@@ -15,6 +15,7 @@ import type { Browser, LaunchOptions, Locator, Page } from "playwright-core";
 
 import { stubVoiceDevices } from "@/test-helpers/voiceDevicesStub";
 import { translate } from "@/lib/i18n";
+import { PROGRAM_IDS } from "@/components/onboarding/ProgramRowParts";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 import { en } from "@/lib/i18n/en";
@@ -45776,15 +45777,16 @@ describe("installer guide: old state, project search, newcomer clarity", () => {
           await page.waitForSelector("[data-kanban-board], [data-mobile-shell], main");
           await page.evaluate(() => window.dispatchEvent(new CustomEvent("llv:open-onboarding", { detail: { mode: "guide", step: "engines" } })));
           await page.waitForSelector("[data-onboarding-legacy-state]");
-          await page.waitForSelector("[data-onboarding-claude-signin]");
+          /* The Accounts step: Claude Code's row with its state in words (the second sign-in is said by its dot, read in the first-run block). */
+          await page.waitForSelector('[data-onboarding-programs] > [data-onboarding-engine="claude"] [data-onboarding-engine-header]');
           const notice = page.locator("[data-onboarding-legacy-state]");
           const reading: Record<string, unknown> = { at };
           reading.notice = await notice.locator("p").first().innerText();
-          reading.claudeSignin = await text("[data-onboarding-claude-signin]");
+          reading.claudeState = await text('[data-onboarding-programs] > [data-onboarding-engine="claude"] [data-onboarding-engine-header]');
           if (reading.notice !== translate(lang, "onboarding.legacy.notice")) failures.push(`${at}: notice reads ${reading.notice}`);
-          if (reading.claudeSignin !== translate(lang, "onboarding.engines.isolatedSignin")) failures.push(`${at}: Claude line reads ${reading.claudeSignin}`);
+          if (!String(reading.claudeState).trim()) failures.push(`${at}: Claude Code's row has no state in words`);
           await frame("engines-notice", ["[data-onboarding-legacy-state]"]);
-          await frame("engines-claude", ["[data-onboarding-claude-signin]"]);
+          await frame("engines-claude", ['[data-onboarding-programs] > [data-onboarding-engine="claude"] [data-onboarding-engine-header]']);
           await notice.locator("button").click();
           reading.cleanStartExpanded = await notice.locator("button").getAttribute("aria-expanded");
           reading.cleanStartLabel = await notice.locator("button").innerText();
@@ -45879,11 +45881,21 @@ describe("first-run guide: variant 1 on the real components", () => {
   /* One frame set per state: the fixture's `firstrun` token, the surface it draws and the lines that define it. */
   type Spec = { token: string; label: Record<Lang, string>; bot?: "none" | "fallback"; narrowOnly?: boolean; phoneOnly?: boolean };
   const SPECS: Spec[] = [
-    { token: "engines-both", label: { en: "Engines · both connected", uk: "Рушії · обидва підключені" } },
-    { token: "engines-claude-only", label: { en: "Engines · Claude only, Codex not installed", uk: "Рушії · лише Claude, Codex не встановлено" } },
-    { token: "engines-codex-only", label: { en: "Engines · Codex only, Claude signed out", uk: "Рушії · лише Codex, Claude без входу" } },
-    { token: "engines-signed-out", label: { en: "Engines · both installed, signed out", uk: "Рушії · обидва встановлені, без входу" } },
-    { token: "engines-no-cli", label: { en: "Engines · no agent CLI", uk: "Рушії · жодного CLI" } },
+    /* Onboarding v2, slice 2 (docs/design/onboarding-v2.md §12.3). The step keeps its stored id `engines` and reads
+       Accounts: one row per program. These five are the rows by what is installed and signed in. */
+    { token: "engines-both", label: { en: "Accounts · every program signed in, one account each", uk: "Акаунти · у кожній програмі вхід виконано, по одному акаунту" } },
+    { token: "engines-claude-only", label: { en: "Accounts · Claude Code signed in, Codex and Antigravity not installed", uk: "Акаунти · у Claude Code вхід виконано, Codex і Antigravity не встановлено" } },
+    { token: "engines-codex-only", label: { en: "Accounts · Codex signed in, Claude Code signed out", uk: "Акаунти · у Codex вхід виконано, Claude Code без входу" } },
+    { token: "engines-signed-out", label: { en: "Accounts · all four installed, nobody signed in", uk: "Акаунти · усі чотири встановлено, входу немає ніде" } },
+    { token: "engines-no-cli", label: { en: "Accounts · nothing installed: a command to copy on each row", uk: "Акаунти · нічого не встановлено: команда для копіювання в кожному рядку" } },
+    { token: "accounts-signing-in", label: { en: "Accounts · signing in: Claude Code awaits its code, Codex shows its device code", uk: "Акаунти · триває вхід: Claude Code чекає код, Codex показує код пристрою" } },
+    { token: "accounts-several", label: { en: "Accounts · several accounts: one low on its limit, one waiting for a sign-in", uk: "Акаунти · кілька акаунтів: в одного мало ліміту, один чекає входу" } },
+    { token: "accounts-terminal", label: { en: "Accounts · Antigravity and Copilot signed out, each in its own terminal", uk: "Акаунти · Antigravity і Copilot без входу, кожен у своєму терміналі" } },
+    { token: "accounts-windows", label: { en: "Accounts · a Windows host: PowerShell lines, and Codex needs WSL 2", uk: "Акаунти · Windows: рядки для PowerShell, а Codex потребує WSL 2" } },
+    /* The welcome: the cover of a guide that opened by itself with no step settled, by what the computer has. */
+    { token: "welcome-found", label: { en: "Welcome · an account found", uk: "Привітання · акаунт знайдено" } },
+    { token: "welcome-signed-out", label: { en: "Welcome · programs installed, nobody signed in", uk: "Привітання · програми встановлено, входу немає" } },
+    { token: "welcome-nothing", label: { en: "Welcome · no agent program installed", uk: "Привітання · жодної програми-агента не встановлено" } },
     { token: "orchestrator-one-press", label: { en: "Orchestrator · one press, both engines", uk: "Оркестратор · одне натискання, обидва рушії" } },
     { token: "orchestrator-claude-only", label: { en: "Orchestrator · Claude only", uk: "Оркестратор · лише Claude" } },
     { token: "orchestrator-codex-only", label: { en: "Orchestrator · Codex only", uk: "Оркестратор · лише Codex" } },
@@ -45908,17 +45920,21 @@ describe("first-run guide: variant 1 on the real components", () => {
   ];
   /* The states of onboarding v2, slice 1. */
   const SLICE_1 = (token: string) => token.startsWith("first-visit") || token === "orchestrator-no-engine";
+  /* The states of slice 2: the Accounts rows and the welcome. */
+  const ROWS = (token: string) => token.startsWith("engines-") || token.startsWith("accounts-");
+  const WELCOME = (token: string) => token.startsWith("welcome-");
+  const SLICE_2 = (token: string) => ROWS(token) || WELCOME(token);
   /* The named widths in both languages and themes; 645 and 900 stand between them, in English and Ukrainian, light.
-     860 is the first width of the guide's desktop layout, drawn for the slice 1 states. */
+     860 is the first width of the guide's desktop layout, drawn for the states of slices 1 and 2. */
   const WIDTHS: Array<{ width: number; themes: Array<"light" | "dark">; tokens?: (token: string) => boolean }> = [
     { width: 1440, themes: ["light", "dark"] },
     { width: 390, themes: ["light", "dark"] },
     { width: 900, themes: ["light"] },
     { width: 645, themes: ["light"] },
-    { width: 860, themes: ["light"], tokens: SLICE_1 },
+    { width: 860, themes: ["light"], tokens: (token) => SLICE_1(token) || SLICE_2(token) },
   ];
   /* Names, product words and code a Ukrainian line may keep in Latin letters. */
-  const LATIN = /^(?:Claude|Code|Codex|Copilot|GitHub|Delegatus|Telegram|Opus|GPT-6\.1-Sol|Sol|README|CLI|CSV|API|Max|Pro|atlas|atlas-api|src\/billing|curl|fsSL|https|bash|sh|install\.sh|claude\.ai|chatgpt\.com|codex|Account|A|B|Report|Bot|Team|Reports|OpenCode|Go|Messages|repo|uk|en|low|medium|high|xhigh|BotFather|team-reports|id|delegatus\.org)$/;
+  const LATIN = /^(?:Claude|Code|Codex|Copilot|GitHub|Delegatus|Telegram|Opus|GPT-6\.1-Sol|Sol|README|CLI|CSV|API|Max|Pro|atlas|atlas-api|src\/billing|curl|fsSL|https|bash|sh|install\.sh|claude\.ai|chatgpt\.com|codex|Account|A|B|Report|Bot|Team|Reports|OpenCode|Go|Messages|repo|uk|en|low|medium|high|xhigh|BotFather|team-reports|id|delegatus\.org|Antigravity|Google|OAuth|AI|agy|copilot|PowerShell|Windows|WSL|PATH|H|Plus|QK7P-M2XD|irm|iex|install\.ps1|antigravity\.google|claude\.ai\/oauth)$/;
 
   /* What one frame reads of the lines that define it, in the page. */
   const MEASURE = (args: { defining: string[] }) => {
@@ -46175,19 +46191,107 @@ describe("first-run guide: variant 1 on the real components", () => {
     };
   };
 
+  /* The program rows of the Accounts step, or of the welcome: which programs they are, every button the guide shows,
+     and what is wrong with a row. A row carries one status dot and its state in words; an account under it carries one
+     dot, and words beside any dot that is not green. A dot stands before its words, on their line. Under a finger
+     every control is a 44 px target. */
+  const PROGRAM_ROWS = (args: { coarse: boolean }) => {
+    const out = { programs: [] as string[], problems: [] as string[], buttons: [] as Array<{ text: string; filled: boolean; inRow: boolean }>, states: [] as string[] };
+    const dialog = document.querySelector("[data-onboarding-dialog]");
+    if (!dialog) { out.problems.push("the guide is not open"); return out; }
+    const rows = [...dialog.querySelectorAll<HTMLElement>("[data-onboarding-programs] > li")];
+    out.programs = rows.map((row) => row.getAttribute("data-onboarding-engine") ?? "");
+    out.buttons = [...dialog.querySelectorAll<HTMLElement>("button")].filter((button) => button.getClientRects().length && !button.hasAttribute("data-settings-dot"))
+      .map((button) => ({ text: (button.textContent ?? "").trim(), filled: /(^|\s)bg-brand(\s|$)/.test(button.className), inRow: Boolean(button.closest("[data-onboarding-programs] > li")) }));
+    const firstLine = (node: Element) => { const range = document.createRange(); range.selectNodeContents(node); return [...range.getClientRects()].find((rect) => rect.width > 0.5 && rect.height > 0.5) ?? null; };
+    const leads = (dot: HTMLElement, words: Element | null, who: string) => {
+      const glyph = dot.firstElementChild?.getBoundingClientRect();
+      const line = words ? firstLine(words) : null;
+      if (!glyph || !line) { out.problems.push(`${who}: the dot or its words are not drawn`); return; }
+      if (glyph.right > line.left + 0.5) out.problems.push(`${who}: the dot ends at ${Math.round(glyph.right)}px, after its words start at ${Math.round(line.left)}px`);
+      const middle = (glyph.top + glyph.bottom) / 2;
+      if (middle < line.top || middle > line.bottom) out.problems.push(`${who}: the dot is off its words' line`);
+    };
+    for (const row of rows) {
+      const name = row.getAttribute("data-onboarding-engine") ?? "";
+      const words = row.querySelector<HTMLElement>("[data-onboarding-engine-header]");
+      out.states.push(`${name}=${row.getAttribute("data-engine-state") ?? ""}: ${words?.textContent ?? ""}`);
+      const own = [...row.querySelectorAll<HTMLElement>("[data-settings-dot]")].filter((dot) => !dot.closest("[data-onboarding-account]"));
+      if (own.length !== 1) out.problems.push(`${name}: ${own.length} status dots on the row`);
+      if (!words?.textContent?.trim()) out.problems.push(`${name}: the row's state is not in words`);
+      if (own[0]) leads(own[0], words, name);
+      for (const account of row.querySelectorAll<HTMLElement>("[data-onboarding-account]")) {
+        const who = `${name}, account ${account.getAttribute("data-onboarding-account")}`;
+        const dots = [...account.querySelectorAll<HTMLElement>("[data-settings-dot]")];
+        if (dots.length !== 1) { out.problems.push(`${who}: ${dots.length} status dots`); continue; }
+        leads(dots[0]!, account.querySelector("[data-settings-row-label]"), who);
+        if (dots[0]!.getAttribute("data-settings-dot") !== "ok" && !account.querySelector("[data-onboarding-account-words]")?.textContent?.trim()) out.problems.push(`${who}: a dot that is not green has no words beside it`);
+      }
+    }
+    if (args.coarse) for (const control of dialog.querySelectorAll<HTMLElement>("[data-onboarding-body] button, [data-onboarding-body] a[href], [data-onboarding-body] input, [data-onboarding-body] select, footer button")) {
+      const box = control.getBoundingClientRect();
+      if (box.width && box.height && Math.min(box.width, box.height) < 43.5) out.problems.push(`a target under 44 px: «${(control.textContent || control.getAttribute("aria-label") || control.getAttribute("placeholder") || "").trim().slice(0, 30)}» ${Math.round(box.width)}×${Math.round(box.height)}`);
+    }
+    return out;
+  };
+
+  /* An open status popover: inside the window and the guide, at most two lines, and over no words, measured from the
+     text ranges of everything else the guide draws. */
+  const DOT_POPOVER = () => {
+    const popover = document.querySelector<HTMLElement>("[data-settings-dot-popover]");
+    const dialog = document.querySelector("[data-onboarding-dialog]");
+    if (!popover || !dialog || getComputedStyle(popover).visibility !== "visible") return null;
+    const box = popover.getBoundingClientRect();
+    const frame = dialog.getBoundingClientRect();
+    const own = document.createRange();
+    own.selectNodeContents(popover);
+    const lines = new Set([...own.getClientRects()].filter((rect) => rect.width > 0.5).map((rect) => Math.round(rect.top))).size;
+    const covered: string[] = [];
+    const walker = document.createTreeWalker(dialog, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode as Text;
+      /* In a narrow card the dot's words open in the row itself: they are the popover, and cover nothing by standing there. */
+      if (!node.textContent?.trim() || !(node.parentElement?.getClientRects().length) || popover.contains(node)) continue;
+      const style = getComputedStyle(node.parentElement!);
+      if (style.visibility === "hidden" || style.clip.startsWith("rect")) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) {
+        if (rect.width <= 0.5 || rect.height <= 0.5) continue;
+        if (Math.min(rect.right, box.right) - Math.max(rect.left, box.left) > 0.5 && Math.min(rect.bottom, box.bottom) - Math.max(rect.top, box.top) > 0.5) { covered.push(node.textContent.trim().slice(0, 40)); break; }
+      }
+    }
+    return {
+      text: popover.textContent ?? "",
+      lines,
+      inline: popover.hasAttribute("data-program-dot-inline"),
+      inWindow: box.left >= 0 && box.top >= 0 && box.right <= innerWidth + 0.5 && box.bottom <= innerHeight + 0.5,
+      inGuide: box.left >= frame.left - 0.5 && box.top >= frame.top - 0.5 && box.right <= frame.right + 0.5 && box.bottom <= frame.bottom + 0.5,
+      covered,
+    };
+  };
+
   /* The defining lines of each state, by selector: the ones the frame is about. */
   const DEFINING = (token: string, phone: boolean): string[] => {
-    if (token === "engines-both") return ['[data-onboarding-current="engines"] h2 + p', '[data-onboarding-engine="claude"] [data-onboarding-engine-header]', '[data-onboarding-engine="codex"] [data-onboarding-engine-header]'];
-    if (token === "engines-claude-only") return ['[data-onboarding-current="engines"] h2 + p', '[data-onboarding-install="codex"]', "[data-onboarding-recheck]", '[data-onboarding-engine="codex"] [data-onboarding-engine-header]'];
-    if (token === "engines-codex-only") return ['[data-onboarding-engine="claude"] [data-onboarding-engine-header]', "[data-onboarding-claude-signin]"];
-    if (token === "engines-signed-out") return ["[data-onboarding-engines-note]", '[data-onboarding-engine="claude"] [data-onboarding-engine-header]'];
-    if (token === "engines-no-cli") return ["[data-onboarding-engines-note]", '[data-onboarding-install="claude"]', '[data-onboarding-install="codex"]', "[data-onboarding-recheck]", '[data-onboarding-engine="copilot"] [data-onboarding-engine-header]'];
+    /* Slice 2. Every Accounts frame is about its heading, its lead and the footer's button, then the rows that carry the state. */
+    const row = (program: string) => `[data-onboarding-programs] > [data-onboarding-engine="${program}"]`;
+    const head = ["[data-onboarding-accounts-step] h2", "[data-onboarding-accounts-lead]", "[data-onboarding-primary]"];
+    if (token === "engines-both") return [...head, row("claude"), row("codex"), row("antigravity"), row("copilot")];
+    if (token === "engines-claude-only") return [...head, "[data-onboarding-recheck]", row("claude"), row("codex"), row("antigravity"), row("copilot")];
+    if (token === "engines-codex-only") return [...head, row("claude"), row("codex")];
+    if (token === "engines-signed-out") return [...head, "[data-onboarding-recheck]", row("claude"), row("codex"), row("antigravity"), row("copilot")];
+    if (token === "engines-no-cli") return [...head, "[data-onboarding-recheck]", row("claude"), row("codex"), row("antigravity"), row("copilot")];
+    if (token === "accounts-signing-in") return [...head, row("claude"), row("codex")];
+    if (token === "accounts-several") return [...head, row("claude"), row("codex")];
+    if (token === "accounts-terminal") return [...head, "[data-onboarding-recheck]", row("antigravity"), row("copilot")];
+    if (token === "accounts-windows") return [...head, "[data-onboarding-recheck]", row("claude"), row("codex"), row("antigravity")];
+    if (token.startsWith("welcome-")) return ["[data-onboarding-welcome] h2", "[data-onboarding-welcome] h2 + p", "[data-onboarding-welcome-programs]", "[data-onboarding-welcome] [data-onboarding-programs]", "[data-onboarding-welcome-question]", "[data-onboarding-welcome-accounts]", ...(token === "welcome-found" ? ["[data-onboarding-welcome-continue]"] : [])];
     if (token === "orchestrator-one-press") return ["[data-onboarding-orchestrator-runs-on]", "[data-onboarding-orchestrator-create]"];
     if (token === "orchestrator-claude-only") return ["[data-onboarding-orchestrator-runs-on]", "[data-onboarding-orchestrator-roles]", "[data-onboarding-orchestrator-create]"];
     if (token === "orchestrator-codex-only") return ["[data-onboarding-orchestrator-runs-on]", "[data-onboarding-orchestrator-advice]", "[data-onboarding-orchestrator-roles]", "[data-onboarding-orchestrator-create]"];
-    if (token === "first-visit") return ["[data-telemetry-guide-notice]", "[data-onboarding-primary]", '[data-onboarding-current="engines"] h2'];
+    if (token === "first-visit") return ["[data-telemetry-guide-notice]", "[data-onboarding-primary]", "[data-onboarding-accounts-step] h2"];
     if (token === "first-visit-orchestrator") return ["[data-onboarding-orchestrator-no-engine]", '[data-onboarding-orchestrator-go="engines"]', "[data-telemetry-guide-notice]", "[data-onboarding-primary]", "[data-onboarding-orchestrator-no-project]", '[data-onboarding-orchestrator-go="project"]'];
-    if (token === "first-visit-dismissed") return ["[data-onboarding-primary]", '[data-onboarding-current="engines"] h2'];
+    if (token === "first-visit-dismissed") return ["[data-onboarding-primary]", "[data-onboarding-accounts-step] h2"];
     if (token === "first-visit-closed") return ["[data-telemetry-notice] p", "[data-telemetry-notice]"];
     if (token === "orchestrator-no-engine") return ["[data-onboarding-orchestrator-no-engine]", '[data-onboarding-orchestrator-go="engines"]', "[data-onboarding-primary]"];
     if (token === "later-memory-before") return ["[data-memory-source-line]", "[data-onboarding-memory-go]"];
@@ -46230,7 +46334,9 @@ describe("first-run guide: variant 1 on the real components", () => {
         const scenario = form || seated ? "orchestrator-first-walk" : "orchestrator-first&guide=installer";
         const firstVisit = spec.token.startsWith("first-visit");
         const noEngine = spec.token === "first-visit-orchestrator" || spec.token === "orchestrator-no-engine";
-        const url = `${served.base}?scenario=${scenario}&firstrun=${spec.token}${spec.bot ? `&bot=${spec.bot}` : ""}#p=atlas`;
+        /* The welcome belongs to a guide that opens by itself, which a page opened on a project never does: its states keep the bare address. */
+        const welcome = WELCOME(spec.token);
+        const url = `${served.base}?scenario=${scenario}&firstrun=${spec.token}${spec.bot ? `&bot=${spec.bot}` : ""}${welcome ? "" : "#p=atlas"}`;
         const { context, page, pageErrors } = await openFixture(browser, url, { width, height: phone ? 844 : 900 }, theme, lang, "reduce", phone, 1, new Date("2026-11-11T10:00:00Z"));
         const at = name;
         const file = (suffix = "") => path.join(frames, `${name}${suffix}.png`);
@@ -46246,11 +46352,17 @@ describe("first-run guide: variant 1 on the real components", () => {
             await page.locator("[data-onboarding-project]").first().click();
           };
           let shell = false;
-          if (!form && !settings) {
-            /* A first visit opens the guide on the step the guide itself chooses; every other state is opened on Engines. */
+          if (welcome) {
+            /* Nothing is dispatched: the first run opens the guide, and the guide opens on its cover. */
+            await page.waitForSelector("[data-onboarding-dialog] [data-onboarding-welcome]", { timeout: 60_000 });
+            await page.waitForFunction(() => document.querySelector("[data-onboarding-welcome]")?.getAttribute("data-onboarding-welcome") !== "loading", null, { timeout: 30_000 });
+          } else if (!form && !settings) {
+            /* A first visit opens the guide on the step the guide itself chooses; every other state is opened on Accounts. */
             await page.evaluate((step) => window.dispatchEvent(new CustomEvent("llv:open-onboarding", { detail: { mode: "guide", step } })), firstVisit ? null : "engines");
             await page.waitForSelector("[data-onboarding-dialog]");
             await page.waitForFunction(() => document.querySelector("[data-onboarding-engine=claude]")?.getAttribute("data-engine-state") !== "loading");
+            /* The rows have settled once none holds its place and the accounts read has named the footer's button. */
+            if (ROWS(spec.token)) await page.waitForFunction(() => !document.querySelector("[data-onboarding-programs] > [data-engine-state=loading]") && document.querySelectorAll("[data-onboarding-programs] > li").length === 4, null, { timeout: 30_000 });
             if (firstVisit) {
               await page.waitForSelector("[data-onboarding-dialog] [data-telemetry-guide-notice]", { timeout: 30_000 });
               if (spec.token === "first-visit-orchestrator") {
@@ -46377,8 +46489,41 @@ describe("first-run guide: variant 1 on the real components", () => {
             if (spec.token === "telegram-numbered" && firstScreen.cut.length) failures.push(`${name}: lines cut on the first screen: ${firstScreen.cut.join(" | ")}`);
             else if (firstScreen.cut.length) notes.push(`${name}: lines cut on the first screen: ${firstScreen.cut.join(" | ")}`);
           }
-          if (spec.token === "engines-signed-out" || spec.token === "engines-no-cli") {
-            if (first.offFirstScreen.includes("[data-onboarding-engines-note]")) failures.push(`${name}: the no-engine warning is not whole on the first screen`);
+          /* Slice 2: the heading and the main button are on the first screen at every width. */
+          if (SLICE_2(spec.token)) {
+            const mustShow = welcome ? ["[data-onboarding-welcome] h2", "[data-onboarding-welcome-accounts]", "[data-onboarding-welcome-continue]"] : ["[data-onboarding-accounts-step] h2", "[data-onboarding-primary]"];
+            for (const selector of first.offFirstScreen) if (mustShow.includes(selector)) failures.push(`${name}: ${selector} is not whole on the first screen`);
+          }
+          let slice2: Record<string, unknown> | null = null;
+          if (SLICE_2(spec.token)) {
+            const rows = await page.evaluate(PROGRAM_ROWS, { coarse: phone });
+            slice2 = { rows };
+            const listed = welcome ? PROGRAM_IDS.filter((program) => program !== "copilot") : [...PROGRAM_IDS];
+            if (rows.programs.join("|") !== listed.join("|")) failures.push(`${name}: the rows are ${rows.programs.join(", ")} and the program list is ${listed.join(", ")}`);
+            for (const problem of rows.problems) failures.push(`${name}: ${problem}`);
+            const label = translate(lang, "onboarding.engines.recheck");
+            const rechecks = rows.buttons.filter((button) => button.text === label);
+            if (rechecks.length > 1 || rechecks.some((button) => button.inRow)) failures.push(`${name}: ${rechecks.length} Check again buttons, ${rechecks.filter((button) => button.inRow).length} of them inside a row`);
+            /* A program that can still be installed by hand, or signed in from its own terminal, is what "Check again" looks for. */
+            const owed = !["engines-both", "accounts-several"].includes(spec.token);
+            if (!welcome && owed !== (rechecks.length === 1)) failures.push(`${name}: ${rechecks.length} Check again buttons where ${owed ? "one is" : "none is"} owed`);
+            if (welcome && rechecks.length) failures.push(`${name}: the welcome offers Check again`);
+            /* One filled button, or none where the state waits on something outside the page. */
+            const filledOwed: Record<string, string | null> = {
+              "engines-both": "onboarding.continue", "engines-claude-only": "onboarding.continue", "engines-codex-only": "onboarding.continue",
+              "engines-signed-out": "onboarding.engines.signIn", "engines-no-cli": null, "accounts-signing-in": "accounts.claudeLogin.submit",
+              "accounts-several": "onboarding.continue", "accounts-terminal": "onboarding.continue", "accounts-windows": null,
+              "welcome-found": "onboarding.welcome.continueWith", "welcome-signed-out": "onboarding.welcome.signIn", "welcome-nothing": "onboarding.welcome.chooseInstall",
+            };
+            const wantFilled = filledOwed[spec.token] ?? null;
+            const filledNow = rows.buttons.filter((button) => button.filled).map((button) => button.text);
+            if (filledNow.join("|") !== (wantFilled ? translate(lang, wantFilled as Parameters<typeof translate>[1]) : "")) failures.push(`${name}: the filled buttons are «${filledNow.join(" | ")}», expected «${wantFilled ? translate(lang, wantFilled as Parameters<typeof translate>[1]) : "none"}»`);
+            if (!welcome) {
+              /* The footer says what continuing means. */
+              const agent = !["engines-signed-out", "engines-no-cli", "accounts-signing-in", "accounts-windows"].includes(spec.token);
+              const footer = (await page.locator("[data-onboarding-primary]").innerText()).trim();
+              if (footer !== translate(lang, agent ? "onboarding.continue" : "onboarding.continueNoAgent")) failures.push(`${name}: the footer's button reads «${footer}»`);
+            }
           }
           if (spec.token === "telegram-numbered") {
             const contradicted = await page.evaluate((words) => document.body.innerText.includes(words), lang === "uk" ? "Не підключено" : "Not connected");
@@ -46411,12 +46556,8 @@ describe("first-run guide: variant 1 on the real components", () => {
             const line = await page.evaluate(() => document.querySelector("[data-memory-source-line]")?.textContent ?? "");
             if (!line.includes(translate(lang, "memorySource.limit"))) failures.push(`${name}: the Settings memory line does not say the import spends the plan's limit`);
           }
-          if (spec.token.startsWith("engines-")) {
-            const rechecks = await page.evaluate((label) => [...document.querySelectorAll<HTMLElement>("[data-onboarding-dialog] button")].filter((button) => button.getClientRects().length && button.textContent?.trim() === label).length, translate(lang, "onboarding.engines.recheck"));
-            if (rechecks > 1) failures.push(`${name}: ${rechecks} Check again buttons`);
-          }
           await page.screenshot({ path: file() });
-          const reading: Record<string, unknown> = { frame: name, width, lang, theme, token: spec.token, label: spec.label[lang], defining, offFirstScreen: first.offFirstScreen, ...(slice1 ?? {}) };
+          const reading: Record<string, unknown> = { frame: name, width, lang, theme, token: spec.token, label: spec.label[lang], defining, offFirstScreen: first.offFirstScreen, ...(slice1 ?? {}), ...(slice2 ?? {}) };
           for (const selector of defining) {
             if (first.missing.includes(selector)) continue;
             if (first.offFirstScreen.includes(selector)) {
@@ -46444,6 +46585,57 @@ describe("first-run guide: variant 1 on the real components", () => {
           const surfaceCheck = await page.evaluate(OVERLAPS, defining[0]!);
           if (surfaceCheck.overlaps.length) failures.push(`${name}: text overlaps: ${surfaceCheck.overlaps.join(" | ")}`);
           if (surfaceCheck.sideways > 1) failures.push(`${name}: scrolls sideways by ${surfaceCheck.sideways}px`);
+          /* Slice 2: every status dot is pressed, and its popover read where it opened. */
+          if (SLICE_2(spec.token)) {
+            const dots = page.locator("[data-onboarding-dialog] [data-onboarding-programs] [data-settings-dot]");
+            const popovers: Array<Record<string, unknown>> = [];
+            /* The frames that keep a popover on screen: the amber account among several, a program that is not installed, and the welcome's first row. */
+            const kept = spec.token === "accounts-several" ? 2 : spec.token === "engines-no-cli" || spec.token === "welcome-found" ? 0 : -1;
+            for (let index = 0; index < await dots.count(); index += 1) {
+              const dot = dots.nth(index);
+              await dot.scrollIntoViewIfNeeded();
+              await dot.locator("span").first().click({ timeout: 5_000 });
+              await page.waitForFunction(() => { const popover = document.querySelector<HTMLElement>("[data-settings-dot-popover]"); return popover !== null && getComputedStyle(popover).visibility === "visible"; }, null, { timeout: 5_000 });
+              const popover = await page.evaluate(DOT_POPOVER);
+              const where = `${name}: the popover of dot ${index + 1}`;
+              if (!popover) failures.push(`${where} did not open`);
+              else {
+                popovers.push({ dot: index + 1, text: popover.text, lines: popover.lines, inline: popover.inline });
+                /* Under 768 px the card is too narrow for a popover beside a name: the words open in the row. */
+                if (popover.inline !== width < 768) failures.push(`${where} ${popover.inline ? "opens in the row" : "floats"} at ${width} px`);
+                if (!popover.text.trim()) failures.push(`${where} is empty`);
+                if (!popover.inWindow || !popover.inGuide) failures.push(`${where} leaves the ${popover.inWindow ? "guide" : "window"}`);
+                if (popover.lines > 2) failures.push(`${where} takes ${popover.lines} lines`);
+                if (popover.covered.length) failures.push(`${where} stands over words: ${popover.covered.join(" | ")}`);
+                if (lang === "uk") for (const piece of popover.text.split(/[\s·,;:()?!«»"—]+/)) {
+                  const part = piece.replace(/\.+$/, "");
+                  if (/^[A-Za-z][A-Za-z0-9./-]*$/.test(part) && !LATIN.test(part)) failures.push(`${where} keeps «${part}» in Latin letters`);
+                }
+              }
+              if (index === kept) await page.screenshot({ path: file("-pressed-dot") });
+              await page.keyboard.press("Escape");
+              await page.waitForSelector("[data-settings-dot-popover]", { state: "detached", timeout: 5_000 });
+            }
+            reading.popovers = popovers;
+            /* Escape closed each popover alone: the guide is still open. */
+            if (!(await page.locator("[data-onboarding-dialog]").count())) failures.push(`${name}: closing a popover closed the guide`);
+          }
+          /* The welcome's buttons lead where they say: with accounts found, on to Project with Accounts settled; otherwise into Accounts. */
+          if (welcome) {
+            const found = spec.token === "welcome-found";
+            await page.locator(found ? "[data-onboarding-welcome-continue]" : "[data-onboarding-welcome-accounts]").click({ timeout: 5_000 });
+            await page.waitForSelector(`[data-onboarding-current="${found ? "project" : "engines"}"]`, { timeout: 5_000 });
+            const after = await page.evaluate(() => ({
+              welcome: document.querySelectorAll("[data-onboarding-welcome]").length,
+              steps: document.querySelectorAll("[data-onboarding-step], [data-onboarding-step-list-toggle]").length,
+              accounts: document.querySelector('[data-onboarding-step="engines"] [data-step-mark]')?.getAttribute("data-step-mark") ?? null,
+            }));
+            reading.afterWelcome = after;
+            if (after.welcome || !after.steps) failures.push(`${name}: after the welcome's button the cover is ${after.welcome ? "still shown" : "gone"} and the step list has ${after.steps} entries`);
+            if (found && !phone && after.accounts !== "done") failures.push(`${name}: after Continue with these the Accounts step is marked ${after.accounts}`);
+            await page.waitForTimeout(200);
+            await page.screenshot({ path: file(found ? "-pressed-continue" : "-pressed-accounts") });
+          }
           /* The audit's press on Continue was refused: the notice took it. Here it lands, with the notice still shown. */
           if (spec.token === "first-visit") {
             await page.locator("[data-onboarding-primary]").click({ timeout: 5_000 });

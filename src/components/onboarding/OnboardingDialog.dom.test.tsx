@@ -63,7 +63,8 @@ Object.assign(globalThis, {
     if (url.includes("/api/orchestrator/seat")) return Promise.resolve(new Response("{}", { status: 404 }));
     if (url.includes("/api/accounts/copilot")) return json({ cli: { present: false, reason: null }, active: "", accounts: [] });
     if (url.includes("/api/accounts/antigravity") && agyBody !== null) return json(agyBody);
-    if (url.endsWith("/api/accounts") || url.includes("/api/accounts?")) return json(accountsBody);
+    /* A case may hold the accounts read open by answering with a promise of its own. */
+    if (url.endsWith("/api/accounts") || url.includes("/api/accounts?")) return accountsBody instanceof Promise ? accountsBody as Promise<Response> : json(accountsBody);
     return json({ claude: { active: "", accounts: [] }, codex: { active: "", accounts: [] } });
   },
 });
@@ -339,13 +340,13 @@ test("an engine whose command is missing reads Not installed even with a credent
   expect(codex.getAttribute("data-engine-state")).toBe("missing");
   expect(codex.textContent).toContain("Not installed");
   expect(codex.textContent).not.toContain("Connected");
-  /* One engine is enough: no note about it any more. */
-  expect(host.querySelector("[data-onboarding-engines-note]")).toBeNull();
+  /* A missing command offers no sign-in, whatever credential is on disk. */
+  expect(codex.querySelector("[data-onboarding-sign-in], [data-onboarding-add-account]")).toBeNull();
   flushSync(() => root.unmount());
   host.remove();
 });
 
-test("without a bot the guide numbers Engines, Project and Orchestrator, and Telegram sits under Later after Memory, counted to three", () => {
+test("without a bot the guide numbers Accounts, Project and Orchestrator, and Telegram sits under Later after Memory, counted to three", () => {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
@@ -358,8 +359,13 @@ test("without a bot the guide numbers Engines, Project and Orchestrator, and Tel
   expect(host.querySelector("[data-onboarding-step=engines]")?.getAttribute("aria-current")).toBe("step");
   expect(host.textContent).toContain("Step 1 of 3");
   expect(host.querySelector("[data-onboarding-step=telegram]")?.textContent).toBe("·Telegram");
-  /* Copilot sits beside Claude and Codex. */
-  expect(host.querySelector("[data-onboarding-engine=copilot]")).not.toBeNull();
+  /* The step kept its stored id and reads Accounts; a guide opened by hand starts on it with no welcome. */
+  expect(host.querySelector("[data-onboarding-step=engines]")?.textContent).toBe("1Accounts");
+  expect(host.querySelector("[data-onboarding-dialog]")?.getAttribute("data-onboarding-current")).toBe("engines");
+  expect(host.querySelector("[data-onboarding-welcome]")).toBeNull();
+  expect(host.querySelector("h2")?.textContent).toBe("Your agent accounts");
+  /* One row per program, Copilot last. */
+  expect(Array.from(host.querySelectorAll("[data-onboarding-programs] > li")).map((row) => row.getAttribute("data-onboarding-engine"))).toEqual(["claude", "codex", "antigravity", "copilot"]);
   flushSync(() => root.unmount());
   host.remove();
 });
@@ -376,6 +382,7 @@ test("with a bot already connected Telegram is the third numbered step, before t
     expect(steps).toEqual(["engines", "project", "telegram", "orchestrator", "agents", "memory", "phone", "voice", "check", "relay"]);
     expect(Array.from(host.querySelectorAll("[data-step-mark=later]")).length).toBe(6);
     expect(host.querySelector("[data-onboarding-step=telegram]")?.textContent).toBe("3Telegram");
+    expect(host.querySelector("[data-onboarding-step=engines]")?.textContent).toBe("1Accounts");
   } finally {
     flushSync(() => root.unmount());
     host.remove();
@@ -462,7 +469,7 @@ test("the relay service step left without pairing is done, never skipped, when a
   }
 });
 
-test("#2166: a six-step marker with Engines done lands on Project; the Tour is gone", () => {
+test("#2166: a six-step marker with Accounts done lands on Project; the Tour is gone", () => {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
@@ -585,6 +592,8 @@ test("the Project step: a taken name makes «Open it» the filled control, and C
   const open = host.querySelector("[data-create-open-existing]") as HTMLElement;
   expect(open.className).toContain("bg-brand");
   expect(host.querySelector("[data-create-project-form] button[type=submit]")).toBeNull();
+  /* The form reports its draft to the guide after it has drawn "Open it". */
+  await until(() => !(host.querySelector("[data-onboarding-primary]") as HTMLElement).className.includes("bg-brand"));
   expect((host.querySelector("[data-onboarding-primary]") as HTMLElement).className).not.toContain("bg-brand");
   flushSync(() => (host.querySelector("[data-onboarding-primary]") as HTMLElement).click());
   await until(() => !onProjectStep(host));
@@ -709,8 +718,8 @@ test("#2166: step 3 says what is missing: a project, an engine, or a signed-in a
 
 /* Onboarding v2, slice 1 (A5): with no engine the step read "Runs on Claude · Opus · account Main" and "It uses your
    Claude plan", and without a project its only stated blocker was the project. The row now names what is missing
-   and leads to Engines; nothing on the step claims a runtime. */
-test("the orchestrator step with no engine claims no runtime: the Runs on row names what is missing and leads to Engines, with and without a project", async () => {
+   and leads to Accounts; nothing on the step claims a runtime. */
+test("the orchestrator step with no engine claims no runtime: the Runs on row names what is missing and leads to Accounts, with and without a project", async () => {
   const projects = [{ project: "repo-todo", name: "todo-cli", cwd: "projects/todo-cli", conversations: 0 }];
   const host = document.createElement("div");
   document.body.appendChild(host);
@@ -738,7 +747,7 @@ test("the orchestrator step with no engine claims no runtime: the Runs on row na
   expect(occurrences("Connect Claude or Codex first.")).toBe(1);
   expect(occurrences("Pick a project first.")).toBe(1);
   expect(host.querySelector("[data-onboarding-orchestrator-no-project]")?.textContent).toBe("Pick a project first.");
-  expect([...host.querySelectorAll("[data-onboarding-orchestrator-go]")].map((button) => `${button.getAttribute("data-onboarding-orchestrator-go")}:${button.textContent}`)).toEqual(["project:Go to Project", "engines:Go to Engines"]);
+  expect([...host.querySelectorAll("[data-onboarding-orchestrator-go]")].map((button) => `${button.getAttribute("data-onboarding-orchestrator-go")}:${button.textContent}`)).toEqual(["project:Go to Project", "engines:Go to Accounts"]);
   expect(host.querySelector("[data-onboarding-orchestrator-change]")).toBeNull();
   expect(host.querySelector("[data-onboarding-orchestrator-create]")).toBeNull();
   expect(host.querySelector("[data-onboarding-primary]")?.textContent).toBe("Finish without it");
@@ -1869,7 +1878,7 @@ test("one engine, Undo: the table shows the receipt for the move made at creatio
   }
 });
 
-test("only Codex: 7 roles move, the orchestrator runs on Codex Sol, and the advice to use Claude sends to Engines", async () => {
+test("only Codex: 7 roles move, the orchestrator runs on Codex Sol, and the advice to use Claude sends to Accounts", async () => {
   rolesBody = await factoryCatalog();
   codexOnly();
   requests.length = 0;
@@ -2000,7 +2009,7 @@ test("a signed-in Antigravity reads connected in the mapping, and a missing agy 
   }
 });
 
-test("Sign in on an Antigravity row opens the Engines step on the Antigravity card with focus inside it", async () => {
+test("Sign in on an Antigravity row of the mapping opens the Accounts step on Antigravity's row with focus on its check", async () => {
   agyBody = { cli: "found", active: "default", accounts: [{ id: "default", label: "Default", kind: "legacy", auth: "signed_out", plan: null, checkedAt: null, authPresent: false }] };
   const { host, done } = await openMappingOnAntigravity();
   try {
@@ -2011,6 +2020,307 @@ test("Sign in on an Antigravity row opens the Engines step on the Antigravity ca
     const card = host.querySelector("[data-onboarding-engine=antigravity]")!;
     expect(card.getAttribute("data-engine-state")).toBe("signed-out");
     expect(card.contains(document.activeElement)).toBe(true);
+  } finally {
+    done();
+  }
+});
+
+/*
+ * The welcome (docs/design/onboarding-v2.md §3.1): the cover of a guide that
+ * opened by itself with no step settled. It is no step and stores nothing.
+ */
+const AGY_MISSING = { cli: "missing", active: "default", accounts: [{ id: "default", label: "Default", kind: "legacy", auth: "unknown", plan: null, checkedAt: null, authPresent: false }] };
+const AGY_SIGNED_IN = { cli: "found", active: "default", accounts: [{ id: "default", label: "Default", kind: "legacy", auth: "signed_in", plan: "Google AI Pro", checkedAt: null, authPresent: true }] };
+const claudeSignedIn = () => answerAccounts({ claude: { active: "default", cli: "found", accounts: [signedIn("default", "Main")] }, codex: { active: "", cli: "found", accounts: [] }, copilot: { active: "", accounts: [] } });
+const nobodySignedIn = () => answerAccounts({ claude: { active: "", cli: "found", accounts: [] }, codex: { active: "", cli: "found", accounts: [] }, copilot: { active: "", accounts: [] } });
+const nothingInstalled = () => answerAccounts({ claude: { active: "", cli: "missing", accounts: [] }, codex: { active: "", cli: "missing", accounts: [] }, copilot: { active: "", accounts: [] } });
+const stepWrites = () => requests.filter((request) => request.method === "PUT" && request.url.includes("/api/onboarding") && request.body?.steps).map((request) => request.body!.steps);
+const currentOf = (host: HTMLElement) => host.querySelector("[data-onboarding-dialog]")?.getAttribute("data-onboarding-current");
+const welcomeOf = (host: HTMLElement) => host.querySelector("[data-onboarding-welcome]")?.getAttribute("data-onboarding-welcome") ?? null;
+const filledIn = (host: HTMLElement) => Array.from(host.querySelectorAll("[data-onboarding-dialog] button")).filter((button) => button.className.split(/\s+/).includes("bg-brand")).map((button) => button.textContent);
+
+function openGuide(props: Partial<Parameters<typeof OnboardingDialog>[0]> = {}) {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  requests.length = 0;
+  flushSync(() => root.render(<OnboardingDialog mode="guide" marker={null} markerStatus="read" onClose={() => {}} {...props} />));
+  return { host, done: () => { flushSync(() => root.unmount()); host.remove(); agyBody = null; nobodySignedIn(); } };
+}
+
+test("a guide that opened by itself with nothing settled opens on its welcome: what was found, one question, and no step list or footer", async () => {
+  claudeSignedIn();
+  const { host, done } = openGuide({ selfOpened: true });
+  try {
+    /* Until every program has answered, the rows hold their place and no button is offered. */
+    expect(welcomeOf(host)).toBe("loading");
+    expect(host.querySelector("[data-onboarding-welcome] button")).toBeNull();
+    await until(() => welcomeOf(host) === "found");
+    expect(currentOf(host)).toBe("welcome");
+    expect(host.querySelectorAll("[data-onboarding-step]")).toHaveLength(0);
+    expect(host.querySelector("[data-onboarding-primary]")).toBeNull();
+    expect(host.querySelector("footer")).toBeNull();
+    expect(host.textContent).not.toContain("Step 1 of");
+    expect(host.querySelector("h2")?.textContent).toBe("Welcome to Delegatus");
+    expect(host.querySelector("[data-onboarding-welcome-programs]")?.textContent).toBe("Agent programs on this computer");
+    const rows = Array.from(host.querySelectorAll("[data-onboarding-programs] > li"));
+    expect(rows.map((row) => row.getAttribute("data-onboarding-engine"))).toEqual(["claude", "codex", "antigravity"]);
+    expect(rows.map((row) => row.querySelector("[data-settings-row-label]")?.textContent)).toEqual(["Claude Code", "Codex", "Antigravity"]);
+    expect(rows.map((row) => row.querySelector("[data-onboarding-engine-header]")?.textContent)).toEqual(["Connected", "Installed, signed out", "Could not check sign-in."]);
+    for (const row of rows) expect(row.querySelectorAll("[data-settings-dot]")).toHaveLength(1);
+    /* The cover starts nothing: its rows carry no action. */
+    expect(rows.flatMap((row) => Array.from(row.querySelectorAll("button")).filter((button) => !button.hasAttribute("data-settings-dot")))).toHaveLength(0);
+    expect(host.querySelector("[data-onboarding-welcome-question]")?.textContent).toBe("Want to add another account?");
+    expect(host.querySelector("[data-onboarding-welcome-continue]")?.textContent).toBe("Continue with these");
+    expect(host.querySelector("[data-onboarding-welcome-accounts]")?.textContent).toBe("Add an account");
+    expect(filledIn(host)).toEqual(["Continue with these"]);
+    /* Showing it stores nothing. */
+    expect(stepWrites()).toEqual([]);
+  } finally {
+    done();
+  }
+});
+
+test("Continue with these settles Accounts, opens Project, and the welcome does not come back", async () => {
+  claudeSignedIn();
+  const { host, done } = openGuide({ selfOpened: true });
+  try {
+    await until(() => welcomeOf(host) === "found");
+    flushSync(() => (host.querySelector("[data-onboarding-welcome-continue]") as HTMLElement).click());
+    expect(welcomeOf(host)).toBeNull();
+    expect(currentOf(host)).toBe("project");
+    expect(host.querySelector("[data-onboarding-step=project]")?.getAttribute("aria-current")).toBe("step");
+    expect(host.textContent).toMatch(/Step 2 of \d/);
+    expect(stepWrites()).toEqual([{ engines: "done" }]);
+    expect(host.querySelector("[data-onboarding-step=engines] [data-step-mark]")?.getAttribute("data-step-mark")).toBe("done");
+    /* Back leads to the Accounts step itself. */
+    flushSync(() => (Array.from(host.querySelectorAll("footer button")).find((button) => button.textContent === "Back") as HTMLElement).click());
+    expect(currentOf(host)).toBe("engines");
+    expect(welcomeOf(host)).toBeNull();
+  } finally {
+    done();
+  }
+});
+
+test("Add an account on the welcome opens the Accounts step and settles nothing", async () => {
+  claudeSignedIn();
+  const { host, done } = openGuide({ selfOpened: true });
+  try {
+    await until(() => welcomeOf(host) === "found");
+    flushSync(() => (host.querySelector("[data-onboarding-welcome-accounts]") as HTMLElement).click());
+    expect(welcomeOf(host)).toBeNull();
+    expect(currentOf(host)).toBe("engines");
+    expect(host.querySelector("[data-onboarding-step=engines]")?.getAttribute("aria-current")).toBe("step");
+    expect(host.querySelector("h2")?.textContent).toBe("Your agent accounts");
+    expect(stepWrites()).toEqual([]);
+  } finally {
+    done();
+  }
+});
+
+test("with no agent program installed the welcome says so and its one button leads to Accounts", async () => {
+  nothingInstalled();
+  agyBody = AGY_MISSING;
+  const { host, done } = openGuide({ selfOpened: true });
+  try {
+    await until(() => welcomeOf(host) === "nothing");
+    expect(Array.from(host.querySelectorAll("[data-onboarding-programs] [data-onboarding-engine-header]")).map((line) => line.textContent)).toEqual(["Not installed", "Not installed", "Not installed"]);
+    expect(host.querySelector("[data-onboarding-welcome-question]")?.textContent).toBe("No agent program is installed yet. The next step shows the command that installs each one.");
+    expect(host.querySelector("[data-onboarding-welcome-continue]")).toBeNull();
+    const buttons = Array.from(host.querySelectorAll("[data-onboarding-welcome] button")).filter((button) => !button.hasAttribute("data-settings-dot"));
+    expect(buttons.map((button) => button.textContent)).toEqual(["Choose what to install"]);
+    expect(filledIn(host)).toEqual(["Choose what to install"]);
+    flushSync(() => (buttons[0] as HTMLElement).click());
+    expect(currentOf(host)).toBe("engines");
+    /* Each missing program shows its command there. */
+    expect(Array.from(host.querySelectorAll("[data-onboarding-install]")).map((block) => block.getAttribute("data-onboarding-install"))).toEqual(["claude", "codex", "antigravity"]);
+    expect(stepWrites()).toEqual([]);
+  } finally {
+    done();
+  }
+});
+
+test("with programs installed and nobody signed in the welcome leads into the sign-in, and offers no Continue with these", async () => {
+  nobodySignedIn();
+  agyBody = { ...AGY_MISSING, cli: "found", accounts: [{ ...AGY_MISSING.accounts[0], auth: "signed_out" }] };
+  const { host, done } = openGuide({ selfOpened: true });
+  try {
+    await until(() => welcomeOf(host) === "signed-out");
+    expect(host.querySelector("[data-onboarding-welcome-question]")?.textContent).toBe("No agent account is signed in yet. The next step signs one in.");
+    expect(host.querySelector("[data-onboarding-welcome-continue]")).toBeNull();
+    expect(host.querySelector("[data-onboarding-welcome-accounts]")?.textContent).toBe("Sign in to an account");
+    expect(filledIn(host)).toEqual(["Sign in to an account"]);
+  } finally {
+    done();
+  }
+});
+
+test("an Antigravity sign-in alone is an account found: the welcome offers Continue with these", async () => {
+  nobodySignedIn();
+  agyBody = AGY_SIGNED_IN;
+  const { host, done } = openGuide({ selfOpened: true });
+  try {
+    await until(() => welcomeOf(host) === "found");
+    expect(Array.from(host.querySelectorAll("[data-onboarding-programs] [data-onboarding-engine-header]")).map((line) => line.textContent)).toEqual(["Installed, signed out", "Installed, signed out", "Connected · Google AI Pro"]);
+    expect(host.querySelector("[data-onboarding-welcome-continue]")).not.toBeNull();
+  } finally {
+    done();
+  }
+});
+
+test("the welcome belongs to a guide that opened by itself with no step settled: a settled step, a named step, or an opening by hand goes to the steps", () => {
+  claudeSignedIn();
+  const settled = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: { ...noSteps, project: "skipped" } } as const;
+  const untouched = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, lastHealth: null, walk: null, steps: noSteps } as const;
+  const cases: Array<[string, Partial<Parameters<typeof OnboardingDialog>[0]>, boolean]> = [
+    ["by itself, a marker with nothing settled", { selfOpened: true, marker: untouched }, true],
+    ["by itself, a step already settled", { selfOpened: true, marker: settled }, false],
+    ["by itself, on a named step", { selfOpened: true, initialStep: "project" }, false],
+    ["by hand", { selfOpened: false }, false],
+    ["the roles table", { selfOpened: true, mode: "mapping" }, false],
+  ];
+  for (const [label, props, shown] of cases) {
+    const { host, done } = openGuide(props);
+    try {
+      expect(`${label}: ${welcomeOf(host) !== null}`).toBe(`${label}: ${shown}`);
+      if (!shown && props.mode !== "mapping") expect(host.querySelectorAll("[data-onboarding-step]").length).toBeGreaterThan(0);
+    } finally {
+      done();
+    }
+  }
+});
+
+test("on a phone the welcome keeps the guide's title in the header, with no step counter and no way back", async () => {
+  claudeSignedIn();
+  const phone = (query: string) => ({ ...matchMediaStub(query), matches: query.includes("max-width") });
+  Object.assign(globalThis, { matchMedia: phone });
+  (dom as unknown as { matchMedia: typeof phone }).matchMedia = phone;
+  const { host, done } = openGuide({ selfOpened: true });
+  try {
+    await until(() => welcomeOf(host) === "found");
+    expect(host.querySelector("[data-onboarding-step-list-toggle]")).toBeNull();
+    expect(host.querySelector("header")?.textContent).toBe("Set up Delegatus");
+    expect(host.querySelector("header button[aria-label='Back']")).toBeNull();
+    /* From a phone the programs are on another computer. */
+    expect(host.querySelector("[data-onboarding-welcome-programs]")?.textContent).toBe("Agent programs on the computer running Delegatus");
+    flushSync(() => (host.querySelector("[data-onboarding-welcome-accounts]") as HTMLElement).click());
+    expect(host.querySelector("[data-onboarding-step-list-toggle]")).not.toBeNull();
+  } finally {
+    done();
+    Object.assign(globalThis, { matchMedia: matchMediaStub });
+    (dom as unknown as { matchMedia: typeof matchMediaStub }).matchMedia = matchMediaStub;
+  }
+});
+
+test("the Accounts footer says what continuing means: without an agent it is bordered and says so, with one it is the filled Continue", async () => {
+  nobodySignedIn();
+  agyBody = AGY_MISSING;
+  const none = openGuide();
+  try {
+    await until(() => none.host.querySelector("[data-onboarding-primary]")?.textContent === "Continue without an agent");
+    expect((none.host.querySelector("[data-onboarding-primary]") as HTMLElement).className).not.toContain("bg-brand");
+    /* Nothing forces an account: it still moves on, and the step it leaves carries its warning in the list. */
+    flushSync(() => (none.host.querySelector("[data-onboarding-primary]") as HTMLElement).click());
+    expect(currentOf(none.host)).toBe("project");
+    expect(none.host.querySelector("[data-onboarding-step=engines] [data-step-mark]")?.getAttribute("data-step-mark")).toBe("warn");
+  } finally {
+    none.done();
+  }
+  claudeSignedIn();
+  const withClaude = openGuide();
+  try {
+    await until(() => (withClaude.host.querySelector("[data-onboarding-primary]") as HTMLElement | null)?.className.includes("bg-brand") === true);
+    expect(withClaude.host.querySelector("[data-onboarding-primary]")?.textContent).toBe("Continue");
+    expect(filledIn(withClaude.host)).toEqual(["Continue"]);
+  } finally {
+    withClaude.done();
+  }
+  nobodySignedIn();
+  agyBody = AGY_SIGNED_IN;
+  const withAntigravity = openGuide();
+  try {
+    await until(() => (withAntigravity.host.querySelector("[data-onboarding-primary]") as HTMLElement | null)?.className.includes("bg-brand") === true);
+    expect(withAntigravity.host.querySelector("[data-onboarding-primary]")?.textContent).toBe("Continue");
+    flushSync(() => (withAntigravity.host.querySelector("[data-onboarding-primary]") as HTMLElement).click());
+    expect(withAntigravity.host.querySelector("[data-onboarding-step=engines] [data-step-mark]")?.getAttribute("data-step-mark")).toBe("done");
+  } finally {
+    withAntigravity.done();
+  }
+});
+
+test("while the accounts are still being read the Accounts footer claims neither wording", () => {
+  answerAccounts(new Promise(() => {}));
+  const { host, done } = openGuide();
+  try {
+    const primary = host.querySelector("[data-onboarding-primary]") as HTMLElement;
+    expect(primary.textContent).toBe("Continue");
+    expect(primary.className).not.toContain("bg-brand");
+  } finally {
+    done();
+  }
+});
+
+test("host: a first run opens the guide on its welcome, and the same guide opened by hand starts on Accounts", async () => {
+  claudeSignedIn();
+  onboardingRead = () => json({ marker: null, hostPlatform: "linux" });
+  const { OnboardingHost } = await import("./OnboardingDialog");
+  const { openOnboarding } = await import("./useOnboarding");
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  try {
+    flushSync(() => root.render(<OnboardingHost projects={[]} />));
+    await until(() => welcomeOf(host) === "found");
+    expect(currentOf(host)).toBe("welcome");
+    flushSync(() => openOnboarding("guide"));
+    await until(() => currentOf(host) === "engines");
+    expect(welcomeOf(host)).toBeNull();
+  } finally {
+    flushSync(() => root.unmount());
+    host.remove();
+    onboardingRead = () => json({ marker: null });
+    nobodySignedIn();
+  }
+});
+
+test("host: on a Windows host the Accounts rows read the system from the marker read", async () => {
+  answerAccounts({ claude: { active: "", cli: "missing", accounts: [] }, codex: { active: "", cli: "missing", accounts: [] }, copilot: { active: "", accounts: [] } });
+  onboardingRead = () => json({ marker: null, hostPlatform: "win32" });
+  const { OnboardingHost } = await import("./OnboardingDialog");
+  const { openOnboarding } = await import("./useOnboarding");
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  try {
+    flushSync(() => root.render(<OnboardingHost projects={[]} />));
+    await until(() => host.querySelector("[data-onboarding-marker=read]") !== null);
+    flushSync(() => openOnboarding("guide", "engines"));
+    await until(() => host.querySelector("[data-onboarding-engine=codex]")?.getAttribute("data-engine-state") === "unsupported");
+    expect(host.querySelector("[data-onboarding-engine=codex] [data-onboarding-engine-header]")?.textContent).toBe("Needs WSL 2 on Windows");
+    expect(host.querySelector("[data-onboarding-engine=claude] code")?.textContent).toBe("irm https://claude.ai/install.ps1 | iex");
+  } finally {
+    flushSync(() => root.unmount());
+    host.remove();
+    onboardingRead = () => json({ marker: null });
+    nobodySignedIn();
+  }
+});
+
+test("Escape closes an open status popover alone, and the next Escape closes the guide", async () => {
+  claudeSignedIn();
+  const closes: string[] = [];
+  const { host, done } = openGuide({ onClose: (outcome) => closes.push(outcome) });
+  try {
+    await until(() => host.querySelector("[data-onboarding-engine=claude]")?.getAttribute("data-engine-state") === "connected");
+    const dot = host.querySelector<HTMLButtonElement>("[data-onboarding-engine=claude] [data-settings-dot]")!;
+    flushSync(() => dot.click());
+    expect(document.querySelectorAll("[data-settings-dot-popover]")).toHaveLength(1);
+    flushSync(() => key(dot, "Escape"));
+    expect(document.querySelectorAll("[data-settings-dot-popover]")).toHaveLength(0);
+    expect(closes).toEqual([]);
+    expect(host.querySelector("[data-onboarding-dialog]")).not.toBeNull();
+    flushSync(() => key(dot, "Escape"));
+    expect(closes).toEqual(["dismissed"]);
   } finally {
     done();
   }

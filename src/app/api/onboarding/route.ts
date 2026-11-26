@@ -23,11 +23,12 @@ function existingInstall(): boolean {
 
 /** The setup guide's marker; `marker: null` means it was never decided and the
     guide opens. The seat tick's check interval rides along for the tour's seat
-    card, which names it; a tick turned off reads as the shipped interval. */
+    card, which names it; a tick turned off reads as the shipped interval. The
+    host's system rides along for the Accounts step, whose rows differ on Windows. */
 export async function GET(): Promise<NextResponse> {
   try {
     const checkIntervalMs = seatTickPolicy()?.checkIntervalMs ?? DEFAULT_SEAT_TICK_POLICY.checkIntervalMs;
-    return NextResponse.json({ marker: resolveOnboardingMarker(existingInstall), legacyState: usesLinkedLegacyState(), seatTickCheckMinutes: Math.round(checkIntervalMs / 60_000) });
+    return NextResponse.json({ marker: resolveOnboardingMarker(existingInstall), legacyState: usesLinkedLegacyState(), seatTickCheckMinutes: Math.round(checkIntervalMs / 60_000), hostPlatform: process.platform });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }

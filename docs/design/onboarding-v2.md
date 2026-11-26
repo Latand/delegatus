@@ -1,8 +1,8 @@
 # Onboarding v2: a welcome, accounts with install and sign-in, roles from the accounts, the ChatGPT plan
 
 Status: design decided by the operator on 2026-11-25 (section 0.1), with a
-build plan in slices (section 12). Slice 1 (section 12.2) is built; nothing
-else here is in the product.
+build plan in slices (section 12). Slices 1 and 2 (sections 12.2 and 12.3)
+are built; nothing else here is in the product.
 
 In this tree since 2026-11-26: this document and
 [the subscription study](onboarding-v2-subscription.md). The prototype
@@ -1113,6 +1113,52 @@ step to the list and touches none of the files that pull request rewrites.
   3.2. The driver counts four program rows against the program list, one
   dot per row, and one "Check again" outside the rows.
 - **Review.** M.
+- **Built, 2026-11-26.** The step reads Accounts and keeps the id `engines`.
+  `EnginesStep.tsx` is the four rows; `ProgramRowParts.tsx` holds what a row
+  and the welcome share (the mark, the name, the state line and its dot, the
+  command to copy), and `AntigravityAccount.tsx` keeps Antigravity's read,
+  its terminal sign-in and the body the sidebar footer and the phone's
+  accounts screen draw. `EngineCardParts.tsx` and `AntigravityCard.tsx` are
+  gone. `AccountsPanel.tsx` exports the sign-in block a row embeds
+  (`AccountSignInBlock`) and the form that names a new account
+  (`AddAccountForm`); `CopilotFooterRow.tsx` needed no change, the row reads
+  its existing account hook.
+  - *The welcome* (`WelcomeStep.tsx`) is shown when `useOnboarding` opened
+    the guide itself and the marker holds no settled step. "Continue with
+    these" marks `engines` done and opens Project, the step after Accounts
+    until Roles is numbered (slice 4). A third state stands beside the
+    table's two: programs installed and nobody signed in, whose button reads
+    "Sign in to an account".
+  - *Until the install job exists* (slice 3) the nothing-found state says
+    "The next step shows the command that installs each one" where the table
+    says Delegatus can install one, and the Accounts lead leaves out the
+    sentence about installing into the home folder.
+  - *Rows.* A dot's popover holds one or two short lines: what the state
+    line leaves out, and for a signed-in account the share of its session
+    limit left with the hour it starts over. The version and path the table
+    names need a probe that reports them; slice 3 adds it with the install
+    job. The popover is placed against the row's name and state alone, so
+    it ends before an action beside them. Under 768 px the list is about
+    300 px wide (a phone, and a window where the step list stands beside
+    it): beside "Claude Code" that leaves a popover some 130 px, which two
+    short lines do not fit. There a row's action stands under its head and
+    the dot's words open in the row itself, under the state line, where
+    they cover nothing. Escape closes an open popover alone and the next
+    Escape closes the guide. The footer reads "Continue without an agent" on a border until
+    Claude Code, Codex or Antigravity has a signed-in account, and the
+    visited step's warning mark in the list follows the same rule.
+  - *This computer.* True when the page was reached at a loopback address on
+    a screen that is not a phone, the signal `/api/chatgpt-plan` already
+    reads; otherwise the sentence names the computer running Delegatus.
+  - *Windows.* `GET /api/onboarding` names the host's system. On `win32` a
+    missing row shows the vendor's PowerShell line (all three answered on
+    2026-11-26) and Codex reads "Needs WSL 2 on Windows". Finding `agy.exe`
+    under `%LOCALAPPDATA%` waits for slice 3, which touches the same
+    resolver for the install job.
+  - *The guide no longer carries* the provider form, the usage header or
+    "Remove": they stay on the accounts screen (A3).
+  - *Frames:* the states `welcome-*`, `engines-*` and `accounts-*` of the
+    kanban driver's guide block, at 1440, 900, 860, 645 and 390.
 
 ### 12.4 Slice 3: the install job and its button
 

@@ -995,8 +995,10 @@ function measureOnboarding(phone: boolean) {
     }).map((el) => (el.textContent ?? "").trim().slice(0, 50)),
     accounts: Object.fromEntries(Array.from(dialog.querySelectorAll<HTMLElement>("[data-onboarding-engine]")).map((el) => [el.dataset.onboardingEngine!, {
       header: el.querySelector("[data-onboarding-engine-header]")?.textContent ?? null,
-      rows: el.querySelectorAll("[data-mobile2-account]").length,
-      addRow: el.querySelector("[data-mobile2-account-add]") !== null,
+      rows: el.querySelectorAll("[data-onboarding-account]").length,
+      /* The row's one action (Sign in, Add an account), and whether "Add an account" is offered anywhere in the row. */
+      action: el.querySelector("[data-onboarding-row-action]")?.textContent ?? null,
+      addRow: el.querySelector("[data-onboarding-add-account]") !== null,
     }])),
     filledButtons: Array.from(dialog.querySelectorAll<HTMLElement>("button")).filter((el) => el.classList.contains("bg-brand") && el.getBoundingClientRect().width > 0).map((el) => (el.textContent ?? "").trim()),
     /* The phone pager lays every page out side by side; only the page on screen competes for the eye. */
@@ -1428,15 +1430,28 @@ async function captureOnboarding(): Promise<void> {
              Back, and a reload reopens the guide on the next numbered step:
              the walk opens the step it measures by name. On the phone the
              step list sits behind its toggle. */
-          const openStep = async (step: string) => {
+          /* A guide that opens by itself with no step settled shows its welcome first (docs/design/onboarding-v2.md
+             §3.1); "Add an account" or "Sign in to an account" leaves it for the Accounts step, settling nothing. */
+          const pastWelcome = async () => {
             await page.waitForSelector("[data-onboarding-dialog]", { timeout: 60_000 });
+            await page.waitForSelector("[data-onboarding-step], [data-onboarding-step-list-toggle], [data-onboarding-welcome-accounts]", { timeout: 60_000 });
+            if (await page.$("[data-onboarding-welcome]")) {
+              await page.click("[data-onboarding-welcome-accounts]");
+              await page.waitForSelector("[data-onboarding-welcome]", { state: "detached" });
+            }
+          };
+          const openStep = async (step: string) => {
+            await pastWelcome();
             if (viewport.phone && !(await page.$(`[data-onboarding-step="${step}"]`))) await page.click("[data-onboarding-step-list-toggle]");
             await page.click(`[data-onboarding-step="${step}"]`);
           };
 
           try {
-            /* 1. First run: the guide opens by itself on the Engines step. */
+            /* 1. First run: the guide opens by itself on its welcome, which leads to the Accounts step. */
             await page.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+            await page.waitForSelector('[data-onboarding-welcome="found"]', { timeout: 60_000 });
+            await page.screenshot({ path: path.join(OUT_DIR, `${tag}-welcome-found.png`) });
+            await pastWelcome();
             await page.waitForSelector('[data-onboarding-engine="codex"][data-engine-state="missing"]', { timeout: 60_000 });
             await page.waitForSelector('[data-onboarding-engine="claude"][data-engine-state="connected"]', { timeout: 60_000 });
             await shot("engines-one-connected", (r) => {
@@ -1444,49 +1459,8 @@ async function captureOnboarding(): Promise<void> {
             });
 
             if (providerOnly) {
-              const guideForm = async (selector: string, name: string) => {
-                const fields = page.locator(`${selector} input:not([type="checkbox"]), ${selector} textarea, ${selector} button`);
-                const readings = [];
-                for (let index = 0; index < await fields.count(); index++) {
-                  await fields.nth(index).scrollIntoViewIfNeeded();
-                  readings.push(await fields.nth(index).evaluate((node) => {
-                    const r = node.getBoundingClientRect();
-                    return { x: r.x, y: r.y, w: r.width, h: r.height };
-                  }));
-                }
-                must(readings.length >= 8 && readings.every((r) => r.w >= 44 && r.h >= (viewport.phone ? 44 : 24)
-                  && r.x >= -1 && r.x + r.w <= viewport.width + 1 && r.y >= -1 && r.y + r.h <= viewport.height + 1),
-                `${tag} ${name}: setup-guide provider controls are clipped or unreachable: ${JSON.stringify(readings)}`);
-                await shot(name, () => {});
-              };
-              const selector = '[data-onboarding-accounts="claude"] [data-claude-provider-editor="new"]';
-              await page.locator(`${selector} button`).first().click();
-              await page.locator(`${selector} input`).first().waitFor();
-              await guideForm(selector, "engines-provider-form");
-              const geometry = await page.locator(selector).evaluate((node) => ({
-                fields: [...node.querySelectorAll("input,button")].map((field) => {
-                  const rect = field.getBoundingClientRect();
-                  return { width: rect.width, height: rect.height, left: rect.left, right: rect.right };
-                }),
-                overflow: node.scrollWidth - node.clientWidth,
-              }));
-              must(geometry.overflow <= 1 && geometry.fields.every((field) => field.width >= 44 && (viewport.phone ? field.height >= 44 : field.height >= 24) && field.left >= 0 && field.right <= viewport.width + 1), `${tag}: provider controls overflow or collapse: ${JSON.stringify(geometry)}`);
-              await page.locator(`${selector} button`).first().click();
-              const edit = '[data-onboarding-accounts="claude"] [data-claude-provider-editor="provider-fixture"]';
-              /* The provider's form opens from the row's own Edit provider, in the opened row. */
-              await page.locator('[data-onboarding-accounts="claude"] [data-account-toggle="provider-fixture"]').click();
-              await page.locator('[data-onboarding-accounts="claude"] [data-account-provider-edit="provider-fixture"]').click();
-              await guideForm(edit, "engines-provider-edit");
-              const editGeometry = await page.locator(edit).evaluate((node) => ({
-                fields: [...node.querySelectorAll("input,button")].map((field) => {
-                  const rect = field.getBoundingClientRect();
-                  return { width: rect.width, height: rect.height, left: rect.left, right: rect.right };
-                }),
-                overflow: node.scrollWidth - node.clientWidth,
-              }));
-              must(editGeometry.overflow <= 1 && editGeometry.fields.every((field) => field.width >= 44 && (viewport.phone ? field.height >= 44 : field.height >= 24) && field.left >= 0 && field.right <= viewport.width + 1), `${tag}: provider edit controls overflow or collapse: ${JSON.stringify(editGeometry)}`);
-              /* The Accounts screen has a separate scroll/fixed-position layout.
-                 Walk its own add and edit controls after leaving the guide. */
+              /* The guide's Accounts rows carry no provider form (docs/design/onboarding-v2.md §2, A3): a compatible
+                 provider is added on the Accounts screen, whose add and edit controls are walked after leaving the guide. */
               await page.locator('[data-onboarding-dialog] button[title]').last().click();
               await page.waitForSelector('[data-onboarding-dialog]', { state: "detached" });
               await page.goto(`${baseUrl}/#p=${encodeURIComponent(project)}`, { waitUntil: "domcontentloaded" });
@@ -1647,13 +1621,14 @@ async function captureOnboarding(): Promise<void> {
             /* 4. Codex installed and signed out; its sign-in opens in place. */
             fakeCli("codex", true);
             await openStep("engines");
-            await page.click('[data-onboarding-engine="codex"] button');
+            /* The step's one "Check again", on the heading's line, looks for every program. */
+            await page.click("[data-onboarding-recheck]");
             await page.waitForSelector('[data-onboarding-engine="codex"][data-engine-state="signed-out"]', { timeout: 30_000 });
-            /* Slice 3: the card is the account list, with the add row always there. */
-            await page.waitForSelector('[data-onboarding-accounts="codex"] [data-mobile2-account-add="codex"]');
+            /* The row holds its one way on: Sign in for an account that waits, Add an account where there is none. */
+            await page.waitForSelector('[data-onboarding-engine="codex"] [data-onboarding-row-action]');
             await shot("engines-sign-in", (r) => {
               must(r.engines.codex === "signed-out", `${tag}: codex reads ${r.engines.codex} after the install`);
-              must(r.accounts.codex?.addRow === true, `${tag}: a signed-out Codex card offers no Add row`);
+              must(Boolean(r.accounts.codex?.action), `${tag}: a signed-out Codex row offers no action`);
             });
 
             /* 4b. Antigravity, the third engine (agent mapping): a row mapped to it
@@ -1684,7 +1659,7 @@ async function captureOnboarding(): Promise<void> {
               await page.click('[data-mapping-row="builder"] [data-mapping-connect="antigravity"]');
               await page.waitForSelector('[data-onboarding-engine="antigravity"][data-engine-state="missing"]', { timeout: 30_000 });
               await shot("engines-agy-missing", (r) => {
-                must(r.agy?.header === text("onboarding.engines.missing"), `${tag}: the missing card reads ${r.agy?.header}`);
+                must(r.agy?.header === text("onboarding.engines.missing"), `${tag}: the missing row reads ${r.agy?.header}`);
                 must(r.agy?.command === ANTIGRAVITY_INSTALL_COMMAND.command, `${tag}: the install command is ${r.agy?.command}`);
                 must(r.agy?.focused === true, `${tag}: the card was not focused after How to install`);
               });
@@ -1701,7 +1676,7 @@ async function captureOnboarding(): Promise<void> {
               await page.click('[data-mapping-row="builder"] [data-mapping-connect="antigravity"]');
               await page.waitForSelector('[data-onboarding-engine="antigravity"][data-engine-state="signed-out"]', { timeout: 30_000 });
               await shot("engines-agy-signed-out", (r) => {
-                must(r.agy?.command === "agy" && r.agy.check === text("onboarding.engines.checkSignin"), `${tag}: the signed-out card shows ${JSON.stringify(r.agy)}`);
+                must(r.agy?.command === "agy" && r.agy.check === text("onboarding.engines.checkSignin"), `${tag}: the signed-out row shows ${JSON.stringify(r.agy)}`);
                 must(r.agy?.focused === true, `${tag}: the card was not focused after Sign in`);
               });
               /* signed in: the check asks the stub, which now opens a session with a tier */
@@ -1736,7 +1711,8 @@ async function captureOnboarding(): Promise<void> {
               must(r.roleLabels.length > 0 && r.blockedRows === r.roleLabels.length, `${tag}: with no engine ${r.blockedRows} of ${r.roleLabels.length} rendered rows are blocked, expected every one`);
             });
             await openStep("engines");
-            await page.waitForSelector("[data-onboarding-engines-note]");
+            await page.waitForSelector("[data-onboarding-accounts-step]");
+            await page.waitForFunction((label) => document.querySelector("[data-onboarding-primary]")?.textContent === label, translate(locale, "onboarding.continueNoAgent"), { timeout: 30_000 });
             await shot("engines-neither", (r) => {
               must(r.engines.claude !== "connected" && r.engines.codex === "missing", `${tag}: engines read ${JSON.stringify(r.engines)} with nothing signed in`);
             });
@@ -1744,7 +1720,7 @@ async function captureOnboarding(): Promise<void> {
               await page.click('[data-onboarding-step="agents"]');
               await page.waitForSelector("[data-agent-mapping] [data-mapping-row]");
               const mark = await page.$eval('[data-onboarding-step="engines"] [data-step-mark]', (el) => (el as HTMLElement).dataset.stepMark);
-              must(mark === "warn", `${tag}: with no engine the visited Engines step shows ${mark}, expected the warning mark`);
+              must(mark === "warn", `${tag}: with no agent account the visited Accounts step shows ${mark}, expected the warning mark`);
             }
             claudeSignedIn(true);
 
@@ -1978,10 +1954,10 @@ async function captureOnboarding(): Promise<void> {
             await openGuide("setup-guide");
             await page.waitForSelector('[data-onboarding-dialog="guide"]');
             await openStep("engines");
-            await page.waitForFunction(() => document.querySelectorAll('[data-onboarding-engine="claude"] [data-mobile2-account]').length === 3, undefined, { timeout: 30_000 });
+            await page.waitForFunction(() => document.querySelectorAll('[data-onboarding-engine="claude"] [data-onboarding-account]').length === 3, undefined, { timeout: 30_000 });
             await shot("engines-three-accounts", (r) => {
               common("engines-three-accounts", r);
-              must(r.accounts.claude?.rows === 3 && r.accounts.claude.addRow, `${tag}: the Claude card lists ${r.accounts.claude?.rows} accounts, add row ${r.accounts.claude?.addRow}`);
+              must(r.accounts.claude?.rows === 3 && r.accounts.claude.addRow, `${tag}: the Claude Code row lists ${r.accounts.claude?.rows} accounts, Add an account ${r.accounts.claude?.addRow}`);
               must(/^(3 accounts|Акаунтів: 3)/.test(r.accounts.claude?.header ?? ""), `${tag}: the Claude header reads "${r.accounts.claude?.header}"`);
               must(/(6|з 6)/.test(r.stepCounter ?? ""), `${tag}: the step counter reads "${r.stepCounter}"`);
             });

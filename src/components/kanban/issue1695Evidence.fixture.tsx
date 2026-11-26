@@ -4337,18 +4337,41 @@ if (COLD_LINK) (window as unknown as { __coldLink: typeof coldLink }).__coldLink
    form states the seat's transcript, its decision with one question that cannot be skipped, and its "Needs you" notice.
    States: engines-both|claude-only|codex-only|signed-out|no-cli, orchestrator-one-press|claude-only|codex-only|no-engine,
    later-memory-before|memory-after|telegram-later, telegram-numbered, form-greeting|decisions|needs-you,
-   settings-memory-before|memory-after, first-visit*.
+   settings-memory-before|memory-after, first-visit*, welcome-found|signed-out|nothing,
+   accounts-signing-in|several|terminal|windows.
    `first-visit*` is a first visit (docs/design/onboarding-v2.md §12.2): no agent tool, and the install notice not yet
-   dismissed. `orchestrator-no-engine` has both tools installed and signed out. */
+   dismissed. `orchestrator-no-engine` has both tools installed and signed out.
+   `welcome-*` is the guide's cover (§12.3) by what the computer has: an account found, programs installed and nobody
+   signed in, nothing installed. `accounts-*` are the Accounts rows the engines states do not reach: a sign-in under way
+   on both programs (Claude Code awaits its code, Codex shows its device code), several accounts of one program with one
+   low on its limit and one waiting for a sign-in, Antigravity and Copilot signed out in their own terminals, and a
+   Windows host with nothing installed. */
 const FIRST_RUN = params.get("firstrun") ?? "";
 const FIRST_RUN_FORM = FIRST_RUN.startsWith("form-");
 const FIRST_VISIT = FIRST_RUN.startsWith("first-visit");
 /* What `/api/telemetry` answers on a first visit; a write is kept. */
 const firstVisitTelemetry = { enabled: true, locked: false, noticeDismissed: false, swarmRules: false };
-const FIRST_RUN_ENGINES: "both" | "claude-only" | "codex-only" | "signed-out" | "no-cli" =
-  FIRST_RUN === "engines-claude-only" || FIRST_RUN === "orchestrator-claude-only" ? "claude-only"
+const FIRST_RUN_ENGINES: "both" | "claude-only" | "codex-only" | "signed-out" | "no-cli" | "signing-in" | "several" =
+  FIRST_RUN === "engines-claude-only" || FIRST_RUN === "orchestrator-claude-only" || FIRST_RUN === "welcome-found" ? "claude-only"
   : FIRST_RUN === "engines-codex-only" || FIRST_RUN === "orchestrator-codex-only" ? "codex-only"
-  : FIRST_RUN === "engines-signed-out" || FIRST_RUN === "orchestrator-no-engine" ? "signed-out" : FIRST_RUN === "engines-no-cli" || FIRST_VISIT ? "no-cli" : "both";
+  : FIRST_RUN === "engines-signed-out" || FIRST_RUN === "orchestrator-no-engine" || FIRST_RUN === "welcome-signed-out" ? "signed-out"
+  : FIRST_RUN === "engines-no-cli" || FIRST_VISIT || FIRST_RUN === "welcome-nothing" || FIRST_RUN === "accounts-windows" ? "no-cli"
+  : FIRST_RUN === "accounts-signing-in" ? "signing-in" : FIRST_RUN === "accounts-several" ? "several" : "both";
+/* The states that are about the agent programs themselves: the welcome, the Accounts rows, and a first visit. */
+const FIRST_RUN_WELCOME = FIRST_RUN.startsWith("welcome-");
+const FIRST_RUN_PROGRAMS = FIRST_VISIT || FIRST_RUN_WELCOME || FIRST_RUN.startsWith("engines-") || FIRST_RUN.startsWith("accounts-") || FIRST_RUN === "orchestrator-no-engine";
+/* Antigravity beside them: not installed where nothing is, signed out where the state is about its terminal or about
+   sign-ins under way, and signed in elsewhere. */
+const FIRST_RUN_AGY: { cli: "found" | "missing"; accounts: { auth: string; plan: string | null }[] } =
+  FIRST_RUN_ENGINES === "no-cli" ? { cli: "missing", accounts: [] }
+  : ["orchestrator-no-engine", "welcome-signed-out", "accounts-terminal", "engines-signed-out", "accounts-signing-in"].includes(FIRST_RUN) ? { cli: "found", accounts: [{ auth: "signed_out", plan: null }] }
+  : FIRST_RUN === "welcome-found" || FIRST_RUN === "engines-claude-only" ? { cli: "missing", accounts: [] }
+  : { cli: "found", accounts: [{ auth: "signed_in", plan: "Google AI Pro" }] };
+/* Copilot: installed and signed out where the state is about its terminal sentence, signed in beside several accounts,
+   not installed elsewhere. */
+const FIRST_RUN_COPILOT = FIRST_RUN === "accounts-terminal" || FIRST_RUN === "engines-signed-out" ? { cli: { present: true, reason: null }, active: "", accounts: [] }
+  : FIRST_RUN === "accounts-several" || FIRST_RUN === "engines-both" ? { cli: { present: true, reason: null }, active: "copilot-main", accounts: [{ id: "copilot-main", label: "Account H", kind: "managed", active: true, auth: "signed_in", user: null, loginCommand: null, login: null }] }
+  : { cli: { present: false, reason: null }, active: "", accounts: [] };
 /* An orchestrator exists for the memory import once the guide was reopened after Create, and on the seat's own board.
    The driver draws those states over `scenario=orchestrator-first-walk`, so the board behind the dialog carries the seat too. */
 const FIRST_RUN_SEATED = FIRST_RUN_FORM || FIRST_RUN === "later-memory-after" || FIRST_RUN === "settings-memory-after";
@@ -4363,12 +4386,25 @@ const frSignedOut = (label: string) => ({
   id: "default", label, kind: "managed", authPresent: false, loginPending: false, loginState: "idle", deviceAuth: null, auth: { state: "signed_out", plan: null }, limits: null,
 });
 const frEngine = (cli: "found" | "missing", accounts: unknown[]) => ({ active: "default", accounts, cli, mutationLocked: false, migration: null, autoBalance: null });
+/* A sign-in under way: Claude Code's link is open and its code is awaited; Codex has handed out its device code. */
+const frAwaitingCode = (label: string) => ({
+  ...frSignedOut(label), loginPending: true, loginState: "pending",
+  login: { operationId: "login-evidence", phase: "awaiting_code", loginUrl: "https://claude.ai/oauth/authorize?code=true&state=evidence", acceptsCode: true, deadlineAt: iso(-9 * MIN), result: null },
+});
+const frDeviceCode = (label: string) => ({ ...frSignedOut(label), loginPending: true, loginState: "pending", deviceAuth: { url: "https://auth.openai.com/codex/device", code: "QK7P-M2XD" } });
+const frSpare = L("Spare", "Запасний");
+const frStudio = L("Studio", "Студія");
 const FIRST_RUN_ACCOUNTS = {
   "both": { claude: frEngine("found", [frSignedIn(frWork, "Max", 18)]), codex: frEngine("found", [frSignedIn(frPersonal, "Pro", 9)]) },
   "claude-only": { claude: frEngine("found", [frSignedIn(frWork, "Max", 18)]), codex: frEngine("missing", []) },
   "codex-only": { claude: frEngine("found", [frSignedOut(frWork)]), codex: frEngine("found", [frSignedIn(frPersonal, "Pro", 9)]) },
   "signed-out": { claude: frEngine("found", [frSignedOut(frWork)]), codex: frEngine("found", [frSignedOut(frPersonal)]) },
   "no-cli": { claude: frEngine("missing", []), codex: frEngine("missing", []) },
+  "signing-in": { claude: frEngine("found", [frAwaitingCode(frWork)]), codex: frEngine("found", [frDeviceCode(frPersonal)]) },
+  "several": {
+    claude: frEngine("found", [frSignedIn(frWork, "Max", 18), accountRow("studio", frStudio, "Max", 88, 95), { ...frSignedOut(frSpare), id: "spare" }]),
+    codex: frEngine("found", [frSignedIn(frPersonal, "Pro", 9), accountRow("team", frWork, "Plus", 34, 210)]),
+  },
 }[FIRST_RUN_ENGINES];
 /* The factory catalog as `GET /api/roles` answers it, so the Roles row counts what a fresh install would move. */
 const frRoles = () => ({
@@ -4418,17 +4454,17 @@ function firstRunAnswer(url: URL, method: string, init?: RequestInit): Response 
     /* Once an orchestrator exists, the guide's first three steps are settled: the numbers turn into ticks. */
     const steps = FIRST_RUN_SEATED ? { engines: "done", project: "done", orchestrator: "done" } : {};
     const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, steps, lastHealth: null, walk: "done" };
-    return json(method === "PUT" ? { marker } : { marker, legacyState: false, seatTickCheckMinutes: 5 });
+    return json(method === "PUT" ? { marker } : { marker, legacyState: false, seatTickCheckMinutes: 5, hostPlatform: FIRST_RUN === "accounts-windows" ? "win32" : "linux" });
   }
-  /* Antigravity as the slice 1 states have it: not installed on a first visit, installed and signed out beside the other two. */
-  if (path === "/api/accounts/antigravity" && (FIRST_VISIT || FIRST_RUN === "orchestrator-no-engine")) return json(FIRST_VISIT ? { cli: "missing", accounts: [] } : { cli: "found", accounts: [{ auth: "signed_out", plan: null }] });
+  /* Antigravity is answered for the states that are about the programs; the others keep the page's own answer. */
+  if (path === "/api/accounts/antigravity" && FIRST_RUN_PROGRAMS) return json(FIRST_RUN_AGY);
   if (path === "/api/telemetry" && FIRST_VISIT) {
     if (method === "PUT") Object.assign(firstVisitTelemetry, JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
     return json(firstVisitTelemetry);
   }
   if (path === "/api/accounts" && method === "GET") return json(FIRST_RUN_ACCOUNTS);
-  if (path === "/api/accounts/cli") return json({ claude: FIRST_RUN_ACCOUNTS.claude.cli, codex: FIRST_RUN_ACCOUNTS.codex.cli });
-  if (path === "/api/accounts/copilot" && method === "GET") return json({ cli: { present: false, reason: null }, active: "", accounts: [] });
+  if (path === "/api/accounts/cli") return json({ claude: FIRST_RUN_ACCOUNTS.claude.cli, codex: FIRST_RUN_ACCOUNTS.codex.cli, ...(FIRST_RUN_PROGRAMS ? { antigravity: FIRST_RUN_AGY.cli } : {}) });
+  if (path === "/api/accounts/copilot" && method === "GET") return json(FIRST_RUN_COPILOT);
   if (path === "/api/roles") return json(frRoles());
   if (path === "/api/telegram/bot") return json({ bot: TELEGRAM_BOT_STATUS });
   if (path === "/api/memory/source") return json({ choice: null, phase: null, orchestrator: FIRST_RUN_SEATED });
@@ -5598,7 +5634,8 @@ else localStorage.setItem("llvProject", PROJECT);
    English is only the DEFAULT here — writing it unconditionally turned every
    requested Ukrainian frame back into an English render (#1743). */
 if (!localStorage.getItem("llv_lang")) localStorage.setItem("llv_lang", "en");
-if (!location.hash && !OVERVIEW_VIEW) location.hash = `#p=${PROJECT}`;
+/* The welcome belongs to a guide that opens by itself, which a page opened on a project never does: it keeps the bare address a first run lands on. */
+if (!location.hash && !OVERVIEW_VIEW && !FIRST_RUN_WELCOME) location.hash = `#p=${PROJECT}`;
 const queueTask = { id: "task_native", title: "Fix __init__.py (#42)" };
 const queueTaskText = taskReferencePrelude([queueTask]) + "\nstart this one";
 const taskDeputy: SeatDeputyView = { askId: "deputy_task", seatConversationId: "conversation_seat_task", deputyConversationId: "conversation_parallel_task",

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { onOpenKeys } from "@/components/keys/openKeys";
+import { hostPlatformOf, type HostPlatform } from "@/lib/onboarding/agentInstallCommands";
 import type { OnboardingMarker, OnboardingPatch, OnboardingStepId } from "@/lib/onboarding/marker";
 
 /**
@@ -106,6 +107,10 @@ export function useOnboarding(): {
   /** The seat tick's check interval, which the orchestrator step names. */
   checkMinutes: number | null;
   legacyState: boolean;
+  /** A first run opened the guide by itself, which is when its welcome is shown. */
+  selfOpened: boolean;
+  /** The system Delegatus runs on, as the marker read named it. */
+  hostPlatform: HostPlatform;
   close: (outcome: "dismissed" | "completed", steps?: OnboardingPatch["steps"], noticeShown?: boolean) => void;
 } {
   const [mode, setMode] = useState<OnboardingMode | null>(null);
@@ -118,6 +123,7 @@ export function useOnboarding(): {
   /* Set by an open request, which can land before the first read answers. */
   const askedByUser = useRef(false);
   const [checkMinutes, setCheckMinutes] = useState<number | null>(null);
+  const [hostPlatform, setHostPlatform] = useState<HostPlatform>("linux");
 
   useEffect(() => publishOnboarding({ guideOpen: mode !== null }), [mode]);
   useEffect(() => { if (marker) publishOnboarding({ marker }); }, [marker]);
@@ -139,7 +145,7 @@ export function useOnboarding(): {
     const stopKeys = onOpenKeys(() => setMode(null));
     let cancelled = false;
     void fetch("/api/onboarding")
-      .then(async (response) => response.ok ? (await response.json()) as { marker: OnboardingMarker | null; seatTickCheckMinutes?: unknown; legacyState?: boolean } : null)
+      .then(async (response) => response.ok ? (await response.json()) as { marker: OnboardingMarker | null; seatTickCheckMinutes?: unknown; legacyState?: boolean; hostPlatform?: unknown } : null)
       .catch(() => null)
       .then((body) => {
         if (cancelled) return;
@@ -151,6 +157,7 @@ export function useOnboarding(): {
         }
         setMarkerStatus("read");
         setLegacyState(body.legacyState === true);
+        setHostPlatform(hostPlatformOf(body.hostPlatform));
         setMarker(body.marker);
         publishOnboarding({ loaded: true, marker: body.marker });
         if (typeof body.seatTickCheckMinutes === "number" && body.seatTickCheckMinutes > 0) setCheckMinutes(body.seatTickCheckMinutes);
@@ -194,5 +201,5 @@ export function useOnboarding(): {
      steps live; opened by itself it carries it only until it was closed once. */
   const noticeShown = legacyState && (origin === "user" || !marker?.legacyNoticeAckedAt);
 
-  return { mode, step, opening, marker, markerStatus, legacyState: noticeShown, checkMinutes, close };
+  return { mode, step, opening, marker, markerStatus, legacyState: noticeShown, selfOpened: origin === "first-run", hostPlatform, checkMinutes, close };
 }

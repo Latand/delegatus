@@ -292,11 +292,13 @@ Headings and what each states:
    so earlier sessions appear as chats; the first start shows the install
    ping notice and how to turn it off.
 5. `## The setup guide` (G11, G12, G13, G14, G15): its title is **Set up
-   Delegatus** and its numbered steps are **Engines**, **Project**,
-   **Telegram (optional)** and **Orchestrator**. Then, per step: the engine
-   states (**Connected**, **Installed, signed out**, **Not installed**) and
-   **Check again**; **Add compatible provider** for an Anthropic Messages
-   compatible service (one sentence, link `README.md#quick-start`); the
+   Delegatus**, it opens on a welcome that lists the agent programs found,
+   and its numbered steps are **Accounts**, **Project**, **Telegram
+   (optional)** and **Orchestrator**. Then, per step: one row per program
+   with its state (**Connected**, **Installed, signed out**, **Not
+   installed**), **Sign in** and **Add an account** on a row, and **Check
+   again** beside the heading; a compatible provider is added on the accounts
+   screen (one sentence, link to the accounts page); the
    project choice (**Already on this computer**, **Open another folder**);
    the orchestrator draft (engine, model, effort and account it will run on,
    **Read its instructions first**, then **Create the orchestrator**). After
@@ -322,7 +324,7 @@ Headings and what each states:
    merge the pull request yourself, or turn on **Merge when the review
    passes** (link to the workflows page section).
 9. `## If something does not start`: one line each for: no agent CLI found
-   (G6); account signed out (Engines step); port busy (G7); only Copilot
+   (G6); account signed out (Accounts step); port busy (G7); only Copilot
    installed (G3); repository initialization refused (G21); no pull request or merge
    (G22). Point to the README's Configuration section for options and
    environment variables.
