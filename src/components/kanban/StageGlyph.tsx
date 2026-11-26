@@ -3,11 +3,12 @@
 import { useId } from "react";
 
 import { useLocale } from "@/lib/i18n";
+import { NeonTileSvg } from "@/components/EngineMark";
 import { STAGE_MARK } from "@/components/pipelines/pipelineBlockModel";
 import { STAGE_TONES, type StageChipState } from "@/components/pipelines/pipelineModel";
 
 import { svgProps } from "./kanbanGlyphs";
-import { GLYPH_STATE, modelGlyphKind, modelGlyphName, type GlyphMotion, type ModelGlyphKind } from "./modelGlyph";
+import { CELL_GLYPH_KINDS, GLYPH_STATE, modelGlyphKind, modelGlyphName, type GlyphMotion, type ModelGlyphKind } from "./modelGlyph";
 import { STAGE_TONE } from "./pipelineGraph";
 
 /*
@@ -20,6 +21,11 @@ import { STAGE_TONE } from "./pipelineGraph";
  * name brings to mind: Opus the Claude spark itself, Sonnet the poet's quill,
  * Haiku a sakura blossom, Fable the fable's fox. The Codex line is its sky:
  * Sol a yellow sun, Astra a blazing blue sun, Terra the Earth, Luna the Moon.
+ * Antigravity's Gemini 4 line is the periodic table: Neon (Ne, 10), Argon (Ar,
+ * 18) and Hydrogen (H, 1) each a cell in their own tint, and the two
+ * orchestrator models the cell of their base element with a small hub in the
+ * corner. Gemini Flash is a bolt with a spark, GPT-OSS an open hexagon with a
+ * seed inside, and a Claude model Antigravity serves draws the Claude glyph.
  * A model with no glyph keeps the stage dot or mark the host always drew, so
  * nothing changes for it.
  *
@@ -115,7 +121,7 @@ export function StageGlyph({ state, model, live = false, motion = "still", fallb
     : { "aria-hidden": true as const };
   return (
     <span
-      className={`mglyph g-${kind} tone-${STAGE_TONE[state]}${className ? ` ${className}` : ""}`}
+      className={`mglyph g-${kind}${CELL_GLYPH_KINDS.includes(kind) ? " g-cell" : ""} tone-${STAGE_TONE[state]}${className ? ` ${className}` : ""}`}
       data-glyph={kind}
       data-glyph-engine={model.engine}
       data-glyph-state={reading}
@@ -224,6 +230,46 @@ const ASTRA_CORONA = star(Array.from({ length: 8 }, (_, index) => (index % 2 ? 6
 /* Terra: land drawn twice across one turn, so it can slide round the disc. */
 const TERRA_LAND = "M1.4 4.6Q3.6 3.4 5.3 4.4Q6.1 5.7 4.9 6.9Q3.6 7.6 4.1 9.2Q4.6 10.9 3.3 11.9Q1.8 11.2 1.2 8.9ZM8.2 2.4Q10.6 2 12.2 3.6Q11.6 5 10 5Q9.2 6.2 10.4 7.4Q12.2 7.6 12.6 9.4Q12 11.8 10.2 13.3Q9 12 9.3 10.3Q8.3 9 7.3 8.1Q6.9 6.2 8 5.2Q7.4 3.6 8.2 2.4Z";
 
+/* Antigravity's periodic-table cells. Neon's drawing is `NeonTileSvg`, the
+   engine's first; Argon and Hydrogen use the same frame, gas chamber and stroke
+   weights with their own atomic number and symbol. */
+const ATOMIC_ONE = "M3.15 2.75V4.85";
+const ARGON_SYM = "M3.1 12.6L5.1 6.8L7.1 12.6M3.8 10.8H6.4M8.9 12.6V8.5M8.9 10.2C8.9 9 9.8 8.4 11.3 8.5";
+const HYDROGEN_SYM = "M4.6 6.8V12.6M11.4 6.8V12.6M4.6 9.7H11.4";
+/* The orchestrator's cue: a hub with two satellites, where the cell's top right is open. */
+const CUE = "M9.5 4L12.3 2.9M9.5 4L12.3 5.1";
+
+function CellFrame({ number, symbol, eight = false }: { number: string; symbol: string; eight?: boolean }) {
+  return (
+    <>
+      <rect className="mg-neon-gas" x="2.1" y="2.1" width="11.8" height="11.8" rx="1.4" />
+      <rect className="mg-tile" x="1" y="1" width="14" height="14" rx="2.3" />
+      <path className="mg-neon-num" d={number} />
+      {eight ? <><circle className="mg-neon-num" cx="5.4" cy="3.3" r="0.6" /><circle className="mg-neon-num" cx="5.4" cy="4.4" r="0.6" /></> : null}
+      <path className="mg-neon-sym" d={symbol} />
+    </>
+  );
+}
+
+function OrchestratorCue() {
+  return (
+    <g className="mg-cue">
+      <path d={CUE} />
+      <circle cx="9.5" cy="4" r="0.95" />
+      <circle cx="12.4" cy="2.9" r="0.8" />
+      <circle cx="12.4" cy="5.1" r="0.8" />
+    </g>
+  );
+}
+
+/* Gemini Flash: a bolt, and a four-point spark beside it. */
+const FLASH_BOLT = "M10 .9L3.4 9.3H7.5L6.3 15.1L12.9 6.8H8.8Z";
+const FLASH_SPARK = "M3.2 1.2C3.4 2.5 3.9 3 5.2 3.2C3.9 3.4 3.4 3.9 3.2 5.2C3 3.9 2.5 3.4 1.2 3.2C2.5 3 3 2.5 3.2 1.2Z";
+
+/* GPT-OSS: an open hexagon, its last side left out, with a seed inside: open weights. */
+const HEX = Array.from({ length: 6 }, (_, index) => at(6.5, index * 60));
+const OSS_RING = `M${HEX.slice(0, 6).map(([x, y]) => `${x} ${y}`).join("L")}`;
+
 function GlyphDrawing({ kind }: { kind: ModelGlyphKind }) {
   /* Terra's clip, Luna's phase mask and Astra's core need an id of their own per instance. */
   const id = `mg${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
@@ -296,6 +342,30 @@ function GlyphDrawing({ kind }: { kind: ModelGlyphKind }) {
           </defs>
           <circle className="mg-earthshine" cx="8" cy="8" r="6.4" />
           <circle className="mg-fill" cx="8" cy="8" r="6.4" mask={`url(#${id})`} />
+        </svg>
+      );
+    case "neon":
+      return <NeonTileSvg />;
+    case "orch-neon":
+      return <NeonTileSvg><OrchestratorCue /></NeonTileSvg>;
+    case "argon":
+      return <svg viewBox="0 0 16 16" aria-hidden="true"><CellFrame number={ATOMIC_ONE} eight symbol={ARGON_SYM} /></svg>;
+    case "orch-argon":
+      return <svg viewBox="0 0 16 16" aria-hidden="true"><CellFrame number={ATOMIC_ONE} eight symbol={ARGON_SYM} /><OrchestratorCue /></svg>;
+    case "hydrogen":
+      return <svg viewBox="0 0 16 16" aria-hidden="true"><CellFrame number={ATOMIC_ONE} symbol={HYDROGEN_SYM} /></svg>;
+    case "flash":
+      return (
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path className="mg-fill mg-flick" d={FLASH_BOLT} />
+          <path className="mg-fill" d={FLASH_SPARK} />
+        </svg>
+      );
+    case "oss":
+      return (
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path className="mg-ring" d={OSS_RING} />
+          <circle className="mg-fill" cx="8" cy="8" r="1.9" />
         </svg>
       );
   }

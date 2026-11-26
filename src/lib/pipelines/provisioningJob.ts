@@ -1,0 +1,1068 @@
+import { createHash, randomUUID } from "node:crypto";
+import type { ChildProcess } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { stateDir } from "@/lib/configDir";
+import { describeTransientGitFailure, transientGitFailure } from "@/lib/git/transientFailure";
+import { operationPortIdentity, withoutOperationLease } from "@/lib/operationLease";
+import { bootEpochProvesExit, captureProcessIdentity, processIdentityStatus, systemBootEpoch } from "@/lib/processIdentity";
+import { DISK_SPACE_RETRY_MS, DISK_SPACE_WAIT_PREFIX, worktreeDiskWait } from "@/lib/state/diskPressure";
+import { StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
+import { hotStateSqliteWriterReady, hotStateWriterRevision, readHotStateAuthority } from "@/lib/state/hotStateAuthority";
+import { realExec } from "@/lib/workflows/provision";
+import { reportProvisioningPhase } from "./controllerJobs";
+import { requestPipelineTick } from "./controllerSignal";
+import {
+  ensurePipelineCheckout, planPipelineCheckout, prepareProvisionedPipeline, realProvisionExec, resolvePipelineBaseAsync,
+  verifyProvisioningCheckoutReceipt,
+  WORKTREE_INITIALIZATION_HELD, type PreservedProvisionRef, type ProvisionExecPort,
+} from "./git";
+import { pipelinePublishesRemoteBranch } from "./publication";
+import { provesProvisionCacheHolder } from "./provisionCacheHolder";
+import { physicalProvisioningPath, provisioningStripe, tryProvisioningLock, type ProvisioningGrant } from "./provisionCheckoutCustody";
+import { observeLegacyInstaller, type LegacyInstallerObservation } from "./provisionLegacyInstaller";
+import { ProvisionToolchainFailure, runProvisionToolchain } from "./provisionToolchain";
+import { provisionToolchainEntry } from "./provisionToolchainEntry";
+import { recordProvisionFixtureEvent } from "./provisionFixtureSupervisor";
+import { PROVISION_STEPS, provisioningStepView, validProvisioningRecord, type ProvisioningRecord, type ProvisioningStepView, type ProvisionStep } from "./provisioningRecord";
+import { controllerPipelineVersionNow, deliveryJournal, findControllerPipeline, provisioningCacheOwnerKeys, withProvisioningCheckpoint } from "./store";
+import type { Pipeline, PipelineBoundedWait } from "./types";
+import type { StateBoundedTransaction } from "@/lib/state/sqliteStateStore";
+
+const MAX_EXECUTORS = 4;
+const EXECUTION_MS = 360_000;
+const RETRY_MS = 180_000;
+const ADD_ROLLBACK_DEFERRAL_MS = 300_000;
+const METADATA_STEPS = new Set<ProvisionStep>(["startingToolchain", "checkingDependencies", "validatingSealedGraph"]);
+const instance = randomUUID();
+let stopped = false;
+
+export type ProvisionClock = {
+  wallMs(): number;
+  monotonicMs(): number;
+  arm(delayMs: number, run: () => void): () => void;
+};
+
+type ProvisionPorts = {
+  exec: typeof realExec;
+  provisionExec?: ProvisionExecPort;
+  provisionClock?: ProvisionClock;
+  provisionToolchainReply?: (id: string, type: string, detail?: string) => Promise<void>;
+  observeProvisioningCheckpoint?: (id: string, step: ProvisioningStepView | undefined, at: number) => void | Promise<void>;
+  beforeGitDispatch?(command: string, args: readonly string[], cwd: string): Promise<void>;
+  now(): string;
+  monotonicNow(): number;
+  scheduleTick?(delayMs?: number): void;
+  worktreeDiskWait?: (repo: string, worktree: string, usesClaude: boolean) => string | null;
+};
+
+type Handle = { finished: Promise<boolean>; abort: AbortController; subject: string; token?: string; revision?: string; child?: ChildProcess; writing?: boolean };
+type ForeignClaim = { token: string; step: ProvisionStep; since: number; deadlineAt: number; stopAt: number };
+type Pool = {
+  handles: Map<string, Handle>;
+  foreign: Map<string, ForeignClaim>;
+  cancelWake?: () => void;
+  due?: number;
+  wake?: symbol;
+  poll?: ReturnType<typeof setInterval>;
+};
+const pools = new Map<string, Pool>();
+
+export async function stopProvisioningJobsForDemotion(): Promise<void> {
+  stopped = true;
+  const pending: Promise<boolean>[] = [];
+  for (const pool of pools.values()) {
+    pool.cancelWake?.();
+    for (const handle of pool.handles.values()) {
+      handle.abort.abort(new JobRevoked());
+      pending.push(handle.finished);
+    }
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.all(pending),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("provisioning controller did not stop within 25 seconds")), 25_000); timer.unref?.(); }),
+    ]);
+  } finally { if (timer) clearTimeout(timer); }
+}
+
+/** A fenced release may resume admission only after its caller proves that
+ * this process again owns the current writer authority. */
+export function resumeProvisioningJobsAfterFenceWithdrawal(ownsWriterAuthority: () => boolean): boolean {
+  if (!ownsWriterAuthority()) return false;
+  stopped = false;
+  requestPipelineTick();
+  return true;
+}
+
+/** Each fixture owns one isolated state root and its remaining helper leases. */
+export async function settleProvisioningJobsForTests(): Promise<void> {
+  const pool = pools.get(stateDir());
+  if (!pool) return;
+  pool.cancelWake?.();
+  delete pool.wake;
+  delete pool.due;
+  pool.foreign.clear();
+  const handles = [...pool.handles.values()];
+  const closing = handles.map(handle => {
+    const child = handle.child;
+    return child && child.exitCode === null && child.signalCode === null
+      ? new Promise<void>(resolve => { child.once("close", () => resolve()); }) : Promise.resolve();
+  });
+  for (const handle of handles) handle.abort.abort(new JobRevoked());
+  await Promise.all([...handles.map(handle => handle.finished), ...closing]);
+  if (!pool.handles.size) pools.delete(stateDir());
+}
+
+const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const asDate = (ms: number) => new Date(ms).toISOString();
+const due = (value?: string) => value ? Date.parse(value) : 0;
+// An admitted add uses the ordinary wait as a rollback deferral.
+const transientWait = (row: Pipeline, add?: ProvisioningRecord["admittedAdd"]) =>
+  add && due(row.provisioningWait?.retryAfter) === add.since + ADD_ROLLBACK_DEFERRAL_MS
+    ? add.previousWait : row.provisioningWait ?? add?.previousWait;
+
+function retryTimeUsed(wait: PipelineBoundedWait, now: number, pausedAt?: number): number {
+  // A pre-v1 controller can still update the ordinary retry record on rollback.
+  // Honor any backoff it recorded while the v1 slot was dormant.
+  const cutoff = pausedAt === undefined ? now : Math.max(pausedAt, Math.min(now, due(wait.retryAfter)));
+  return Math.max(0, cutoff - due(wait.startedAt));
+}
+const clockFor = (ports: ProvisionPorts): ProvisionClock => ports.provisionClock ?? {
+  wallMs: () => Date.parse(ports.now()),
+  monotonicMs: ports.monotonicNow,
+  arm(delay, run) {
+    const timer = setTimeout(run, delay);
+    timer.unref?.();
+    return () => clearTimeout(timer);
+  },
+};
+
+export function provisioningDueAt(pipeline: Pipeline): number | undefined {
+  const slot = pipeline.provisioningJob;
+  if (!validProvisioningRecord(slot) || slot.status === "parked") return;
+  return slot.retryAt ?? slot.deadlineAt;
+}
+
+export function hasSupersededProvisioningJob(row: Pipeline): boolean {
+  return row.provisioningJob !== undefined
+    && (row.state === "closed" || row.state === "completed" || row.state === "running" || Boolean(row.hiddenAt));
+}
+
+function subject(row: Pipeline): string {
+  return hash([planSubject(row), row.controlGeneration, row.cursor?.stageId, row.cursor?.state]);
+}
+
+export function provisioningSubject(row: Pipeline): string {
+  return subject(row);
+}
+
+function planSubject(row: Pipeline): string {
+  const { delivery } = row;
+  return hash([row.id, row.createdAt, row.repoDir, row.worktreeDir, row.branch, row.baseBranch,
+    row.baseRef, row.baseRefPinned, row.lastPassedCommit, delivery?.ownerId, delivery?.epoch,
+    delivery?.active, delivery?.target]);
+}
+
+function eligible(row: Pipeline): boolean {
+  return row.state === "provisioning" && !row.closedAt && !row.hiddenAt && (!pipelinePublishesRemoteBranch(row) || !!row.delivery);
+}
+
+class JobRevoked extends Error {}
+class StepDeadline extends Error {}
+class Deferred extends Error {
+  constructor(readonly step: ProvisionStep, readonly since: number, readonly deadline: number, readonly reason: string, readonly resource?: string,
+    readonly cache?: { identity: string; metadataRemainingMs: number; holderDeadline?: number },
+    readonly legacyWriter?: ProvisioningRecord["legacyWriter"], readonly blockerToken?: string) { super(reason); }
+}
+
+function schedule(pool: Pool, at: number, clock: ProvisionClock, ports: ProvisionPorts) {
+  if (pool.due !== undefined && pool.due <= at) return;
+  pool.cancelWake?.();
+  const wake = pool.wake = Symbol();
+  pool.due = at;
+  pool.cancelWake = clock.arm(Math.max(0, at - clock.wallMs()), () => {
+    if (pool.wake !== wake) return;
+    delete pool.due;
+    delete pool.wake;
+    delete pool.cancelWake;
+    ports.scheduleTick?.(0);
+    requestPipelineTick();
+  });
+}
+
+function observeForeignClaim(pool: Pool, id: string, slot: ProvisioningRecord, clock: ProvisionClock): number {
+  const observed = pool.foreign.get(id);
+  if (observed?.token === slot.token && observed.step === slot.step && observed.since === slot.since
+    && observed.deadlineAt === slot.deadlineAt) return observed.stopAt;
+  const { token, step, since, deadlineAt } = slot;
+  const stopAt = clock.monotonicMs() + Math.min(PROVISION_STEPS[step], Math.max(0, deadlineAt - clock.wallMs()));
+  // A release owns at most four executing claims. Keep a bounded observation
+  // set even if a restored store contains unverified owners from many releases.
+  if (!observed && pool.foreign.size >= MAX_EXECUTORS * 16) {
+    const oldest = pool.foreign.keys().next().value;
+    if (oldest !== undefined) pool.foreign.delete(oldest);
+  }
+  pool.foreign.set(id, { token, step, since, deadlineAt, stopAt });
+  return stopAt;
+}
+
+async function provisioningOwnerExited(owner: ProvisioningRecord["owner"]): Promise<boolean> {
+  const boot = systemBootEpoch();
+  if (!boot || !owner.bootEpoch) return false;
+  if (owner.bootEpoch !== boot) return bootEpochProvesExit(owner.bootEpoch, boot);
+  if (process.platform !== "linux") return processIdentityStatus(owner) === "dead";
+  try {
+    const stat = await fs.promises.readFile(`/proc/${owner.pid}/stat`, { encoding: "utf8", signal: AbortSignal.timeout(500) });
+    const start = stat.slice(stat.lastIndexOf(")") + 2).trim().split(" ")[19];
+    return Boolean(start && owner.startIdentity && owner.startIdentity !== `${owner.pid}:${start}`);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT";
+  }
+}
+
+export function bindProvisioningGit(ports: Pick<ProvisionPorts, "exec" | "provisionExec">): { native: boolean; exec: ProvisionExecPort } {
+  if (ports.provisionExec) return { native: false, exec: ports.provisionExec };
+  if (operationPortIdentity(ports.exec) === realExec) return { native: true, exec: realProvisionExec };
+  return { native: false, exec: async (command, args, cwd, signal, options) => ports.exec(command, args, cwd, options?.env,
+    { signal, timeoutMs: options?.timeoutMs, inheritFd: options?.inheritFd, additionalInheritedFds: options?.additionalInheritedFds }) };
+}
+
+type JobHooks = { phaseDone?: Promise<void>; parked(row: Pipeline): void };
+
+function workerExited(worker: NonNullable<ProvisioningRecord["worker"]>): boolean {
+  const boot = systemBootEpoch();
+  if (!boot || !worker.bootEpoch) return false;
+  if (worker.bootEpoch !== boot) return bootEpochProvesExit(worker.bootEpoch, boot);
+  if (processIdentityStatus(worker) !== "dead") return false;
+  try { process.kill(-worker.pid, 0); return false; }
+  catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; }
+}
+
+/** Terminal rows stay hot until the prior effect releases its native custody. */
+async function retireProvisioningJob(row: Pipeline, root: string, native: boolean): Promise<boolean> {
+  const slot = row.provisioningJob;
+  if (!validProvisioningRecord(slot)) return false;
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), 5_000);
+  const grants: ProvisioningGrant[] = [];
+  try {
+    if (slot.worker && !workerExited(slot.worker)) return false;
+    if (slot.admittedAdd && !await tryProvisioningLock(root, "add", slot.admittedAdd.stripe, native, abort.signal, grant => grants.push(grant))) return false;
+    return await withProvisioningCheckpoint(tx => {
+      const current = tx.get(row.id);
+      if (!current || current.createdAt !== row.createdAt || eligible(current) || current.provisioningJob?.token !== slot.token) return false;
+      delete current.provisioningJob;
+      // A legacy apply can already have consumed the wait while leaving this slot behind.
+      const add = slot.admittedAdd;
+      if (add && due(current.provisioningWait?.retryAfter) === add.since + ADD_ROLLBACK_DEFERRAL_MS) {
+        if (add.previousWait) current.provisioningWait = add.previousWait;
+        else delete current.provisioningWait;
+      }
+      tx.put(current);
+      return true;
+    }, 500);
+  } finally {
+    clearTimeout(timer);
+    for (const grant of grants) grant.close();
+  }
+}
+
+/** An excluded lane may retire or revoke a slot. It may never start a new
+ * claim while a legacy domain walk owns the lane. */
+export async function reconcileExcludedProvisioning(row: Pipeline, ports: ProvisionPorts): Promise<boolean> {
+  if (stopped) return false;
+  const slot = row.provisioningJob;
+  if (!validProvisioningRecord(slot)) return false;
+  const root = stateDir();
+  const terminal = hasSupersededProvisioningJob(row);
+  const active = pools.get(root)?.handles.get(row.id);
+  if (active) {
+    if (terminal) active.abort.abort(new JobRevoked());
+    // A live local claim's monotonic timer owns expiry.
+    return false;
+  }
+  if (terminal) return retireProvisioningJob(row, root, bindProvisioningGit(ports).native);
+  const now = clockFor(ports).wallMs();
+  if (!eligible(row) || (slot.status !== "running" && slot.status !== "awaitingApply") || slot.deadlineAt > now) return false;
+  return withProvisioningCheckpoint(tx => {
+    const current = tx.get(row.id);
+    if (!current || !eligible(current) || subject(current) !== subject(row)
+      || current.provisioningJob?.token !== slot.token || current.provisioningJob.deadlineAt !== slot.deadlineAt
+      || current.provisioningJob.status !== slot.status) return false;
+    const reason = now >= slot.executionDeadlineAt ? "provision-execution-budget-exhausted" : "provision-step-timeout";
+    current.provisioningJob = { ...slot, token: randomUUID(), status: "waiting", retryAt: now + 5_000,
+      interruption: slot.interruption ?? { step: slot.step, since: slot.since, deadlineAt: slot.deadlineAt, observedAt: now, reason } };
+    current.stateDetail = `provisioning deferred: ${reason}`;
+    tx.put(current);
+    return true;
+  }, 500);
+}
+
+export function advanceProvisioningJob(row: Pipeline, ports: ProvisionPorts, hooks: JobHooks): Promise<boolean> | undefined {
+  if (stopped) return;
+  const cleanup = hasSupersededProvisioningJob(row);
+  if (!eligible(row) && !cleanup) return;
+  const root = stateDir();
+  let pool = pools.get(root);
+  if (!pool) pools.set(root, pool = { handles: new Map(), foreign: new Map() });
+  const prior = pool.handles.get(row.id);
+  if (prior) {
+    if (cleanup) prior.abort.abort(new JobRevoked());
+    return prior.finished;
+  }
+  const clock = clockFor(ports), current = row.provisioningJob;
+  const at = cleanup ? 0 : current?.admittedAdd ? 0 : current?.retryAt ?? due(row.provisioningWait?.retryAfter);
+  if (at > clock.wallMs()) {
+    schedule(pool, at, clock, ports);
+    return;
+  }
+  if (pool.handles.size >= MAX_EXECUTORS) return;
+  const abort = new AbortController();
+  const handle: Handle = { subject: subject(row), abort, finished: Promise.resolve(false) };
+  const ownedPool = pool;
+  const git = bindProvisioningGit(ports);
+  handle.finished = withoutOperationLease(async () => {
+    await hooks.phaseDone;
+    if (cleanup) {
+      ownedPool.foreign.delete(row.id);
+      return retireProvisioningJob(row, root, git.native);
+    }
+    return runProvisioningJob(row.id, root, ports, hooks, git, clock, ownedPool, handle);
+  }).catch(error => {
+    if (!(error instanceof JobRevoked)) schedule(ownedPool, clock.wallMs() + 1_000, clock, ports);
+    return false;
+  }).finally(() => {
+    const retire = () => {
+      ownedPool.handles.delete(row.id);
+      if (!ownedPool.handles.size) {
+        clearInterval(ownedPool.poll);
+        delete ownedPool.poll;
+        if (ownedPool.due === undefined && !ownedPool.foreign.size) pools.delete(root);
+      }
+      requestPipelineTick();
+    };
+    const child = handle.child;
+    if (child && child.exitCode === null && child.signalCode === null) child.once("close", retire);
+    else retire();
+  });
+  pool.handles.set(row.id, handle);
+  if (!pool.poll) {
+    let checking = false;
+    pool.poll = withoutOperationLease(() => setInterval(() => {
+      if (checking) return;
+      checking = true;
+      void Promise.all([...ownedPool.handles].map(async ([id, active]) => {
+        if (!active.token || active.writing || active.abort.signal.aborted) return;
+        try {
+          const revision = controllerPipelineVersionNow(id);
+          if (revision === active.revision) return;
+          const record = await findControllerPipeline(id);
+          if (!record || !eligible(record) || subject(record) !== active.subject || record.provisioningJob?.token !== active.token) {
+            active.abort.abort(new JobRevoked());
+          }
+          active.revision = revision;
+        } catch { active.abort.abort(new JobRevoked()); }
+      })).finally(() => { checking = false; });
+    }, 50));
+    pool.poll.unref?.();
+  }
+  return handle.finished;
+}
+
+async function runProvisioningJob(id: string, root: string, ports: ProvisionPorts, hooks: JobHooks,
+  git: ReturnType<typeof bindProvisioningGit>, clock: ProvisionClock, pool: Pool, handle: Handle): Promise<boolean> {
+  let row = await findControllerPipeline(id);
+  if (!row) {
+    pool.foreign.delete(id);
+    return false;
+  }
+  const previous = row.provisioningJob;
+  const { signal } = handle.abort;
+  const stalePlan = previous?.planSubject !== undefined && previous.planSubject !== planSubject(row);
+  let heldAddFence: ProvisioningGrant | undefined;
+  let recoveredAddFence: ProvisioningGrant | undefined;
+  if (subject(row) !== handle.subject || (previous?.subject !== undefined && previous.subject !== handle.subject) || !eligible(row)) {
+    if (!validProvisioningRecord(previous)) return false;
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), 5_000);
+    const grants: ProvisioningGrant[] = [];
+    try {
+      if (previous.owner.instance !== instance && !await provisioningOwnerExited(previous.owner)) {
+        schedule(pool, clock.wallMs() + 1_000, clock, ports);
+        return false;
+      }
+      if (previous.worker && !workerExited(previous.worker)) {
+        schedule(pool, clock.wallMs() + 1_000, clock, ports);
+        return false;
+      }
+      if (previous.admittedAdd && !await tryProvisioningLock(root, "add", previous.admittedAdd.stripe, git.native, abort.signal,
+        grant => grants.push(grant))) {
+        schedule(pool, Math.min(previous.deadlineAt, clock.wallMs() + 1_000), clock, ports);
+        return false;
+      }
+      const retired = await withProvisioningCheckpoint(tx => {
+        const current = tx.get(id);
+        const saved = current?.provisioningJob;
+        if (!current || subject(current) !== subject(row!) || saved?.token !== previous.token) return false;
+        if (previous.admittedAdd && due(current.provisioningWait?.retryAfter) === previous.admittedAdd.since + ADD_ROLLBACK_DEFERRAL_MS) {
+          if (previous.admittedAdd.previousWait) current.provisioningWait = previous.admittedAdd.previousWait;
+          else delete current.provisioningWait;
+        }
+        delete current.provisioningJob;
+        tx.put(current);
+        return true;
+      }, 500);
+      if (retired && eligible(row)) {
+        ports.scheduleTick?.(0);
+        requestPipelineTick();
+      }
+      return retired;
+    } finally {
+      clearTimeout(timer);
+      for (const grant of grants) grant.close();
+    }
+  }
+  if (previous !== undefined && !validProvisioningRecord(previous)) {
+    await withProvisioningCheckpoint(tx => {
+      const current = tx.get(id);
+      if (!current || !eligible(current) || subject(current) !== handle.subject || validProvisioningRecord(current.provisioningJob)) return;
+      current.state = "needs_decision";
+      current.stateDetail = "provisioning evidence is invalid or belongs to a newer controller; inspect the lane before retrying";
+      tx.put(current);
+    }, 500);
+    return true;
+  }
+  const wall = clock.wallMs();
+  const claimObservedMono = clock.monotonicMs();
+  const release = hotStateWriterRevision(root) ?? "unversioned";
+  const authority = readHotStateAuthority(root);
+  const claimed = previous?.status === "running" || previous?.status === "awaitingApply";
+  let expired = claimed && (previous.deadlineAt <= wall || previous.executionDeadlineAt <= wall);
+  if (claimed && previous.owner.instance !== instance
+    && !(authority?.mode === "sqlite" && hotStateSqliteWriterReady(root) && authority.releaseRevision !== previous.owner.release)) {
+    const stopAt = observeForeignClaim(pool, id, previous, clock);
+    const exited = clock.monotonicMs() < stopAt && await provisioningOwnerExited(previous.owner);
+    const remaining = stopAt - clock.monotonicMs();
+    expired = remaining <= 0;
+    if (!expired && !exited) {
+      schedule(pool, clock.wallMs() + remaining, clock, ports);
+      return false;
+    }
+  }
+  if (claimed && expired) {
+    if (previous.admittedAdd && !stalePlan) {
+      const add = previous.admittedAdd;
+      const custodyDeadline = add.since + PROVISION_STEPS.waitingForCheckoutWriter;
+      const fence = await tryProvisioningLock(root, "add", add.stripe, git.native, signal, grant => { recoveredAddFence = grant; });
+      if (fence) {
+        // The original writer has released its lock. Keep this proof through
+        // checkout repair and receipt consumption; a second add may not race
+        // into the gap between the probe and verification.
+        heldAddFence = fence;
+        expired = false;
+      } else {
+        const reason = "checkout-writer-unverified";
+        const earlier = transientWait(row, add);
+        const retryBudget = earlier?.budgetMs ?? RETRY_MS;
+        const spent = earlier ? retryTimeUsed(earlier, wall, previous.retryPausedAt)
+          + (previous.retryPausedAt === undefined ? 0 : Math.ceil(clock.monotonicMs() - claimObservedMono)) : 0;
+        const remaining = retryBudget - spent;
+        const rounds = earlier?.rounds ?? 0, retryMaxMs = earlier?.retryMaxMs ?? 60_000;
+        const retryAt = wall + Math.min(5_000 * 2 ** rounds, retryMaxMs, Math.max(1, remaining), Math.max(1, custodyDeadline - wall));
+        const waitReason = wall >= custodyDeadline ? reason
+          : remaining <= 0 ? "provision-retry-window-exhausted" : reason;
+        const waiting = wall < custodyDeadline && remaining > 0;
+        const nextRetry: PipelineBoundedWait | undefined = waiting
+          ? { startedAt: earlier?.startedAt ?? asDate(wall - spent), rounds: rounds + 1,
+            retryAfter: asDate(retryAt), budgetMs: retryBudget, retryMaxMs } : undefined;
+        const transitioned = await withProvisioningCheckpoint(tx => {
+          const current = tx.get(id);
+          const saved = current?.provisioningJob;
+          if (!current || !eligible(current) || subject(current) !== handle.subject || saved?.token !== previous.token
+            || saved.deadlineAt !== previous.deadlineAt || saved.executionDeadlineAt !== previous.executionDeadlineAt
+            || (saved.status !== "running" && saved.status !== "awaitingApply")) return false;
+          current.provisioningJob = {
+            ...saved,
+            token: randomUUID(),
+            step: "waitingForCheckoutWriter",
+            since: add.since,
+            deadlineAt: custodyDeadline,
+            status: waiting ? "waiting" : "parked",
+            retryAt: waiting ? retryAt : undefined,
+            retryPausedAt: wall,
+            admittedAdd: nextRetry ? { ...add, previousWait: nextRetry } : add,
+            waitReason,
+            interruption: { step: "waitingForCheckoutWriter", since: add.since, deadlineAt: custodyDeadline,
+              observedAt: wall, reason: waitReason },
+          };
+          if (!waiting) current.state = "needs_decision";
+          current.stateDetail = waiting ? `provisioning deferred: ${reason}` : waitReason;
+          tx.put(current);
+          return true;
+        }, 500);
+        if (transitioned && waiting) schedule(pool, retryAt, clock, ports);
+        if (transitioned && !waiting) {
+          const parked = await findControllerPipeline(id);
+          if (parked) hooks.parked(parked);
+          requestPipelineTick();
+        }
+        return transitioned;
+      }
+    }
+    if (expired && !previous.admittedAdd) {
+      const reason = wall >= previous.executionDeadlineAt ? "provision-execution-budget-exhausted" : "provision-step-timeout";
+      const earlier = transientWait(row, previous.admittedAdd);
+      const retryBudget = earlier?.budgetMs ?? RETRY_MS;
+      const spent = earlier ? retryTimeUsed(earlier, wall, previous.retryPausedAt)
+        + (previous.retryPausedAt === undefined ? 0 : Math.ceil(clock.monotonicMs() - claimObservedMono)) : 0;
+      const remaining = retryBudget - spent;
+      const rounds = earlier?.rounds ?? 0, retryMaxMs = earlier?.retryMaxMs ?? 60_000;
+      const retryAt = wall + Math.min(5_000 * 2 ** rounds, retryMaxMs, Math.max(1, remaining));
+      const transitioned = await withProvisioningCheckpoint(tx => {
+        const current = tx.get(id);
+        const saved = current?.provisioningJob;
+        if (!current || !eligible(current) || subject(current) !== handle.subject || saved?.token !== previous.token
+          || saved.deadlineAt !== previous.deadlineAt || saved.executionDeadlineAt !== previous.executionDeadlineAt
+          || (saved.status !== "running" && saved.status !== "awaitingApply")) return false;
+        current.provisioningJob = remaining > 0
+          ? { ...saved, token: randomUUID(), status: "waiting", retryAt, waitReason: reason,
+            interruption: saved.interruption ?? { step: saved.step, since: saved.since, deadlineAt: saved.deadlineAt, observedAt: wall, reason } }
+          : { ...saved, token: randomUUID(), status: "parked", retryAt: undefined,
+            waitReason: "provision-retry-window-exhausted",
+            interruption: saved.interruption ?? { step: saved.step, since: saved.since, deadlineAt: saved.deadlineAt,
+              observedAt: wall, reason: "provision-retry-window-exhausted" } };
+        if (!remaining) current.state = "needs_decision";
+        current.stateDetail = remaining > 0 ? `provisioning deferred: ${reason}`
+          : `${reason}; provision-retry-window-exhausted; inspect the last provisioning step and retry-stage`;
+        tx.put(current);
+        return true;
+      }, 500);
+      if (transitioned && remaining > 0) schedule(pool, retryAt, clock, ports);
+      if (transitioned && remaining <= 0) {
+        const parked = await findControllerPipeline(id);
+        if (parked) hooks.parked(parked);
+        requestPipelineTick();
+      }
+      return transitioned;
+    }
+  }
+  const priorRetry = transientWait(row, previous?.admittedAdd);
+  let slot: ProvisioningRecord = {
+    ...previous, version: 1, kind: "provision", subject: handle.subject, planSubject: planSubject(row), generation: (previous?.generation ?? 0) + 1,
+    token: randomUUID(), owner: { ...captureProcessIdentity(process.pid), instance, release },
+    step: "resolvingRepository", status: "running", since: wall, deadlineAt: wall + PROVISION_STEPS.resolvingRepository,
+    executionDeadlineAt: wall + EXECUTION_MS, retryAt: undefined,
+    retryPausedAt: priorRetry ? previous?.retryPausedAt ?? (claimed ? wall : Math.min(wall, due(priorRetry.retryAfter))) : undefined,
+    cacheOwner: undefined,
+  };
+  if (claimed && expired && !slot.interruption) {
+    slot.interruption = { step: previous.step, since: previous.since, deadlineAt: previous.deadlineAt, observedAt: wall, reason: "provision-step-timeout" };
+  }
+  const stale = stalePlan;
+  if (stale) {
+    if (previous?.admittedAdd || previous?.worker) return false;
+    delete slot.plan;
+    delete slot.privateReceipt;
+    delete slot.privateIntent;
+    delete slot.cacheWaitSince;
+    delete slot.cacheWaitIdentity;
+    delete slot.cacheMetadataRemainingMs;
+  }
+  let changed = false;
+  const claimStart = clock.monotonicMs();
+  let stopAt = claimStart + PROVISION_STEPS.resolvingRepository;
+  let executionStop = clock.monotonicMs() + EXECUTION_MS;
+  let metadataStop = Infinity;
+  let cancelTimer: (() => void) | undefined;
+  let checkoutGrant: ProvisioningGrant | null = null;
+  let armed: symbol | undefined;
+  const grants = new Set<ProvisioningGrant>();
+  const own = (grant: ProvisioningGrant) => {
+    if (signal.aborted) grant.close();
+    else grants.add(grant);
+  };
+  if (recoveredAddFence) own(recoveredAddFence);
+  const cleanup = () => {
+    armed = undefined;
+    cancelTimer?.();
+    for (const grant of grants) {
+      const child = handle.child;
+      if (grant === checkoutGrant && child && child.exitCode === null && child.signalCode === null) {
+        child.once("close", grant.close);
+      } else grant.close();
+    }
+    grants.clear();
+  };
+  signal.addEventListener("abort", cleanup, { once: true });
+  const arm = () => {
+    cancelTimer?.();
+    const token = armed = Symbol();
+    const deadline = stopAt;
+    cancelTimer = clock.arm(Math.max(0, deadline - clock.monotonicMs()), () => {
+      if (armed === token) handle.abort.abort(new StepDeadline());
+    });
+  };
+  arm();
+  const read = () => { signal.throwIfAborted(); if (clock.monotonicMs() >= stopAt) throw new StepDeadline(); };
+  const write = async (update: (record: Pipeline, tx: StateBoundedTransaction<Pipeline>) => void,
+    next: ProvisioningRecord | null = slot, initial = false, afterStop = false) => {
+    if (!afterStop) read();
+    handle.writing = true;
+    const result = await withProvisioningCheckpoint(tx => {
+      const current = tx.get(id);
+      if (!current || !eligible(current) || subject(current) !== handle.subject
+        || current.provisioningJob?.token !== (initial ? previous?.token : slot.token)
+        || (!initial && current.provisioningJob?.step !== slot.step)) throw new JobRevoked();
+      if (!afterStop) read();
+      update(current, tx);
+      if (next) {
+        next.subject = subject(current);
+        next.planSubject = planSubject(current);
+        if (!validProvisioningRecord(next)) throw new Error("provisioning evidence exceeds its limits");
+        current.provisioningJob = next;
+      } else delete current.provisioningJob;
+      tx.put(current);
+      return current;
+    }, afterStop ? 500 : stopAt - clock.monotonicMs()).finally(() => { handle.writing = false; });
+    changed = true;
+    handle.subject = subject(result);
+    const transitioned = initial || !next || next.step !== slot.step || next.since !== slot.since || next.status !== slot.status;
+    if (next) { handle.token = next.token; slot = next; }
+    else delete handle.token;
+    row = result;
+    if (transitioned) {
+      const view = provisioningStepView(result);
+      const at = clock.wallMs();
+      if (view) reportProvisioningPhase(id, { phase: "step", view }, asDate(at));
+      if (ports.observeProvisioningCheckpoint) await ports.observeProvisioningCheckpoint(id, view, at);
+    }
+    requestPipelineTick();
+  };
+  const step = async (name: ProvisionStep) => {
+    read();
+    if (slot.step === name) return;
+    const now = clock.wallMs(), monotonic = clock.monotonicMs();
+    if (name === "startingToolchain") {
+      const remaining = slot.cacheMetadataRemainingMs ?? PROVISION_STEPS.startingToolchain;
+      metadataStop = monotonic + remaining;
+    }
+    const bound = Math.min(executionStop, monotonic + PROVISION_STEPS[name], METADATA_STEPS.has(name) ? metadataStop : Infinity);
+    let cutoff = bound;
+    if (name === "applyingCheckout" && previous?.status === "awaitingApply") {
+      cutoff = Math.min(bound, monotonic + Math.max(0, previous.deadlineAt - now));
+    }
+    await write(() => {}, { ...slot, step: name, since: now, deadlineAt: now + Math.ceil(Math.max(0, cutoff - monotonic)),
+      status: name === "applyingCheckout" ? "awaitingApply" : "running" });
+    stopAt = cutoff;
+    arm();
+    read();
+  };
+  const park = async (reason: string) => {
+    const bounded = reason.slice(0, 256);
+    await write(current => {
+      current.state = "needs_decision";
+      current.pausedState = null;
+      current.stateDetail = bounded;
+      current.dismissedAt = null;
+      delete current.dismissedBy;
+      delete current.dismissedNote;
+      if (!slot.admittedAdd) delete current.provisioningWait;
+    }, { ...slot, status: "parked", retryAt: undefined,
+      interruption: slot.interruption ?? { step: slot.step, since: slot.since, deadlineAt: slot.deadlineAt, observedAt: clock.wallMs(),
+        reason: /^[a-z][a-z-]{1,63}$/.test(bounded) ? bounded : "provisioning-refused" } },
+    false, true);
+    hooks.parked(row!);
+  };
+  const pauseRetry = () => slot.retryPausedAt ?? (transientWait(row!, slot.admittedAdd) ? clock.wallMs() : undefined);
+  const wait = async (error: Deferred) => {
+    const now = clock.wallMs();
+    const ownerRetry = error.step === "waitingForTurn" && error.reason === "provisioning-owner-expired";
+    const at = ownerRetry ? now + 5_000 : Math.min(error.deadline, now + 5_000, error.cache?.holderDeadline ?? Infinity);
+    const detail = `provisioning wait: ${error.reason}${error.blockerToken ? ` · owner ${error.blockerToken}` : ""}`;
+    await write(current => { current.stateDetail = detail; },
+      { ...slot, step: error.step, since: error.since, deadlineAt: ownerRetry ? at : error.deadline, status: "waiting", retryAt: at,
+      resource: error.resource, waitReason: error.reason, retryPausedAt: pauseRetry(),
+      ...(error.blockerToken ? { blockingOwnerToken: error.blockerToken } : { blockingOwnerToken: undefined }),
+      ...(error.cache ? { cacheWaitSince: error.since, cacheWaitIdentity: error.cache.identity,
+        cacheMetadataRemainingMs: error.cache.metadataRemainingMs } : {}),
+      ...(error.step === "waitingForLegacyInstaller" ? { legacyWaitSince: error.since, legacyWriter: error.legacyWriter } : {}) }, false, true);
+    schedule(pool, at, clock, ports);
+  };
+  const deferLegacyWriter = async (cause: Exclude<LegacyInstallerObservation, { kind: "clear" }>): Promise<never> => {
+    const since = slot.legacyWaitSince ?? clock.wallMs();
+    const detail = cause.kind === "possible-writer" ? "possible-writer" : cause.reason;
+    const writer = cause.kind === "possible-writer" ? { pid: cause.pid, start: cause.start } : undefined;
+    throw new Deferred("waitingForLegacyInstaller", since, since + PROVISION_STEPS.waitingForLegacyInstaller,
+      `private-install-writer-live (${detail})`, undefined, undefined, writer);
+  };
+  const disk = () => {
+    const lane = row!;
+    return ports.worktreeDiskWait ? ports.worktreeDiskWait(lane.repoDir, lane.worktreeDir, lane.stages.some(stage => stage.effectiveRole.engine === "claude"))
+      : worktreeDiskWait(lane.repoDir, lane.worktreeDir, undefined, undefined, undefined, lane.stages.some(stage => stage.effectiveRole.engine === "claude"));
+  };
+  let checkoutStripe = 0;
+  let provedRepository: string | undefined;
+  let provedCheckout: string | undefined;
+  const lock = (kind: "checkout" | "repo" | "add", stripe: number) => tryProvisioningLock(root, kind, stripe, git.native, signal, own);
+  const deferAdd = (start: number) => new Deferred("waitingForCheckoutWriter", start, start + PROVISION_STEPS.waitingForCheckoutWriter, "checkout-writer-unverified");
+  const addWaitSince = () => previous?.step === "waitingForCheckoutWriter" && previous.waitReason === "checkout-writer-unverified"
+    ? previous.since : clock.wallMs();
+  const dispatch = (name: string) => write(() => {}, { ...slot, effect: { name, sequence: (slot.effect?.sequence ?? 0) + 1 } });
+  const checkAddExit = async () => {
+    const admitted = slot.admittedAdd;
+    if (!admitted || heldAddFence) return;
+    const proof = await lock("add", admitted.stripe);
+    if (!proof) throw deferAdd(admitted.since);
+    proof.close();
+  };
+  const exec: ProvisionExecPort = async (command, args, cwd, _signal, options) => {
+    read();
+    const add = command === "git" && args[0] === "worktree" && args[1] === "add";
+    const fetch = command === "git" && args[0] === "fetch";
+    let effectCwd = cwd;
+    let effectArgs = args;
+    if (add || fetch) {
+      await ports.beforeGitDispatch?.(command, args, cwd);
+      read();
+    }
+    if (git.native && provedRepository && provedCheckout && command === "git") {
+      const [currentRepository, currentCheckout] = await Promise.all([
+        fs.promises.realpath(row!.repoDir), physicalProvisioningPath(row!.worktreeDir),
+      ]);
+      if (currentRepository !== provedRepository || currentCheckout !== provedCheckout) {
+        throw new Error("pipeline repository or checkout identity changed before Git dispatch");
+      }
+      const bind = (value: string) => value === row!.repoDir ? provedRepository!
+        : value === row!.worktreeDir ? provedCheckout!
+        : value.startsWith(`${row!.worktreeDir}${path.sep}`) ? path.join(provedCheckout!, path.relative(row!.worktreeDir, value))
+        : value.startsWith(`${row!.repoDir}${path.sep}`) ? path.join(provedRepository!, path.relative(row!.repoDir, value)) : value;
+      effectCwd = bind(cwd);
+      effectArgs = args.map(argument => bind(argument));
+    }
+    const common = command === "git" && args.includes("--git-common-dir");
+    const label = add ? "worktree-add" : fetch ? "fetch" : common ? "common-directory" : null;
+    let fence: ProvisioningGrant | null = null;
+    let launcher: ReturnType<typeof provisionToolchainEntry> | undefined;
+    if (add) {
+      const blocked = disk();
+      if (blocked) throw new Error(blocked);
+      if (git.native) {
+        try { launcher = provisionToolchainEntry(); }
+        catch {
+          await step("startingToolchain");
+          throw new ProvisionToolchainFailure("toolchain-start-failed");
+        }
+      }
+      await step("creatingCheckout");
+      if (slot.admittedAdd) await checkAddExit();
+      fence = heldAddFence ?? await lock("add", checkoutStripe);
+      if (!fence) throw deferAdd(addWaitSince());
+      const since = clock.wallMs(), horizon = asDate(since + ADD_ROLLBACK_DEFERRAL_MS);
+      const previousWait = transientWait(row!, slot.admittedAdd);
+      const admittedAdd = { stripe: checkoutStripe, since, argsDigest: hash(args), sequence: (slot.admittedAdd?.sequence ?? 0) + 1,
+        ...(previousWait ? { previousWait } : {}) };
+      await write(current => {
+        current.provisioningWait = { ...(previousWait ?? { startedAt: horizon, rounds: 0 }), retryAfter: horizon };
+      }, { ...slot, admittedAdd });
+    } else if (fetch) await dispatch("fetch");
+    else if (command === "git" && (["update-ref", "merge", "read-tree", "checkout-index"].includes(args[0] ?? "")
+      || (args[0] === "worktree" && args[1] === "unlock"))) await dispatch("checkout-mutation");
+    else if (command === "bun") await dispatch("install-private");
+    if (label) reportProvisioningPhase(id, { phase: "git-started", step: label });
+    let ok = false;
+    try {
+      read();
+      if (add) await recordProvisionFixtureEvent("worktree-add", { pipelineId: id });
+      // The fetch keeps its own Git timeout; the step watchdog aborts the signal at stopAt.
+      const timeoutMs = fetch && options?.timeoutMs !== undefined ? options.timeoutMs
+        : Math.min(options?.timeoutMs ?? Infinity, Math.max(1, Math.floor(stopAt - clock.monotonicMs())));
+      const result = launcher ? await git.exec(launcher.command,
+        ["--no-env-file", launcher.entry, "add", String(Date.now() + timeoutMs), effectCwd, ...effectArgs],
+        launcher.cwd, signal, { ...options, timeoutMs, inheritFd: fence!.fd })
+        : await git.exec(command, effectArgs, effectCwd, signal, { ...options, timeoutMs });
+      read();
+      ok = result.code === 0;
+      return result;
+    } finally {
+      if (fence && fence !== heldAddFence) fence.close();
+      if (label) reportProvisioningPhase(id, { phase: "git-finished", step: label, status: signal.aborted ? "cancelled" : ok ? "ok" : "failed" });
+    }
+  };
+  try {
+    await write(() => {}, slot, true);
+    pool.foreign.delete(id);
+    const execute = async () => {
+      if (slot.worker) {
+        if (!workerExited(slot.worker)) {
+          const since = previous?.since ?? slot.since;
+          throw new Deferred("preparingToolchain", since, since + 180_000, "toolchain-writer-unverified");
+        }
+        await write(() => {}, { ...slot, worker: undefined });
+      }
+      const waitingDisk = disk();
+      if (waitingDisk) throw new Error(waitingDisk);
+      const repoRead = await exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], row!.repoDir, signal);
+      if (repoRead.code !== 0 || !repoRead.stdout.trim()) throw new Error("resolving the pipeline Git directory failed");
+      const commonDir = git.native ? await fs.promises.realpath(path.resolve(row!.repoDir, repoRead.stdout.trim())) : path.resolve(row!.repoDir, repoRead.stdout.trim());
+      const physicalCheckout = git.native ? await physicalProvisioningPath(row!.worktreeDir) : path.resolve(row!.worktreeDir);
+      provedRepository = git.native ? await fs.promises.realpath(row!.repoDir) : path.resolve(row!.repoDir);
+      provedCheckout = physicalCheckout;
+      checkoutStripe = provisioningStripe(physicalCheckout);
+      await checkAddExit();
+      const checkout = await lock("checkout", checkoutStripe);
+      checkoutGrant = checkout;
+      const repoStripe = provisioningStripe(commonDir);
+      const repository = checkout && await lock("repo", repoStripe);
+      const checkoutResource = `checkout:${checkoutStripe}`, repoResource = `repo:${repoStripe}`;
+      const queuedProvisioningOwner = (tx: StateBoundedTransaction<Pipeline>, resource: string) => {
+        const head = tx.provisioningWaitHead(resource);
+        if (!head || head === id) return undefined;
+        const owner = tx.get(head)?.provisioningJob;
+        if (!validProvisioningRecord(owner)) return undefined;
+        return { token: owner.blockingOwnerToken ?? owner.token, deadlineAt: owner.deadlineAt,
+          expired: owner.waitReason === "provisioning-owner-expired" };
+      };
+      const waitTurn = (resource: string, owner?: ReturnType<typeof queuedProvisioningOwner>) => {
+        const since = previous?.resource === resource ? previous.since : clock.wallMs();
+        const now = clock.wallMs();
+        const ownerToken = owner?.token ?? (previous?.resource === resource ? previous.blockingOwnerToken : undefined);
+        const expired = owner?.expired || (owner !== undefined && owner.deadlineAt <= now)
+          || (ownerToken !== undefined && previous?.waitReason === "provisioning-owner-expired");
+        const deadline = owner ? expired ? now + PROVISION_STEPS.waitingForTurn : owner.deadlineAt
+          : previous?.resource === resource ? previous.deadlineAt : since + EXECUTION_MS;
+        return new Deferred("waitingForTurn", since, deadline,
+          expired ? "provisioning-owner-expired" : "waiting-for-provisioning-turn", resource,
+          undefined, undefined, ownerToken);
+      };
+      if (!repository) {
+        const resource = checkout ? repoResource : checkoutResource;
+        const owner = await withProvisioningCheckpoint(tx => queuedProvisioningOwner(tx, resource), 500);
+        throw waitTurn(resource, owner);
+      }
+      const admitted = { ...slot, executionDeadlineAt: clock.wallMs() + EXECUTION_MS,
+        resource: undefined, waitReason: undefined, retryPausedAt: undefined, blockingOwnerToken: undefined };
+      await write((current, tx) => {
+        for (const resource of [checkoutResource, repoResource]) {
+          const head = tx.provisioningWaitHead(resource);
+          if (head && head !== id) throw waitTurn(resource, queuedProvisioningOwner(tx, resource));
+        }
+        const now = clock.wallMs();
+        executionStop = clock.monotonicMs() + EXECUTION_MS;
+        admitted.executionDeadlineAt = now + EXECUTION_MS;
+        const retry = transientWait(current, slot.admittedAdd);
+        if (retry && slot.retryPausedAt !== undefined) {
+          const resumed = { ...retry, startedAt: asDate(now - retryTimeUsed(retry, now, slot.retryPausedAt)) };
+          if (slot.admittedAdd) admitted.admittedAdd = { ...slot.admittedAdd, previousWait: resumed };
+          else current.provisioningWait = resumed;
+        }
+      }, admitted);
+      if (!slot.plan) {
+        await step("resolvingBase");
+        let { baseBranch, baseRef } = row!;
+        const baseRefPinned = row!.baseRefPinned ?? false;
+        if (!baseBranch || !baseRef || !row!.lastPassedCommit) {
+          const resolved = await resolvePipelineBaseAsync(row!.repoDir, { baseBranch }, exec, signal);
+          if (!resolved.ok) throw new Error(resolved.error);
+          ({ baseBranch, baseRef } = resolved);
+        }
+        const result = await planPipelineCheckout({ ...row!, baseBranch, baseRef, baseRefPinned }, exec, signal);
+        if (!result.ok) throw new Error(result.error);
+        await write(current => {
+          Object.assign(current, { baseBranch, baseRef, baseRefPinned, lastPassedCommit: baseRef });
+        }, { ...slot, plan: result.plan });
+      }
+      await step("verifyingCheckout");
+      let preserved: PreservedProvisionRef | undefined;
+      const custody = git.native || fs.existsSync(row!.worktreeDir) ? {
+        commonDir, addAdmitted: !!slot.admittedAdd,
+        checkpointAlternative: (plan: NonNullable<ProvisioningRecord["plan"]>) => write(() => {}, { ...slot, plan }),
+        prepareInterruptedIndexRepair: async () => {
+          const add = slot.admittedAdd;
+          if (!add) throw new Error("interrupted checkout repair has no admitted add custody");
+          const grant = heldAddFence ?? await lock("add", add.stripe);
+          if (!grant) throw deferAdd(add.since);
+          if (grant !== heldAddFence) own(grant);
+          heldAddFence = grant;
+          await dispatch("repair-index-lock");
+        },
+        verify: async () => {
+          await step("verifyingCheckout");
+          await checkAddExit();
+          if (git.native && await physicalProvisioningPath(row!.worktreeDir) !== physicalCheckout) throw new Error("checkout identity changed during provisioning");
+          await dispatch("record-provenance");
+        },
+      } : undefined;
+      const result = await ensurePipelineCheckout(row!, slot.plan!, exec, signal, custody, value => { preserved = value; });
+      if (!result.ok) throw new Error(result.error);
+      await checkAddExit();
+      await write(current => {
+        if (slot.admittedAdd) {
+          const restored = transientWait(current, slot.admittedAdd);
+          if (restored) current.provisioningWait = restored;
+          else delete current.provisioningWait;
+        }
+      }, { ...slot, admittedAdd: undefined });
+      repository.close();
+      await step("startingToolchain");
+      if (git.native) await runProvisionToolchain({ root, token: slot.token, repository: row!.repoDir, checkout: row!.worktreeDir,
+        signal, exec, budgetMs: Math.min(180_000, Math.floor(executionStop - clock.monotonicMs())),
+        observeReply: ports.provisionToolchainReply ? (type, detail) => ports.provisionToolchainReply!(id, type, detail) : undefined,
+        privateReceipt: slot.privateReceipt,
+        privateIntent: slot.privateIntent,
+        recordPrivateReceipt: receipt => write(() => {}, { ...slot, privateReceipt: receipt }),
+        recordPrivateIntent: intent => write(() => {}, { ...slot, privateIntent: intent }),
+        ready: async workerPid => {
+          const worker = captureProcessIdentity(workerPid);
+          if (!worker.startIdentity || !worker.bootEpoch) throw new Error("cannot verify the provisioning worker");
+          await write(() => {}, { ...slot, worker });
+          reportProvisioningPhase(id, { phase: "toolchain-ready" });
+        }, step, dispatch,
+        cacheAcquired: async fence => {
+          const worker = slot.worker;
+          const cacheOwner = worker && await provesProvisionCacheHolder(worker, fence, signal) ? fence : undefined;
+          await write(() => {}, { ...slot, cacheWaitSince: undefined, cacheWaitIdentity: undefined, cacheMetadataRemainingMs: undefined, cacheOwner });
+        },
+        cacheBusy: async identity => {
+          const now = clock.wallMs();
+          const since = slot.cacheWaitIdentity === identity ? slot.cacheWaitSince ?? now : now;
+          let holderDeadline: number | undefined;
+          for (const ownerId of await provisioningCacheOwnerKeys(identity)) {
+            const observed = (await findControllerPipeline(ownerId))?.provisioningJob;
+            if (!validProvisioningRecord(observed) || observed.status !== "running"
+              || observed.cacheOwner?.identity !== identity || !observed.worker
+              || !await provesProvisionCacheHolder(observed.worker, observed.cacheOwner, signal)) continue;
+            const fresh = (await findControllerPipeline(ownerId))?.provisioningJob;
+            if (fresh?.token === observed.token && fresh.status === "running" && fresh.cacheOwner?.identity === identity
+              && fresh.cacheOwner.fd === observed.cacheOwner.fd) {
+              holderDeadline = fresh.deadlineAt;
+              break;
+            }
+          }
+          if (holderDeadline !== undefined && holderDeadline <= now) requestPipelineTick();
+          const cutoff = since + PROVISION_STEPS.waitingForCache;
+          const reason = holderDeadline === undefined ? "cache-holder-unclaimed"
+            : now >= cutoff ? "cache-wait-expired" : "waiting-for-cache-holder";
+          const metadataRemainingMs = Math.ceil(Math.max(0, metadataStop - clock.monotonicMs()));
+          throw new Deferred("waitingForCache", since, cutoff, reason, undefined,
+            { identity, metadataRemainingMs, holderDeadline: holderDeadline !== undefined && holderDeadline > now ? holderDeadline : undefined });
+        },
+        legacyWriter: deferLegacyWriter, track: child => { handle.child = child; },
+      }); else {
+        await step("checkingDependencies");
+        const prepared = await prepareProvisionedPipeline(row!, result.sha, exec, signal);
+        if (!prepared.ok) throw new Error(prepared.error);
+      }
+      await step("applyingCheckout");
+      const verified = custody
+        ? await verifyProvisioningCheckoutReceipt(row!, slot.plan!, commonDir, exec, signal)
+        : (await exec("git", ["rev-parse", "HEAD"], row!.worktreeDir, signal)).stdout.trim() === result.sha;
+      if (!verified || (git.native && await physicalProvisioningPath(row!.worktreeDir) !== physicalCheckout)) {
+        throw new Error("checkout changed before its provisioning receipt could be consumed");
+      }
+      if (slot.privateReceipt) {
+        const receipt = slot.privateReceipt;
+        // Toolchain verification can precede apply by another state-admission
+        // window. Qualify readiness with a fresh census at the consume boundary.
+        const observation = await observeLegacyInstaller(row!.worktreeDir);
+        read();
+        if (observation.kind !== "clear") await deferLegacyWriter(observation);
+        const modules = await fs.promises.lstat(path.join(row!.worktreeDir, "node_modules"), { bigint: true });
+        if (!modules.isDirectory() || String(modules.dev) !== receipt.device || String(modules.ino) !== receipt.inode) {
+          throw new ProvisionToolchainFailure("private-install-unverified");
+        }
+      }
+      await write(current => {
+        const journal = preserved ? `${preserved.unpublishedCommits} unpublished commit(s) preserved at ${preserved.ref}; checkout excludes this local tip` : null;
+        if (journal && current.delivery && !current.delivery.journal.some(entry => entry.reason === journal)) deliveryJournal(current, "recovery", journal);
+        delete current.provisioningWait;
+        current.lastPassedCommit = result.sha;
+        current.state = "running";
+        current.stateDetail = journal;
+        if (slot.interruption) current.lastProvisioningInterruption = slot.interruption;
+      }, null);
+      ports.scheduleTick?.(0);
+    };
+    let rejectRevoked!: () => void;
+    const revoked = new Promise<never>((_, reject) => {
+      rejectRevoked = () => reject(signal.reason);
+      signal.addEventListener("abort", rejectRevoked, { once: true });
+      if (signal.aborted) rejectRevoked();
+    });
+    try { await Promise.race([execute(), revoked]); }
+    finally { signal.removeEventListener("abort", rejectRevoked); }
+  } catch (error) {
+    if (!changed || error instanceof JobRevoked) return changed;
+    if (error instanceof StoreBusyBeforeAdmissionError) {
+      schedule(pool, clock.wallMs() + 1_000, clock, ports);
+      return changed;
+    }
+    if (error instanceof Deferred) {
+      if (clock.wallMs() >= error.deadline) {
+        if (error.step === "waitingForTurn") {
+          const retryAt = clock.wallMs() + 5_000;
+          await wait(new Deferred("waitingForTurn", error.since, retryAt,
+            error.blockerToken ? "provisioning-owner-expired" : "waiting-for-provisioning-turn",
+            error.resource, undefined, undefined, error.blockerToken));
+          return true;
+        }
+        const reason = error.reason;
+        await write(() => {}, { ...slot, step: error.step, since: error.since, deadlineAt: error.deadline, waitReason: error.reason,
+          ...(error.cache ? { cacheWaitSince: error.since, cacheWaitIdentity: error.cache.identity,
+            cacheMetadataRemainingMs: error.cache.metadataRemainingMs } : {}),
+          ...(error.step === "waitingForLegacyInstaller" ? { legacyWaitSince: error.since, legacyWriter: error.legacyWriter } : {}),
+        }, false, true);
+        await park(reason);
+      }
+      else await wait(error);
+      return true;
+    }
+    const message = error instanceof Error ? error.message : "provisioning operation refused";
+    if (message.includes(DISK_SPACE_WAIT_PREFIX)) {
+      const at = clock.wallMs() + DISK_SPACE_RETRY_MS;
+      await write(current => { current.stateDetail = message.slice(message.indexOf(DISK_SPACE_WAIT_PREFIX)); },
+        { ...slot, status: "waiting", retryAt: at, retryPausedAt: pauseRetry() }, false, true);
+      schedule(pool, at, clock, ports);
+      return true;
+    }
+    const gitReason = message.startsWith(WORKTREE_INITIALIZATION_HELD) ? "lock" : transientGitFailure(message);
+    const timeout = error instanceof StepDeadline || signal.reason instanceof StepDeadline;
+    const workerFailure = error instanceof ProvisionToolchainFailure && error.reason !== "private-install-unverified";
+    if (!timeout && !workerFailure && !gitReason) {
+      await park(error instanceof ProvisionToolchainFailure ? error.reason : message);
+      return true;
+    }
+    const now = clock.wallMs();
+    let reason: string;
+    if (timeout) {
+      if (clock.monotonicMs() >= executionStop) reason = "provision-execution-budget-exhausted";
+      else reason = slot.step === "startingToolchain" && !slot.worker ? "toolchain-start-failed" : "provision-step-timeout";
+    } else reason = workerFailure ? error.reason : describeTransientGitFailure(gitReason!, message).cause;
+    const earlier = transientWait(row!, slot.admittedAdd);
+    const budget = earlier?.budgetMs ?? RETRY_MS;
+    // Failed admission reads still spend their own time. Successful probes and
+    // time beyond the scheduled backoff leave the retry window paused.
+    const spent = earlier ? retryTimeUsed(earlier, now, slot.retryPausedAt)
+      + (slot.retryPausedAt === undefined ? 0 : Math.ceil(clock.monotonicMs() - claimStart)) : 0;
+    const remaining = budget - spent;
+    if (remaining <= 0) {
+      await park(`${reason}; inspect the last provisioning step and retry-stage`);
+      return true;
+    }
+    const rounds = earlier?.rounds ?? 0, retryMaxMs = earlier?.retryMaxMs ?? 60_000;
+    const retryAt = now + Math.min(5_000 * 2 ** rounds, retryMaxMs, remaining);
+    const retry: PipelineBoundedWait = { startedAt: asDate(now - spent), rounds: rounds + 1, retryAfter: asDate(retryAt), budgetMs: budget, retryMaxMs };
+    await write(current => {
+      if (!slot.admittedAdd) current.provisioningWait = retry;
+      current.stateDetail = `provisioning deferred: ${reason}`;
+    }, { ...slot, ...(slot.admittedAdd ? { admittedAdd: { ...slot.admittedAdd, previousWait: retry } } : {}),
+      retryAt, retryPausedAt: retryAt, status: "waiting",
+      interruption: slot.interruption ?? { step: slot.step, since: slot.since, deadlineAt: slot.deadlineAt, observedAt: now, reason } }, false, true);
+    schedule(pool, retryAt, clock, ports);
+  } finally {
+    cleanup();
+    signal.removeEventListener("abort", cleanup);
+  }
+  return changed;
+}

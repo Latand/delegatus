@@ -1998,6 +1998,8 @@ describe("MCP tool service", () => {
         "telegram_bot_send",
         "telegram_bot_send_media",
         "telegram_bot_send_document",
+        "telegram_bot_reactions",
+        "telegram_bot_set_reaction",
         "telegram_bot_messages",
         "relay_owner_history",
         "relay_trusted_requesters",

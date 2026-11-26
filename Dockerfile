@@ -157,6 +157,7 @@ chmod +x /usr/local/bin/docker
 EOF
 
 FROM runtime-system AS runtime
+ENV LLV_GATE_IMAGE_BUN=bun-container
 COPY --from=build /app/.next ./.next
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/public ./public
@@ -165,14 +166,15 @@ COPY --from=build /app/bin ./bin
 COPY --from=build /app/next.config.ts ./next.config.ts
 COPY --from=build /app/tsconfig.json ./tsconfig.json
 COPY --from=build /app/src ./src
-COPY --from=build /app/scripts/privacy-known-value-fingerprints.json ./scripts/privacy-known-value-fingerprints.json
-COPY --from=build /app/scripts/whisper_transcribe.py ./scripts/whisper_transcribe.py
+COPY --from=build /app/scripts ./scripts
+COPY --from=build /app/.githooks/pre-push ./.githooks/pre-push
 # The pinned Telegram connector (#1059) is resolved at runtime from
 # /app/vendor — without this line the image ships without it and sign-in
 # dies with start_failed (#1081).
 COPY --from=build /app/vendor ./vendor
 COPY --from=build /app/scripts/runtime-host-viewer-adapter.ts ./scripts/runtime-host-viewer-adapter.ts
 COPY --from=build /app/scripts/runtime-host-healthcheck.ts ./scripts/runtime-host-healthcheck.ts
+COPY --from=build /app/scripts/verify-provisioning-release.mjs ./scripts/verify-provisioning-release.mjs
 COPY --from=build /app/scripts/gate-slot.sh /app/scripts/owned-runner.ts /app/scripts/cpu-admission.ts /app/scripts/cpu-admission-lock.ts /app/scripts/test-child-guardian.ts ./scripts/
 COPY --from=build /app/node_modules ./node_modules
 

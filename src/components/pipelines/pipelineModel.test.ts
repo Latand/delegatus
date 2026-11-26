@@ -45,6 +45,7 @@ import {
   stageOpenTarget,
   attemptNavTarget,
   stageAgentRowModel,
+  stageAsksOperator,
   stageCloudTaskUrl,
   resolveStageNavFile,
   partitionPipelineSurfaces,
@@ -1827,6 +1828,19 @@ describe("stage agent row", () => {
     ] as PipelineStageAttempt[] }] });
     expect(stageAgentRowModel(p, "design")).toEqual({ target: { conversationId: "conversation_design", agentPath: null }, question: "Question\nOptions", earlier: [{ n: 1, position: 1, state: "failed", target: { conversationId: null, agentPath: "/fixture/old.jsonl" } }] });
     expect(stageAgentRowModel(p, "unstarted")).toEqual({ target: null, question: null, earlier: [] });
+  });
+});
+
+describe("a stage that asks the operator", () => {
+  const asking = (state: string, attemptState: string, summary: string | null) => pipeline({ state: state as Pipeline["state"], runs: [{ stageId: "design", attempts: [{ n: 1, state: attemptState, conversationId: "conversation_design", agentPath: null, ...(summary ? { report: { summary } } : {}) } as PipelineStageAttempt] }] });
+  test("a parked lane whose latest attempt asked a question answers in the conversation's composer", () => {
+    expect(stageAsksOperator(asking("needs_decision", "needs_decision", "Keep the header row?"), "design")).toBe(true);
+  });
+  test("a decision with no question, a stage that passed and a lane that moved on do not", () => {
+    expect(stageAsksOperator(asking("needs_decision", "needs_decision", null), "design")).toBe(false);
+    expect(stageAsksOperator(asking("needs_decision", "passed", "Keep the header row?"), "design")).toBe(false);
+    expect(stageAsksOperator(asking("running", "needs_decision", "Keep the header row?"), "design")).toBe(false);
+    expect(stageAsksOperator(asking("needs_decision", "needs_decision", "Keep the header row?"), "other")).toBe(false);
   });
 });
 

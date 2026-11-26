@@ -1,3 +1,4 @@
+import { provisioningStepView } from "./provisioningRecord";
 import { cloudEngine, isCloudRuntime, stageExecution } from "./cloudStage";
 import { hardenedRedact } from "@/lib/view/compactText";
 /**
@@ -116,6 +117,7 @@ export type PipelineListRow = {
   pausedState: Pipeline["pausedState"];
   /** Clamped. */
   stateDetail: string | null;
+  provisioningStep?: Pipeline["provisioningStep"];
   /** Whether a pinned specification exists — the body itself is a get_pipeline read. */
   hasSpec: boolean;
   createdAt: string;
@@ -310,6 +312,7 @@ export function pipelineListRow(record: Pipeline): PipelineListRow {
     hiddenFromBoard: pipelineHiddenFromBoard(pipeline),
     pausedState: pipeline.pausedState ?? null,
     stateDetail: clampText(withDeliveryPublicationDetail(pipeline).stateDetail),
+    ...(pipeline.provisioningJob ? { provisioningStep: provisioningStepView(pipeline) } : {}),
     hasSpec: typeof pipeline.spec === "string" && pipeline.spec.length > 0,
     createdAt: pipeline.createdAt,
     closedAt: pipeline.closedAt ?? null,
@@ -339,6 +342,7 @@ export type PipelineCompactRow = {
   cursor: { stageId: string; state: PipelineCursorState } | null;
   /** Clamped. */
   stateDetail: string | null;
+  provisioningStep?: Pipeline["provisioningStep"];
   /** As on the full row (#1938). */
   review?: PipelineReviewSummary;
   stages: Array<{
@@ -374,6 +378,7 @@ export function pipelineCompactRow(record: Pipeline): PipelineCompactRow {
     hiddenFromBoard: pipelineHiddenFromBoard(pipeline),
     cursor: pipeline.cursor ? { stageId: pipeline.cursor.stageId, state: pipeline.cursor.state } : null,
     stateDetail: clampChars(withDeliveryPublicationDetail(pipeline).stateDetail, COMPACT_DETAIL_CHARS),
+    ...(pipeline.provisioningJob ? { provisioningStep: provisioningStepView(pipeline) } : {}),
     ...reviewField(pipeline),
     stages: (pipeline.stages ?? []).map((stage) => {
       const attempt = latestOperationalStageAttempt(pipeline, stage.id);

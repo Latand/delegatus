@@ -211,8 +211,11 @@ timeout and follows bounded pagination:
    head checks. For a mismatch on Delegatus, evaluate the target checks and
    require the app-bound runtime gate and its matching successful push workflow
    and check suite. For a mismatch elsewhere, report `untested-tree`.
-3. Read check runs, statuses and branch protection; require every required
-   context and refuse red or incomplete evidence.
+3. Read check runs, statuses, branch protection and the active branch rules
+   (`/rules/branches/<branch>`, which carry a requirement that only a ruleset
+   defines, with its integration binding); require every required context and
+   refuse red or incomplete evidence. A malformed protection or rule answer is
+   `unknown`, never an empty required set.
 
 Check runs and statuses are mapped onto the rollup shape (`name`, `status`,
 `conclusion`, `startedAt`, and `context`, `state` for a status) and folded with

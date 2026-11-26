@@ -142,8 +142,17 @@ if pre_push_parent "$@"; then
     read -ra wrapper_fields <<< "${wrapper_stat##*) }"
     export LLV_GATE_HOOK_WRAPPER_IDENTITY="$BASHPID:${wrapper_fields[19]}"
   fi
+  # Only this dispatch bypasses a slot. A nested or generic heavy dispatch
+  # must clear the recorder's phase before it can obtain its own grant.
+  export LLV_GATE_RECORD_WAIT_ONLY="${LLV_GATE_RECORD_WAIT_REQUEST:-}"
+  if [[ -n "$LLV_GATE_RECORD_WAIT_ONLY" && -n ${LLV_GATE_RECORD_WAIT_PARENT:-} ]]; then
+    export LLV_OWNED_RUN_PARENT_IDENTITY="$LLV_GATE_RECORD_WAIT_PARENT"
+  fi
+  unset LLV_GATE_RECORD_WAIT_REQUEST LLV_GATE_RECORD_WAIT_PARENT
   run "$@"
 fi
+recorded_wait_only=${LLV_GATE_RECORD_WAIT_ONLY:-}
+unset LLV_GATE_RECORD_WAIT_REQUEST LLV_GATE_RECORD_WAIT_PARENT LLV_GATE_RECORD_WAIT_ONLY
 
 # Keep the ticket until a slot is locked and its admission is committed.
 # CPU waits precede the owned runner's execution deadline.
@@ -264,7 +273,11 @@ slot_search=$slots
 # same memory sample while their compilers are still starting.
 if [[ -n ${LLV_GATE_PUBLICATION_MEMORY_BYTES:-} ]]; then slot_search=1; fi
 while :; do
-  "$gate_bun" "$admission" --wait "$queue_key" "$owner_pid"
+  if [[ -n $recorded_wait_only ]]; then
+    LLV_GATE_RECORD_WAIT_ONLY="$recorded_wait_only" "$gate_bun" "$admission" --wait "$queue_key" "$owner_pid"
+  else
+    "$gate_bun" "$admission" --wait "$queue_key" "$owner_pid"
+  fi
   if [[ $OSTYPE == msys || $OSTYPE == cygwin ]]; then
     # Native Windows uses the shared queue's atomic claim and the native
     # wrapper PID as its slot proof.

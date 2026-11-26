@@ -39,13 +39,13 @@ for (const lowSpace of [false, true]) for (const clearsCap of lowSpace ? [false]
       if (clearsCap) store.measure(held.directory, 2e9);
       process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = lowSpace || clearsCap ? "1000000000" : "0";
       process.env.LLV_PRESSURE_FIXTURE = config;
-      fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: lowSpace ? 0 : 1e12,
+      fs.writeFileSync(config, JSON.stringify({ pressureInventory: true, now: NOW, freeBytes: lowSpace ? 0 : 1e12,
         slowProof: { phase, prefix: count + Number(costlyTail), timeoutPrefix, requiredCost } }));
       const before = store.bytes();
       let report = await realParentPass(), clock = JSON.parse(fs.readFileSync(config, "utf8"));
       for (let tick = 1; !clearsCap && report.removed === 0 && tick < Math.ceil(timeoutPrefix / 7) + 2; tick++) {
         expect(report.errors).toBe(0); expect(clock.elapsed).toBeLessThanOrEqual(40_001);
-        fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: lowSpace ? 0 : 1e12,
+        fs.writeFileSync(config, JSON.stringify({ pressureInventory: true, now: NOW, freeBytes: lowSpace ? 0 : 1e12,
           slowProof: { phase, prefix: count + Number(costlyTail), timeoutPrefix, requiredCost } }));
         report = await realParentPass(); clock = JSON.parse(fs.readFileSync(config, "utf8"));
       }
@@ -84,12 +84,20 @@ for (const lowSpace of [false, true]) for (const clearsCap of lowSpace ? [false]
         bytes: report.bytes, elapsed: clock.elapsed }));
       // Restore proof and restart the actual helper over the same durable
       // cursor. The protected root stays while every ended sibling recovers.
-      fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: 1e12 }));
       process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = String(heldBytes);
       let removed = report.removed;
+      let recoveryAt = NOW + (clock.elapsed ?? 0);
+      const recover = () => {
+        const retryAt = ledgerRoots(store, scratch).filter(row => row.directory !== held.directory).map(row => row.checkedAt);
+        // The helper restarts on later ticks. Let recorded proof backoff
+        // elapse before asking a new pass to reach the earlier deferrals.
+        recoveryAt = Math.max(recoveryAt + 60_000, ...retryAt);
+        fs.writeFileSync(config, JSON.stringify({ pressureInventory: true, now: recoveryAt, freeBytes: 1e12 }));
+        return realParentPass();
+      };
       const nativeRefused = new Set<string>();
       for (let pass = 0; pass < 3 && store.bytes() > heldBytes; pass++) {
-        const recovered = await realParentPass();
+        const recovered = await recover();
         if (pass === 0) expect(recovered.outcomes[0]!.directory).toBe(next);
         for (const directory of nativeFenceDeferrals(recovered, store)) nativeRefused.add(directory);
         expect(recovered.errors).toBe(0); removed += recovered.removed;
@@ -103,7 +111,7 @@ for (const lowSpace of [false, true]) for (const clearsCap of lowSpace ? [false]
           const stat = fs.statSync(owner.directory); expect(`${stat.dev}:${stat.ino}`).toBe(owner.identity);
           expect(fs.readFileSync(path.join(owner.directory, "data")).length).toBe(4096);
         }
-        const recovered = await realParentPass(); expect(recovered.errors).toBe(0); removed += recovered.removed;
+        const recovered = await recover(); expect(recovered.errors).toBe(0); removed += recovered.removed;
         for (const directory of nativeFenceDeferrals(recovered, store)) nativeRefused.add(directory);
       }
       expect(removed).toBe(count); expect(store.bytes()).toBe(heldBytes);

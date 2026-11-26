@@ -18,6 +18,15 @@ export const publicRefusals = (attempts: BotAttempt[]) => attempts.map(({ bot, c
 const mayFallback = (r: BotCallResult, code: string) => !r.ok && (r.classified ? r.classified.fallback : r.kind === "http"
   && ["forbidden", "bot_not_in_chat", "not_enough_rights", "token_rejected"].includes(code));
 
+type PostingCapability = "canPost" | "canSendPhotos" | "canSendDocuments";
+
+function botPostingRefusal(bot: PostingBot, membership: Membership | null, capability: PostingCapability): TelegramBotError | null {
+  if (bot.tokenState === "rejected") return new TelegramBotError("token_rejected", "Telegram rejected the bot token");
+  if (membership?.[capability] !== false) return null;
+  if (membership.member === false) return new TelegramBotError("bot_not_in_chat", "the bot is no longer in the chat");
+  return new TelegramBotError("not_enough_rights", "the bot may not post this content here");
+}
+
 export function botRows(db: Database): Array<{ bot_id: string; name: string; username: string | null; token_state: "ok" | "rejected" }> {
   return db.query<{ bot_id: string; name: string; username: string | null; token_state: "ok" | "rejected" }, []>(
     "SELECT bot_id, name, username, token_state FROM sending_bots ORDER BY connected_at, rowid").all();
@@ -90,6 +99,18 @@ export class BotSelector {
     const check = { transport: bot.transport, work };
     this.#checks.set(key, check);
     try { return await work; } finally { if (this.#checks.get(key) === check) this.#checks.delete(key); }
+  }
+
+  /** Re-read the recorded pair after an external chat lookup that may deliver
+   * a newer membership update while it was in flight. */
+  async assertCurrentPostingEligibility(bot: PostingBot, chat: ChatRow): Promise<void> {
+    if (bot.tokenState === "rejected") throw new TelegramBotError("token_rejected", "Telegram rejected the bot token");
+    if (chat.type === "private") return;
+    const membership = await this.membership(chat.chatId, bot.id);
+    if (membership && Date.parse(membership.expiresAt) > this.now().getTime()) {
+      const refusal = botPostingRefusal(bot, membership, "canPost");
+      if (refusal) throw refusal;
+    }
   }
 
   async observeUpdate(bot: PostingBot, chat: ChatRow, update: Record<string, unknown>): Promise<void> {
@@ -175,7 +196,56 @@ export class BotSelector {
       lastDelivery: saved.last_delivery ? parseSqliteJson(saved.last_delivery, db) as TelegramLastDelivery : null };
   }
 
-  selection(chat: ChatRow, caller: string, key: string, capability: "canPost" | "canSendPhotos" | "canSendDocuments",
+  private assignedBot(chatId: string) {
+    return outboundState(this.store.filename, false, db => db.query<{ assigned_bot: string | null }, [string]>(
+      "SELECT assigned_bot FROM chats WHERE chat_id=?",
+    ).get(chatId)?.assigned_bot);
+  }
+
+  private orderedBots(chat: ChatRow, connected: PostingBot[], assigned: string | null | undefined, retryBot?: string | null) {
+    return connected.filter(bot => chat.type !== "private" || bot.receiving)
+      .sort((a, b) => Number(b.id === retryBot) - Number(a.id === retryBot) || Number(b.id === assigned) - Number(a.id === assigned));
+  }
+
+  /** Native operations share posting eligibility, without making a message send claim. */
+  async withNativePostingBot<T>(chat: ChatRow, authorize: () => void, run: (bot: PostingBot, assertCurrent: () => void) => Promise<T>): Promise<T> {
+    const assigned = await this.assignedBot(chat.chatId);
+    authorize();
+    const connected = this.bots();
+    if (!connected.length) throw new TelegramBotError("bot_not_connected", "no Telegram Bot API bot is connected");
+    const candidates = this.orderedBots(chat, connected, assigned).map(bot => ({ bot, checked: false }));
+    let firstRefusal: TelegramBotError | undefined;
+    for (const { bot, checked } of candidates) {
+      authorize();
+      const membership = checked || bot.tokenState === "rejected" ? null : await this.check(bot, chat);
+      if (!checked && chat.type !== "private" && bot.tokenState !== "rejected" && membership?.canPost == null) {
+        // As for sends, try known posting members before unknown pairs.
+        candidates.push({ bot, checked: true });
+        continue;
+      }
+      const refusal = botPostingRefusal(bot, membership, "canPost");
+      if (refusal) {
+        firstRefusal ??= refusal;
+        continue;
+      }
+      const assertCurrent = () => {
+        authorize();
+        if (!this.bots().some(current => current.id === bot.id && current.transport === bot.transport && current.tokenState === "ok")) {
+          throw new TelegramBotError("chat_not_allowed", "the selected bot changed or became unavailable");
+        }
+      };
+      assertCurrent();
+      try {
+        return await run(bot, assertCurrent);
+      } catch (error) {
+        if (!(error instanceof TelegramBotError) || !["bot_not_in_chat", "chat_unknown", "token_rejected", "not_enough_rights", "forbidden"].includes(error.code)) throw error;
+        firstRefusal ??= error;
+      }
+    }
+    throw firstRefusal ?? new TelegramBotError("bot_not_in_chat", "no connected bot can post here");
+  }
+
+  selection(chat: ChatRow, caller: string, key: string, capability: PostingCapability,
     target: (botId: string) => PublicationTarget | null, authorize: () => void) {
     chat = { ...chat };
     const connected = this.bots();
@@ -185,7 +255,7 @@ export class BotSelector {
     let publicationTarget: PublicationTarget | null = null;
     const attempts: BotAttempt[] = [];
     const available = (bot: PostingBot) => bot.clone ? this.clones?.valid(bot.clone, chat.chatId) === true : this.bots().some(b => b.id === bot.id);
-    const assignedBot = () => outboundState(this.store.filename, false, db => db.query<{ assigned_bot: string | null }, [string]>("SELECT assigned_bot FROM chats WHERE chat_id=?").get(chat.chatId)?.assigned_bot);
+    const assignedBot = () => this.assignedBot(chat.chatId);
     const authorizeClone = async () => {
       if (await assignedBot()) throw new TelegramBotError("chat_not_allowed", "a bot was assigned to this chat");
       authorize();
@@ -250,8 +320,7 @@ export class BotSelector {
         return result;
       }
       const assigned = await assignedBot();
-      const bots = connected.filter(b => chat.type !== "private" || b.receiving);
-      bots.sort((a, b) => Number(b.id === retryBot) - Number(a.id === retryBot) || Number(b.id === assigned) - Number(a.id === assigned));
+      const bots = this.orderedBots(chat, connected, assigned, retryBot);
       const candidates: Array<{ bot: PostingBot; checked?: boolean; membership?: Membership | null }> = bots.map(bot => ({ bot }));
       if (!assigned && chat.type !== "private" && this.clones) {
         const route = await this.clones.route(chat.chatId);
@@ -278,9 +347,9 @@ export class BotSelector {
           candidates.push({ bot, checked: true, membership });
           continue;
         }
-        if (bot.tokenState === "rejected" || membership?.[capability] === false) {
-          const code = bot.tokenState === "rejected" ? "token_rejected" : membership?.member === false ? "bot_not_in_chat" : "not_enough_rights";
-          await record(bot, new TelegramBotError(code, code === "bot_not_in_chat" ? "the bot is no longer in the chat" : code === "token_rejected" ? "Telegram rejected the bot token" : "the bot may not post this content here"), "check");
+        const refusal = botPostingRefusal(bot, membership, capability);
+        if (refusal) {
+          await record(bot, refusal, "check");
           continue;
         }
         authorize();

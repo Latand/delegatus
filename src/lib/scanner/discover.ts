@@ -12,6 +12,7 @@ import { conversationSearchProjection } from "./conversationSearchProjection";
 import { isClaudeWorkflowBookkeeping } from "./claudeNative";
 import { codexThreadIdFromPath, nativeCodexParentThreadId } from "./codexNative";
 import { isOpenclawTranscript } from "./openclawNative";
+import { isAntigravityTranscriptPath } from "./antigravityNative";
 import { isCopilotTranscriptPath } from "./copilotNative";
 import { describe } from "./describe";
 import type { ConversationCatalogEntry } from "./conversationCatalog";
@@ -115,6 +116,8 @@ async function walkPaths(rootName: RootKey, root: string, dir: string, limit: Li
     /* A Copilot session directory holds checkpoints, file snapshots and
        research notes beside its one transcript, `events.jsonl`. */
     if (rootName === "copilot-sessions" && !isCopilotTranscriptPath(root, path.join(dir, entry.name))) return { paths: [], complete: true };
+    /* An Antigravity session directory holds sidecar indexes beside `events.jsonl`. */
+    if (rootName === "antigravity-sessions" && !isAntigravityTranscriptPath(root, path.join(dir, entry.name))) return { paths: [], complete: true };
     return { paths: [{ rootName, root, path: path.join(dir, entry.name) }], complete: true };
   }));
   return {
@@ -366,7 +369,7 @@ function resourceActivity(previous: FileEntry | undefined, mtime: number, size: 
 
 /** Placeholder card labels for the resource scope, which names a transcript
     before any of its bytes have been read. */
-const ENGINE_LABEL = { codex: "Codex", claude: "Claude", openclaw: "OpenClaw", copilot: "Copilot" } as const;
+const ENGINE_LABEL = { codex: "Codex", claude: "Claude", openclaw: "OpenClaw", copilot: "Copilot", antigravity: "Antigravity" } as const;
 
 function resourceScopeFromPaths(raw: RawPath[], baseline?: ResourceScopeSnapshot): ResourceScopeSnapshot {
   const previousByPath = new Map((baseline?.files ?? []).map((entry) => [entry.path, entry] as const));
@@ -376,7 +379,8 @@ function resourceScopeFromPaths(raw: RawPath[], baseline?: ResourceScopeSnapshot
     const engine = entry.rootName === "codex-sessions"
       ? "codex" as const
       : entry.rootName === "openclaw-sessions" ? "openclaw" as const
-        : entry.rootName === "copilot-sessions" ? "copilot" as const : "claude" as const;
+        : entry.rootName === "copilot-sessions" ? "copilot" as const
+          : entry.rootName === "antigravity-sessions" ? "antigravity" as const : "claude" as const;
     const mtime = previous?.mtime ?? Date.now() / 1000;
     const size = previous?.size ?? 1;
     const activity = resourceActivity(previous, mtime, size);

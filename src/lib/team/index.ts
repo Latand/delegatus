@@ -12,7 +12,7 @@
  */
 
 import type { MessageSender, TeamActor, TeamModule } from "./contract";
-import { activeDeliveryActor, telegramOwnerActor, accessKeyWithheld, authenticatedOwner, isHumanActor, refuseAnonymous, teamActor } from "./actor";
+import { activeDeliveryActor, telegramOwnerActor, accessKeyWithheld, authenticatedOwner, isHumanActor, ownerTelegramGap, refuseAnonymous, teamActor } from "./actor";
 import { memberInitials } from "./contract";
 import { claimMessageAuthor, settleMessageAuthor } from "./authorship";
 import { messageTextDigest, recordMessageAuthor, recordTeamEvent } from "./events";
@@ -22,7 +22,7 @@ import { sessionBoundStream } from "./streams";
 import { recordConversationEvent } from "./subjects";
 import { teamTelegramHook } from "./telegramSignIn";
 
-export { activeDeliveryActor, telegramOwnerActor, accessKeyWithheld, authenticatedOwner, claimMessageAuthor, isHumanActor, recordConversationEvent, recordMessageAuthor, recordTeamEvent, refuseAnonymous, sessionBoundStream, settleMessageAuthor, teamActor, teamMode, teamTelegramHook };
+export { activeDeliveryActor, telegramOwnerActor, accessKeyWithheld, authenticatedOwner, claimMessageAuthor, isHumanActor, ownerTelegramGap, recordConversationEvent, recordMessageAuthor, recordTeamEvent, refuseAnonymous, sessionBoundStream, settleMessageAuthor, teamActor, teamMode, teamTelegramHook };
 export type { MessageAuthorClaim, PriorSubmission } from "./contract";
 export { agentBrowserAccess, type AgentBrowserSeat } from "./agentBrowserAccess";
 export { TeamError } from "./members";
@@ -132,6 +132,7 @@ export const team: TeamModule = {
   teamMode,
   teamActor,
   authenticatedOwner,
+  ownerTelegramGap,
   accessKeyWithheld,
   refuseAnonymous,
   recordTeamEvent,
@@ -164,6 +165,19 @@ const AUTHOR_SLACK_MS = 10 * 60_000;
  * when none precedes it). Each send names at most one
  * record; a record nothing matches is left unnamed.
  */
+/** Fast check for whether a conversation has any recorded human member sends
+    that could participate in occurrence-based authorship attribution. */
+export function hasConversationMessageAuthors(conversationId: string | null): boolean {
+  if (!conversationId) return false;
+  try {
+    const store = existingTeamStore();
+    if (!store) return false;
+    return store.messageAuthorsForConversation(conversationId).some((row) => Boolean(row.textDigest));
+  } catch {
+    return false;
+  }
+}
+
 export function recordAuthors(
   conversationId: string | null,
   records: ReadonlyArray<{ role: string; ts: string | null; text: string }>,

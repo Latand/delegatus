@@ -1215,6 +1215,7 @@ test.each(["failure", "pending"] as const)("a latest %s status with a tied times
         { id: 20, context: "build", state: latest, created_at: "2026-01-01T00:00:00Z" },
         { id: 10, context: "build", state: "success", created_at: "2026-01-01T00:00:00Z" },
       ]
+      : url.includes("/rules/branches/") ? []
       : url.includes("/branches/") ? { protected: true, protection: { required_status_checks: { contexts: ["build"] } } }
       : { commit: { tree: { sha: "c".repeat(40) } } };
     return Response.json(body);

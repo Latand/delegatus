@@ -5,57 +5,25 @@
     "stages-light": {
       "production": {
         "title": "Redesign attachment upload for large files",
-        "progress": "8 stages · Build ui running",
-        "navChips": 0,
+        "waits": "Stage 4 of 8 · waiting on the Builder (Build ui)",
+        "tabs": 8,
         "loops": [
-          "↺back to Build ui"
+          "↺ If Verify fails → back to Build ui · 0 of 2"
         ],
-        "graphDir": "LR",
-        "graphNodes": 8,
+        "rules": [
+          "↺ If Verify fails → back to Build ui · 0 of 2"
+        ],
+        "graphDir": null,
+        "graphNodes": 0,
         "headControls": [
-          "Collapse finished",
-          "Expand all",
           "Previous stage",
           "Next stage"
         ],
         "focusedPane": "build-ui",
         "panes": [
           {
-            "stage": "plan",
-            "width": 634,
-            "folded": false,
-            "attempts": [],
-            "draft": false,
-            "status": null,
-            "composerDisabled": null,
-            "reader": true,
-            "added": null
-          },
-          {
-            "stage": "build-api",
-            "width": 634,
-            "folded": false,
-            "attempts": [],
-            "draft": false,
-            "status": null,
-            "composerDisabled": null,
-            "reader": true,
-            "added": null
-          },
-          {
-            "stage": "review-api",
-            "width": 634,
-            "folded": false,
-            "attempts": [],
-            "draft": false,
-            "status": null,
-            "composerDisabled": null,
-            "reader": true,
-            "added": null
-          },
-          {
             "stage": "build-ui",
-            "width": 634,
+            "width": 1390,
             "folded": false,
             "attempts": [],
             "draft": false,
@@ -63,50 +31,6 @@
             "composerDisabled": null,
             "reader": true,
             "added": null
-          },
-          {
-            "stage": "review-ui",
-            "width": 634,
-            "folded": false,
-            "attempts": [],
-            "draft": true,
-            "status": "First message · not sent yet",
-            "composerDisabled": null,
-            "reader": true,
-            "added": "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
-          },
-          {
-            "stage": "verify",
-            "width": 634,
-            "folded": false,
-            "attempts": [],
-            "draft": true,
-            "status": "First message · not sent yet",
-            "composerDisabled": null,
-            "reader": true,
-            "added": "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
-          },
-          {
-            "stage": "docs",
-            "width": 634,
-            "folded": false,
-            "attempts": [],
-            "draft": true,
-            "status": "First message · not sent yet",
-            "composerDisabled": null,
-            "reader": true,
-            "added": "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
-          },
-          {
-            "stage": "merge",
-            "width": 634,
-            "folded": false,
-            "attempts": [],
-            "draft": true,
-            "status": "First message · not sent yet",
-            "composerDisabled": null,
-            "reader": true,
-            "added": "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
           }
         ]
       }
@@ -114,57 +38,25 @@
     "stages-dark": {
       "production": {
         "title": "Redesign attachment upload for large files",
-        "progress": "8 stages · Build ui running",
-        "navChips": 0,
+        "waits": "Stage 4 of 8 · waiting on the Builder (Build ui)",
+        "tabs": 8,
         "loops": [
-          "↺back to Build ui"
+          "↺ If Verify fails → back to Build ui · 0 of 2"
         ],
-        "graphDir": "LR",
-        "graphNodes": 8,
+        "rules": [
+          "↺ If Verify fails → back to Build ui · 0 of 2"
+        ],
+        "graphDir": null,
+        "graphNodes": 0,
         "headControls": [
-          "Collapse finished",
-          "Expand all",
           "Previous stage",
           "Next stage"
         ],
         "focusedPane": "build-ui",
         "panes": [
           {
-            "stage": "plan",
-            "width": 634,
-            "folded": false,
-            "attempts": [],
-            "draft": false,
-            "status": null,
-            "composerDisabled": null,
-            "reader": true,
-            "added": null
-          },
-          {
-            "stage": "build-api",
-            "width": 634,
-            "folded": false,
-            "attempts": [],
-            "draft": false,
-            "status": null,
-            "composerDisabled": null,
-            "reader": true,
-            "added": null
-          },
-          {
-            "stage": "review-api",
-            "width": 634,
-            "folded": false,
-            "attempts": [],
-            "draft": false,
-            "status": null,
-            "composerDisabled": null,
-            "reader": true,
-            "added": null
-          },
-          {
             "stage": "build-ui",
-            "width": 634,
+            "width": 1390,
             "folded": false,
             "attempts": [],
             "draft": false,
@@ -172,50 +64,6 @@
             "composerDisabled": null,
             "reader": true,
             "added": null
-          },
-          {
-            "stage": "review-ui",
-            "width": 634,
-            "folded": false,
-            "attempts": [],
-            "draft": true,
-            "status": "First message · not sent yet",
-            "composerDisabled": null,
-            "reader": true,
-            "added": "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
-          },
-          {
-            "stage": "verify",
-            "width": 634,
-            "folded": false,
-            "attempts": [],
-            "draft": true,
-            "status": "First message · not sent yet",
-            "composerDisabled": null,
-            "reader": true,
-            "added": "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
-          },
-          {
-            "stage": "docs",
-            "width": 634,
-            "folded": false,
-            "attempts": [],
-            "draft": true,
-            "status": "First message · not sent yet",
-            "composerDisabled": null,
-            "reader": true,
-            "added": "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
-          },
-          {
-            "stage": "merge",
-            "width": 634,
-            "folded": false,
-            "attempts": [],
-            "draft": true,
-            "status": "First message · not sent yet",
-            "composerDisabled": null,
-            "reader": true,
-            "added": "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
           }
         ]
       }
@@ -223,16 +71,18 @@
     "stages-retry": {
       "production": {
         "title": "Restore search results after the index rebuild",
-        "progress": "4 stages · Verify · 2 running",
-        "navChips": 0,
+        "waits": "Stage 3 of 4 · waiting on the Verifier (Verify)",
+        "tabs": 4,
         "loops": [
+          "↺ Fail edge: when Verify fails, Implement runs again. Used 1 of 2.",
           "↺back to Implement"
+        ],
+        "rules": [
+          "↺ Fail edge: when Verify fails, Implement runs again. Used 1 of 2."
         ],
         "graphDir": "LR",
         "graphNodes": 4,
         "headControls": [
-          "Collapse finished",
-          "Expand all",
           "Previous stage",
           "Next stage"
         ],
@@ -240,7 +90,7 @@
         "panes": [
           {
             "stage": "implement",
-            "width": 634,
+            "width": 1390,
             "folded": false,
             "attempts": [
               "attempt 1 · passed",
@@ -251,45 +101,6 @@
             "composerDisabled": null,
             "reader": true,
             "added": null
-          },
-          {
-            "stage": "review",
-            "width": 634,
-            "folded": false,
-            "attempts": [
-              "attempt 1 · passed",
-              "attempt 2 · passed"
-            ],
-            "draft": false,
-            "status": null,
-            "composerDisabled": null,
-            "reader": true,
-            "added": null
-          },
-          {
-            "stage": "verify",
-            "width": 634,
-            "folded": false,
-            "attempts": [
-              "attempt 1 · failed",
-              "attempt 2 · running"
-            ],
-            "draft": false,
-            "status": null,
-            "composerDisabled": null,
-            "reader": true,
-            "added": null
-          },
-          {
-            "stage": "merge",
-            "width": 634,
-            "folded": false,
-            "attempts": [],
-            "draft": true,
-            "status": "First message · not sent yet",
-            "composerDisabled": null,
-            "reader": true,
-            "added": "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
           }
         ]
       }
@@ -330,7 +141,7 @@
           "expectedStageDigest": "c28974257bc95f0233e8437b87100dc0b82f55c19e057a4ed47dd637564f7d0c"
         }
       },
-      "status": "First message · not sent yet · edited 02:08 AM"
+      "status": "First message · not sent yet · edited 05:30 AM"
     },
     "startedDuringSave": {
       "notice": {

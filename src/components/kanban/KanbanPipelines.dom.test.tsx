@@ -198,9 +198,10 @@ test("the opened graph shows each stage's state, the pass edges, the fail edge b
   expect(nodes.map((node) => node.dataset.stage)).toEqual(["implement", "review", "verify", "merge"]);
   expect(nodes.map((node) => node.querySelector(".pstate")?.textContent)).toEqual(["passed", "passed", "running", "waiting"]);
   expect(nodes[2]!.className).toContain("tone-active");
-  /* A waiting stage opens its first message (K5b), so its node is a live control. */
+  /* A waiting stage's node is a live control; a press selects its tab, and the label says so. */
   expect(nodes[3]!.getAttribute("aria-disabled")).toBeNull();
-  expect(nodes[3]!.getAttribute("aria-label")).toContain("Open its first message");
+  expect(nodes[3]!.getAttribute("aria-label")).toContain("Show its pane");
+  expect(nodes[3]!.getAttribute("aria-label")).not.toContain("Open its");
   /* One attempt caption (#1892): the number rides the name from the second attempt. */
   expect(nodes.map((node) => node.querySelector(".pattempt")?.textContent ?? null)).toEqual([" · 2", null, " · 2", null]);
   expect(nodes[0]!.querySelector(".pdetail")).toBeNull();
@@ -217,8 +218,8 @@ test("the opened graph shows each stage's state, the pass edges, the fail edge b
   const strip = section.querySelector<HTMLElement>('[data-strip="verify:fail:implement"]')!;
   expect([strip.dataset.stripShape, strip.dataset.stripFired, strip.dataset.stripMax]).toEqual(["return", "1", "2"]);
   expect(strip.querySelector(".sname")?.textContent).toBe("back to Implement");
-  /* One round fired, the next under way while Verify runs, none left after it. */
-  expect(strip.querySelector(".sdots")?.getAttribute("data-dots")).toBe("bad next");
+  /* One round fired and its rework passed; the other round of the budget is left. */
+  expect(strip.querySelector(".sdots")?.getAttribute("data-dots")).toBe("ok left");
   expect(strip.className).not.toContain("spent");
   expect(nodes[2]!.className).toContain("has-strip");
 });
@@ -248,10 +249,12 @@ test("with a helper conversation adopted last on Implement, the graph keeps the 
     expect(graphView(host).querySelector<HTMLElement>('[data-strip="verify:fail:implement"]')?.dataset.stripFired).toBe("1");
     expect(graphView(host).querySelector('.pnode[data-stage="implement"] .pattempt')?.textContent).toBe(" · 2");
     click(graphView(host).querySelector('.pnode[data-stage="implement"]'));
-    expect(await inWindow(host)).toBe("conversation_implement-2");
+    await tick();
+    /* The node selects its stage in the sheet, whose pane holds the marked attempt's conversation; no window opens. */
+    expect(host.querySelector("[data-agent-window]")).toBeNull();
+    expect(host.querySelector('[data-stages-sheet] .pane[data-stage="implement"] [data-kanban-reader]')?.getAttribute("data-kanban-reader")).toBe("conversation_implement-2");
     expect(card(host).querySelector("[data-kanban-reader]")).toBeNull();
     expect(graphView(host).querySelector('.pnode[data-stage="implement"]')?.getAttribute("aria-pressed")).toBe("true");
-    expect(card(host).querySelector('.pb-pills [data-stage="implement"]')?.className).toContain("selected");
     click(host.querySelector("[data-sheet-close]"));
     await tick();
     /* The helper stays reachable, listed as what it is. */
@@ -306,10 +309,10 @@ test("an edge is marked live only when the stage's own new attempt arrives throu
   /* The fail edge folds into Verify's strip, which takes the live mark. */
   const liveStrip = graphView(host).querySelector<HTMLElement>(".pstrip.live")!;
   expect(liveStrip.dataset.strip).toBe("verify:fail:implement");
-  /* The second return spends the budget: no hollow dot is left. */
+  /* The second return spends the budget: its rework is at work and no hollow dot is left. */
   expect(liveStrip.dataset.stripFired).toBe("2");
   expect(liveStrip.className).toContain("spent");
-  expect(liveStrip.querySelector(".sdots")?.getAttribute("data-dots")).toBe("bad bad");
+  expect(liveStrip.querySelector(".sdots")?.getAttribute("data-dots")).toBe("ok next");
 
   /* Within the window the record changes again with nothing attributed. */
   await tick(400);

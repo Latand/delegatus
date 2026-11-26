@@ -1,8 +1,51 @@
 # A cleaner agent that removes provably dead temporary work
 
-Status: design. Read-only investigation of `main` at `cb408fce` (2026-11-12). No product
-code changed, nothing on any machine deleted, stopped or modified. Written for the
-build, review and fix stages of this lane; the reviewers judge the build against it.
+The serving Viewer implements the pressure-triggered server pass described below.
+The numbered sections retain the broader November 12 design, including its
+proposed agent tools, daily schedule and approval flow.
+
+## Automatic pressure pass
+
+The serving Viewer's disk watch starts the cleaner on any monitored warning
+or critical reading, or when an observed write volume has fewer bytes free
+than `LLV_CLEANER_FREE_GB` (decimal GB, default 150). The controller starts
+before the pressure observer finishes measuring its largest consumers. One
+async lease serializes passes across Viewer generations. A pass starts at
+most once per 15 minutes after the preceding pass finishes, including empty
+or interrupted passes. `LLV_CLEANER=dry-run` previews eligibility and
+`LLV_CLEANER=off` stops scheduling.
+
+The standing November 23 operator instruction grants automatic removal for
+three classes:
+
+- Registered attempt and stage scratch uses the attempt ledger, lane
+  retirement claim, identity checks and existing native remover. A lane's
+  completion or a standalone host's proved termination establishes ownership.
+  The owner's canonical project must match the pass at selection and at
+  dispatch. The minute worker continues its ordinary scratch expiry schedule.
+  The tree must have been idle for three hours. Open and parked lanes,
+  checkout links, live process and container references, keep markers,
+  preservation records and unknown identities keep their data.
+- The checkout install's release owner can remove a registered, verified
+  release beyond the newest 15. Serving, rollback, in-flight, locked or
+  dirty releases and revisions without a surviving Git ref are kept.
+  The existing release gate closes access to the quarantined tree before
+  the final process and owner checks. Interrupted release removal checks mount
+  boundaries after reopening the gate and at recursive removal dispatch.
+- Evidence retention removes ledger-bound captures after their seven-day
+  retention and file-age checks pass. Open tasks protect captures through
+  lane and launch membership or a stored path reference. This uses the
+  evidence owner's quarantine, identity and live-reference checks. A
+  quarantine retains its authorizing pass and proof through recovery so the
+  original audit and seat report can settle.
+
+The cleaner runs removal inside the leased retention workers and leaves
+unverifiable trees in place. A durable journal under `state/disk-cleaner`
+records path, allocated bytes, class and proof before removal, followed by
+its observed outcome. An interrupted intent is reported as uncertain. The
+project's disk card and seat wake include the free-space readings, reclaimed
+allocation by class, largest observed holds and journal reference. Seat
+delivery follows the normal wake settings and receipt handling.
 
 ## 0. Originating requirement
 

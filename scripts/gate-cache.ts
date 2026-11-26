@@ -7,8 +7,9 @@ import { withoutGateAdmissionLauncher } from "../src/lib/runtime/gateAdmissionLa
 import { gateToolingFiles } from "./gate-tooling";
 
 export const fingerprint = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+export const contentsFingerprint = (contents: Buffer) => createHash("sha256").update(contents).digest("hex");
 export function fileFingerprint(file: string): string {
-  return existsSync(file) && statSync(file).isFile() ? createHash("sha256").update(readFileSync(file)).digest("hex") : "missing";
+  return existsSync(file) && statSync(file).isFile() ? contentsFingerprint(readFileSync(file)) : "missing";
 }
 
 /** The Bash wrappers read this file before launching the gate or comparator.
@@ -25,7 +26,7 @@ export function shellStartupFingerprint(root: string, startup: string | undefine
  * or plugin. Bounded traversal follows package links, including an external
  * dependency directory, while breaking cycles. Hash large files in chunks.
  */
-function treeFingerprint(directory: string, label: string, exclude: (relative: string) => boolean = () => false): string {
+function treeFingerprint(directory: string, label: string, exclude: (relative: string) => boolean = () => false, present = existsSync(directory)): string {
   const hash = createHash("sha256"), seen = new Set<string>();
   let entries = 0, bytes = 0;
   const buffer = Buffer.alloc(1024 * 1024);
@@ -51,8 +52,21 @@ function treeFingerprint(directory: string, label: string, exclude: (relative: s
       finally { closeSync(fd); }
     } else throw new Error("unsupported dependency input");
   };
-  if (existsSync(directory)) visit(directory, label);
+  if (present) visit(directory, label);
   return hash.digest("hex");
+}
+
+/** Bind installed compiler bytes when a check executes that dependency. */
+export function dependencyTreeFingerprint(root: string, relative: string): string {
+  const directory = path.join(root, relative);
+  // A selected compiler check requires a real input tree. In particular,
+  // existsSync() hides dangling symlinks and would certify an empty tree.
+  try { lstatSync(directory); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
+    throw error;
+  }
+  return treeFingerprint(directory, relative, undefined, true);
 }
 
 export function installedFingerprint(root: string): string {
@@ -101,12 +115,15 @@ export function gateToolFiles(root: string): string[] {
 
 /** Isolation replaces these before a check reads them, or they only record
  * how this process was started. */
-const ROOTS = new Set(["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR", "TMPDIR", "LLV_STATE_DIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_TMPDIR",
+const ROOTS = new Set(["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR", "TMPDIR", "LLV_STATE_DIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_TMPDIR",
   "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "NODE_ENV", "LLV_VIEWER_CONTROL_URL"]);
 const BOOKKEEPING = new Set(["PWD", "OLDPWD", "SHLVL", "_", "INVOCATION_ID", "JOURNAL_STREAM", "SYSTEMD_EXEC_PID", "MANAGERPID",
+  // The native entry proves each worker's supervisor. The recorder collects
+  // its queue timing separately. Those bindings belong to one execution.
+  "LLV_CHECK_ENTRY_SUPERVISOR", "LLV_RECORDED_CHECK_WAIT_ROOT",
   "TERM", "COLORTERM", "PAGER", "GIT_PAGER", "GH_PAGER", "NO_COLOR", "FORCE_COLOR"]);
 /** What a check may read, so its value is part of the key. */
-const KEYED = /^(?:PATH|LANG|LANGUAGE|LC_[A-Z]+|TZ|USER|LOGNAME|SHELL|NODE_OPTIONS|BUN_[A-Z0-9_]+|CI|CHROME_BIN|PLAYWRIGHT_BROWSERS_PATH|GIT_CONFIG_(?:GLOBAL|SYSTEM|NOSYSTEM)|LLV_GATE_(?:BUN|CHECK_ENV))$/;
+const KEYED = /^(?:PATH|LANG|LANGUAGE|LC_[A-Z]+|TZ|USER|LOGNAME|SHELL|NODE_OPTIONS|BUN_[A-Z0-9_]+|CI|CHROME_BIN|PLAYWRIGHT_BROWSERS_PATH|GIT_CONFIG_(?:GLOBAL|SYSTEM|NOSYSTEM)|LLV_GATE_(?:BUN|CHECK_ENV|CHECKPOINT_CLEANUP))$/;
 /** A commit identity that reaches a check is keyed by presence. Pre-push
  * checks receive none: the Viewer publishing a lane need not carry one, and
  * hosted CI has none either. */

@@ -7,6 +7,7 @@ import captures from "./cloud-checks.replay.fixture.json";
 // quoting, command structure and stderr retain the observed bytes.
 const job: CloudJob = {
   head: "a".repeat(40), tree: "b".repeat(40), base: "c".repeat(40), bundle: "bundle", timeoutMs: 1000,
+  deadlineAt: 1_900_000_000_000,
   inputs: { LANG: "en_US.UTF-8", LOGNAME: "fixture", NODE_OPTIONS: "--max-old-space-size=11264", SHELL: "/bin/bash", USER: "fixture" },
 };
 const config = {
@@ -15,6 +16,7 @@ const config = {
   environmentId: "asenvcfg_fixture",
 };
 const cwd = "/workspace/repository";
+const runRootLine = /^root="\$git_common\/delegatus-cloud-checks\/[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}"$/m;
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 const receipt = (code = 0) => `DELEGATUS_GATE ${job.head} ${job.tree} ${job.base} ${cloudInputDigest(job.inputs)} ${code}\n`;
 type Capture = typeof captures[number];
@@ -36,7 +38,11 @@ function replay(capture: Capture, change: RecordChange = {}) {
         const submitted = input.slice(input.indexOf("\n") + 1);
         submittedCommand = submitted;
         const upload = submitted.match(/\nupload='([^']+)'\n/)![1]!;
-        expect(submitted).toBe(cloudCommand(job, { directory: upload, source: cwd }));
+        const expected = cloudCommand(job, { directory: upload, source: cwd });
+        // Each render allocates its own run directory. The provider replay
+        // still wraps the exact command it received.
+        expect(submitted).toMatch(runRootLine);
+        expect(submitted.replace(runRootLine, "root=fixture")).toBe(expected.replace(runRootLine, "root=fixture"));
         command = `/bin/bash -lc ${quote(submitted)}`;
         return { turn: { id: "turn-fixture" } };
       }
