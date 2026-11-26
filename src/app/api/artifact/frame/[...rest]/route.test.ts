@@ -7,7 +7,7 @@ import { NextRequest } from "next/server";
 import { KEEP_PNG, legacyReportPictureFixture, localFileKeepFixture } from "@/lib/artifact/localFile.fixture";
 
 import { FRAME_SCOPE_TTL_MS, mintFrameScope } from "@/lib/artifact/frameScope";
-import { FRAME_SANDBOX } from "@/components/preview/DocumentPanes";
+import { EVIDENCE_FRAME_SANDBOX, FRAME_SANDBOX } from "@/components/preview/DocumentPanes";
 import { resolveLink } from "@/lib/artifact/linkTarget";
 import { claimInstall, signOutSession } from "@/lib/team/members";
 import { resetTeamStoreForTests, teamStore } from "@/lib/team/store";
@@ -64,7 +64,7 @@ function frameRequest(urlPath: string, headers: Record<string, string> = FRAME_R
 
 function reportDir(): string {
   const dir = path.join(home, "checkout/reports/round-2");
-  write("checkout/reports/round-2/index.html", '<link rel="stylesheet" href="style.css"><h2 id="decision-graph">Graph</h2><img src="assets/g.png">');
+  write("checkout/reports/round-2/index.html", '<link rel="stylesheet" href="style.css"><h2 id="decision-graph">Graph</h2><img src="assets/g.png"><form action="/save"><button>Save</button></form><dialog open>Modal</dialog><a href="https://outside.invalid" target="_blank">open</a>');
   write("checkout/reports/round-2/style.css", "h2 { color: teal }");
   write("checkout/reports/round-2/assets/app.js", "document.title = 'ok';");
   write("checkout/secrets.md", "outside the report");
@@ -84,7 +84,13 @@ test("the meta read of an HTML report mints a frame URL scoped to its directory"
   const page = await GET(frameRequest(meta.frame!));
   expect(page.status).toBe(200);
   expect(page.headers.get("content-type")).toBe("text/html; charset=utf-8");
-  expect(await page.text()).toContain('id="decision-graph"');
+  const document = await page.text();
+  expect(document).toContain('id="decision-graph"');
+  expect(document).toContain("<form action=\"/save\">");
+  expect(document).toContain("<dialog open>Modal</dialog>");
+  expect(document).toContain("target=\"_blank\"");
+  expect(document).toContain("https://outside.invalid");
+  expect(page.headers.get("content-security-policy")).toBe(`sandbox ${FRAME_SANDBOX}`);
 });
 
 test("evidence frame serves HTML and local rasters with the report sandbox", async () => {
@@ -109,14 +115,18 @@ test("evidence frame serves HTML and local rasters with the report sandbox", asy
   expect(page.status).toBe(200);
   expect(page.headers.get("content-type")).toBe("text/html; charset=utf-8");
   const csp = page.headers.get("content-security-policy")!;
-  expect(csp).toContain(`sandbox ${FRAME_SANDBOX}`);
+  expect(csp).toContain(`sandbox ${EVIDENCE_FRAME_SANDBOX}`);
   expect(csp).toContain(`/api/artifact/frame/${new URL(frame, "http://127.0.0.1").pathname.split("/")[4]}/`);
   expect(csp).toContain("base-uri 'none'");
   expect(csp).toContain("form-action 'none'");
+  expect(csp).toContain("script-src 'none'");
   expect(csp).toContain("frame-src 'none'");
   expect(csp).not.toContain("allow-popups");
   expect(csp).not.toContain("allow-forms");
-  expect(await page.text()).toBe(html);
+  const deliveredHtml = await page.text();
+  expect(deliveredHtml).toContain(html.slice(0, 32));
+  expect(deliveredHtml).not.toContain("https://outside.invalid");
+  expect(deliveredHtml).not.toContain("location.href");
   const chart = await asset("chart.png");
   expect(chart.status).toBe(200);
   expect(Buffer.from(await chart.arrayBuffer())).toEqual(KEEP_PNG);
@@ -138,6 +148,50 @@ test("evidence frame serves HTML and local rasters with the report sandbox", asy
   fs.symlinkSync(path.dirname(sibling), directory, "dir");
   expect((await asset("index.html")).status).toBe(403);
   expect((await asset("chart.png")).status).toBe(403);
+});
+
+test("workspace authorization checks the project owning each evidence target", async () => {
+  const store = teamStore();
+  const owner = claimInstall(store, "Fixture owner", { surface: "desktop", browser: "chrome" });
+  const member = {
+    id: "m_target_access", name: "Fixture member", role: "member", status: "active", color: "teal",
+    telegram: null, createdAt: new Date().toISOString(), createdBy: "claim", revokedAt: null,
+  } as const;
+  store.insertMember(member);
+  const { mintSession } = await import("@/lib/team/sessions");
+  const signedIn = mintSession(store, member.id, "approval", { surface: "desktop", browser: "chrome" });
+  const priorCatalog = conversationCatalogSnapshot();
+  const evidence = path.join(home, "state/evidence/agents/target-access");
+  const firstDir = path.join(evidence, "first-project");
+  const secondDir = path.join(firstDir, "second-project");
+  fs.mkdirSync(secondDir, { recursive: true });
+  fs.writeFileSync(path.join(firstDir, "index.html"), "<h1>Allowed report</h1>");
+  fs.writeFileSync(path.join(firstDir, "chart.png"), KEEP_PNG);
+  fs.writeFileSync(path.join(secondDir, "chart.png"), KEEP_PNG);
+  fs.writeFileSync(path.join(home, "state/project-catalog.json"), JSON.stringify({ files: {
+    first: { cwd: firstDir, projectRoot: firstDir },
+    second: { cwd: secondDir, projectRoot: secondDir },
+  } }));
+  const { projectForCwd } = await import("@/lib/scanner/describe");
+  const firstProject = projectForCwd(firstDir)!;
+  const secondProject = projectForCwd(secondDir)!;
+  replaceConversationCatalog([...priorCatalog,
+    { path: "first-session.jsonl", root: "codex-sessions", name: "first", project: firstProject, title: "first", firstPrompt: "", engine: "codex", kind: "session", fmt: "codex", mtime: 0, size: 0 },
+    { path: "second-session.jsonl", root: "codex-sessions", name: "second", project: secondProject, title: "second", firstPrompt: "", engine: "codex", kind: "session", fmt: "codex", mtime: 0, size: 0 },
+  ]);
+  const workspaceId = `w_${"d".repeat(32)}`;
+  createWorkspace(store, owner.member, { id: workspaceId, name: "First project", projects: [firstProject] });
+  store.putWorkspaceMember(workspaceId, member.id, "member", owner.member.id, new Date().toISOString());
+  const scope = mintFrameScope(firstDir, Date.now(), signedIn.session.id, "evidence", firstProject,
+    path.join(home, "state/evidence"), path.join(home, "state/evidence"));
+  const target = (name: string) => `/api/artifact/frame/${scope}/${name}`;
+  try {
+    expect((await GET(frameRequest(target("index.html")))).status).toBe(200);
+    expect((await GET(frameRequest(target("chart.png")))).status).toBe(200);
+    expect((await GET(frameRequest(target("second-project/chart.png")))).status).toBe(403);
+  } finally {
+    replaceConversationCatalog([...priorCatalog]);
+  }
 });
 
 test.skipIf(process.platform !== "win32")("a native drive-letter evidence link opens its HTML frame", async () => {
@@ -164,18 +218,21 @@ test("workspace removal revokes a live session's evidence document and raster gr
   store.insertMember(member);
   const { mintSession } = await import("@/lib/team/sessions");
   const signedIn = mintSession(store, member.id, "approval", { surface: "desktop", browser: "chrome" });
-  const priorCatalog = conversationCatalogSnapshot();
-  replaceConversationCatalog([...priorCatalog, {
-    path: "evidence-workspace.jsonl", root: "codex-sessions", name: "fixture", project: "repo-evidence",
-    title: "fixture", firstPrompt: "", engine: "codex", kind: "session", fmt: "codex", mtime: 0, size: 0,
-  }]);
-  const workspaceId = `w_${"c".repeat(32)}`;
-  createWorkspace(store, owner.member, { id: workspaceId, name: "Evidence workspace", projects: ["repo-evidence"] });
-  store.putWorkspaceMember(workspaceId, member.id, "member", owner.member.id, new Date().toISOString());
   const dir = path.join(home, "state/evidence/agents/workspace-fixture");
   write("state/evidence/agents/workspace-fixture/index.html", "<h1>Workspace report</h1>");
   fs.writeFileSync(path.join(home, "state/evidence/agents/workspace-fixture/chart.png"), KEEP_PNG);
-  const scope = mintFrameScope(dir, Date.now(), signedIn.session.id, "evidence", "repo-evidence");
+  const { projectForCwd } = await import("@/lib/scanner/describe");
+  const reportProject = projectForCwd(dir)!;
+  const priorCatalog = conversationCatalogSnapshot();
+  replaceConversationCatalog([...priorCatalog, {
+    path: "evidence-workspace.jsonl", root: "codex-sessions", name: "fixture", project: reportProject,
+    title: "fixture", firstPrompt: "", engine: "codex", kind: "session", fmt: "codex", mtime: 0, size: 0,
+  }]);
+  const workspaceId = `w_${"c".repeat(32)}`;
+  createWorkspace(store, owner.member, { id: workspaceId, name: "Evidence workspace", projects: [reportProject] });
+  store.putWorkspaceMember(workspaceId, member.id, "member", owner.member.id, new Date().toISOString());
+  const evidenceRoot = path.join(home, "state/evidence");
+  const scope = mintFrameScope(dir, Date.now(), signedIn.session.id, "evidence", reportProject, evidenceRoot, evidenceRoot);
   const target = (name: string) => `/api/artifact/frame/${scope}/${name}`;
   try {
     expect((await GET(frameRequest(target("index.html")))).status).toBe(200);
@@ -199,7 +256,7 @@ test("an evidence grant cannot acquire a project's non-raster asset permissions"
     const project = await GET(frameRequest(`/api/artifact/frame/${mintFrameScope(root)}/${asset}`));
     expect(project.status).toBe(200);
     expect(await project.text()).toBe("h1 { color: teal }");
-    const evidence = await GET(frameRequest(`/api/artifact/frame/${mintFrameScope(root, Date.now(), null, "evidence")}/${asset}`));
+    const evidence = await GET(frameRequest(`/api/artifact/frame/${mintFrameScope(root, Date.now(), null, "evidence", null, root, root)}/${asset}`));
     expect(evidence.status).toBe(403);
   } finally {
     if (previous === undefined) delete process.env.LLV_EVIDENCE_ROOTS;

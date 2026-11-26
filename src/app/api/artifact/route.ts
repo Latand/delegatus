@@ -179,7 +179,8 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<FailBody> | 
       if (isHtmlReport(real) && existingTeamStore()?.hasActiveOwner() && !live)
         return NextResponse.json({ error: "sign in to open a report frame", code: "member_required" }, { status: 401 });
       const frame = isHtmlReport(real)
-        ? frameUrl(mintFrameScope(path.dirname(real), Date.now(), live?.session.id ?? null, evidenceHtml ? "evidence" : "project", workspaceProject), path.basename(real))
+        ? frameUrl(mintFrameScope(path.dirname(real), Date.now(), live?.session.id ?? null, evidenceHtml ? "evidence" : "project", workspaceProject,
+          evidenceBoundary?.root ?? null, evidenceRoot ?? null), path.basename(real))
         : undefined;
       return NextResponse.json(
         { name, kind, mime, size: stat.size, mtimeMs: Math.round(stat.mtimeMs), etag,

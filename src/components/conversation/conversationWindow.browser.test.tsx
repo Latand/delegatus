@@ -7695,14 +7695,18 @@ describe("message document links", () => {
       </style>
       <main><h1>${heading}</h1><p>Root volume · 24 GiB of 40 GiB used</p>
       <img alt="Local usage chart" style="width:160px;height:48px" src="chart.png"><img aria-hidden="true" alt="" style="display:none" src="/outside.png">
+      <a href="https://outside.invalid/leave" target="_self" ping="https://outside.invalid/ping">Outside destination</a>
+      <script>location.href = "https://outside.invalid/script"</script>
       <progress aria-label="Root volume used" max="40" value="24">60%</progress></main></html>`);
     fs.mkdirSync(out, { recursive: true });
     let metadataReads = 0;
     let frameReads = 0;
+    let lastFramePath = "";
     let offScopeServerRequests = 0;
     const chartResponses: Array<{ status: number; contentType: string | null; length: number | null }> = [];
     const framePolicies: string[] = [];
     const browserMessages: string[] = [];
+    const offScopeNavigations: string[] = [];
     const throughProxy = async (request: Request, handler: (req: InstanceType<typeof NextRequest>) => Promise<Response>) => {
       const req = new NextRequest(request);
       const admission = proxy(req);
@@ -7714,6 +7718,7 @@ describe("message document links", () => {
         const response = await throughProxy(request, artifact);
         if (response.ok) {
           const meta = await response.clone().json() as { frame?: string };
+          if (meta.frame) lastFramePath = meta.frame;
           // The fixture server dispatches by exact pathname.
           if (meta.frame) responses[meta.frame] = async request => {
             frameReads++;
@@ -7752,9 +7757,11 @@ describe("message document links", () => {
         const reportLabel = lang === "uk" ? "Звіт про використання диска" : "Disk usage report";
         const query = new URLSearchParams({ case: "document-links", lang, cwd: scratch, parent: scratch, evidenceReport: report, reportLabel });
         const beforeOpen = metadataReads;
+        const frameReadsBeforeOpen = frameReads;
         const { context, page, pageErrors } = await openFixture(browser, `${served.base}?${query}`,
           { width, height: phone ? 844 : 900 }, theme, lang, "no-preference", phone);
         page.on("console", message => { if (message.type() === "error") browserMessages.push(message.text()); });
+        page.on("request", request => { if (request.url().startsWith("https://outside.invalid/")) offScopeNavigations.push(request.url()); });
         try {
           const link = page.getByRole("link", { name: reportLabel, exact: true });
           const pane = page.locator("[data-artifact-preview]");
@@ -7762,7 +7769,7 @@ describe("message document links", () => {
           expect(await pane.count()).toBe(0);
           expect(await page.locator("iframe").count()).toBe(0);
           expect(metadataReads).toBe(beforeOpen);
-          expect(frameReads).toBe(beforeOpen * 2);
+          expect(frameReads).toBe(frameReadsBeforeOpen);
           if (phone) await link.tap();
           else await link.click();
 
@@ -7773,9 +7780,15 @@ describe("message document links", () => {
           await title.waitFor();
           const localImage = reportFrame.contentFrame().getByRole("img", { name: "Local usage chart" });
           await localImage.waitFor();
+          await localImage.evaluate(image => (image as HTMLImageElement).decode());
           const imageState = await localImage.evaluate(image => ({ complete: (image as HTMLImageElement).complete, width: (image as HTMLImageElement).naturalWidth, src: (image as HTMLImageElement).currentSrc }));
           expect(imageState).toMatchObject({ complete: true, width: 64 });
           expect(chartResponses.at(-1)).toMatchObject({ status: 200, contentType: "image/png" });
+          const outsideLink = reportFrame.contentFrame().getByText("Outside destination", { exact: true });
+          await outsideLink.click();
+          expect(offScopeNavigations).toEqual([]);
+          expect(await title.count()).toBe(1);
+          expect(framePolicies.at(-1)).toContain("script-src 'none'");
           expect(framePolicies.at(-1)).toContain("/api/artifact/frame/");
           expect(offScopeServerRequests).toBe(0);
           expect(browserMessages.some(message => message.includes("Unrecognized Content-Security-Policy directive"))).toBe(false);
@@ -7788,13 +7801,46 @@ describe("message document links", () => {
           expect(await pane.getByRole("link", { name: translate(lang, "preview.download") }).count()).toBe(0);
           expect(await pane.locator('[data-preview-mode="source"]').count()).toBe(0);
           expect(metadataReads).toBe(beforeOpen + 1);
-          expect(frameReads).toBe((beforeOpen + 1) * 2);
+          expect(frameReads).toBe(frameReadsBeforeOpen + 2);
+          const directTab = await context.newPage();
+          try {
+            await directTab.goto(new URL(lastFramePath, served.base).toString());
+            await directTab.getByRole("heading", { name: heading }).waitFor();
+            expect(await directTab.evaluate(() => window.origin)).toBe("null");
+            await directTab.getByText("Outside destination", { exact: true }).click();
+            expect(offScopeNavigations).toEqual([]);
+            expect(await directTab.getByRole("heading", { name: heading }).count()).toBe(1);
+          } finally { await directTab.close(); }
           expect(pageErrors).toEqual([]);
           await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}.png`) });
           await pane.getByRole("button", { name: translate(lang, "preview.close") }).click();
           await pane.waitFor({ state: "detached" });
         } finally { await context.close(); }
       }
+      served.stop();
+      served = await serveEvidenceFixture(scratch, FIXTURE, responses, { hostname: "::1" });
+      const { context: ipv6Context, page: ipv6Page, pageErrors: ipv6Errors } = await openFixture(browser,
+        `${served.base}?${new URLSearchParams({ case: "document-links", lang: "en", cwd: scratch, parent: scratch, evidenceReport: report, reportLabel: "Disk usage report" })}`,
+        { width: 1280, height: 900 }, "light", "en");
+      try {
+        const link = ipv6Page.getByRole("link", { name: "Disk usage report", exact: true });
+        await link.click();
+        const frame = ipv6Page.locator("[data-preview-frame]");
+        await frame.contentFrame().getByRole("heading", { name: heading }).waitFor();
+        expect(framePolicies.at(-1)).toContain("http://localhost:");
+        const chart = frame.contentFrame().getByRole("img", { name: "Local usage chart" });
+        await chart.waitFor();
+        const chartState = await chart.evaluate(async image => {
+          const element = image as HTMLImageElement;
+          try { await element.decode(); } catch (error) { return { width: element.naturalWidth, src: element.currentSrc, error: (error as Error).message }; }
+          return { width: element.naturalWidth, src: element.currentSrc, error: null };
+        });
+        expect({ chartState, response: chartResponses.at(-1), csp: framePolicies.at(-1), browserMessages })
+          .toMatchObject({ chartState: { width: 64, error: null } });
+        expect(chartResponses.at(-1)).toMatchObject({ status: 200, contentType: "image/png" });
+        expect(browserMessages.some(message => message.includes("chart.png") && message.includes("violates the following Content Security Policy"))).toBe(false);
+        expect(ipv6Errors).toEqual([]);
+      } finally { await ipv6Context.close(); }
     } finally {
       await browser?.close();
       served?.stop();

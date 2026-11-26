@@ -417,7 +417,7 @@ test("evidence HTML grants stay inside the admitting root and report directory",
   expect((await GET(request({ path: report, mode: "meta" }))).status).toBe(200);
 });
 
-test("managed evidence root symlinks admit their canonical directory as the grant boundary", async () => {
+test("managed evidence root symlinks serve the report and raster, then refuse a retargeted root", async () => {
   const managed = path.join(process.env.LLV_STATE_DIR!, "evidence");
   fs.rmSync(managed, { recursive: true, force: true });
   const canonical = fs.mkdtempSync(path.join(sandbox, "managed-evidence-target-"));
@@ -425,11 +425,22 @@ test("managed evidence root symlinks admit their canonical directory as the gran
   const report = path.join(canonical, "agents", "fixture", "index.html");
   fs.mkdirSync(path.dirname(report), { recursive: true });
   fs.writeFileSync(report, "<p>managed report</p>");
+  fs.writeFileSync(path.join(path.dirname(report), "chart.png"), KEEP_PNG);
   const response = await GET(request({ path: path.join(managed, "agents", "fixture", "index.html"), mode: "meta" }));
   expect(response.status).toBe(200);
   const { frame } = await response.json() as { frame: string };
   const signedDir = Buffer.from(frame.split("/")[4]!.split(".")[0]!, "base64url").toString("utf8");
   expect(signedDir).toBe(path.dirname(report));
+  const { GET: getFrame } = await import("./frame/[...rest]/route");
+  const read = async (url: string) => getFrame(new NextRequest(new URL(url, "http://127.0.0.1:8898"), { headers: { host: "127.0.0.1:8898" } }));
+  expect(await (await read(frame)).text()).toContain("managed report");
+  const chart = await read(frame.replace("index.html", "chart.png"));
+  expect(chart.status).toBe(200);
+  await chart.arrayBuffer();
+  const replacement = fs.mkdtempSync(path.join(sandbox, "retargeted-evidence-root-"));
+  fs.rmSync(managed);
+  fs.symlinkSync(replacement, managed, "dir");
+  expect((await read(frame)).status).toBe(403);
 });
 
 test("an evidence image opens from the tailnet origin the phone uses", async () => {

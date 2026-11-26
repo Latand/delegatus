@@ -5,12 +5,14 @@ import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 
 import { classifyArtifact } from "@/lib/artifact/classify";
+import { containEvidenceHtml } from "@/lib/artifact/evidenceHtml";
 import { frameCsp, frameMime, verifyFrameScope } from "@/lib/artifact/frameScope";
 import { admittedAs, evidenceFrameAdmission, lexicalAllowedRoots, realpathAdmitted, openAdmitted, realAllowedRoots, streamWindow, underRoot } from "@/lib/artifact/localFile";
 import { artifactEtag, artifactLimits, SNIFF_BYTES, sniffAgrees } from "@/lib/artifact/serve";
 import { rejectForeignHost } from "@/lib/sameOrigin";
 import { existingTeamStore } from "@/lib/team/store";
 import { workspaceScope } from "@/lib/team/workspaceAccess";
+import { projectForCwd } from "@/lib/scanner/describe";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -90,14 +92,36 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   if (!grant) return refuse(403, "this report link has expired; reopen the preview");
   const { directory, kind } = grant;
   const forwardedProtocol = req.headers.get("x-forwarded-proto")?.split(",", 1)[0]?.trim();
-  const protocol = forwardedProtocol === "https" ? "https" : new URL(req.url).protocol.slice(0, -1);
+  const requestUrl = new URL(req.url);
+  const protocol = forwardedProtocol === "https" ? "https" : requestUrl.protocol.slice(0, -1);
   const requestHost = req.headers.get("host");
-  const cspOrigin = requestHost ? `${protocol}://${requestHost}` : new URL(req.url).origin;
-  const csp = frameCsp(scope, cspOrigin, kind === "evidence");
+  // CSP host matching does not support IPv6 literals. For loopback IPv6,
+  // scope relative asset URLs to the equivalent localhost authority instead.
+  let cspOrigin: string;
+  let ipv6Loopback = false;
+  try {
+    const authority = new URL(`${protocol}://${requestHost ?? requestUrl.host}`);
+    ipv6Loopback = authority.hostname.replace(/^\[|\]$/g, "") === "::1";
+    cspOrigin = ipv6Loopback
+      ? `${protocol}://localhost${authority.port ? `:${authority.port}` : ""}`
+      : authority.origin;
+  }
+  catch { return refuse(400, "invalid request authority"); }
+  const evidenceBase = kind === "evidence" && ipv6Loopback ? `${cspOrigin}/api/artifact/frame/${scope}/` : undefined;
+  const csp = frameCsp(scope, cspOrigin, kind === "evidence", Boolean(evidenceBase));
 
   const abs = path.resolve(directory, ...inside);
   const roots = lexicalAllowedRoots();
-  const admission = kind === "evidence" ? evidenceFrameAdmission(abs, roots) : admittedAs(abs, roots);
+  let canonicalEvidenceRoots = roots;
+  if (kind === "evidence") {
+    if (!grant.evidenceRoot || !grant.evidenceRootPath || !roots.evidence.includes(grant.evidenceRootPath)
+      || !underRoot(directory, grant.evidenceRoot)) return refuse(403, "outside the admitted evidence root");
+    try {
+      if (await fs.realpath(grant.evidenceRootPath) !== grant.evidenceRoot) return refuse(403, "evidence root changed");
+    } catch { return refuse(403, "evidence root unavailable"); }
+    canonicalEvidenceRoots = { ...roots, evidence: [...new Set([...roots.evidence, grant.evidenceRoot])] };
+  }
+  const admission = kind === "evidence" ? evidenceFrameAdmission(abs, canonicalEvidenceRoots) : admittedAs(abs, roots);
   if (!underRoot(abs, directory) || !admission) return refuse(403, "outside the report directory");
 
   const classified = classifyArtifact(abs);
@@ -106,7 +130,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   let real: string;
   try {
     real = await fs.realpath(abs);
-    if (!realpathAdmitted(admission, real, await realAllowedRoots())) return refuse(403, "outside the allowed roots");
+    const resolvedRoots = await realAllowedRoots();
+    if (kind === "evidence" && grant.evidenceRoot && !resolvedRoots.evidence.includes(grant.evidenceRoot))
+      resolvedRoots.evidence = [...resolvedRoots.evidence, grant.evidenceRoot];
+    if (!realpathAdmitted(admission, real, resolvedRoots)) return refuse(403, "outside the allowed roots");
   } catch {
     return refuse(404, "file not found");
   }
@@ -120,7 +147,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   if (grant.sessionId) {
     const store = existingTeamStore();
     const session = store?.session(grant.sessionId);
-    if (!store || !session || !workspaceScope(store, session.memberId).canReadFile(grant.workspaceProject))
+    const targetProject = projectForCwd(path.dirname(real));
+    if (!store || !session || !workspaceScope(store, session.memberId).canReadFile(targetProject))
       return refuse(403, "workspace file access was revoked");
   }
 
@@ -156,14 +184,25 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       await handle.close();
       return refuse(403, "this report link has expired; reopen the preview");
     }
+    const responseType = frameMime(path.extname(real).slice(1), classified.mime);
+    let body: Uint8Array | null = null;
+    let responseLength = stat.size;
+    if (kind === "evidence" && /\.html?$/i.test(real)) {
+      body = Buffer.from(containEvidenceHtml((await handle.readFile()).toString("utf8"), evidenceBase), "utf8");
+      responseLength = body.byteLength;
+    }
     const headers = new Headers({
       ...HEADERS_BASE,
       "content-security-policy": csp,
       ...corsFor(req),
-      "content-type": frameMime(path.extname(real).slice(1), classified.mime),
-      "content-length": String(stat.size),
+      "content-type": responseType,
+      "content-length": String(responseLength),
       etag: artifactEtag(stat),
     });
+    if (body) {
+      await handle.close();
+      return new NextResponse(body, { status: 200, headers });
+    }
     if (stat.size === 0) {
       await handle.close();
       return new NextResponse(null, { status: 200, headers });
