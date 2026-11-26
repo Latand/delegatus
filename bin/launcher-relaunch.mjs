@@ -205,9 +205,11 @@ async function terminalBootstrap(encoded, nextEntry, args) {
       failed = true;
       rollbackExpiry ??= trial.rollbackDeadlineAt;
     }
-    // The launcher can exec the prior image in place. Give its persisted
-    // rollback the time it owns even after the original switch has expired.
-    if (Date.now() >= (failed ? rollbackExpiry ?? Infinity : switchExpiry)) break;
+    // The watchdog writes rolled-back only after its owned children stop. Keep
+    // observing for that bounded teardown, then honor the persisted rollback.
+    const now = Date.now();
+    if (failed && now >= rollbackExpiry) break;
+    if (!failed && now >= switchExpiry + 2 * STOP_TIMEOUT_MS) break;
     const record = read(recordFile);
     if (record && record.launcher.pid === child.pid && record.launcher.startIdentity && record.launcher.startIdentity === readStartIdentity(child.pid)
       && (!record.launcher.state || record.launcher.state === "healthy") && record.web.state === "healthy" && record.runtimeHost.state === "healthy"

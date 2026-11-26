@@ -929,7 +929,7 @@ test("terminal bootstrap records refusal and reaps a candidate that misses the p
   let terminalOutput = "";
   child.stderr?.on("data", chunk => { terminalOutput += String(chunk); });
   const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-    const watchdog = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("terminal bootstrap exceeded its independent test deadline")); }, 10_000);
+    const watchdog = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("terminal bootstrap exceeded its independent test deadline")); }, 30_000);
     child.once("error", error => { clearTimeout(watchdog); reject(error); });
     child.once("close", (code, signal) => { clearTimeout(watchdog); children.delete(child); resolve({ code, signal }); });
   });
@@ -941,7 +941,7 @@ test("terminal bootstrap records refusal and reaps a candidate that misses the p
   expect(JSON.parse(readFileSync(ledgerFile, "utf8"))[0]).toMatchObject({ phase: "failed", terminal: true, error: expect.any(String) });
   expect(JSON.parse(readFileSync(trialFile, "utf8"))).toMatchObject({ refused: true, detail: expect.any(String) });
   expect(existsSync(drainFile)).toBe(false);
-});
+}, 35_000);
 
 test("terminal bootstrap refuses a candidate whose recorded runtime host never answers health", async () => {
   const fixture = install();
@@ -1000,7 +1000,7 @@ test("terminal bootstrap refuses a candidate whose recorded runtime host never a
     Buffer.from(JSON.stringify(plan)).toString("base64"), candidateEntry, "--no-open"], { cwd: fixture.checkout, env: fixture.env, stdio: "ignore" });
   children.add(child);
   const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-    const watchdog = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("terminal bootstrap exceeded its independent test deadline")); }, 10_000);
+    const watchdog = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("terminal bootstrap exceeded its independent test deadline")); }, 30_000);
     child.once("error", error => { clearTimeout(watchdog); reject(error); });
     child.once("close", (code, signal) => { clearTimeout(watchdog); children.delete(child); resolve({ code, signal }); });
   });
@@ -1012,7 +1012,7 @@ test("terminal bootstrap refuses a candidate whose recorded runtime host never a
   expect(JSON.parse(readFileSync(ledgerFile, "utf8"))[0]).toMatchObject({ phase: "failed", terminal: true, error: expect.any(String) });
   expect(JSON.parse(readFileSync(trialFile, "utf8"))).toMatchObject({ refused: true, detail: expect.any(String) });
   expect(existsSync(drainFile)).toBe(false);
-});
+}, 35_000);
 
 test("an early prior-launcher exit settles the deployment as a durable refusal", async () => {
   const fixture = install();
@@ -1079,14 +1079,14 @@ test("the forwarding launcher bounds a replacement that stalls during module loa
   writeFileSync(ledgerFile, JSON.stringify([{ deploymentId: intent.deploymentId, phase: "switching", terminal: false, error: null, revisionNumber: 1 }]));
   writeFileSync(drainFile, JSON.stringify({ id: intent.requestId, target: candidate.sha, persistent: true }));
 
-  const running = await start(fixture);
+  const running = await start(fixture, [], 35_000);
   try {
     const { isAlive } = await import("../src/lib/selfUpdate/pid");
     await until(() => existsSync(pidFile) ? true : null, 5_000).catch(error => { throw new Error(`${String(error)}\n${running.output()}`); });
     running.child.kill("SIGTERM");
     // A signal-resistant replacement must remain supervised until the
     // persisted startup deadline, then receive the bounded stop escalation.
-    await until(() => JSON.parse(readFileSync(path.join(directory, "apply.json"), "utf8")).state === "failed" ? true : null, 5_000);
+    await until(() => JSON.parse(readFileSync(path.join(directory, "apply.json"), "utf8")).state === "failed" ? true : null, 25_000);
     expect(isAlive(Number(readFileSync(pidFile, "utf8")))).toBe(false);
     expect(JSON.parse(readFileSync(path.join(directory, "apply.json"), "utf8"))).toMatchObject({ state: "failed", detail: expect.any(String) });
     expect(JSON.parse(readFileSync(ledgerFile, "utf8"))[0]).toMatchObject({ phase: "failed", terminal: true, error: expect.any(String) });
@@ -1105,7 +1105,7 @@ test("the forwarding launcher bounds a replacement that stalls during module loa
     }
     children.delete(running.child);
   }
-});
+}, 35_000);
 
 test("terminal bootstrap lets a rollback finish after the switch expires", async () => {
   const fixture = install();

@@ -13,6 +13,17 @@ export const VIEWER_PAGE_CHECK_TIMEOUT_MS = 90_000;
 export const TERMINAL_BOOTSTRAP_TIMEOUT_MS = SWITCH_TIMEOUT_MS + ROLLBACK_TIMEOUT_MS + 4 * STOP_TIMEOUT_MS + 30_000;
 export const SWITCH_OVERRUN = "The launcher switch exceeded its 10 minute deadline";
 
+export function launcherStartupDeadline({ active, switchDeadline, trial, requestId, target, bootstrapDeadline,
+  teardownGraceMs, now = Date.now() }) {
+  const matches = active && trial?.requestId === requestId && trial.target === target;
+  const matchingRollback = matches && trial.state === "rolled-back" && Number.isFinite(trial.rollbackDeadlineAt);
+  const phase = matches && trial.refused ? "refused" : matchingRollback ? "rollback" : active ? "switch" : "startup";
+  const expiry = phase === "refused" ? now : phase === "rollback" ? trial.rollbackDeadlineAt
+    : phase === "switch" ? switchDeadline + teardownGraceMs : bootstrapDeadline;
+  const deadline = Math.min(expiry, bootstrapDeadline);
+  return { phase, deadline, expired: now >= deadline };
+}
+
 function startupSleep(ms, signal) {
   return new Promise(resolve => {
     const timer = setTimeout(done, ms);
@@ -29,12 +40,15 @@ function startupSleep(ms, signal) {
   });
 }
 
+/** @typedef {(ms: number, signal?: AbortSignal) => Promise<void>} StartupSleep */
+
 /** Poll readiness until the child answers, stops advancing or exhausts the
  * absolute monotonic deadline. File evidence may be slow, so let the host
  * check for child exit while its evidence read is pending. The Viewer reports
  * evidence already received on stderr as part of its check. */
+/** @param {{ check: (remaining: () => number, record: (key: string, value: number, detail: unknown, observedAt?: number) => void) => Promise<boolean | { ready: boolean, observedAt: number }>, progress?: () => Promise<Array<[string, number, unknown, number?]>>, onTimeout: (detail: { elapsed: number, lastProgress: unknown, silent: number, ceiling: boolean }) => void, deadline: number, silenceMs: number, intervalMs: number, signal?: AbortSignal, now?: () => number, sleep?: StartupSleep, readyMayFinishAfterSilence?: boolean }} options */
 export async function waitForStartupProgress({
-  check, progress, onTimeout, deadline, silenceMs, intervalMs, signal,
+  check, progress, onTimeout, deadline, silenceMs, intervalMs, signal, readyMayFinishAfterSilence = false,
   now = () => performance.now(), sleep = startupSleep,
 }) {
   const started = now();
@@ -60,21 +74,26 @@ export async function waitForStartupProgress({
   };
 
   while (true) {
-    const ready = await check(remaining, record);
+    const checked = await check(remaining, record);
+    const ready = typeof checked === "boolean" ? checked : checked.ready;
+    const readyObservedAt = typeof checked === "boolean" ? now() : checked.observedAt;
+    if (ready && readyObservedAt < deadline
+      && (readyMayFinishAfterSilence || readyObservedAt <= lastProgressAt + silenceMs)) return true;
     if (now() >= deadline) { expired(); return false; }
-    if (ready && remaining() > 0) return true;
     if (!progress) {
       if (expired()) return false;
       await sleep(Math.min(intervalMs, remaining()), signal);
       continue;
     }
+    const progressRequestedAt = now();
     pendingProgress ??= Promise.resolve()
       .then(progress)
-      .then(observed => ({ observed }), () => ({ observed: [] }));
+      .then(observed => ({ observed, progressRequestedAt }), () => ({ observed: [], progressRequestedAt }));
     const sleepController = new AbortController();
+    const sleepMs = Math.max(0, Math.min(intervalMs, remaining()));
     const result = await Promise.race([
       pendingProgress,
-      sleep(Math.max(1, Math.min(intervalMs, remaining())), sleepController.signal).then(() => null),
+      sleep(sleepMs, sleepController.signal).then(() => null),
     ]);
     if (result === null) {
       if (expired()) return false;
@@ -84,10 +103,15 @@ export async function waitForStartupProgress({
     pendingProgress = null;
     // A child may exit during either asynchronous read/probe.
     const readyAfterRead = await check(remaining, record);
+    const readyAfterReadAt = typeof readyAfterRead === "boolean" ? now() : readyAfterRead.observedAt;
+    const readyAfterReadValue = typeof readyAfterRead === "boolean" ? readyAfterRead : readyAfterRead.ready;
+    if (readyAfterReadValue && readyAfterReadAt < deadline
+      && (readyMayFinishAfterSilence || readyAfterReadAt <= lastProgressAt + silenceMs)) return true;
     if (now() >= deadline) { expired(); return false; }
-    for (const marker of result.observed) record(...marker);
+    for (const [key, value, detail, observedAt] of result.observed) {
+      record(key, value, detail, observedAt ?? result.progressRequestedAt);
+    }
     if (expired()) return false;
-    if (readyAfterRead) return true;
     await sleep(Math.min(intervalMs, remaining()), signal);
   }
 }

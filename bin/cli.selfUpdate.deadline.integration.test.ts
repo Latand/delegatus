@@ -9,6 +9,7 @@ import { activeDrain } from "../src/lib/selfUpdate/drain";
 import { isAlive, readStartIdentity } from "../src/lib/selfUpdate/pid";
 import { harness, runSeatTickCheck, PROJECT, CONVERSATION, NOW } from "../src/lib/monitor/seatTickController.fixture";
 import { availablePort, children, install, readRecord, registerSelfUpdateCleanup, release, pointerFile, served, socketAnswers, start, until } from "./__fixtures__/cli-self-update";
+import { STOP_TIMEOUT_MS } from "./launcher-deadline.mjs";
 
 registerSelfUpdateCleanup();
 
@@ -195,8 +196,8 @@ export async function ensureWebPortFree() {
     observedRecord = record;
     return record.launcher.state === "healthy" && (coldRestart || record.launcher.requestId === apply.current!.requestId)
       && record.web.state === "healthy" && record.runtimeHost.state === "healthy" ? record : null;
-  }, coldRestart ? 25_000 : 8000).catch(error => { throw new Error(`${error}\nlast recovery record: ${JSON.stringify(observedRecord)}`); });
-  expect(Date.now()).toBeLessThan(deadline + (coldRestart ? 20_000 : 5000));
+  }, coldRestart ? 35_000 : 30_000).catch(error => { throw new Error(`${error}\nlast recovery record: ${JSON.stringify(observedRecord)}`); });
+  expect(Date.now()).toBeLessThan(deadline + 2 * STOP_TIMEOUT_MS + 5_000);
   expect(savedDeadline).toBe(deadline);
   expect(after.launcher.revision).toBe(fixture.first);
   expect(await served(running.port)).toBe(fixture.checkout);
@@ -223,7 +224,7 @@ export async function ensureWebPortFree() {
   expect(rig.sent[0]!.text).toContain(status.error!);
   await runSeatTickCheck(PROJECT, rig.deps);
   expect(rig.sent).toHaveLength(1);
-}, 20_000);
+}, 35_000);
 
 test.each(["exit", "retirement"])("lost %s completion ends the launcher switch within its stop bound", async lost => {
   const fixture = install();

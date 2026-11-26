@@ -48,12 +48,14 @@ export async function runtimeHostStartupProgress(filename, pid, startIdentity) {
 }
 
 /** The host polls its own startup file alongside the socket check. */
+/** @param {{ check: () => Promise<boolean>, progress: () => Promise<Array<[string, number, string]>>, timeout: (elapsed: number, lastProgress: string | null, silent: number, ceiling: boolean) => string, now?: () => number, sleep?: (ms: number, signal?: AbortSignal) => Promise<void>, silenceMs?: number, ceilingMs?: number, intervalMs?: number }} options */
 export async function waitForRuntimeHostStartup({
   check, progress, timeout, now = () => performance.now(), sleep,
   silenceMs = RUNTIME_HOST_STARTUP_SILENCE_MS, ceilingMs = RUNTIME_HOST_STARTUP_CEILING_MS, intervalMs = 100,
 }) {
   await waitForStartupProgress({
     check, progress, now, sleep, intervalMs, silenceMs, deadline: now() + ceilingMs,
+    readyMayFinishAfterSilence: true,
     onTimeout: ({ elapsed, lastProgress, silent, ceiling }) => {
       throw new Error(timeout(elapsed, lastProgress, silent, ceiling));
     },

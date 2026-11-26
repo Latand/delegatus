@@ -289,7 +289,7 @@ export async function served(port: number): Promise<string> {
   return (await fetch(`http://127.0.0.1:${port}/`)).text();
 }
 
-export async function start(fixture: ReturnType<typeof install>, args: string[] = []) {
+export async function start(fixture: ReturnType<typeof install>, args: string[] = [], startupTimeoutMs = 20_000) {
   const port = await availablePort();
   const child = spawn(process.execPath, ["--bun", path.join(fixture.checkout, "bin", "cli.mjs"), "--no-open", "--port", String(port), ...args], {
     cwd: fixture.checkout,
@@ -308,7 +308,7 @@ export async function start(fixture: ReturnType<typeof install>, args: string[] 
     if (!output.includes(`:${port}/`)) return false;
     const record = readRecord(fixture.state);
     return record.web.state === "healthy" && record.runtimeHost.state === "healthy";
-  }, 20_000).catch((error) => { throw new Error(`${String(error)}\n${output}`); });
+  }, startupTimeoutMs).catch((error) => { throw new Error(`${String(error)}\n${output}`); });
   return { port, child, output: () => output };
 }
 

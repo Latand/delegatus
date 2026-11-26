@@ -663,6 +663,18 @@ describe("progress-bound Viewer readiness", () => {
     } });
   });
 
+  test("a ready answer observed inside the silence window survives journal write time", async () => {
+    let now = 0;
+    const ready = await waitForViewerReadiness(43123, {
+      revision, silenceMs: 90_000, now: () => now,
+      onPhase: event => { if (event.status === "ready") now += 5; },
+      probe: async () => { now = 89_999; return { httpStatus: 200, revision }; },
+      sleep: async milliseconds => { now += milliseconds; },
+    });
+    expect(ready).toBeTrue();
+    expect(now).toBe(90_004);
+  });
+
   test("silence at registry expires 90 seconds after its last counter", async () => {
     expect(await start("stalled", [
       [10_000, receipt("registry running 0")],

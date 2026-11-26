@@ -497,6 +497,7 @@ export async function waitForViewerReadiness(port, {
         const result = budget > 0
           ? await probe(port, endpoint, revision, Math.ceil(Math.min(5_000, budget)), headers, signal)
           : { error: "deadline" };
+        const observedAt = now();
         assertChildRunning();
         collectProgress();
         const { httpStatus } = result;
@@ -514,7 +515,7 @@ export async function waitForViewerReadiness(port, {
         // returns 404. Both statuses still require legacy eligibility.
         if (endpoint === READY_ROUTE && allowLegacyFallback && (httpStatus === 404 || accessRefused)) {
           endpoint = LEGACY_READY_ROUTE;
-        } else return ready;
+        } else return ready ? { ready: true, observedAt } : false;
       }
     },
   });

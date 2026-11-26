@@ -10,7 +10,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StringDecoder } from "node:string_decoder";
 import { agentStartupMessage } from "./agent-binaries.mjs";
-import { boundedWait, startupHandoffSucceeded, STOP_TIMEOUT_MS, switchDeadline, SWITCH_OVERRUN, TERMINAL_BOOTSTRAP_TIMEOUT_MS, VIEWER_PAGE_CHECK_TIMEOUT_MS, writeLauncherRefusal } from "./launcher-deadline.mjs";
+import { boundedWait, launcherStartupDeadline, startupHandoffSucceeded, STOP_TIMEOUT_MS, switchDeadline, SWITCH_OVERRUN, TERMINAL_BOOTSTRAP_TIMEOUT_MS, VIEWER_PAGE_CHECK_TIMEOUT_MS, writeLauncherRefusal } from "./launcher-deadline.mjs";
 
 /* The checkout may be older than this file. No checkout sibling is linked
    until the release decision has completed. */
@@ -1769,29 +1769,47 @@ function handOffLauncher({ checkout, entry, record }) {
     const persistedDeadline = active
       ? Math.min(switchDeadline(apply), Number.isFinite(trial.switchDeadlineAt) ? trial.switchDeadlineAt : Infinity)
       : Infinity;
-    const deadline = Math.min(Date.now() + TERMINAL_BOOTSTRAP_TIMEOUT_MS,
+    const bootstrapDeadline = Date.now() + TERMINAL_BOOTSTRAP_TIMEOUT_MS;
+    const deadline = Math.min(bootstrapDeadline,
       Number.isFinite(persistedDeadline) ? persistedDeadline : Infinity);
-    timer = setTimeout(() => { void (async () => {
+    const scheduleDeadline = at => {
+      timer = setTimeout(onDeadline, Math.max(1, at - Date.now()));
+      timer.unref?.();
+    };
+    const onDeadline = () => { void (async () => {
       timer = undefined;
       const observed = json(record);
       const childIsHealthy = startupHandoffSucceeded(child.pid, child.exitCode == null && child.signalCode == null, forwarded, observed);
       // The startup bound ends when this exact child has published a complete
       // healthy generation. Its normal lifetime is then governed by close.
       if (childIsHealthy) { startupSettled = true; return; }
-      const switchOverrun = active && Date.now() >= persistedDeadline;
-      const detail = switchOverrun
+      const currentTrial = json(trialFile);
+      const matchingTrial = currentTrial?.requestId === trial?.requestId && currentTrial?.target === trial?.target;
+      const decision = launcherStartupDeadline({ active, switchDeadline: persistedDeadline,
+        trial: matchingTrial ? currentTrial : null, requestId: trial?.requestId, target: trial?.target,
+        bootstrapDeadline, teardownGraceMs: 2 * STOP_TIMEOUT_MS });
+      if (!decision.expired) {
+        scheduleDeadline(decision.deadline);
+        return;
+      }
+      const terminalTrial = matchingTrial ? currentTrial : trial;
+      const rollbackExpired = decision.phase === "rollback";
+      const switchOverrun = decision.phase === "switch";
+      const detail = decision.phase === "refused" ? terminalTrial?.detail ?? "The launcher refused startup"
+        : switchOverrun
         ? SWITCH_OVERRUN
-        : "The replacement launcher did not become ready before its startup deadline";
+        : rollbackExpired ? "The launcher rollback exceeded its 10 minute deadline"
+          : "The replacement launcher did not become ready before its startup deadline";
       if (active) {
-        const refusedTrial = switchOverrun ? { ...trial, switchOverrun: trial.switchOverrun ?? SWITCH_OVERRUN } : trial;
+        const refusedTrial = switchOverrun ? { ...terminalTrial, switchOverrun: terminalTrial.switchOverrun ?? SWITCH_OVERRUN } : terminalTrial;
         if (switchOverrun) writeFileSync(trialFile, `${JSON.stringify(refusedTrial)}\n`, { mode: 0o600 });
         const pointer = join(directory, `release-${suffix}`);
-        if (json(pointer)?.sha === trial.target) {
-          if (trial.rollbackPointer === null) {
+        if (json(pointer)?.sha === terminalTrial.target) {
+          if (terminalTrial.rollbackPointer === null) {
             try { rmSync(pointer, { force: true }); } catch { /* refusal remains durable */ }
-          } else if (typeof trial.rollbackPointer === "string") {
+          } else if (typeof terminalTrial.rollbackPointer === "string") {
             const temporary = `${pointer}.${process.pid}.rollback`;
-            try { writeFileSync(temporary, trial.rollbackPointer, { mode: 0o600 }); renameSync(temporary, pointer); }
+            try { writeFileSync(temporary, terminalTrial.rollbackPointer, { mode: 0o600 }); renameSync(temporary, pointer); }
             catch { try { rmSync(temporary, { force: true }); } catch { /* refusal remains durable */ } }
           }
         }
@@ -1824,9 +1842,12 @@ function handOffLauncher({ checkout, entry, record }) {
         try { await boundedWait(closed, STOP_TIMEOUT_MS, "The replacement launcher did not exit after SIGKILL"); }
         catch (error) { console.error(`[self-update] replacement launcher cleanup exceeded its deadline: ${error.message}`); }
       }
-      finish(true);
-    })(); }, Math.max(1, deadline - Date.now()));
-    timer.unref?.();
+      // A switch overrun has now been fenced, the candidate was reaped, and
+      // its prior pointer restored. Resume the checkout path to boot that
+      // verified prior release instead of leaving the port vacant.
+      finish(active && switchOverrun ? false : true);
+    })(); };
+    scheduleDeadline(deadline);
   });
 }
 
