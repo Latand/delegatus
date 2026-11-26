@@ -463,7 +463,7 @@ exec bun -e 'setInterval(() => {}, 1000)'
       h.advance(MERGE_SETTLE_MS);
       await sweepAutoMerge(ports);
       expect(h.merge("L1")).toMatchObject({ state: "merged", repository: REPO, readFailures: 0 });
-      expect(h.writes).toHaveLength(1);
+      expect(h.writes).toEqual([{ repository: REPO, args: ["pr", "merge", "11", "--repo", REPO, "--squash", "--match-head-commit", HEAD_A] }]);
       expect(cliReads).toBe(0);
       expect(fixture.lookups().at(-1)?.at(-1)).toBe(fixture.repository);
     } finally { fs.unlinkSync(declaration); }
@@ -1263,7 +1263,7 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
     }
   });
 
-  test("CLEAN with settled green checks merges with --match-head-commit, and never before the checks settled", async () => {
+  test("an undeclared repository merges with the owner noreply and head match after green checks settle", async () => {
     const h = harness({ lanes: [lane("L1")], prs: [openPr(11)] });
     await h.run(MERGE_SETTLE_MS - MERGE_POLL_MS);
     expect(h.merges()).toEqual([]);

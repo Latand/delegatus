@@ -1356,7 +1356,10 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
       }
     };
     beforeDispatch();
-    await ports.write(["pr", "merge", String(merge.prNumber), "--repo", merge.repository, `--${method}`, "--author-email", ownerNoreplyAddress(commitAccount), "--match-head-commit", view.headRefOid], merge.repository,
+    const args = ["pr", "merge", String(merge.prNumber), "--repo", merge.repository, `--${method}`];
+    if (!isForgeAppRepository(merge.repository)) args.push("--author-email", ownerNoreplyAddress(commitAccount));
+    args.push("--match-head-commit", view.headRefOid);
+    await ports.write(args, merge.repository,
       () => { beforeDispatch(); dispatched = true; });
   } catch (error) {
     /* No App credential: the refusal is the whole reason, in its own words. */

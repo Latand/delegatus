@@ -31,7 +31,7 @@ const put = (body: unknown, origin = ORIGIN) => PUT(new NextRequest(`${ORIGIN}/a
 }));
 
 test("nothing is set until a client writes; a detection is kept until a choice replaces it, and never after", async () => {
-  expect(await (await GET()).json()).toMatchObject({ ok: true, locale: null, timeZone: null, commitAttribution: null, commitAccount: { state: "unresolved" } });
+  expect(await (await get()).json()).toMatchObject({ ok: true, locale: null, timeZone: null, commitAttribution: null, commitAccount: { state: "unresolved" } });
 
   const detected = await put({ locale: "en", source: "detected", timeZone: "Europe/Kyiv" });
   expect(detected.status).toBe(200);
@@ -39,7 +39,7 @@ test("nothing is set until a client writes; a detection is kept until a choice r
 
   expect((await (await put({ locale: "uk", source: "chosen" })).json()).locale).toMatchObject({ value: "uk", source: "chosen" });
   expect((await (await put({ locale: "en", source: "detected" })).json()).locale).toMatchObject({ value: "uk", source: "chosen" });
-  expect((await (await GET()).json()).locale.value).toBe("uk");
+  expect((await (await get()).json()).locale.value).toBe("uk");
 });
 
 test("a malformed write is refused, and so is a cross-origin one", async () => {
@@ -68,7 +68,7 @@ test("the attribution opt-out round-trips and only accepts booleans", async () =
   const saved = await put({ commitAttribution: false });
   expect(saved.status).toBe(200);
   expect(await saved.json()).toMatchObject({ commitAttribution: { value: false } });
-  expect(await (await GET()).json()).toMatchObject({
+  expect(await (await get()).json()).toMatchObject({
     commitAttribution: { value: false }, commitAccount: { state: "resolved", login: fixtureForgeAccount.login },
   });
 });

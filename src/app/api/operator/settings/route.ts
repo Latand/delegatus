@@ -21,8 +21,8 @@ export interface OperatorSettingsResponse extends OperatorSettings {
   commitAccount: CommitAccountStatus;
 }
 
-export async function GET(request?: Request): Promise<NextResponse> {
-  if (request && new URL(request.url).searchParams.get("refreshCommitAccount") === "1") {
+export async function GET(request: Request): Promise<NextResponse> {
+  if (new URL(request.url).searchParams.get("refreshCommitAccount") === "1") {
     await resolveForgeCommitAccount({ forceRefresh: true });
   }
   return NextResponse.json({ ok: true, ...readOperatorSettings(), commitAccount: forgeCommitAccountStatus() } satisfies OperatorSettingsResponse, { headers });
