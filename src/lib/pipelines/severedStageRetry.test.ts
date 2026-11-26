@@ -1050,33 +1050,54 @@ function seatStructuredHost(registry: InstanceType<typeof AgentRegistry>, worktr
   };
 }
 
-test("a passed stage's idle host whose captured tree keeps running is stopped by its recorded identities, and the next stage starts with no manual kill", async () => {
+test.each(["custody first", "receipt first"] as const)("a passed stage's idle host is stopped before the next stage starts (%s)", async (order) => {
   const spawns: string[] = [];
   const journalDir = fs.mkdtempSync(path.join(isolated, "prior-writer-runtime-"));
   const journal = new RuntimeJournal(path.join(journalDir, "runtime.sqlite"), { structuredHosts: true });
   const client = runtimeJournalClient(journal);
   let fixture: Awaited<ReturnType<typeof passedStageWithCapturedTree>> | null = null;
-  const aliveAtReplacement: string[][] = [];
+  const replacement: Array<{ identities: string[]; receipt: string | undefined }> = [];
   const requests: Array<{ operationId?: string; actor?: unknown; onlyIfIdle?: unknown; status: number }> = [];
+  const releaseReceipt = Promise.withResolvers<void>();
+  let writingReceipt = false;
+  const transition = client.transitionOperation;
+  client.transitionOperation = async (operationId, status, ...args) => {
+    if (operationId === requests[0]?.operationId && status === "delivered") {
+      writingReceipt = true;
+      await releaseReceipt.promise;
+    }
+    return transition(operationId, status, ...args);
+  };
   try {
-    fixture = await passedStageWithCapturedTree(spawns, () => (target, operationId) => stopSettledPipelineStageWriter(target, {
+    fixture = await passedStageWithCapturedTree(spawns, () => (target, operationId, options) => stopSettledPipelineStageWriter(target, {
+      ...options,
       operationId,
       client,
       /* The production control channel, every field the engine sends: a
          conditional runtime kill operation, admitted by the journal and
          executed by the delivery controller bound below. */
       action: async ({ transcriptPath, ...request }) => {
+        const observation = { operationId: request.operationId, actor: request.actor, onlyIfIdle: request.onlyIfIdle, status: 0 };
+        requests.push(observation);
         const answer = await dispatchStructuredControl({ path: transcriptPath, ...request },
           { registry: fixture!.stage.registry, client, enabled: () => true })
           ?? { status: 409, body: { error: "structured control was unavailable" } };
-        requests.push({ operationId: request.operationId, actor: request.actor, onlyIfIdle: request.onlyIfIdle, status: answer.status });
+        observation.status = answer.status;
         return answer;
       },
     }));
     const { ports, stage } = fixture;
+    const readCustody = ports.stageHostStopCustody!;
+    let originalCustody: string | null = null;
+    let custodyChanged = false;
+    // The controller can read the registry update and the journal commit in either order.
+    ports.stageHostStopCustody = target => custodyChanged ? null : (originalCustody ??= readCustody(target));
     const spawn = ports.spawnAgent;
     ports.spawnAgent = async (input, onReserved) => {
-      if (spawns.length > 0) aliveAtReplacement.push(fixture!.alive());
+      if (spawns.length > 0) replacement.push({
+        identities: fixture!.alive(),
+        receipt: journal.operationResult(requests[0]!.operationId!)?.receipt.status,
+      });
       return spawn(input, onReserved);
     };
     await bindStructuredDeliveryQueue([], { registry: fixture.stage.registry, client });
@@ -1088,29 +1109,46 @@ test("a passed stage's idle host whose captured tree keeps running is stopped by
     } });
 
     /* Settle the fix stage; the review stage is next. */
-    for (let tick = 0; tick < 4 && spawns.length < 2; tick += 1) {
+    for (let tick = 0; tick < 4 && requests.length === 0; tick += 1) {
       await tickPipelines([fixture.endedTurn], ports);
       ports.advanceWallClock(10_000);
     }
+    const [request] = requests;
+    expect(request?.operationId).toMatch(/^prior-writer-stop-[0-9a-f]{32}-1$/);
+    const operationId = request!.operationId!;
+    expect(originalCustody).not.toBeNull();
+    await settles(() => writingReceipt, "conditional kill reaching its receipt commit");
+    expect(fixture.alive()).toEqual(["dead", "dead"]);
+    expect(journal.operationResult(operationId)?.receipt.status).toBe("delivering");
+    if (order === "custody first") {
+      custodyChanged = true;
+      await tickPipelines([fixture.endedTurn], ports);
+      expect(loadPipelines()[0]!.runs[1]!.attempts[0]).toMatchObject({
+        state: "pending", priorWriterStops: [{ operationId, tries: 1 }],
+      });
+      expect(spawns).toHaveLength(1);
+    }
+    releaseReceipt.resolve();
+    await settles(() => journal.operationResult(operationId)?.receipt.status === "delivered", "conditional kill receipt");
+    custodyChanged = true;
+    await tickPipelines([fixture.endedTurn], ports);
+
     expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "passed" });
     expect(loadPipelines()[0]!.stateDetail ?? "").not.toContain("waiting for an earlier stage agent");
     expect(spawns).toHaveLength(2);
-    expect(aliveAtReplacement).toEqual([["dead", "dead"]]);
-    expect(fixture.alive()).toEqual(["dead", "dead"]);
+    expect(replacement).toEqual([{ identities: ["dead", "dead"], receipt: "delivered" }]);
     const lane = loadPipelines()[0]!;
     expect(lane.runs[1]!.attempts[0]).toMatchObject({ n: 1, state: "running", launchId: "replacement-1" });
     expect(lane.runs[1]!.attempts[0]!.priorWriterStops?.[0]).toBeUndefined();
     /* One conditional kill, accepted under the engine's own key and settled
        by the runtime. */
     expect(requests).toHaveLength(1);
-    const [request] = requests;
     expect(request!.status).toBeLessThan(300);
-    expect(request!.operationId).toMatch(/^prior-writer-stop-[0-9a-f]{32}-1$/);
     expect(request!.actor).toEqual({ kind: "agent", conversationId: stage.conversationId });
     expect(request!.onlyIfIdle).toMatchObject({ writerClaim: "structured-host:severed-stage-fixture:1" });
-    await settles(() => journal.operationResult(request!.operationId!)?.receipt.status === "delivered", "conditional kill receipt");
-    expect(journal.operationResult(request!.operationId!)?.receipt).toMatchObject({ kind: "kill", status: "delivered" });
+    expect(journal.operationResult(operationId)?.receipt).toMatchObject({ kind: "kill", status: "delivered" });
   } finally {
+    releaseReceipt.resolve();
     await fixture?.cleanup();
     await bindStructuredDeliveryQueue([], { registry: fixture?.stage.registry, client: null });
     journal.close();

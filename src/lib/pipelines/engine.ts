@@ -455,7 +455,8 @@ export interface PipelinePorts {
   /** Stops a settled earlier stage agent whose recorded processes still run in
       the worktree a new attempt is waiting for, by those recorded identities
       only. `deferred` while its host is in a turn. */
-  stopSettledStageWriter?(target: PipelineStageHostRef, operationId: string, options?: { settleUnclaimedQueued?: true }): Promise<PipelineStageStopResult>;
+  stopSettledStageWriter?(target: PipelineStageHostRef, operationId: string,
+    options?: Pick<StageStopProbes, "receiptOnly" | "settleUnclaimedQueued">): Promise<PipelineStageStopResult>;
   /** Monotonic milliseconds, kept apart from `now()` so a teardown budget can be
       bounded independently of the ISO timestamps written to the record. */
   monotonicNow(): number;
@@ -1158,6 +1159,9 @@ const KILL_REFUSED_STATES = new Set(["failed", "rejected"]);
 
 export type StageStopProbes = {
   operationId?: string;
+  /** Read the addressed kill receipt after custody changes, without acquiring
+      stop authority or attempting another effect. */
+  receiptOnly?: true;
   /** Used only after the persisted observation deadline to close an unclaimed
       queued kill before the stage gives up observing it. */
   settleUnclaimedQueued?: true;
@@ -1693,6 +1697,26 @@ export async function stopSettledPipelineStageWriter(
   probes: StageStopProbes = {},
 ): Promise<PipelineStageStopResult> {
   try {
+    if (probes.receiptOnly) {
+      const { operationId } = probes;
+      const { conversationId } = target;
+      if (!operationId || !conversationId?.startsWith("conversation_")) {
+        return { outcome: "failed", error: "stop operation identity unavailable" };
+      }
+      const client = probes.client === undefined ? runtimeHostClient() : probes.client;
+      const observed = await client?.operationStatus(operationId, { signal: stageStopSignal(probes) }).catch(() => null);
+      const receipt = observed?.receipt;
+      if (receipt) {
+        if (receipt.operationId !== operationId || receipt.kind !== "kill"
+          || receipt.conversationId !== agentRegistry().canonicalConversationId(conversationId as ViewerConversationId)) {
+          return { outcome: "failed", error: "stop operation target changed" };
+        }
+        if (KILL_DELIVERED_STATES.has(receipt.status)) return { outcome: "stopped", settledOperationId: operationId };
+        if (KILL_REFUSED_STATES.has(receipt.status)) return { outcome: "failed", error: receipt.reason ?? `stop ${receipt.status}` };
+      }
+      return { outcome: "unconfirmed", operationId,
+        detail: receipt ? `stop ${receipt.status}` : "stop operation observation unavailable" };
+    }
     const probe = await stageHostProbe(target);
     if (!probe) return { outcome: "not-running" };
     if (!probe.resident() && !probes.operationId) return { outcome: "not-running" };
@@ -2697,8 +2721,7 @@ export function defaultPipelinePorts(
     stopStagePane: async () => ({ outcome: "not-running" }),
     stopSettledStageWriter: (target, operationId, options) => withViewerOperation("pipelines.prior-writer-stop", () =>
       performanceSpans.wait("pipeline.prior-writer-stop", () =>
-        stopSettledPipelineStageWriter(target, { operationId, termination: dependencies.termination,
-          ...(options?.settleUnclaimedQueued ? { settleUnclaimedQueued: true as const } : {}) }))),
+        stopSettledPipelineStageWriter(target, { ...options, operationId, termination: dependencies.termination }))),
     stageHostTreeStillRunning: (conversationIds) => {
       const current = registry.readOnlySnapshot();
       for (const id of conversationIds) {
@@ -10067,26 +10090,6 @@ async function endSettledPriorWriters(
     }
     const target: PipelineStageHostRef = { stageId, attempt: candidate.n, conversationId, launchId: candidate.launchId ?? null,
       agentPath: candidate.agentPath ?? null, paneId: null };
-    if (pending && unixMs(ports.now()) >= unixMs(sequence.deadlineAt ?? sequence.lastAt)) {
-      const currentCustody = ports.stageHostStopCustody?.(target) ?? null;
-      if (sequence.custody && !stageHostCustodyMatches(sequence.custody, currentCustody)) {
-        sequence.error = "recorded stage host custody changed";
-      } else {
-        target.stopCustody = sequence.custody ?? currentCustody ?? undefined;
-        const finalObservation = await ports.stopSettledStageWriter(target, sequence.operationId!, { settleUnclaimedQueued: true });
-        const still = ports.stageHostTreeStillRunning?.([conversationId]);
-        if (!still && finalObservation.settledOperationId === sequence.operationId) {
-          sequences.delete(conversationId);
-          await checkpoint();
-          continue;
-        }
-        sequence.error = "error" in finalObservation ? finalObservation.error
-          : "detail" in finalObservation && finalObservation.detail ? finalObservation.detail
-            : `stop observation deadline expired; operation answered ${finalObservation.outcome}`;
-      }
-      results.set(conversationId, { park: true, suffix: `; ${sequence.error}` });
-      continue;
-    }
     const spent = (stopped: number, error: string | null) => `; ${stopped} automatic stop${stopped === 1 ? "" : "s"} left them running${error ? ` (last: ${error})` : ""}; stop those processes, then retry the stage`;
     if (!pending && tries >= PRIOR_WRITER_STOP_TRIES) {
       results.set(conversationId, { park: true, suffix: spent(tries, sequence?.error ?? null) });
@@ -10097,13 +10100,41 @@ async function endSettledPriorWriters(
       continue;
     }
     const currentCustody = ports.stageHostStopCustody?.(target) ?? null;
+    const expired = pending && unixMs(ports.now()) >= unixMs(sequence.deadlineAt ?? sequence.lastAt);
     if (sequence?.custody && !stageHostCustodyMatches(sequence.custody, currentCustody)) {
+      // The admitted kill can retire its registry row before writing its receipt.
+      if (pending) {
+        const observation = await ports.stopSettledStageWriter(target, sequence.operationId!, { receiptOnly: true });
+        if (observation.outcome === "stopped" && observation.settledOperationId === sequence.operationId
+          && !ports.stageHostTreeStillRunning?.([conversationId])) {
+          sequences.delete(conversationId);
+          await checkpoint();
+          continue;
+        }
+        if (!expired && observation.outcome === "unconfirmed") {
+          results.set(conversationId, { suffix: `; observing the original stop until ${sequence.deadlineAt} (${observation.detail})` });
+          continue;
+        }
+      }
       sequence.error = "recorded stage host custody changed";
       results.set(conversationId, { park: true, suffix: "; recorded stage host custody changed; no replacement was signalled" });
       continue;
     }
     const custody = sequence?.custody ?? currentCustody ?? undefined;
     target.stopCustody = custody;
+    if (expired) {
+      const finalObservation = await ports.stopSettledStageWriter(target, sequence.operationId!, { settleUnclaimedQueued: true });
+      if (!ports.stageHostTreeStillRunning?.([conversationId]) && finalObservation.settledOperationId === sequence.operationId) {
+        sequences.delete(conversationId);
+        await checkpoint();
+        continue;
+      }
+      sequence.error = "error" in finalObservation ? finalObservation.error
+        : "detail" in finalObservation && finalObservation.detail ? finalObservation.detail
+          : `stop observation deadline expired; operation answered ${finalObservation.outcome}`;
+      results.set(conversationId, { park: true, suffix: `; ${sequence.error}` });
+      continue;
+    }
     const operationId = sequence?.operationId ?? priorWriterStopKey(pipeline, waitingStageId, attempt, conversationId, tries + 1);
     const intent = pending ? sequence! : { conversationId, tries: tries + 1, lastAt: ports.now(), error: null,
       operationId, deadlineAt: new Date(unixMs(ports.now()) + 125_000).toISOString(), target: targetIdentity, history: sequence?.history, custody };
