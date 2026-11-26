@@ -640,7 +640,11 @@ export type TempSweepProof = {
   ledger?: Pick<TempProvenanceRow, "firstSeenAt" | "lastSeenAt" | "evidence">;
 };
 
-export type TempSweepRemoval = { path: string; via: string; bytes: number; ageHours: number;
+export type TempSweepRemoval = { path: string; via: string; bytes: number;
+  /** Null for a replayed removal, whose tree was dated by the pass that began it. */
+  ageHours: number | null;
+  /** An interrupted removal an earlier pass began, finished by this one. */
+  replay?: true;
   /** Absent for owned names. */
   kind?: "stray";
   /** `agent-ledger` when a recorded agent process used this exact inode;
@@ -868,8 +872,7 @@ export async function removeTreeViaTrash(directory: string, options: {
 export async function finishTreeTrash(journal: string, held: (trash: string) => boolean | Promise<boolean>,
   remove?: (trash: string, mutationStarted: () => void) => Promise<void>, validate?: (trash: string) => boolean, allowDisposable = false, dispatch?: (trash: string) => boolean, keepRefusedTrash = false): Promise<boolean> {
   const row = JSON.parse(fs.readFileSync(journal, "utf8")) as { directory: string; trash: string; uid: number; identity: string; snapshot?: TreeSnapshot; disposable?: boolean; cleaner?: unknown };
-  const recovered = readAttemptTempTrash(journal, path.dirname(row.directory));
-  const trashPath = recovered?.trash ?? claimedTrashForJournal(row) ?? row.trash;
+  const trashPath = journaledTrash(journal, row);
   const matches = () => row.snapshot ? matchesSnapshot(trashPath, row.snapshot) : allowDisposable && row.disposable === true;
   if (path.dirname(row.directory) !== path.dirname(row.trash)
     || !path.basename(row.trash).startsWith(`.delegatus-trash-${path.basename(row.directory)}-`)) return false;
@@ -906,6 +909,12 @@ export async function finishTreeTrash(journal: string, held: (trash: string) => 
   }
   if (!row.cleaner) fs.unlinkSync(journal);
   return true;
+}
+
+/** Where a journaled quarantine is now: an interrupted native removal leaves
+ * it under the claim name it renamed it to. */
+function journaledTrash(journal: string, row: { directory: string; trash: string; identity: string }): string {
+  return readAttemptTempTrash(journal, path.dirname(row.directory))?.trash ?? claimedTrashForJournal(row) ?? row.trash;
 }
 
 /** Resolve a claim made after the journal was written. The journal's owner,
@@ -1311,6 +1320,7 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
   const candidates: { root: TempSweepRoot; candidate: string; modified: number; stray: boolean; ledger?: TempProvenanceRow }[] = [];
   if (options.stray) report.stray = { maxAgeHours: options.stray.maxAgeMs / HOUR_MS, removed: 0, removedBytes: 0, agentLedger: 0, deferred: 0 };
   const strayMaxRemovals = options.stray?.maxRemovals ?? MAX_STRAY_REMOVALS_PER_SWEEP;
+  const replayed = { owned: 0, stray: 0 };
   const ledgerRow = (root: TempSweepRoot, name: string, identity: string) => options.stray?.provenance?.find(row =>
     row.root === root.path && row.name === name && row.identity === identity
     && (row.namespace ?? null) === (root.anchor?.namespace ?? scan.ownNamespace ?? null));
@@ -1344,10 +1354,27 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         const candidate = path.join(root.path, path.basename(original));
         const owner = detachedOwner(root, path.basename(candidate));
         const removalBegan = owner === "gate" && !!row.snapshot?.entries?.[GATE_ALLOCATION_FILE];
-        if (await finishTreeTrash(journal,
+        const quarantine = journaledTrash(journal, row);
+        const left = fs.existsSync(quarantine);
+        // Attempt retirement accounts for its own replays in its ledger. Only a
+        // directory beside the original is walked: a journal can name any path.
+        const bytes = left && !options.onlyDirectories && path.dirname(quarantine) === path.dirname(row.directory)
+          && fs.lstatSync(quarantine).isDirectory() ? await measure(quarantine, new Set()) : 0;
+        const finished = await finishTreeTrash(journal,
           async trash => (options.eligible && !await options.eligible(trash)) || (!owner && trashHolds(root, trash, candidate)),
           options.remove, trash => !trashPolicyHolds(root, trash, owner ? candidate : original) && (!options.dispatchGuard || options.dispatchGuard(trash)),
-          options.disposable, owner ? trash => !trashHolds(root, trash, candidate, 0, removalBegan) : undefined, options.keepRefusedTrash)) report.trashFinished!++;
+          options.disposable, owner ? trash => !trashHolds(root, trash, candidate, 0, removalBegan) : undefined, options.keepRefusedTrash);
+        if (finished) report.trashFinished!++;
+        // A removal that emptied its trash and was lost before it dropped the
+        // intent has no row yet either: both paths are gone with the intent.
+        const emptied = !left && !fs.existsSync(journal) && !fs.existsSync(row.directory);
+        if (!options.onlyDirectories && (finished || emptied)) {
+          const stray = row.stray === true;
+          report.removed.push({ path: candidate, via: root.via, bytes, ageHours: null, replay: true, ...(stray ? { kind: "stray" as const } : {}) });
+          report.removedBytes += bytes;
+          if (stray) { report.stray!.removed++; report.stray!.removedBytes += bytes; replayed.stray++; }
+          else replayed.owned++;
+        }
       } catch (error) { report.errors.push(String(error)); }
     }
     for (const name of names.sort()) {
@@ -1494,7 +1521,9 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         if (await keep("worktree", bytes)) report.held!.push({ path: candidate, via: root.via, reason: hold, bytes });
         continue;
       }
-      if (stray ? report.stray!.removed >= strayMaxRemovals : report.removed.length - (report.stray?.removed ?? 0) >= maxRemovals) {
+      // The budgets bound what this pass begins; replayed removals are outside them.
+      if (stray ? report.stray!.removed - replayed.stray >= strayMaxRemovals
+        : report.removed.length - (report.stray?.removed ?? 0) - replayed.owned >= maxRemovals) {
         if (stray) report.stray!.deferred++;
         await keep("deferred");
         continue;

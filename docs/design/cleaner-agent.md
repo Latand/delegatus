@@ -179,6 +179,9 @@ above, no stray is removed while a refusing process outside the known daemon lis
 path under `/tmp` or `/var/tmp`. Both hold every candidate as `process-scan-unverified`;
 a stray the command line names is held as `process_reference`.
 
+An interrupted removal that a later pass finishes gets one row in the sweep journal for
+the original path, marked `replay`, with the bytes that were left.
+
 Cannot prove, and holds or skips instead:
 
 - **Names it did not choose.** `delegatus-test-comparison-*` (`scripts/local-gate-tests.ts:483`),

@@ -1814,6 +1814,86 @@ test("the paths a refusing process names never stand in for its working director
   expect(await warmCheckoutInventory(inspected, new RepositoryLinkInventory())).toMatchObject({ checkouts: 1 });
 });
 
+test.each(["owned", "stray", "claimed", "emptied"] as const)("a finished interrupted removal is journaled once for its original path (%s)", async kind => {
+  const root = tempRoot();
+  const directory = strayFixture(root, kind === "stray" ? "rev-replayed" : "llv-replayed");
+  const state = tempRoot(), previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = state;
+  const now = Date.now() + 2 * DAY;
+  const options: TempSweepOptions = { ...strayOptions(root), now: () => now };
+  try {
+    const lost = async (): Promise<never> => { throw new Error("process lost mid-removal"); };
+    const interrupted = await realSweep({ ...options, remove: async (trash, mutationStarted) => {
+      // The native remover renames the quarantine to a claim name first.
+      if (kind === "claimed") return removeTreeWithinAttemptBudget(trash, mutationStarted, lost as never);
+      mutationStarted();
+      if (kind === "emptied") fs.rmSync(trash, { recursive: true });
+      await lost();
+    } });
+    recordTempSweep(interrupted);
+    expect(interrupted.removed).toEqual([]);
+    expect(fs.readdirSync(root).filter(name => name.startsWith(".delegatus-trash-claim-"))).toHaveLength(kind === "claimed" ? 1 : 0);
+    // A replay a process still holds removes nothing and writes no row.
+    if (kind !== "emptied") {
+      const held = await realSweep({ ...options, scan: { ownNamespace: null,
+        processes: [{ pid: 4242, namespace: null, stamped: false, paths: [directory] }] } });
+      recordTempSweep(held);
+      expect(held.removed).toEqual([]);
+      expect(fs.existsSync(path.join(state, "temp-sweep-journal.ndjson"))).toBeFalse();
+    }
+    const resumed = await realSweep(options);
+    recordTempSweep(resumed);
+    recordTempSweep(await realSweep(options));
+    expect(resumed.errors).toEqual([]);
+    expect(resumed.trashFinished).toBe(kind === "emptied" ? 0 : 1);
+    expect(fs.readdirSync(root)).toEqual([]);
+    const lines = fs.readFileSync(path.join(state, "temp-sweep-journal.ndjson"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+    expect(lines.filter(line => line.path === directory)).toEqual([expect.objectContaining({ replay: true, ageHours: null, bytes: resumed.removedBytes })]);
+    expect(lines).toHaveLength(1);
+    // The fixture's one dependency file alone is 8 KiB.
+    if (kind === "emptied") expect(resumed.removedBytes).toBe(0); else expect(resumed.removedBytes).toBeGreaterThanOrEqual(8192);
+    expect(resumed.stray).toMatchObject({ removed: kind === "stray" ? 1 : 0 });
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+  }
+});
+
+test.each(["owned", "stray"] as const)("a replayed %s removal does not spend this pass's removal budget", async kind => {
+  const root = tempRoot(), name = (suffix: string) => `${kind === "stray" ? "rev" : "llv"}-replay-${suffix}`;
+  const first = strayFixture(root, name("first")), now = Date.now() + 2 * DAY;
+  const budget: Partial<TempSweepOptions> = kind === "stray"
+    ? { stray: { maxAgeMs: 12 * HOUR, keep: [], roots: [root], maxRemovals: 1 } } : { maxRemovals: 1 };
+  const options: TempSweepOptions = { ...strayOptions(root, budget), now: () => now };
+  await realSweep({ ...options, remove: async (_trash, mutationStarted) => { mutationStarted(); throw new Error("lost"); } });
+  const second = strayFixture(root, name("second"));
+  const report = await realSweep(options);
+  expect(report.removed.map(row => [row.path, row.replay ?? false])).toEqual([[first, true], [second, false]]);
+});
+
+test("a replayed attempt removal stays with the attempt ledger and adds no sweep row", async () => {
+  const scratch = tempRoot(), attempt = aged(scratch, "llv-stage-replayed", 2 * DAY);
+  const options: TempSweepOptions = { roots: [{ path: scratch, via: "" }], onlyDirectories: [attempt], scan: noProcesses, maxAgeMs: 0, disposable: true };
+  await realSweep({ ...options, remove: async (_trash, mutationStarted) => { mutationStarted(); throw new Error("lost"); } });
+  const walked: string[] = [];
+  const replayed = await realSweep({ ...options, measure: async target => { walked.push(target); return 1; } });
+  expect(replayed.trashFinished).toBe(1);
+  expect(replayed.removed).toEqual([]);
+  expect(walked).toEqual([]);
+});
+
+test.each(["outside the directory", "behind a link beside it"])("a replay walks no quarantine a journal places %s", async where => {
+  const root = tempRoot(), directory = path.join(root, "llv-planted"), elsewhere = aged(tempRoot(), "someone-else", 2 * DAY);
+  const trash = where === "outside the directory" ? elsewhere : path.join(root, ".delegatus-trash-llv-planted-link");
+  if (trash !== elsewhere) fs.symlinkSync(elsewhere, trash);
+  fs.writeFileSync(path.join(root, ".delegatus-sweep-planted.json"),
+    JSON.stringify({ directory, trash, uid: process.getuid?.() ?? 0, identity: "1:1" }));
+  const walked: string[] = [];
+  const report = await realSweep({ ...strayOptions(root), measure: async target => { walked.push(target); return 1; } });
+  expect(walked).toEqual([]);
+  expect(report.removed).toEqual([]);
+  expect(fs.existsSync(path.join(elsewhere, "file.txt"))).toBeTrue();
+});
+
 test.skipIf(process.platform !== "linux")("a refusing daemon naming a temp root this pass does not read still holds every stray", async () => {
   // Another namespace's view: its /tmp is a directory of the test's own, and
   // no root of the pass is its /var/tmp. The policy names no roots, as in production.
