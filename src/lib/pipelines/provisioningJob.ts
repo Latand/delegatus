@@ -21,6 +21,7 @@ import { pipelinePublishesRemoteBranch } from "./publication";
 import { provesProvisionCacheHolder } from "./provisionCacheHolder";
 import { physicalProvisioningPath, provisioningStripe, tryProvisioningLock, type ProvisioningGrant } from "./provisionCheckoutCustody";
 import { observeLegacyInstaller, type LegacyInstallerObservation } from "./provisionLegacyInstaller";
+import { verifyPrivateWorkspaceInstall } from "./provisionPrivateDependencies";
 import { ProvisionToolchainFailure, runProvisionToolchain } from "./provisionToolchain";
 import { provisionToolchainEntry } from "./provisionToolchainEntry";
 import { recordProvisionFixtureEvent } from "./provisionFixtureSupervisor";
@@ -968,6 +969,9 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
         const observation = await observeLegacyInstaller(row!.worktreeDir);
         read();
         if (observation.kind !== "clear") await deferLegacyWriter(observation);
+        if (receipt.workspaceDigest !== undefined && !await verifyPrivateWorkspaceInstall(row!.worktreeDir, receipt.workspaceDigest)) {
+          throw new ProvisionToolchainFailure("private-install-unverified");
+        }
         const modules = await fs.promises.lstat(path.join(row!.worktreeDir, "node_modules"), { bigint: true });
         if (!modules.isDirectory() || String(modules.dev) !== receipt.device || String(modules.ino) !== receipt.inode) {
           throw new ProvisionToolchainFailure("private-install-unverified");
