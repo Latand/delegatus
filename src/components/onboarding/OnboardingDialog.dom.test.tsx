@@ -699,6 +699,107 @@ test("#2166: step 3 says what is missing: a project, an engine, or a signed-in a
   answerAccounts({ claude: { active: "", accounts: [] }, codex: { active: "", accounts: [] } });
 });
 
+/* Onboarding v2, slice 1 (A5): with no engine the step read "Runs on Claude · Opus · account Main" and "It uses your
+   Claude plan", and without a project its only stated blocker was the project. The row now names what is missing
+   and leads to Engines; nothing on the step claims a runtime. */
+test("the orchestrator step with no engine claims no runtime: the Runs on row names what is missing and leads to Engines, with and without a project", async () => {
+  const projects = [{ project: "repo-todo", name: "todo-cli", cwd: "projects/todo-cli", conversations: 0 }];
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const step = () => host.querySelector("[data-onboarding-orchestrator]")!;
+  const named = () => host.querySelector("[data-onboarding-orchestrator-no-engine]");
+  const occurrences = (text: string) => (step().textContent ?? "").split(text).length - 1;
+
+  /* Nothing installed, nothing chosen: the walk a newcomer makes by pressing Continue twice. */
+  answerAccounts({ claude: { active: "", cli: "missing", accounts: [] }, codex: { active: "", cli: "missing", accounts: [] } });
+  let root = createRoot(host);
+  flushSync(() => root.render(<OnboardingDialog mode="guide" marker={null} markerStatus="read" projects={projects} onClose={() => {}} />));
+  await until(() => host.querySelector("[data-onboarding-engine=claude]")?.getAttribute("data-engine-state") === "missing");
+  flushSync(() => (host.querySelector("[data-onboarding-primary]") as HTMLElement).click());
+  expect(host.querySelector("[data-onboarding-dialog]")?.getAttribute("data-onboarding-current")).toBe("project");
+  flushSync(() => (host.querySelector("[data-onboarding-primary]") as HTMLElement).click());
+  expect(host.querySelector("[data-onboarding-dialog]")?.getAttribute("data-onboarding-current")).toBe("orchestrator");
+  await until(() => Boolean(named()));
+  expect(named()!.textContent).toBe("Connect Claude or Codex first.");
+  expect(host.querySelector("[data-onboarding-orchestrator-runs-on]")).toBeNull();
+  expect(host.querySelector("[data-onboarding-orchestrator-change=runs-on]")).toBeNull();
+  for (const claim of ["Opus", "account Main", "Claude plan", "API cost estimate"]) expect(step().textContent).not.toContain(claim);
+  expect(host.querySelector("[data-onboarding-cost]")).toBeNull();
+  expect(host.querySelector("[data-onboarding-permissions]")).not.toBeNull();
+  /* Both blockers are stated, each once, each with its way. */
+  expect(occurrences("Connect Claude or Codex first.")).toBe(1);
+  expect(occurrences("Pick a project first.")).toBe(1);
+  expect([...host.querySelectorAll("[data-onboarding-orchestrator-go]")].map((button) => `${button.getAttribute("data-onboarding-orchestrator-go")}:${button.textContent}`)).toEqual(["engines:Go to Engines", "project:Go to Project"]);
+  expect(host.querySelector("[data-onboarding-orchestrator-create]")).toBeNull();
+  expect(host.querySelector("[data-onboarding-primary]")?.textContent).toBe("Finish without it");
+  flushSync(() => (host.querySelector("[data-onboarding-orchestrator-go=engines]") as HTMLElement).click());
+  expect(host.querySelector("[data-onboarding-step=engines]")?.getAttribute("aria-current")).toBe("step");
+  flushSync(() => root.unmount());
+
+  /* Installed and signed out, with a project chosen: the engine is the only thing missing, said once. */
+  const signedOut = { id: "work", label: "Work", kind: "managed", authPresent: false, loginPending: false, loginState: "idle", deviceAuth: null, auth: { state: "signed_out" } };
+  answerAccounts({ claude: { active: "work", cli: "found", accounts: [signedOut] }, codex: { active: "", cli: "found", accounts: [] } });
+  root = createRoot(host);
+  flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="orchestrator" marker={null} markerStatus="read" projects={projects} onClose={() => {}} />));
+  chooseProject(host, "orchestrator");
+  await until(() => Boolean(named()));
+  expect(occurrences("Connect Claude or Codex first.")).toBe(1);
+  expect(step().textContent).not.toContain("Pick a project first.");
+  expect(host.querySelector("[data-onboarding-orchestrator-runs-on]")).toBeNull();
+  expect(host.querySelector("[data-onboarding-orchestrator-signin]")).toBeNull();
+  expect(host.querySelectorAll("[data-onboarding-orchestrator-go]").length).toBe(1);
+  expect(host.querySelector("[data-onboarding-orchestrator-create]")).toBeNull();
+  expect(step().textContent).not.toContain("Claude plan");
+  flushSync(() => root.unmount());
+
+  /* The same step once an engine is signed in: the row reads the runtime again, with Change, and the plan it spends. */
+  answerAccounts({ claude: { active: "default", cli: "found", accounts: [signedIn("default", "Main")] }, codex: { active: "", cli: "found", accounts: [] } });
+  root = createRoot(host);
+  flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="orchestrator" marker={null} markerStatus="read" projects={projects} onClose={() => {}} />));
+  chooseProject(host, "orchestrator");
+  await until(() => (host.querySelector("[data-onboarding-orchestrator-runs-on]")?.textContent ?? "").includes("account Main"));
+  expect(named()).toBeNull();
+  expect(host.querySelector("[data-onboarding-orchestrator-go]")).toBeNull();
+  expect(host.querySelector("[data-onboarding-orchestrator-change=runs-on]")).not.toBeNull();
+  expect(host.querySelector("[data-onboarding-orchestrator-plan]")?.textContent).toContain("It uses your Claude plan.");
+  flushSync(() => root.unmount());
+  host.remove();
+  answerAccounts({ claude: { active: "", accounts: [] }, codex: { active: "", accounts: [] } });
+});
+
+/* While the engines' sign-in states are still being read the step claims neither: no missing engine yet. */
+test("the orchestrator step does not call an engine missing before the accounts read has answered", async () => {
+  const real = globalThis.fetch;
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url.endsWith("/api/accounts") || url.includes("/api/accounts?")) await held;
+    return real(input, init);
+  }) as typeof fetch;
+  answerAccounts({ claude: { active: "", cli: "missing", accounts: [] }, codex: { active: "", cli: "missing", accounts: [] } });
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  try {
+    flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="orchestrator" marker={null} projects={[]} onClose={() => {}} />));
+    /* The roles read has answered; the accounts read has not. */
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(host.querySelector("[data-onboarding-orchestrator]")).not.toBeNull();
+    expect(host.querySelector("[data-onboarding-orchestrator-no-engine]")).toBeNull();
+    release();
+    await until(() => Boolean(host.querySelector("[data-onboarding-orchestrator-no-engine]")));
+    expect(host.querySelector("[data-onboarding-orchestrator-no-engine]")?.textContent).toBe("Connect Claude or Codex first.");
+    expect(host.querySelector("[data-onboarding-orchestrator-runs-on]")).toBeNull();
+  } finally {
+    release();
+    flushSync(() => root.unmount());
+    host.remove();
+    globalThis.fetch = real;
+    answerAccounts({ claude: { active: "", accounts: [] }, codex: { active: "", accounts: [] } });
+  }
+});
+
 test("slice 3: the Dictation menu mode shows the Voice step alone, without the step list or the footer", async () => {
   const host = document.createElement("div");
   document.body.appendChild(host);
