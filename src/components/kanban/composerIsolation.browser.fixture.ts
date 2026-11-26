@@ -246,9 +246,11 @@ export async function measureComposerIsolation(browser: Browser, hostSample: () 
         }
         await page.evaluate(() => (window as typeof window & { __startIsolationDate(): void }).__startIsolationDate());
         await page.evaluate(installTypingProbe);
-        /* Warm up with printable keys, then put the draft and caret back. */
+        /* Warm up with printable keys, then put the draft and caret back. The draft is
+           seeded, so no measured key turns an empty field into a written one. */
         const focused = page.locator("textarea:focus");
-        const draft = await focused.inputValue();
+        const draft = "Draft: ";
+        await focused.fill(draft);
         await keys(page, mode === "smoke" ? "key " : "type ".repeat(4));
         await focused.fill(draft);
         await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
