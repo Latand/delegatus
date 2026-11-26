@@ -70,11 +70,24 @@ export async function measureComposerIsolation(browser: Browser, hostSample: () 
       const bundle = hash(fs.readFileSync(entry));
       const file = path.join(out, name + ".json");
       const { context, page, pageErrors } = await openFixture(browser, "about:blank", { width, height: width === 390 ? 844 : width === 915 ? 872 : 900 },
-        "light", "en", "reduce", width === 390, 1, new Date("2026-11-25T12:00:00Z"));
+        "light", "en", "reduce", width === 390, 1);
       try {
         await page.bringToFront();
+        // Freeze fixture dates while the browser timestamps input, runs timers and schedules real frames.
+        await page.addInitScript(epoch => {
+          const nativeDate = Date;
+          let start: number | undefined;
+          const fixtureNow = () => epoch + (start === undefined ? 0 : Math.floor(performance.now() - start));
+          Object.defineProperty(window, "__startIsolationDate", { value: () => { start ??= performance.now(); } });
+          globalThis.Date = new Proxy(nativeDate, {
+            get(target, key, receiver) { return key === "now" ? fixtureNow : Reflect.get(target, key, receiver); },
+            apply() { return new nativeDate(fixtureNow()).toString(); },
+            construct(target, args, newTarget) { return Reflect.construct(target, args.length ? args : [fixtureNow()], newTarget); },
+          });
+        }, Date.parse("2026-11-25T12:00:00Z"));
         await routeAssets(page, entry, assets);
         const cdp = await context.newCDPSession(page);
+        await cdp.send("Emulation.setTimezoneOverride", { timezoneId: "UTC" });
         await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
         await page.goto(ORIGIN + "/?scenario=composer-isolation&streaming=1&seathost=30");
         await page.waitForFunction(() => (window as IsolationWindow).composerIsolation?.census().connection === "live", undefined, { timeout: 90000 });
@@ -107,6 +120,7 @@ export async function measureComposerIsolation(browser: Browser, hostSample: () 
         if (mode === "timing" && width === 1440 && Math.abs(corpus.nodes - 23500) > 1200) {
           throw Error("desktop DOM size outside the calibrated range: " + corpus.nodes);
         }
+        await page.evaluate(() => (window as typeof window & { __startIsolationDate(): void }).__startIsolationDate());
         await page.evaluate(installTypingProbe);
         await keys(page, mode === "smoke" ? "key " : "type ".repeat(4));
         await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
