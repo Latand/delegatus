@@ -28,7 +28,7 @@
         "meanDifference": 0.23,
         "ringsClipped": 0
       },
-      "sha256": "04f544866d7c2a7fd93f64a822c1619182f1b0691c0597961820cebf363fe799"
+      "sha256": "7ed023c9239d0eb0e18c9e0aa918c6f4f68812122a5cec373d2fc35f45e42e78"
     },
     {
       "path": "orchestrator.svg",
@@ -48,10 +48,10 @@
       "renderBack": {
         "worstTileMean": 13.513,
         "changedTileShare": 0.032,
-        "meanDifference": 0.613,
+        "meanDifference": 0.618,
         "ringsClipped": 1
       },
-      "sha256": "5b885a5b1f8956909b5f0a8aa64ca00445a189cfb05df0260ab15e94a99e1c8f"
+      "sha256": "1ed0a415bb0622c1d2f2df2ef535ffd177828d3e0e8d93fb31e00984f5ba3634"
     },
     {
       "path": "conversation.svg",
@@ -74,7 +74,7 @@
         "meanDifference": 0.362,
         "ringsClipped": 2
       },
-      "sha256": "1df06c16ed20fe8034f8823f7ab5b4932659f1b5ffa78932986966d0b72bac22"
+      "sha256": "f57ce02a1b5ee3d2696ee986aaa8c5021ee46f35503d590bd2bc838ce945a50f"
     },
     {
       "path": "pipeline.svg",
@@ -97,7 +97,7 @@
         "meanDifference": 0.155,
         "ringsClipped": 0
       },
-      "sha256": "e56b49ef216b05379598708a52664e8a574c8b5da184c6dc82d881af3a3a5dbf"
+      "sha256": "24dd5da2656ea0e9afa440866217dbb4617cdd309539966e42b40a6673e68b2e"
     },
     {
       "path": "card-menu.svg",
@@ -120,7 +120,7 @@
         "meanDifference": 0.299,
         "ringsClipped": 0
       },
-      "sha256": "b42381fe399c9a725b1d86faa16c58dc567bee589f1791fae9c693f94bcb90c3"
+      "sha256": "eeecd241e88292d3b97c65aab396abeb76fac353ccff8e7f0dcc5366613f0ae9"
     },
     {
       "path": "accounts.svg",
@@ -140,10 +140,10 @@
       "renderBack": {
         "worstTileMean": 2.702,
         "changedTileShare": 0,
-        "meanDifference": 0.216,
+        "meanDifference": 0.215,
         "ringsClipped": 0
       },
-      "sha256": "377d2a8f23a09b94d0f6b93f1d980089c7b0a4217cb12abe05609ee84111127b"
+      "sha256": "7b755fae145ccea13b62165332db382d2e11e9a2e665a1c41b22dff0f24ed94b"
     },
     {
       "path": "phone-conversation.svg",
@@ -160,7 +160,7 @@
         "meanDifference": 0.752,
         "ringsClipped": 0
       },
-      "sha256": "43b6923847e78f36d7ea3e538cfab1a37146ee898011ee5ae0f7e0ba1e64d925"
+      "sha256": "c4318dfaf2829e0e81668426cb237888a30e566acfc6c963e4500de664379290"
     },
     {
       "path": "phone-board.svg",
