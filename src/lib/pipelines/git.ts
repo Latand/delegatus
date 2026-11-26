@@ -33,7 +33,7 @@ import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifa
 import { decisiveRefusal, publicationApp403, publicationDeadlineKind, publicationFrozenInstallFailure, publicationTransportLine, PUBLICATION_MEMORY_DEFERRAL } from "./publication";
 import type { Pipeline, PipelinePublicationFailure, PipelinePublicationResult } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
-import { recordWorktreeProvenance } from "./worktreeProvenance";
+import { readWorktreeProvenance, recordWorktreeProvenance } from "./worktreeProvenance";
 import { CpuContainmentUnavailable, wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
 import { cpuPriorityEnv } from "@/lib/runtime/cpuPriority";
 import { instanceCpuPrioritySource } from "@/lib/runtime/cpuAdmissionScope";
@@ -311,14 +311,40 @@ export async function resolvePipelineBaseAsync(
   return { ok: true, baseBranch, baseRef };
 }
 
-export async function provisionPipelineWorktreeAsync(pipeline: Pipeline, exec: ProvisionExecPort, signal?: AbortSignal, checkoutReady?: () => void): Promise<PipelineGitResult> {
-  const preservation: { value?: PreservedProvisionRef } = {};
-  const result = await provisionPipelineCheckout(pipeline, exec, preservation, signal, checkoutReady);
-  return preservation.value ? { ...result, preservedLocalRef: preservation.value } : result;
+export async function provisionPipelineWorktreeAsync(pipeline: Pipeline, exec: ProvisionExecPort, signal?: AbortSignal, checkoutReady?: () => void,
+  custody?: ProvisionCheckoutCustody): Promise<PipelineGitResult> {
+  const selected = await planPipelineCheckout(pipeline, exec, signal);
+  if (!selected.ok) return selected;
+  let preservation: PreservedProvisionRef | undefined;
+  const checked = await ensurePipelineCheckout(pipeline, selected.plan, exec, signal, custody, value => { preservation = value; });
+  if (!checked.ok) return preservation ? { ...checked, preservedLocalRef: preservation } : checked;
+  checkoutReady?.();
+  const prepared = await prepareProvisionedPipeline(pipeline, checked.sha, exec, signal);
+  return preservation ? { ...prepared, preservedLocalRef: preservation } : prepared;
 }
 
-async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExecPort,
-  preservation: { value?: PreservedProvisionRef }, signal?: AbortSignal, checkoutReady?: () => void): Promise<PipelineGitResult> {
+export type PipelineCheckoutPlan = {
+  branch: string;
+  deliveryBranch: string;
+  start: string;
+  expectedHead: string;
+  reuseBranch: boolean;
+  backup?: PreservedProvisionRef;
+  preserved?: PreservedProvisionRef;
+};
+
+export type ProvisionCheckoutCustody = {
+  commonDir: string;
+  addAdmitted: boolean;
+  checkpointAlternative(plan: PipelineCheckoutPlan): Promise<void>;
+  prepareInterruptedIndexRepair?(): Promise<void>;
+  verify(): Promise<void>;
+};
+
+/** Select exact checkout inputs before writing a ref or creating a worktree. */
+export async function planPipelineCheckout(pipeline: Pipeline, exec: ProvisionExecPort, signal?: AbortSignal): Promise<
+  { ok: true; plan: PipelineCheckoutPlan } | { ok: false; error: string }
+> {
   if (!pipeline.baseBranch || !/^[0-9a-f]{40}$/i.test(pipeline.baseRef)) return { ok: false, error: "the pipeline base is unresolved" };
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
   const legacy = await exec("git", ["show-ref", "--verify", "--quiet", `refs/heads/${pipeline.branch}`], pipeline.repoDir, signal);
@@ -356,6 +382,8 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
   const resumesLocal = (ownsCheckout && sameOwner) || resumesPublication;
   const holdsInitialPin = pipeline.baseRefPinned && localSha === pipeline.baseRef;
   const backupPrefix = `refs/backup/provision-unpublished/${pipeline.branch}/`;
+  let preserved: PreservedProvisionRef | undefined;
+  let backup: PreservedProvisionRef | undefined;
   if (legacy.code === 0 && resumesLocal) {
     // A crash can leave a complete checkout before its outcome is persisted.
     // The ref itself carries the lane and count needed to replay its evidence.
@@ -365,7 +393,7 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
       const [ref, sha] = record.split(" ");
       const match = ref?.startsWith(backupPrefix) ? ref.slice(backupPrefix.length).match(/^([1-9][0-9]*)-([0-9a-f]{40})$/) : null;
       if (match && sha === match[2] && Number.isSafeInteger(Number(match[1]))) {
-        preservation.value = { ref, sha, unpublishedCommits: Number(match[1]) };
+        preserved = { ref, sha, unpublishedCommits: Number(match[1]) };
         break;
       }
     }
@@ -403,23 +431,53 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
     if (unpublishedCommits > 0) {
       // Content-addressed and create-only: retries retain the same backup,
       // and no provisioning attempt can overwrite an earlier preserved tip.
-      const ref = `${backupPrefix}${unpublishedCommits}-${localSha}`;
-      const backup = await exec("git", ["update-ref", ref, localSha, "0".repeat(40)], pipeline.repoDir, signal);
-      if (backup.code !== 0) {
-        const existing = await exec("git", ["rev-parse", "--verify", ref], pipeline.repoDir, signal);
-        if (existing.code !== 0 || existing.stdout.trim() !== localSha) return failure("preserving unpublished delivery commits", backup);
-      }
-      preservation.value = { ref, sha: localSha, unpublishedCommits };
+      backup = { ref: `${backupPrefix}${unpublishedCommits}-${localSha}`, sha: localSha, unpublishedCommits };
     }
     // Keep the delivery ref and any holder untouched, even when it is free.
     branch = pipeline.branch;
   }
   const reuseLocal = localSha && (resumesLocal || localSha === start) && branch !== pipeline.branch;
   let expectedHead = start;
-  const addArgs = (deliveryBranch === pipeline.branch ? localSha : legacy.code === 0 || reuseLocal)
+  if (resumesLocal && localSha && remoteSha && localSha !== remoteSha && !holdsInitialPin) {
+    const remoteContainsLocal = await exec("git", ["merge-base", "--is-ancestor", localSha, remoteSha], pipeline.repoDir, signal);
+    if (remoteContainsLocal.code === 0) expectedHead = remoteSha;
+  }
+  return { ok: true, plan: { branch, deliveryBranch, start, expectedHead,
+    reuseBranch: Boolean(deliveryBranch === pipeline.branch ? localSha : legacy.code === 0 || reuseLocal),
+    ...(backup ? { backup } : {}), ...(preserved ? { preserved } : {}) } };
+}
+
+export async function ensurePipelineCheckout(pipeline: Pipeline, plan: PipelineCheckoutPlan, exec: ProvisionExecPort,
+  signal?: AbortSignal, custody?: ProvisionCheckoutCustody,
+  preserve?: (value: PreservedProvisionRef) => void): Promise<PipelineGitResult> {
+  const { deliveryBranch, start, expectedHead } = plan;
+  let { branch } = plan;
+  if (plan.preserved) preserve?.(plan.preserved);
+  if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
+  const inspected = custody && await inspectPlannedCheckout(pipeline, plan, custody, exec, signal);
+  if (inspected && !inspected.ok) return inspected;
+  if (inspected?.state === "absent" && plan.reuseBranch) {
+    const branchHead = await exec("git", ["rev-parse", "--verify", `refs/heads/${branch}^{commit}`], pipeline.repoDir, signal);
+    if (branchHead.code !== 0 || branchHead.stdout.trim() !== start) {
+      return { ok: false, error: "the existing pipeline branch changed after checkout planning; inspect it before retrying" };
+    }
+  }
+  if (plan.backup) {
+    const { ref, sha } = plan.backup;
+    const current = custody && await exec("git", ["rev-parse", "--verify", ref], pipeline.repoDir, signal);
+    const backup = current && current.code === 0 && current.stdout.trim() === sha ? current
+      : await exec("git", ["update-ref", ref, sha, "0".repeat(40)], pipeline.repoDir, signal);
+    if (backup.code !== 0) {
+      const existing = await exec("git", ["rev-parse", "--verify", ref], pipeline.repoDir, signal);
+      if (existing.code !== 0 || existing.stdout.trim() !== sha) return failure("preserving unpublished delivery commits", backup);
+    }
+    preserve?.(plan.backup);
+  }
+  const addArgs = plan.reuseBranch
     ? ["worktree", "add", pipeline.worktreeDir, branch]
     : ["worktree", "add", "-b", branch, pipeline.worktreeDir, start];
-  let add = await exec("git", addArgs, pipeline.repoDir, signal);
+  let add: ExecResult = inspected && inspected.state !== "absent" ? { code: 0, stdout: "", stderr: "" }
+    : await exec("git", addArgs, pipeline.repoDir, signal);
   if (!signal?.aborted && add.code !== 0 && !add.signal && add.code !== null && !killedAtBound(add)) {
     const listing = await exec("git", ["worktree", "list", "--porcelain", "-z"], pipeline.repoDir, signal);
     if (listing.code !== 0) return failure("checking which worktree holds the pipeline branch", listing);
@@ -433,6 +491,7 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
       }
       branch = pipeline.branch;
       if (!validPipelineBranch(branch)) return { ok: false, error: "the pipeline branch is invalid" };
+      await custody?.checkpointAlternative({ ...plan, branch, reuseBranch: false });
       add = await exec("git", ["worktree", "add", "-b", branch, pipeline.worktreeDir, start], pipeline.repoDir, signal);
       if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
       if (add.code !== 0) return { ok: false, error: `delivery branch ${deliveryBranch} is held by worktree ${holdingPath}; creating lane branch ${branch} failed; resolve the lane branch/path conflict and retry provisioning: ${(add.stderr || add.stdout).trim()}` };
@@ -442,6 +501,11 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
   if (killedAtBound(add)) return { ok: false, error: "git worktree add: checkout interrupted or timed out after 60s" };
   if (add.signal || add.code === null) return failure("git worktree add interrupted", add);
   let finishedInterruptedCheckout = false;
+  if (inspected && inspected.state === "initializing") {
+    const finished = await finishInterruptedCheckout(pipeline, branch, start, exec, signal, custody);
+    if (!finished.ok) return finished;
+    finishedInterruptedCheckout = true;
+  }
   if (add.code !== 0) {
     const probe = await exec("git", ["rev-parse", "--abbrev-ref", "HEAD"], pipeline.worktreeDir, signal);
     if (probe.code !== 0 || probe.stdout.trim() !== branch) return failure("git worktree add", add);
@@ -455,7 +519,7 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
       return { ok: false, error: "the pipeline worktree has not finished initializing" };
     }
     if (entry.includes("locked initializing")) {
-      const finished = await finishInterruptedCheckout(pipeline, branch, start, exec, signal);
+      const finished = await finishInterruptedCheckout(pipeline, branch, start, exec, signal, custody);
       if (!finished.ok) return finished;
       finishedInterruptedCheckout = true;
     }
@@ -466,14 +530,9 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
     if (tracked.code !== 0) return failure("checking pipeline worktree tracked files", tracked);
   }
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
-  if (resumesLocal && localSha && remoteSha && localSha !== remoteSha
-    && !holdsInitialPin) {
-    const remoteContainsLocal = await exec("git", ["merge-base", "--is-ancestor", localSha, remoteSha], pipeline.worktreeDir, signal);
-    if (remoteContainsLocal.code === 0) {
-      const merged = await exec("git", ["merge", "--ff-only", "--no-overwrite-ignore", remoteSha], pipeline.worktreeDir, signal);
-      if (merged.code !== 0) return failure("fast-forwarding the delivery branch before production", merged);
-      expectedHead = remoteSha;
-    }
+  if (expectedHead !== start && (inspected?.state !== "ready" || inspected.sha !== expectedHead)) {
+    const merged = await exec("git", ["merge", "--ff-only", "--no-overwrite-ignore", expectedHead], pipeline.worktreeDir, signal);
+    if (merged.code !== 0) return failure("fast-forwarding the delivery branch before production", merged);
   }
   const base = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir, signal);
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
@@ -490,8 +549,65 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
   }
   // The worktree sweep removes only checkouts with a record of who made them.
   // The pipeline's own record names this path too, so a failed write keeps it sweepable.
+  await custody?.verify();
   recordWorktreeProvenance(pipeline.worktreeDir, { creator: "pipeline", id: pipeline.id });
-  checkoutReady?.();
+  if (custody) {
+    const receipt = await inspectPlannedCheckout(pipeline, { ...plan, branch }, { ...custody, addAdmitted: false }, exec, signal);
+    if (!receipt.ok) return receipt;
+    if (receipt.state !== "ready" || receipt.sha !== expectedHead) {
+      return { ok: false, error: "the pipeline checkout could not be verified after creation" };
+    }
+  }
+  return { ok: true, sha: base.stdout.trim(), baseBranch: pipeline.baseBranch };
+}
+
+async function inspectPlannedCheckout(pipeline: Pipeline, plan: PipelineCheckoutPlan, custody: ProvisionCheckoutCustody, exec: ProvisionExecPort,
+  signal?: AbortSignal): Promise<
+  { ok: true; state: "absent" | "initializing" } | { ok: true; state: "ready"; sha: string } | { ok: false; error: string }
+> {
+  const listing = await exec("git", ["worktree", "list", "--porcelain", "-z"], pipeline.repoDir, signal);
+  if (listing.code !== 0) return failure("checking the pipeline checkout registration", listing);
+  const entries = listing.stdout.split("\0\0").map(row => row.split("\0"));
+  const registered = entries.find(fields => worktreePathMatches(
+    fields.find(field => field.startsWith("worktree "))?.slice("worktree ".length), pipeline.worktreeDir));
+  const present = fs.lstatSync(pipeline.worktreeDir, { throwIfNoEntry: false });
+  if (!registered && !present) return { ok: true, state: "absent" };
+  if (!registered || !present?.isDirectory() || registered.some(field => field.startsWith("prunable"))
+    || !registered.includes(`branch refs/heads/${plan.branch}`)) {
+    return { ok: false, error: "the checkout path or registration does not belong to the planned pipeline branch" };
+  }
+  const common = await exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], pipeline.worktreeDir, signal);
+  if (common.code !== 0 || !worktreePathMatches(common.stdout.trim(), custody.commonDir)) {
+    return { ok: false, error: "the pipeline checkout is registered to a different repository" };
+  }
+  const head = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir, signal);
+  const sha = head.stdout.trim();
+  if (head.code !== 0 || (sha !== plan.start && sha !== plan.expectedHead) || !registered.includes(`HEAD ${sha}`)) {
+    return { ok: false, error: "the pipeline checkout does not match its persisted plan" };
+  }
+  const provenance = readWorktreeProvenance(pipeline.worktreeDir, { commonDir: custody.commonDir });
+  if (provenance ? provenance.creator !== "pipeline" || provenance.id !== pipeline.id : !custody.addAdmitted) {
+    return { ok: false, error: "the pipeline checkout has no matching creation evidence; preserve it and inspect its ownership before retrying" };
+  }
+  if (registered.includes("locked initializing")) return { ok: true, state: "initializing" };
+  const staged = await exec("git", ["diff", "--cached", "--quiet", "HEAD", "--"], pipeline.worktreeDir, signal);
+  if (staged.code === 1) return { ok: false, error: "the pipeline worktree index contains staged tracked changes" };
+  if (staged.code !== 0) return failure("checking pipeline worktree staged tracked files", staged);
+  const tracked = await exec("git", ["diff", "--quiet", "--"], pipeline.worktreeDir, signal);
+  if (tracked.code === 1) return { ok: false, error: "the pipeline worktree has incomplete or modified tracked files" };
+  if (tracked.code !== 0) return failure("checking pipeline worktree tracked files", tracked);
+  return { ok: true, state: "ready", sha };
+}
+
+export async function verifyProvisioningCheckoutReceipt(pipeline: Pipeline, plan: PipelineCheckoutPlan, commonDir: string,
+  exec: ProvisionExecPort, signal: AbortSignal): Promise<boolean> {
+  const proof = await inspectPlannedCheckout(pipeline, plan, {
+    commonDir, addAdmitted: false, checkpointAlternative: async () => {}, verify: async () => {},
+  }, exec, signal);
+  return proof.ok && proof.state === "ready" && proof.sha === plan.expectedHead;
+}
+
+export async function prepareProvisionedPipeline(pipeline: Pipeline, sha: string, exec: ProvisionExecPort, signal?: AbortSignal): Promise<PipelineGitResult> {
   try {
     await prepareStageToolchain(pipeline,
       (command, args, cwd, env, options) => exec(command, args, cwd, signal, { env, timeoutMs: options?.timeoutMs, inheritFd: options?.inheritFd, additionalInheritedFds: options?.additionalInheritedFds }), signal);
@@ -501,7 +617,7 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
     return { ok: false, error: dependencyEnvironmentError(error) };
   }
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
-  return { ok: true, sha: base.stdout.trim(), baseBranch: pipeline.baseBranch };
+  return { ok: true, sha, baseBranch: pipeline.baseBranch };
 }
 
 /** What a retry says while a live Git process still initializes the worktree
@@ -534,7 +650,8 @@ function liveGitOwner(worktreeDir: string): number | null {
  * have run in it. It rebuilds the index and checks out only missing files;
  * checkout-index never overwrites a file that appeared after the safety scan.
  */
-async function finishInterruptedCheckout(pipeline: Pipeline, branch: string, start: string, exec: ProvisionExecPort, signal?: AbortSignal): Promise<PipelineGitResult> {
+async function finishInterruptedCheckout(pipeline: Pipeline, branch: string, start: string, exec: ProvisionExecPort, signal?: AbortSignal,
+  custody?: ProvisionCheckoutCustody): Promise<PipelineGitResult> {
   const owner = liveGitOwner(pipeline.worktreeDir);
   if (owner !== null) return { ok: false, error: `${WORKTREE_INITIALIZATION_HELD} ${owner}` };
 
@@ -647,14 +764,47 @@ async function finishInterruptedCheckout(pipeline: Pipeline, branch: string, sta
   if (collisions.length > 0) {
     return { ok: false, error: `the interrupted pipeline checkout has untracked content blocking tracked paths (${collisions.slice(0, 3).join(", ")}); preserve it, move it aside, then retry-stage` };
   }
-  const staged = await exec("git", ["diff", "--cached", "--quiet", "--diff-filter=ACMRT", "HEAD", "--"], pipeline.worktreeDir, signal);
-  if (staged.code === 1) return { ok: false, error: "the interrupted pipeline checkout contains staged tracked changes; preserve them, move them aside, then retry-stage" };
-  if (staged.code !== 0) return failure("checking staged changes in the interrupted pipeline checkout", staged);
+  const stagedAtStart = await exec("git", ["diff", "--cached", "--quiet", "--diff-filter=ACMRT", "HEAD", "--"], pipeline.worktreeDir, signal);
+  if (stagedAtStart.code === 1) return { ok: false, error: "the interrupted pipeline checkout contains staged tracked changes; preserve them, move them aside, then retry-stage" };
+  if (stagedAtStart.code !== 0) return failure("checking staged changes in the interrupted pipeline checkout", stagedAtStart);
   const stillOwned = liveGitOwner(pipeline.worktreeDir);
   if (stillOwned !== null) return { ok: false, error: `${WORKTREE_INITIALIZATION_HELD} ${stillOwned}` };
   const gitDir = await exec("git", ["rev-parse", "--path-format=absolute", "--git-dir"], pipeline.worktreeDir, signal);
   if (gitDir.code !== 0 || !gitDir.stdout.trim()) return failure("locating the interrupted pipeline checkout", gitDir);
-  fs.rmSync(path.join(gitDir.stdout.trim(), "index.lock"), { force: true });
+  const indexLock = path.join(gitDir.stdout.trim(), "index.lock");
+  let originalLock: string | null;
+  try {
+    const stat = fs.lstatSync(indexLock, { bigint: true });
+    originalLock = `${stat.dev}:${stat.ino}`;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return { ok: false, error: `checking interrupted checkout index custody: ${error instanceof Error ? error.message : "filesystem read failed"}` };
+    originalLock = null;
+  }
+  if (!custody?.prepareInterruptedIndexRepair) return { ok: false, error: "interrupted checkout repair requires controller-owned admission; retry through provisioning" };
+  // The lock removal is itself a destructive effect. Recheck the live Git
+  // owner and acquire the lane's native add fence after the keyed admission,
+  // so a close or takeover that wins first cannot unlink another writer's lock.
+  const ownerBeforeAdmission = liveGitOwner(pipeline.worktreeDir);
+  if (ownerBeforeAdmission !== null) return { ok: false, error: `${WORKTREE_INITIALIZATION_HELD} ${ownerBeforeAdmission}` };
+  await custody.prepareInterruptedIndexRepair();
+  if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
+  const ownerAfterAdmission = liveGitOwner(pipeline.worktreeDir);
+  if (ownerAfterAdmission !== null) return { ok: false, error: `${WORKTREE_INITIALIZATION_HELD} ${ownerAfterAdmission}` };
+  const stagedAfterAdmission = await exec("git", ["diff", "--cached", "--quiet", "--diff-filter=ACMRT", "HEAD", "--"], pipeline.worktreeDir, signal);
+  if (stagedAfterAdmission.code === 1) return { ok: false, error: "the interrupted pipeline checkout acquired staged changes during repair admission; preserve them and retry-stage" };
+  if (stagedAfterAdmission.code !== 0) return failure("rechecking staged interrupted checkout paths", stagedAfterAdmission);
+  const ownerAfterStagedCheck = liveGitOwner(pipeline.worktreeDir);
+  if (ownerAfterStagedCheck !== null) return { ok: false, error: `${WORKTREE_INITIALIZATION_HELD} ${ownerAfterStagedCheck}` };
+  let currentLock: string | null;
+  try {
+    const stat = fs.lstatSync(indexLock, { bigint: true });
+    currentLock = `${stat.dev}:${stat.ino}`;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return { ok: false, error: `checking interrupted checkout index custody: ${error instanceof Error ? error.message : "filesystem read failed"}` };
+    currentLock = null;
+  }
+  if (currentLock !== originalLock) return { ok: false, error: "the interrupted pipeline checkout index lock changed during repair admission; preserve it and retry-stage" };
+  if (currentLock !== null) fs.unlinkSync(indexLock);
   const index = await exec("git", ["read-tree", "HEAD"], pipeline.worktreeDir, signal);
   if (index.code !== 0) return failure("rebuilding the interrupted pipeline checkout index", index);
   // Checkout only files proven missing. If one appears after the scan, Git
@@ -663,6 +813,12 @@ async function finishInterruptedCheckout(pipeline: Pipeline, branch: string, sta
     const checkout = await exec("git", ["checkout-index", "--", ...missingTrackedPaths], pipeline.worktreeDir, signal);
     if (checkout.code !== 0) return failure("finishing the interrupted pipeline checkout", checkout);
   }
+  const tracked = await exec("git", ["diff", "--quiet", "HEAD", "--"], pipeline.worktreeDir, signal);
+  if (tracked.code === 1) return { ok: false, error: "the interrupted pipeline checkout changed during repair; preserve it and retry-stage" };
+  if (tracked.code !== 0) return failure("verifying the interrupted pipeline checkout repair", tracked);
+  const staged = await exec("git", ["diff", "--cached", "--quiet", "HEAD", "--"], pipeline.worktreeDir, signal);
+  if (staged.code === 1) return { ok: false, error: "the interrupted pipeline checkout index changed during repair; preserve it and retry-stage" };
+  if (staged.code !== 0) return failure("verifying the interrupted pipeline checkout index", staged);
   return { ok: true, sha: start };
 }
 

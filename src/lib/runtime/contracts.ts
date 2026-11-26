@@ -980,6 +980,8 @@ export interface ViewerHealthReadiness {
 }
 
 export interface ViewerHealthEvidence {
+  /** Cold provisioning verified through the candidate's served bundle. */
+  provisioning?: { ok: boolean; workerEntry?: string; runtime?: string; readyFrame?: boolean };
   checkedAt: string;
   endpoint: string;
   processReady: boolean;

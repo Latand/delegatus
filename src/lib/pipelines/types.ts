@@ -1343,6 +1343,10 @@ export type Pipeline = {
       transient Git or network failure (#2115, #2176, #2220). Cleared when
       provisioning succeeds or parks. */
   provisioningWait?: PipelineBoundedWait;
+  /** Server-owned controller evidence. Never returned by a public projection. */
+  provisioningJob?: import("./provisioningRecord").ProvisioningRecord;
+  lastProvisioningInterruption?: import("./provisioningRecord").ProvisionInterruption;
+  provisioningStep?: import("./provisioningRecord").ProvisioningStepView;
   srcPath: string | null;
   srcConversationId: string | null;
   /** The seat's parallel self that created the lane on the seat's behalf

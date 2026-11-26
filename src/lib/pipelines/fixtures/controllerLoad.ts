@@ -3,7 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
+import { monitorEventLoopDelay } from "node:perf_hooks";
 import { Database } from "bun:sqlite";
+import { performanceSpans } from "@/lib/performanceSpans";
 import { buildPipeline, savePipelines, archiveSettledPipelines } from "../store";
 import type { Pipeline, PipelineStageAttempt } from "../types";
 import { defaultPipelinePorts } from "../engine";
@@ -13,6 +15,8 @@ import { SqliteStateCollection, resetStateReadonlyConnectionCountForTests, state
 
 export async function measureSeededController() {
   const root = process.env.AUDIT_RUN!;
+  const closedMultiplier = Number(process.env.AUDIT_CLOSED_MULTIPLIER ?? "1");
+  if (closedMultiplier !== 1 && closedMultiplier !== 10) throw new Error("closed rows multiplier must be 1 or 10");
   const startedUtc = new Date().toISOString();
   const now = Date.parse("2026-10-16T00:00:00Z");
   registerPipelineTick(async () => {});
@@ -38,7 +42,7 @@ export async function measureSeededController() {
   savePipelines(Array.from({ length: 796 }, (_, i) => record(`archive-${i.toString().padStart(4,"0")}`, true)));
   await archiveSettledPipelines(now);
   savePipelines([...Array.from({ length: 30 }, (_, i) => record(`open-${i.toString().padStart(4,"0")}`, false)),
-    ...Array.from({ length: 232 }, (_, i) => record(`retained-${i.toString().padStart(4,"0")}`, true))]);
+    ...Array.from({ length: 232 * closedMultiplier }, (_, i) => record(`retained-${i.toString().padStart(4,"0")}`, true))]);
   const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"));
   const corpus = db.query("SELECT collection,count(*) AS rows,sum(length(value_json)) AS bytes FROM state_rows WHERE collection IN ('pipelines','pipelines_archive') GROUP BY collection").all();
   const digest = crypto.createHash("sha256");
@@ -70,29 +74,50 @@ export async function measureSeededController() {
     return { cpuMs: (Number(stat[11]) + Number(stat[12])) * 10, bytes: Number(io.rchar) };
   };
   const decode = (SqliteStateCollection.prototype as unknown as { decodeRow: (json: string) => unknown }).decodeRow;
-  let decodedBytes = 0;
-  (SqliteStateCollection.prototype as unknown as { decodeRow: (json: string) => unknown }).decodeRow = function(json) { decodedBytes += Buffer.byteLength(json); return decode.call(this,json); };
+  let decodedBytes = 0, decodedRows = 0;
+  (SqliteStateCollection.prototype as unknown as { decodeRow: (json: string) => unknown }).decodeRow = function(json) {
+    decodedBytes += Buffer.byteLength(json);
+    decodedRows++;
+    return decode.call(this, json);
+  };
+  let selections = 0;
+  const recordSelection = SqliteStateCollection.prototype.recordPipelineTickSelection;
+  SqliteStateCollection.prototype.recordPipelineTickSelection = async function(work, at) {
+    await recordSelection.call(this, work, at);
+    selections++;
+  };
+  let longestSync = 0;
+  const syncSpan = performanceSpans.sync.bind(performanceSpans);
+  performanceSpans.sync = ((site, run, rows, bytes) => {
+    const start = performance.now();
+    try { return syncSpan(site, run, rows, bytes); }
+    finally { longestSync = Math.max(longestSync, performance.now() - start); }
+  }) as typeof performanceSpans.sync;
+  const delay = monitorEventLoopDelay({ resolution: 10 });
   resetStateReadonlyConnectionCountForTests();
   const loadBefore = os.loadavg();
   const logError = console.error;
   let errors = 0;
   console.error = (...args) => { errors++; logError(...args); };
   const ticks = [];
+  delay.enable();
   for (let tick = 0; tick < 600; tick++) {
     clock = now + tick * 1000;
     // One durable lane edit per simulated second. Every lane changes in 30s.
     const id = `open-${(tick % 30).toString().padStart(4,"0")}`;
     db.query("UPDATE state_rows SET value_json=json_set(value_json,'$.stateDetail',?),row_revision=row_revision+1 WHERE collection='pipelines' AND row_key=?").run(`progress-${tick}`,id);
     db.query("UPDATE state_collections SET revision=revision+1 WHERE collection='pipelines'").run();
-    const before = counters(), start = performance.now(), decoded = decodedBytes;
+    const before = counters(), start = performance.now(), decoded = decodedBytes, rows = decodedRows, selected = selections;
     const result = await tickPipelinesController([],ports);
     if (errors) throw new Error("seeded controller reported an error");
     const after = counters();
     ticks.push({ wallMs: performance.now()-start, cpuMs: after.cpuMs-before.cpuMs, readBytes: after.bytes-before.bytes,
-      decodedBytes: decodedBytes-decoded, changed: result.changed });
+      decodedBytes: decodedBytes-decoded, decodedRows: decodedRows-rows, selections: selections-selected, changed: result.changed });
   }
+  delay.disable();
   console.error = logError;
-  const result = { errors, startedUtc, finishedUtc: new Date().toISOString(), corpus, seedSha256, limits, simulatedSeconds: 600, ticks, overruns: ticks.filter(tick => tick.wallMs > 15_000).length,
+  const result = { errors, startedUtc, finishedUtc: new Date().toISOString(), corpus, closedMultiplier, seedSha256, limits, simulatedSeconds: 600, ticks,
+    longestSyncMs: longestSync, maxEventLoopDelayMs: delay.max / 1e6, overruns: ticks.filter(tick => tick.wallMs > 15_000).length,
     readConnections: stateReadonlyConnectionCountForTests(), load: { before: loadBefore, after: os.loadavg(), cpuCount: os.cpus().length,
       cpuMax: fs.existsSync("/sys/fs/cgroup/cpu.max") ? fs.readFileSync("/sys/fs/cgroup/cpu.max","utf8").trim() : "unavailable at cgroup root" } };
   fs.writeFileSync(path.join(root,"seeded-result.json"),JSON.stringify(result,null,2));

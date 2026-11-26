@@ -33,7 +33,7 @@ import { stageAttemptPushRefusal, settleStageAttemptPush } from "./stageAttemptP
 import { prepareStageGitGuard } from "@/lib/git/stageAttemptGuard";
 import { buildReleaseTagPolicy } from "./releaseTagPolicy";
 import { controllerClosedHosts, controllerPipelineKeys, controllerAttemptSelected, controllerReferences, controllerCloseBudget, controllerRuns, controllerTickFingerprint, controllerOffWindowGuard, controllerAssignmentAttached, controllerSettledAttempt, controllerOffWindowWorkingHost, withControllerPipelineScope } from "./controllerScope";
-import { withProvisioningTurn } from "./provisioningTurn";
+import { advanceProvisioningJob, type ProvisionClock } from "./provisioningJob";
 import { startPipelineControllerJob, pipelineControllerJobLanes, reportProvisioningPhase, waitForPipelineControllerJob } from "./controllerJobs";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { assertOperationLease, awaitLeasedOperation, currentOperationLease, leasedOperationPorts, OperationLease, OperationLeaseExpiredError, operationPortIdentity, withoutOperationLease } from "@/lib/operationLease";
@@ -124,7 +124,6 @@ import { enqueueStructuredMessage, idleContinuationDeliveryRetryable } from "@/l
 import { delegatusMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { interruptionObligationDirectory, interruptionObligationStore, submittedContinuationOutcome, type InterruptionObligation } from "@/lib/runtime/interruptionObligations";
 import { StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
-import { DISK_SPACE_RETRY_MS, DISK_SPACE_WAIT_PREFIX, worktreeDiskWait } from "@/lib/state/diskPressure";
 import { dispatchStructuredControl, RUNTIME_HOST_UNAVAILABLE_CODE } from "@/lib/runtime/structuredControls";
 import {
   describeStructuredHostOwnerGeneration,
@@ -152,8 +151,7 @@ import { servingControllerSupports } from "./controllerCapabilities";
 import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgroundTasks, stepBackgroundWait } from "./backgroundTasks";
 import { durableStageTurnEvidence, stageTurnEvidenceCurrent, type StageTurnEvidence } from "./durableEvidence";
 import { defaultStageFailEdge, FAIL_EDGE_BUDGET_SPENT_DETAIL, advanceFailEdgeBudgetSpent, failEdgeBudgetSpent, failEdgeExhaustion, failEdgeMaxRounds, failEdgeRoundsUsed, terminalReviewBudgetSpent } from "./failEdgeBudget";
-import { describeTransientGitFailure, transientGitFailure, type TransientGitFailure } from "@/lib/git/transientFailure";
-import { acquirePublicationFileLock, releasePublicationFileLock, commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineLiteralGitEnv, pipelineBaseBranchError, pipelinePublicationFence, pipelinePublicationInFlight, publicationFailureCause, publicationFailurePhase, publicationInterruptionCause, pipelineWorktreeChanges, provisionPipelineWorktreeAsync, realProvisionExec, resolveDeliveryRemote, resolvePipelineBaseAsync, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resolvePipelineBase, synchronizePipelineRetryHead, verifyPassedHeadIntegration, WORKTREE_INITIALIZATION_HELD } from "./git";
+import { acquirePublicationFileLock, releasePublicationFileLock, commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineLiteralGitEnv, pipelineBaseBranchError, pipelinePublicationFence, pipelinePublicationInFlight, publicationFailureCause, publicationFailurePhase, publicationInterruptionCause, pipelineWorktreeChanges, realProvisionExec, resolveDeliveryRemote, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resolvePipelineBase, synchronizePipelineRetryHead, verifyPassedHeadIntegration } from "./git";
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
   MAX_FAIL_EDGE_ROUNDS,
@@ -200,7 +198,7 @@ import { pipelineAttemptMayBeWorking, pipelineAttemptReleased, pipelineHostHasLi
 import { recordedAttemptReceipts, recordedHostHeld } from "@/lib/recordedChecks/store";
 import { recordedReportReceipts } from "@/lib/recordedChecks/reportGate";
 import { pipelineRecordRevalidator } from "./revalidation";
-import { findControllerPipeline, controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, completedComparisonPass, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, controllerUnclaimedPublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines as selectAllControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, controllerPipelineVersionNow, pendingCpuStageRevision, wakePipelineCpuStage, pipelineRecordReader, cloneControllerPipeline, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation as withAllPipelineControllerMutation, withPipelineMutation } from "./store";
+import { findControllerPipeline, controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, completedComparisonPass, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, controllerUnclaimedPublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines as selectAllControllerPipelines, selectProvisioningSlice, controllerPipelineRowOrder, controllerPipelineVersion, controllerPipelineVersionNow, pendingCpuStageRevision, wakePipelineCpuStage, pipelineRecordReader, cloneControllerPipeline, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation as withAllPipelineControllerMutation, withPipelineMutation } from "./store";
 import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQueue";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { mergeOnReviewEnabled } from "@/lib/projects/settings";
@@ -341,6 +339,11 @@ export interface PipelinePorts {
   stageBranchProtections?: ReadonlyMap<string, StageBranchProtection>;
   /** Asynchronous Git used only by the provisioning pre-pass. */
   provisionExec?: ProvisionExecPort;
+  provisionClock?: ProvisionClock;
+  /** Observe the worker's response boundary from an isolated controller harness. */
+  provisionToolchainReply?: (id: string, type: string, detail?: string) => Promise<void>;
+  observeProvisioningCheckpoint?: (id: string, step: import("./provisioningRecord").ProvisioningStepView | undefined, at: number) => void | Promise<void>;
+  beforeGitDispatch?: (command: string, args: readonly string[], cwd: string) => Promise<void>;
   preflightRepo(repoDir: string): PipelineRepoPreflight | Promise<PipelineRepoPreflight>;
   roleLookup?: PipelineRoleLookup | null;
   spawnAgent(input: {
@@ -3037,7 +3040,6 @@ const APPROVED_REMOTE_HEAD_WAIT = { budgetMs: 10 * 60_000, retryBaseMs: 15_000, 
     on this backoff: 5s, 10s, 20s, 40s, then 60s rounds, with at most three
     minutes of added wait before it parks. Each retry is itself bounded by the
     sixty-second Git bounds, and runs outside the pipeline lease. */
-const PROVISION_RETRY_WAIT = { budgetMs: 3 * 60_000, retryBaseMs: 5_000, retryMaxMs: 60_000 };
 /** Retired launches an attempt keeps; the host budget cannot mint more than
     sixteen, so the cap only guards the record against a future longer budget. */
 const RETIRED_LAUNCH_LIMIT = 25;
@@ -11572,270 +11574,12 @@ async function tickReviewStage(pipeline: Pipeline): Promise<void> {
     cleared by the controller pass that provisions the lane. */
 export const PIPELINE_BASE_UNRESOLVED_DETAIL = "resolving the pipeline base and provisioning the worktree";
 
-/**
- * One lane's base fetch and `git worktree add`, performed OUTSIDE the registry
- * mutation (#1799).
- *
- * Both are slow — the fetch is bounded at sixty seconds and a worktree add
- * costs a repository copy — and the pipeline lease is the lock every writer in
- * the Viewer waits on, so a create that arrived while the controller was
- * provisioning waited behind the whole of it: twenty-five of the twenty-seven
- * seconds the operator reported were spent exactly here.
- *
- * The record it read travels back with the outcome as {@link fence}, because
- * the work is applied in a LATER lease than the one it was decided from. A
- * record that moved under it — closed, started against a different repository,
- * provisioned by another pass — is left alone and the next tick reads it
- * again. Both operations are idempotent, so repeating one costs nothing.
- */
-interface PipelineProvisionOutcome {
-  id: string;
-  /** The identity the work was performed against. */
-  fence: { repoDir: string; worktreeDir: string; branch: string; baseBranch: string; baseRef: string; baseRefPinned: boolean | null; createdAt: string; lastPassedCommit: string; owner: string };
-  /** The commit the fetch resolved, recorded even when the worktree then
-      failed: a retry of a parked provisioning provisions the SAME commit the
-      lane was parked on rather than whatever the base has moved to since. */
-  base: { baseBranch: string; baseRef: string; baseRefPinned: boolean } | null;
-  /** The checked-out head can already contain commits on an existing delivery branch. */
-  head: string | null;
-  /** What stopped the lane, or null when it is provisioned. */
-  error: string | null;
-  preservedLocalRef?: import("./git").PreservedProvisionRef;
-}
-
-function provisionFence(pipeline: Pipeline): PipelineProvisionOutcome["fence"] {
-  return {
-    createdAt: pipeline.createdAt,
-    lastPassedCommit: pipeline.lastPassedCommit,
-    owner: JSON.stringify(pipeline.delivery ? [pipeline.delivery.ownerId, pipeline.delivery.epoch, pipeline.delivery.active, pipeline.delivery.target] : null),
-    repoDir: pipeline.repoDir,
-    worktreeDir: pipeline.worktreeDir,
-    branch: pipeline.branch,
-    baseBranch: pipeline.baseBranch,
-    baseRef: pipeline.baseRef,
-    baseRefPinned: pipeline.baseRefPinned ?? null,
-  };
-}
-
-async function provisionPipelineOutsideLease(pipeline: Pipeline, exec: ProvisionExecPort, signal: AbortSignal, checkoutReady: () => void): Promise<PipelineProvisionOutcome> {
-  const fence = provisionFence(pipeline);
-  // Legacy non-draft records did not retain caller pin provenance. Preserve
-  // their published-head default; new records carry the explicit marker.
-  const baseRefPinned = pipeline.baseRefPinned ?? false;
-  let base = { baseBranch: pipeline.baseBranch, baseRef: pipeline.baseRef, baseRefPinned };
-  if (!base.baseBranch || !base.baseRef || !pipeline.lastPassedCommit) {
-    /* The lane's OWN base branch, never a hardcoded default: the create path
-       records what the caller asked for and resolves nothing, so this is the
-       only place that reads it (#1799). */
-    const resolved = await resolvePipelineBaseAsync(pipeline.repoDir, { baseBranch: pipeline.baseBranch }, exec, signal);
-    if (!resolved.ok) return { id: pipeline.id, fence, base: null, head: null, error: resolved.error };
-    base = { baseBranch: resolved.baseBranch, baseRef: resolved.baseRef, baseRefPinned };
-  }
-  const provisioned = await provisionPipelineWorktreeAsync({ ...pipeline, ...base }, exec, signal, checkoutReady);
-  return { id: pipeline.id, fence, base, head: provisioned.ok ? provisioned.sha : null, error: provisioned.ok ? null : provisioned.error,
-    ...(provisioned.preservedLocalRef ? { preservedLocalRef: provisioned.preservedLocalRef } : {}) };
-}
-
-/**
- * Fetch and provision outside the lease (#1799). Scoped controller passes
- * dispatch this work to bounded jobs and apply each outcome in a later lease.
- *
- * The indexed read takes no write lease. A pass with no provisioning work
- * reads no pipeline payloads and starts no subprocess.
- */
-async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: number, admitted: readonly Pipeline[], waitForRepository: (previous: Promise<void>) => Promise<void> = previous => previous): Promise<Map<string, PipelineProvisionOutcome>> {
-  const outcomes = new Map<string, PipelineProvisionOutcome>();
-  let pending: Pipeline[];
-  try {
-    const nowMs = unixMs(ports.now());
-    pending = [...new Map([...(await selectControllerPipelines("provisioning", throughOrder)),
-      ...admitted.flatMap(row => { const current = findPipelineRecord(row.id); return current ? [current] : []; })]
-      .map(row => [row.id, row])).values()].filter((pipeline) =>
-      pipeline.state === "provisioning" && !pipeline.hiddenAt && !pipeline.closedAt
-      && (!publishesRemoteBranch(pipeline) || pipeline.delivery)
-      /* A lane waiting out a transient failure keeps its backoff: its own
-         scheduled tick provisions it when the wait falls due. */
-      && !(pipeline.provisioningWait && unixMs(pipeline.provisioningWait.retryAfter) > nowMs));
-  } catch (error) {
-    /* The lease-taking pass below reports an unreadable registry; this read
-       having failed is not a second outage to announce. */
-    if (!(error instanceof PipelineStoreError)) throw error;
-    return outcomes;
-  }
-  if (!pending.length) return outcomes;
-  // Existing injected synchronous ports remain usable by state-machine tests.
-  // Production's realExec always selects the native asynchronous implementation.
-  const exec: ProvisionExecPort = ports.provisionExec ?? (operationPortIdentity(ports.exec) === realExec ? realProvisionExec
-    : async (command, args, cwd, signal, options) => (await ports.exec(command, args, cwd, options?.env, { signal, timeoutMs: options?.timeoutMs, inheritFd: options?.inheritFd, additionalInheritedFds: options?.additionalInheritedFds })));
-  const jobs = pending.map((pipeline) => {
-    const fence = JSON.stringify(provisionFence(pipeline)), abort = new AbortController();
-    const revalidate = pipelineRecordRevalidator(pipeline.id, (record) => {
-      if (!record || record.state !== "provisioning" || record.hiddenAt || record.closedAt
-        || JSON.stringify(provisionFence(record)) !== fence) abort.abort();
-    });
-    return { pipeline, abort, revalidate };
-  });
-  const revalidate = () => {
-    try {
-      for (const job of jobs) job.revalidate();
-    } catch {
-      // An unreadable registry cannot authorize more provisioning work.
-      for (const job of jobs) job.abort.abort();
-    }
-  };
-  // Close/delete may originate in another process. Indexed row revisions
-  // invalidate only changed jobs; polling needs no lease or close-path hook.
-  const watch = setInterval(revalidate, 50);
-  const diskAdmission = ports.worktreeDiskWait ?? ((repoDir: string, worktreeDir: string, usesClaude: boolean) =>
-    worktreeDiskWait(repoDir, worktreeDir, undefined, undefined, undefined, usesClaude));
-  try {
-    await Promise.all(jobs.map(async (job) => {
-      /* Below the critical free space a new checkout waits, before any git
-         runs and again right before `git worktree add`; running work is never
-         touched by it. */
-      const usesClaude = job.pipeline.stages.some(stage => stage.effectiveRole.engine === "claude");
-      const diskWait = diskAdmission(job.pipeline.repoDir, job.pipeline.worktreeDir, usesClaude);
-      if (diskWait) {
-        outcomes.set(job.pipeline.id, { id: job.pipeline.id, fence: provisionFence(job.pipeline), base: null, head: null, error: diskWait });
-        return;
-      }
-      const guardedExec: ProvisionExecPort = async (command, args, cwd, signal, options) => {
-        revalidate();
-        if (command === "git" && args[0] === "worktree" && args[1] === "add") {
-          const wait = diskAdmission(job.pipeline.repoDir, job.pipeline.worktreeDir, usesClaude);
-          if (wait) return { code: 1, stdout: "", stderr: wait };
-        }
-        if (signal?.aborted) return { code: null, stdout: "", stderr: "pipeline provisioning cancelled" };
-        const step = command !== "git" ? null : args.includes("--git-common-dir") ? "common-directory"
-          : args[0] === "fetch" ? "fetch" : args[0] === "worktree" && args[1] === "add" ? "worktree-add" : null;
-        if (step === "common-directory") reportProvisioningPhase(job.pipeline.id, { phase: "state-validated" });
-        if (step) reportProvisioningPhase(job.pipeline.id, { phase: "git-started", step });
-        let succeeded = false;
-        try {
-          const result = await exec(command, args, cwd, signal, options);
-          succeeded = result.code === 0;
-          return result;
-        } catch (error) {
-          return { code: null, stdout: "", stderr: String(error) };
-        } finally {
-          if (step) reportProvisioningPhase(job.pipeline.id, {
-            phase: "git-finished", step, status: signal?.aborted ? "cancelled" : succeeded ? "ok" : "failed",
-          });
-        }
-      };
-      try {
-        // Linked worktrees share refs and Git locks even when repoDir differs.
-        // Resolve through Git asynchronously, then serialize each common dir.
-        const common = await guardedExec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], job.pipeline.repoDir, job.abort.signal);
-        if (common.code !== 0 || !common.stdout.trim()) {
-          if (!job.abort.signal.aborted) outcomes.set(job.pipeline.id, {
-            id: job.pipeline.id, fence: provisionFence(job.pipeline), base: null, head: null,
-            error: `resolving the pipeline Git directory: ${common.stderr || "no common directory"}`,
-          });
-          return;
-        }
-        const repository = path.resolve(job.pipeline.repoDir, common.stdout.trim());
-        await withProvisioningTurn(repository, job.pipeline.worktreeDir, waitForRepository, async checkoutReady => {
-          const outcome = await provisionPipelineOutsideLease(job.pipeline, guardedExec, job.abort.signal, checkoutReady);
-          revalidate();
-          if (!job.abort.signal.aborted) outcomes.set(job.pipeline.id, outcome);
-        });
-      } catch (error) {
-        revalidate();
-        if (!job.abort.signal.aborted) outcomes.set(job.pipeline.id, {
-          id: job.pipeline.id, fence: provisionFence(job.pipeline), base: null, head: null,
-          error: `pipeline provisioning failed: ${String(error)}`,
-        });
-      }
-    }));
-  } finally { clearInterval(watch); }
-  return outcomes;
-}
-
-/** Applies one pre-pass outcome under the lease, or declines it (#1799). The
-    record is re-read here, so everything the decision rested on is checked
-    against the record as it stands now. */
-async function applyProvisionOutcome(pipeline: Pipeline, outcome: PipelineProvisionOutcome | undefined, ports: PipelinePorts): Promise<boolean> {
-  if (!outcome || pipeline.state !== "provisioning" || pipeline.hiddenAt || pipeline.closedAt) return false;
-  const fence = provisionFence(pipeline);
-  if ((Object.keys(fence) as Array<keyof typeof fence>).some((key) => fence[key] !== outcome.fence[key])) return false;
-  if (outcome.base) {
-    pipeline.baseBranch = outcome.base.baseBranch;
-    pipeline.baseRef = outcome.base.baseRef;
-    pipeline.baseRefPinned = outcome.base.baseRefPinned;
-    pipeline.lastPassedCommit = outcome.base.baseRef;
-  }
-  const preserved = outcome.preservedLocalRef;
-  const preservationDetail = preserved
-    ? `${preserved.unpublishedCommits} unpublished commit(s) preserved at ${preserved.ref}; checkout excludes this local tip`
-    : null;
-  if (preservationDetail && pipeline.delivery
-    && !pipeline.delivery.journal.some((entry) => entry.reason === preservationDetail)) {
-    deliveryJournal(pipeline, "recovery", preservationDetail);
-  }
-  if (outcome.error) {
-    await deferOrParkProvisioning(pipeline, outcome.error, ports);
-    return true;
-  }
-  delete pipeline.provisioningWait;
-  if (outcome.head) pipeline.lastPassedCommit = outcome.head;
-  pipeline.state = "running";
-  pipeline.stateDetail = preservationDetail;
-  return true;
-}
-
-/** The transient class of a provisioning failure, or null for a real one. A
-    worktree another live Git process is still initializing is a held lock. */
-function transientProvisioningFailure(error: string): TransientGitFailure | null {
-  if (error.startsWith(WORKTREE_INITIALIZATION_HELD)) return "lock";
-  return transientGitFailure(error);
-}
-
-/**
- * A transient provisioning failure waits out a bounded backoff instead of
- * parking the lane on its first sighting (#2115, #2176, #2220). The wait is
- * spent between ticks, like every other controller wait: the lane stays in
- * `provisioning` and its scheduled tick provisions it again, so nothing sleeps
- * under the lease. A real error, and a transient one whose budget is spent,
- * park with the cause and the action that clears it.
- */
-async function deferOrParkProvisioning(pipeline: Pipeline, error: string, ports: PipelinePorts): Promise<void> {
-  /* A disk wait spends no retry budget and never parks: the lane says why it
-     waits and the next tick after space returns provisions it. */
-  if (error.includes(DISK_SPACE_WAIT_PREFIX)) {
-    delete pipeline.provisioningWait;
-    pipeline.stateDetail = error.slice(error.indexOf(DISK_SPACE_WAIT_PREFIX));
-    ports.scheduleTick?.(DISK_SPACE_RETRY_MS);
-    return;
-  }
-  const kind = transientProvisioningFailure(error);
-  if (!kind) {
-    delete pipeline.provisioningWait;
-    await park(pipeline, error);
-    return;
-  }
-  const { cause, fix } = describeTransientGitFailure(kind, error);
-  const now = ports.now();
-  const next = nextBoundedWait(pipeline.provisioningWait, now, now, PROVISION_RETRY_WAIT);
-  if (!next) {
-    const wait = pipeline.provisioningWait;
-    const seconds = wait ? Math.round(Math.max(0, unixMs(now) - unixMs(wait.startedAt)) / 1_000) : 0;
-    delete pipeline.provisioningWait;
-    await park(pipeline, `gave up after ${wait?.rounds ?? 0} retries over ${seconds}s: ${cause} (${error}); retry-stage ${fix}`);
-    return;
-  }
-  pipeline.provisioningWait = next.wait;
-  pipeline.stateDetail = `provisioning deferred: ${cause} (${error}); retry ${next.wait.rounds} at ${next.wait.retryAfter}`;
-  ports.scheduleTick?.(next.delayMs);
-}
-
 async function tickPipeline(
   pipeline: Pipeline,
   entries: FileEntry[],
   ports: PipelinePorts,
   persist: () => void | Promise<void>,
   recoveryAccountingDeadline: number,
-  provisioned: Map<string, PipelineProvisionOutcome>,
 ): Promise<boolean> {
   const before = performanceSpans.sync("controller.lane", () => controllerTickFingerprint(pipeline));
   const proactiveError = proactivePipelineExecutionError(pipeline, "prepare");
@@ -11847,14 +11591,7 @@ async function tickPipeline(
     await park(pipeline, proactiveError);
     return performanceSpans.sync("controller.lane", () => controllerTickFingerprint(pipeline) !== before);
   }
-  if (pipeline.state === "provisioning") {
-    /* Nothing slow runs here any more (#1799): the fetch and the worktree add
-       happened in the pre-pass, outside this lease, and all that is left is
-       recording what they produced. A lane the pre-pass did not reach — it was
-       admitted after the pre-pass read the registry, or its record moved under
-       the work — stays in `provisioning` and the next tick provisions it. */
-    await applyProvisionOutcome(pipeline, provisioned.get(pipeline.id), ports);
-  } else if (pipeline.state === "running") {
+  if (pipeline.state === "running") {
     const stage = currentStage(pipeline);
     if (!stage) await park(pipeline, "pipeline cursor points to an unknown stage");
     else if (stage.kind === "run") {
@@ -14644,8 +14381,16 @@ export async function recoverPipelineProviderTurn(id: string, ports?: PipelinePo
   }
 }
 
-export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts = defaultPipelinePorts(), publicationPass = 0): Promise<{ pipelines: Pipeline[]; changed: boolean; retry?: boolean }> {
+export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts = defaultPipelinePorts(), publicationPass = 0,
+  provisioningDrive?: { deadline: number; selected: Set<string> }): Promise<{ pipelines: Pipeline[]; changed: boolean; retry?: boolean }> {
   assertOperationLease();
+  let provisioningChanged = false;
+  const provisioningPorts: PipelinePorts = { ...ports, observeProvisioningCheckpoint: async (id, step, at) => {
+    provisioningChanged = true;
+    await ports.observeProvisioningCheckpoint?.(id, step, at);
+  } };
+  const monotonic = ports.provisionClock?.monotonicMs ?? ports.monotonicNow;
+  const drive = provisioningDrive ?? { deadline: monotonic() + 15_000, selected: new Set<string>() };
   ports = leasedOperationPorts(ports);
   const keys = controllerPipelineKeys();
   const scoped = Boolean(keys);
@@ -14727,7 +14472,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         taskNoteAuthority.set(pipeline, () => assertCurrent(pipeline));
         const lanePorts = controllerSnapshotPorts(admissionPorts, () => assertCurrent(pipeline));
         if (await tickPipeline(pipeline, entries, lanePorts, async () => await persist([pipeline]),
-          ports.monotonicNow() + VERDICT_RECOVERY_ACCOUNTING_BUDGET_MS, new Map())) {
+          ports.monotonicNow() + VERDICT_RECOVERY_ACCOUNTING_BUDGET_MS)) {
           await persist([pipeline]);
           admissionChanged = true;
         }
@@ -14789,21 +14534,37 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     /* Before the lease, never under it (#1799). */
     await settlePendingRemoteActions(ports);
     await settlePendingStageProvenance(ports);
-    // Production controller passes own bounded jobs; Git never occupies the
-    // scheduler phase. The durable provisioning row is replayed after restart.
-    const provisioned = scoped ? new Map<string, PipelineProvisionOutcome>()
-      : await provisionPendingPipelines(ports, provisioningThrough, admittedCreations);
-    if (scoped) for (const lane of await selectControllerPipelines("provisioning", provisioningThrough)) {
-      startPipelineControllerJob(lane.id, async waitOutsideCapacity => {
-        await phaseDone;
-        await withControllerPipelineScope([lane.id], async () => {
-          const outcomes = await provisionPendingPipelines(ports, provisioningThrough, [], waitOutsideCapacity);
-          await withPipelineMutation(async (pipelines, persist) => {
-            const current = pipelines.find(row => row.id === lane.id);
-            if (current && await applyProvisionOutcome(current, outcomes.get(lane.id), ports)) await persist([current]);
-          });
+    const provisioningNow = ports.provisionClock?.wallMs() ?? unixMs(ports.now());
+    if (scoped || (drive.selected.size === 0 && monotonic() < drive.deadline)) {
+      const selection = scoped ? await selectControllerPipelines("provisioning", provisioningThrough)
+        : await selectProvisioningSlice(provisioningThrough, provisioningNow);
+      const eligible = new Map([...selection, ...admittedCreations].map(row => [row.id, row]));
+      const pending = [];
+      for (const row of [...eligible.values()].slice(0, 4)) {
+        if (!scoped && monotonic() >= drive.deadline) break;
+        if (!scoped) drive.selected.add(row.id);
+        const job = advanceProvisioningJob(row, provisioningPorts, {
+          ...(scoped ? { phaseDone } : {}),
+          parked: parked => {
+            void writeEngineParkedTaskNote(parked, parked.stateDetail!).catch(() => {});
+          },
         });
-      }, () => controllerPipelineVersion(lane.id), "provisioning");
+        if (job) pending.push(job);
+      }
+      if (!scoped && pending.length) {
+        let cancelWait: (() => void) | undefined;
+        const timeout = new Promise<boolean>(resolve => {
+          const remaining = Math.max(0, drive.deadline - monotonic());
+          if (ports.provisionClock) cancelWait = ports.provisionClock.arm(remaining, () => resolve(false));
+          else {
+            const timer = setTimeout(() => resolve(false), remaining);
+            cancelWait = () => clearTimeout(timer);
+          }
+        });
+        const jobs = Promise.all(pending.map(job => job.then(changed => { provisioningChanged ||= changed; })));
+        try { await Promise.race([jobs, timeout]); }
+        finally { cancelWait?.(); }
+      }
     }
     const stageBranchProtections = new Map<string, StageBranchProtection>();
     await Promise.all((await selectControllerPipelines("hosts")).map(async (pipeline) => {
@@ -14868,7 +14629,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
       return observed?.fence === reviewIngressFence(pipeline) ? observed.flowGit : null;
     } };
     const result = await withPipelineControllerMutation(async (pipelines, persist, assertCurrent) => {
-      let changed = await reconcilePipelineFallbackTasks(pipelines, persist) || closedLaunchesChanged;
+      let changed = await reconcilePipelineFallbackTasks(pipelines, persist) || closedLaunchesChanged || provisioningChanged;
       await forEachCooperatively(pipelines, pipeline => withViewerOperation("pipelines.controller-lane", async () => {
         if (scoped && pipelineControllerJobLanes().includes(pipeline.id)) return;
         taskNoteAuthority.set(pipeline, () => assertCurrent(pipeline));
@@ -15032,7 +14793,6 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
             lanePorts,
             persistPipeline,
             recoveryAccountingDeadline,
-            provisioned,
           ) || pipelineChanged;
         }
         if (pipelineChanged) {
@@ -15087,7 +14847,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     if (!scoped && pending.length && publicationPass < 3) {
       await stopAdmissionPolling();
       releaseTick();
-      const settled = await tickPipelines(entries, ports, publicationPass + 1);
+      const settled = await tickPipelines(entries, ports, publicationPass + 1, drive);
       return { ...settled, changed: true };
     }
     await stopAdmissionPolling();
@@ -18257,6 +18017,18 @@ async function applyPipelinePatch(
       }
       const elsewhere = pipelineTasksRunElsewhere(pipeline.taskIds, loadTasksForList());
       if (elsewhere) return elsewhere;
+      if (!attempt && !explicitReceiptRetry && pipeline.state === "needs_decision" && pipeline.provisioningJob?.status === "parked") {
+        const job = pipeline.provisioningJob;
+        pipeline.state = "provisioning";
+        pipeline.pausedState = null;
+        pipeline.stateDetail = PIPELINE_BASE_UNRESOLVED_DETAIL;
+        pipeline.provisioningJob = { ...job, status: "waiting", retryAt: undefined, cacheWaitSince: undefined, cacheMetadataRemainingMs: undefined, legacyWaitSince: undefined };
+        if (job.admittedAdd) delete pipeline.provisioningJob.admittedAdd?.previousWait;
+        else delete pipeline.provisioningWait;
+        await persist();
+        requestPipelineTick();
+        return { pipeline };
+      }
       if (attempt && retryPublishedPass) {
         delete attempt.settlementAdmissionRetry;
         renewPullRequestInspection(pipeline, attempt, ports.now());
