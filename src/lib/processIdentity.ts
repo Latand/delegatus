@@ -61,6 +61,15 @@ export function systemBootEpoch(): string | null {
   return cachedBootEpoch;
 }
 
+/** A Linux PID-namespace change alone does not prove that the host booted. */
+export function bootEpochProvesExit(previous: string | null | undefined, current: string | null | undefined): boolean {
+  if (!previous || !current || previous === current) return false;
+  const priorLinux = /^linux:([^:]+):pidns:(.+)$/.exec(previous);
+  const currentLinux = /^linux:([^:]+):pidns:(.+)$/.exec(current);
+  if (priorLinux && currentLinux && priorLinux[1] === currentLinux[1]) return false;
+  return true;
+}
+
 const defaultProbe: ProcessIdentityProbe = {
   pidAlive: (pid) => procBackend.pidAlive(pid),
   processIdentity: (pid) => procBackend.processIdentity(pid),
@@ -97,7 +106,8 @@ export function processIdentityStatus(
   if (typeof identity.bootEpoch !== "string" || !identity.bootEpoch || currentBootEpoch === null) {
     return "unverified";
   }
-  return currentBootEpoch === identity.bootEpoch ? "alive" : "dead";
+  if (currentBootEpoch === identity.bootEpoch) return "alive";
+  return bootEpochProvesExit(identity.bootEpoch, currentBootEpoch) ? "dead" : "unverified";
 }
 
 /** Whether an identity can still own a fence. Unknown evidence blocks takeover;

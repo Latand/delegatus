@@ -17,6 +17,7 @@ export type PrivateInstallEffect = "private-scratch" | "private-install" | "priv
 type PrivateInstallPorts = {
   beforeEffect(effect: PrivateInstallEffect): Promise<void>;
   afterModulesDirectoryCreated?(): Promise<void>;
+  now?(): number;
   workerEntry?: string;
   observeLegacy?: typeof observeLegacyInstaller;
   uncertain(observation: Exclude<LegacyInstallerObservation, { kind: "clear" }>): Promise<never>;
@@ -105,11 +106,21 @@ async function filesMatch(reference: string, actual: string): Promise<boolean> {
 
 export async function preparePrivateDependencies(repository: string, checkout: string, claim: string, prior: PrivateInstallReceipt | undefined, priorIntent: PrivateInstallIntent | undefined,
   budgetMs: number, ports: PrivateInstallPorts): Promise<boolean> {
+  const now = ports.now ?? Date.now;
   const census = async () => {
     const observation = await (ports.observeLegacy ?? observeLegacyInstaller)(checkout);
     if (observation.kind !== "clear") await ports.uncertain(observation);
+    if (observation.observedAt > now() || now() - observation.observedAt > 5_000) {
+      await ports.uncertain({ kind: "incomplete", reason: "expired" });
+    }
   };
-  const permit = async (effect: PrivateInstallEffect) => { await census(); await ports.beforeEffect(effect); };
+  const permit = async (effect: PrivateInstallEffect) => {
+    await census();
+    await ports.beforeEffect(effect);
+    // Admission may wait for a worker handoff. Recheck after that wait so the
+    // observation still covers the effect which follows the permit.
+    await census();
+  };
   const inputs = async (directory = checkout, names: Iterable<string> = [...worktreeDependencyInputs, "bunfig.toml"]) => {
     const files: Array<[string, Buffer]> = [];
     for (const name of names) {
@@ -309,29 +320,46 @@ async function installInPlace({ checkout, target, scratch, claim, inputs, budget
   verify: () => Promise<boolean>; ports: PrivateInstallPorts;
 }): Promise<boolean> {
   if (original && (!prior || prior.inputs !== inputs || prior.device !== String(original.dev) || prior.inode !== String(original.ino))) return false;
-  let createdIdentity: BigIntStats | undefined;
+  const opens = constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;
+  let directoryFd: number | undefined;
   if (!original) {
     await permit("create-modules-directory");
-    // Exclusive mkdir provides a no-replace binding on filesystems where the
-    // atomic rename extension is unavailable. Keep creation and descriptor
-    // acquisition in one synchronous turn so no awaited callback can replace
-    // the name between those operations; then prove the name still denotes
-    // the opened directory before granting the installer any writes.
+    // Build the directory under the private scratch root, acquire its inode
+    // before publishing the public name, then publish with no-replace. This
+    // keeps a competing node_modules from becoming the install write target.
+    const staged = path.join(scratch, "node_modules");
     try {
-      mkdirSync(target, { mode: 0o700 });
-      createdIdentity = await fs.lstat(target, { bigint: true });
+      mkdirSync(staged, { mode: 0o700 });
+      directoryFd = openSync(staged, opens);
+      const createdIdentity = fstatSync(directoryFd, { bigint: true });
+      if (!createdIdentity.isDirectory() || !sameDirectory(createdIdentity, await entry(staged))) {
+        closeSync(directoryFd);
+        directoryFd = undefined;
+        return false;
+      }
       await ports.afterModulesDirectoryCreated?.();
+      if (!sameDirectory(createdIdentity, await entry(staged)) || !publishNoReplace(staged, target)
+        || !sameDirectory(createdIdentity, await entry(target))) {
+        closeSync(directoryFd);
+        directoryFd = undefined;
+        return false;
+      }
     }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") return false; throw error; }
+    catch (error) {
+      if (directoryFd !== undefined) closeSync(directoryFd);
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+      throw error;
+    }
+  } else {
+    try { directoryFd = openSync(target, opens); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT" || (error as NodeJS.ErrnoException).code === "ELOOP") return false; throw error; }
   }
-  const opens = constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;
-  let directoryFd: number;
-  try { directoryFd = openSync(target, opens); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT" || (error as NodeJS.ErrnoException).code === "ELOOP") return false; throw error; }
+  if (directoryFd === undefined) return false;
+  const boundDirectoryFd = directoryFd;
   try {
-    const identity = fstatSync(directoryFd, { bigint: true });
-    if ((createdIdentity && !sameDirectory(createdIdentity, identity)) || !sameDirectory(identity, await entry(target))) return false;
-    const anchored = `/proc/self/fd/${directoryFd}`;
+    const identity = fstatSync(boundDirectoryFd, { bigint: true });
+    if (!sameDirectory(identity, await entry(target))) return false;
+    const anchored = `/proc/self/fd/${boundDirectoryFd}`;
     const digest = (nonce: string) => createHash("sha256").update(nonce).digest("hex");
     let intent = prior;
     if (original) {
@@ -352,7 +380,7 @@ async function installInPlace({ checkout, target, scratch, claim, inputs, budget
       if (!sameDirectory(identity, await entry(target))) return false;
       const installed = await containedDependencyExec(process.execPath, ["--no-env-file", ports.workerEntry ?? process.argv[1]!, "install-bound"], checkout,
         { NODE_ENV: "development", BUN_INSTALL_CACHE_DIR: path.join(scratch, "cache"), TMPDIR: scratch },
-        { timeoutMs: budgetMs, inheritFd: directoryFd, additionalInheritedFds: [cache.fd] });
+        { timeoutMs: budgetMs, inheritFd: boundDirectoryFd, additionalInheritedFds: [cache.fd] });
       if (installed.code !== 0 || !sameDirectory(identity, await entry(target))) return false;
       const retained = JSON.parse((await fileBytes(path.join(anchored, INTENT), 4096)).toString());
       if (retained.claim !== intent!.claim || typeof retained.nonce !== "string" || digest(retained.nonce) !== intent!.nonceDigest) return false;
@@ -370,5 +398,5 @@ async function installInPlace({ checkout, target, scratch, claim, inputs, budget
       await ports.receipt({ claim: intent!.claim, inputs, device: String(identity.dev), inode: String(identity.ino), mode: "in-place" });
       return true;
     } finally { await cache.close(); }
-  } finally { closeSync(directoryFd); }
+  } finally { closeSync(boundDirectoryFd); }
 }

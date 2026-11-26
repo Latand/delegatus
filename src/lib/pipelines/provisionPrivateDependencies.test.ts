@@ -48,6 +48,33 @@ test.each(["enumeration", "process-identity", "expired"] as const)("private prep
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
+test("a legacy census that expires while install admission is held cannot create scratch or dispatch Bun", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "private-census-stale-permit-"));
+  const source = path.join(root, "source"), checkout = path.join(root, "checkout");
+  const effects: PrivateInstallEffect[] = [];
+  let now = 1_000;
+  const refusal = new Error("stale legacy installer census");
+  try {
+    await fs.mkdir(source);
+    await fs.mkdir(checkout);
+    await fs.writeFile(path.join(checkout, "package.json"), '{"name":"fixture-tools"}\n');
+    await fs.writeFile(path.join(checkout, "bun.lock"), '{"lockfileVersion":1}\n');
+    await expect(preparePrivateDependencies(source, checkout, "stale-census-claim", undefined, undefined, 5_000, {
+      now: () => now,
+      async observeLegacy() { return { kind: "clear", observedAt: 1_000 }; },
+      async beforeEffect(effect) { effects.push(effect); now = 6_001; },
+      async uncertain(observation) {
+        expect(observation).toEqual({ kind: "incomplete", reason: "expired" });
+        throw refusal;
+      },
+      async receipt() { throw new Error("stale census must not produce a receipt"); },
+      async intent() { throw new Error("stale census must not produce an intent"); },
+    })).rejects.toBe(refusal);
+    expect(effects).toEqual(["private-scratch"]);
+    expect((await fs.readdir(checkout)).sort()).toEqual(["bun.lock", "package.json"]);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
 test("in-place installation refuses a directory replaced between creation and descriptor binding", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "private-in-place-race-"));
   try {
@@ -59,11 +86,10 @@ test("in-place installation refuses a directory replaced between creation and de
     const effects: PrivateInstallEffect[] = [];
     const sentinel = "preserve foreign install bytes\n";
     expect(await preparePrivateDependencies(source, checkout, "directory-race-claim", undefined, undefined, 5_000, {
-      async observeLegacy() { return { kind: "clear", observedAt: 1_000 }; },
+      async observeLegacy() { return { kind: "clear", observedAt: Date.now() }; },
       workerEntry: path.resolve("src/lib/pipelines/provisionToolchain.worker.ts"),
       async beforeEffect(effect) { effects.push(effect); },
       async afterModulesDirectoryCreated() {
-        await fs.rename(target, `${target}.created`);
         await fs.mkdir(target);
         await fs.writeFile(path.join(target, "sentinel"), sentinel);
       },
@@ -101,7 +127,7 @@ test("a staged install marker reconciles after restart without dispatching a sec
       device: priorIntent.device, inode: priorIntent.inode, mode: "staged", nonceDigest }));
     const effects: PrivateInstallEffect[] = [], receipts: PrivateInstallReceipt[] = [];
     expect(await preparePrivateDependencies(source, checkout, claim, undefined, priorIntent, 5_000, {
-      async observeLegacy() { return { kind: "clear", observedAt: 1_000 }; },
+      async observeLegacy() { return { kind: "clear", observedAt: Date.now() }; },
       async beforeEffect(effect) { effects.push(effect); },
       async uncertain(cause) { throw new Error(JSON.stringify(cause)); },
       async receipt(value) { receipts.push(value); },
@@ -136,7 +162,7 @@ test("a completed staged scratch receipt publishes after restart without another
       device: prior.device, inode: prior.inode, mode: "staged", nonceDigest }));
     const effects: PrivateInstallEffect[] = [], receipts: PrivateInstallReceipt[] = [];
     expect(await preparePrivateDependencies(source, checkout, "successor-claim", undefined, prior, 5_000, {
-      async observeLegacy() { return { kind: "clear", observedAt: 1_000 }; },
+      async observeLegacy() { return { kind: "clear", observedAt: Date.now() }; },
       async beforeEffect(effect) { effects.push(effect); },
       async uncertain(observation) { throw new Error(JSON.stringify(observation)); },
       async receipt(value) { receipts.push(value); },
@@ -164,7 +190,7 @@ native.each(["empty", "populated"] as const)("copy publication preserves a late 
     const effects: PrivateInstallEffect[] = [], receipts: PrivateInstallReceipt[] = [];
     let foreignInode: bigint | undefined;
     expect(await preparePrivateDependencies(source, checkout, "copy-test-claim", undefined, undefined, 5_000, {
-      async observeLegacy() { return { kind: "clear", observedAt: 1_000 }; },
+      async observeLegacy() { return { kind: "clear", observedAt: Date.now() }; },
       async beforeEffect(effect) {
         effects.push(effect);
         if (effect !== "private-publish") return;

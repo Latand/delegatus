@@ -16,6 +16,7 @@ import {
   verifyBuiltCodexSocket,
   sandboxEnvironment,
   verifyViewerRuntime,
+  hasBuiltPipelineRoute,
 } from "./verify-viewer-runtime";
 import { isOperatorOwnedDirectory, setStateOwnershipPathsForTests } from "../src/lib/stateOwnership";
 import { recordProvisionFixtureEvent, waitForProvisionFixtureReply } from "../src/lib/pipelines/provisionFixtureSupervisor";
@@ -145,6 +146,13 @@ test("runtime probes preserve their signal namespace boundary without inheriting
     if (previous === undefined) delete process.env.LLV_SIGNAL_SANDBOX;
     else process.env.LLV_SIGNAL_SANDBOX = previous;
   }
+});
+
+test("provisioning release tracing runs only for a completed App Router build", () => {
+  const root = fixtureRoot([path.join(BUILT_SERVER_DIR, "app/api/pipelines/route.js")]);
+  expect(hasBuiltPipelineRoute(root)).toBe(false);
+  fs.writeFileSync(path.join(root, ".next/BUILD_ID"), "fixture-build\n");
+  expect(hasBuiltPipelineRoute(root)).toBe(true);
 });
 
 test.each(["check-ignore", "cache-permit"] as const)("private release fixture supervisor holds the %s reply", async reply => {

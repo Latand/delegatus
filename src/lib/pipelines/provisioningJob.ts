@@ -5,7 +5,7 @@ import path from "node:path";
 import { stateDir } from "@/lib/configDir";
 import { describeTransientGitFailure, transientGitFailure } from "@/lib/git/transientFailure";
 import { operationPortIdentity, withoutOperationLease } from "@/lib/operationLease";
-import { captureProcessIdentity, processIdentityStatus, systemBootEpoch } from "@/lib/processIdentity";
+import { bootEpochProvesExit, captureProcessIdentity, processIdentityStatus, systemBootEpoch } from "@/lib/processIdentity";
 import { DISK_SPACE_RETRY_MS, DISK_SPACE_WAIT_PREFIX, worktreeDiskWait } from "@/lib/state/diskPressure";
 import { StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
 import { hotStateSqliteWriterReady, hotStateWriterRevision, readHotStateAuthority } from "@/lib/state/hotStateAuthority";
@@ -211,7 +211,7 @@ function observeForeignClaim(pool: Pool, id: string, slot: ProvisioningRecord, c
 async function provisioningOwnerExited(owner: ProvisioningRecord["owner"]): Promise<boolean> {
   const boot = systemBootEpoch();
   if (!boot || !owner.bootEpoch) return false;
-  if (owner.bootEpoch !== boot) return true;
+  if (owner.bootEpoch !== boot) return bootEpochProvesExit(owner.bootEpoch, boot);
   if (process.platform !== "linux") return processIdentityStatus(owner) === "dead";
   try {
     const stat = await fs.promises.readFile(`/proc/${owner.pid}/stat`, { encoding: "utf8", signal: AbortSignal.timeout(500) });
@@ -719,11 +719,15 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
   };
   const exec: ProvisionExecPort = async (command, args, cwd, _signal, options) => {
     read();
+    const add = command === "git" && args[0] === "worktree" && args[1] === "add";
+    const fetch = command === "git" && args[0] === "fetch";
     let effectCwd = cwd;
     let effectArgs = args;
-    if (git.native && provedRepository && provedCheckout && command === "git") {
+    if (add || fetch) {
       await ports.beforeGitDispatch?.(command, args, cwd);
       read();
+    }
+    if (git.native && provedRepository && provedCheckout && command === "git") {
       const [currentRepository, currentCheckout] = await Promise.all([
         fs.promises.realpath(row!.repoDir), physicalProvisioningPath(row!.worktreeDir),
       ]);
@@ -737,8 +741,6 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
       effectCwd = bind(cwd);
       effectArgs = args.map(argument => bind(argument));
     }
-    const add = command === "git" && args[0] === "worktree" && args[1] === "add";
-    const fetch = command === "git" && args[0] === "fetch";
     const common = command === "git" && args.includes("--git-common-dir");
     const label = add ? "worktree-add" : fetch ? "fetch" : common ? "common-directory" : null;
     let fence: ProvisioningGrant | null = null;
@@ -764,7 +766,8 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
       await write(current => {
         current.provisioningWait = { ...(previousWait ?? { startedAt: horizon, rounds: 0 }), retryAfter: horizon };
       }, { ...slot, admittedAdd });
-    } else if (command === "git" && (["update-ref", "merge", "read-tree", "checkout-index"].includes(args[0] ?? "")
+    } else if (fetch) await dispatch("fetch");
+    else if (command === "git" && (["update-ref", "merge", "read-tree", "checkout-index"].includes(args[0] ?? "")
       || (args[0] === "worktree" && args[1] === "unlock"))) await dispatch("checkout-mutation");
     else if (command === "bun") await dispatch("install-private");
     if (label) reportProvisioningPhase(id, { phase: "git-started", step: label });

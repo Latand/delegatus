@@ -63,6 +63,12 @@ const START_POLL_MS = 250;
 /** Bounded tail of a child's own output, kept with a failure. */
 const LOG_LINES = 40;
 
+/** A synthetic lifecycle shim may contain route.js without a completed build. */
+export function hasBuiltPipelineRoute(root: string): boolean {
+  return fs.existsSync(path.join(root, ".next/BUILD_ID"))
+    && fs.existsSync(path.join(root, ".next/server/app/api/pipelines/route.js"));
+}
+
 export interface ViewerModuleFailure {
   /** Repository-relative, because that is what a reader can go and open. */
   module: string;
@@ -459,8 +465,7 @@ async function serveOnce(root: string, sandbox: string): Promise<{ status: numbe
       // exercise process cleanup. Run release tracing only for a built App
       // Router tree; a real build has route.js even when its required trace is
       // missing, so the verifier still reports that packaging defect.
-      if (response.status === 200 && body.length > 0
-        && fs.existsSync(path.join(root, ".next/server/app/api/pipelines/route.js"))) {
+      if (response.status === 200 && body.length > 0 && hasBuiltPipelineRoute(root)) {
         await verifyProvisioningTrace(root);
         const evidence = await verifyProvisioningRelease(origin, sandbox, fixtureEnvironment);
         if (!log().some(line => line.includes(`"pipelineId":"${evidence.lane}"`) && line.includes('"phase":"toolchain-ready"'))) {

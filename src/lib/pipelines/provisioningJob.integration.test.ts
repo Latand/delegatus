@@ -19,6 +19,55 @@ async function driveProvisioning(ports: Parameters<typeof tickPipelinesControlle
   }
 }
 
+test.each(["before dispatch", "after dispatch"] as const)("superseding a provisioning lane around fetch preserves only the admitted-first ordering (%s)", async order => withControllerAuditState(async () => {
+  const fixture = await realWorktreeLane(`provision-fetch-${order.replaceAll(" ", "-")}`, BUILD_ONLY as never);
+  const { h, repo, root } = fixture;
+  const reached = latch(), release = latch();
+  let fetches = 0, adds = 0;
+  try {
+    delete h.ports.provisionExec;
+    const execute = h.ports.exec;
+    h.ports.exec = async (command, args, cwd, env, options) => {
+      if (command === "git" && args[0] === "fetch") {
+        fetches++;
+        if (order === "after dispatch") { reached.resolve(); await release.promise; }
+      }
+      if (command === "git" && args[0] === "worktree" && args[1] === "add") adds++;
+      return execute(command, args, cwd, env, options);
+    };
+    h.ports.beforeGitDispatch = async (command, args) => {
+      if (order === "before dispatch" && command === "git" && args[0] === "fetch") {
+        reached.resolve();
+        await release.promise;
+      }
+    };
+    const lane = (await createPipelineFromRequest({ task: "Fence a superseded provisioning fetch", repoDir: repo,
+      publication: "internal", stages: BUILD_ONLY as never }, h.ports)).pipeline!;
+    const run = driveProvisioning(h.ports, async () => (await findControllerPipeline(lane.id))?.state === "closed");
+    await until(reached.promise);
+    await withPipelineMutation(async (rows, persist) => {
+      const current = rows.find(row => row.id === lane.id)!;
+      current.state = "closed";
+      current.closedAt = h.ports.now();
+      current.cursor = null;
+      current.controlGeneration = "superseded-fetch-control";
+      await persist([current]);
+    });
+    release.resolve();
+    await run;
+    await settleProvisioningJobsForTests();
+    expect(fetches).toBe(order === "after dispatch" ? 1 : 0);
+    expect(adds).toBe(0);
+    expect((await findControllerPipeline(lane.id))?.runs[0]?.attempts).toHaveLength(0);
+  } finally {
+    release.resolve();
+    await settleProvisioningJobsForTests();
+    await settlePipelineControllerJobs();
+    await settlePipelineStopReadLanes();
+    await removeProvisioningFixture(root);
+  }
+}));
+
 test("a repository alias swap at Git dispatch refuses before touching the replacement checkout", () => withControllerAuditState(async () => {
   const fixture = await realWorktreeLane("provision-alias-dispatch", BUILD_ONLY as never);
   const { h, repo, origin, root, base, git } = fixture;
