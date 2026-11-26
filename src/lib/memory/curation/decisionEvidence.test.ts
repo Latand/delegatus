@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, setSystemTime, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { agentRegistry } from "@/lib/agent/registry";
+import { agentRegistry, closeAgentRegistryForTests } from "@/lib/agent/registry";
 import { selfFile } from "@/lib/links/self";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
 import { decidePrototype } from "@/lib/prototypeReview/decision";
@@ -45,6 +45,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  closeAgentRegistryForTests();
   setCallerConversationResolverForTests(null);
   setSystemTime();
   if (previousState === undefined) delete process.env.LLV_STATE_DIR;
@@ -140,6 +141,65 @@ test("curation ranks operator answers, attributes literal quotes, runs privacy h
   patchPass(live.id, { state: "succeeded", endedAt: at(10) });
   const later = claimPass({ project: serviceProject, now: START + CURATION_INTERVAL_MS + 20, repoDir: null })!;
   expect(later.decisionEvidence).toEqual([]);
+});
+
+test("a Legatus rewrite drops typed priority while the earlier version keeps its attribution", () => {
+  lesson();
+  const round = form(30);
+  answer(round, 0, words, 1);
+  const pass = claimPass({ project: serviceProject, now: START + 2, repoDir: null })!;
+  const ref = pass.decisionEvidence![0]!;
+  applyCuration(pass, { scopes: order(LEGATUS_SCOPE, `decision:${ref.id}`), adoptDecision: [
+    { evidence: ref.id, quote: words, to: LEGATUS_SCOPE, rule, why, note: why },
+  ] }, at(3));
+  expect(alwaysOn([activeRule(ref.id)])).toContain(ref.id);
+
+  const replacement = "Check the dedicated review surface before following the existing rule.";
+  leaveLessonForSeat({ project: serviceProject, roleId: "legatus", conversationId: conversation }, {
+    rewrite: { id: ref.id, rule: replacement, why: "The earlier choice was overturned by the seat." },
+  }, at(4));
+
+  const current = activeRule(ref.id);
+  expect(current.source).toMatchObject({ origin: "decision", author: "typed" });
+  expect(current.revisedBy).toMatchObject({ by: "agent", source: { origin: "seat", roleId: "legatus" } });
+  expect(alwaysOn([current])).not.toContain(ref.id);
+  const view = projectView(serviceProject).scopes.find(scope => scope.scope === LEGATUS_SCOPE)!.active.find(item => item.id === ref.id)!;
+  expect(view).not.toHaveProperty("decisionAuthor");
+  expect(view.revisedBy).toMatchObject({ by: "agent", roleId: "legatus" });
+  expect(view.versions).toEqual([expect.objectContaining({ decisionAuthor: "typed", rule })]);
+});
+
+test("a failed first curator pass retries from the original decision scan boundary", () => {
+  lesson();
+  const round = form(31);
+  answer(round, 0, words, 1);
+  const first = claimPass({ project: serviceProject, now: START + 2, repoDir: null })!;
+  expect(first.decisionEvidence?.map(ref => "reviewId" in ref && ref.reviewId)).toEqual([round.id]);
+  patchPass(first.id, { state: "failed", failure: "no-account", endedAt: at(3) });
+
+  const retry = claimPass({ project: serviceProject, now: START + CURATION_INTERVAL_MS + 20, repoDir: null })!;
+  expect(retry.decisionEvidence?.map(ref => "reviewId" in ref && ref.reviewId)).toEqual([round.id]);
+});
+
+test("a successful 50-item curator batch leaves overflow eligible and deduplicates adopted evidence", () => {
+  startSeat();
+  const rounds = Array.from({ length: 51 }, (_, i) => form(100 + i));
+  rounds.forEach((round, i) => answer(round, 0, `typed choice ${i}`, i + 1));
+  const first = claimPass({ project: serviceProject, now: START + 60, repoDir: null })!;
+  expect(first.decisionEvidence).toHaveLength(50);
+  expect(first.decisionEvidenceHasMore).toBe(true);
+  const refs = first.decisionEvidence!;
+  applyCuration(first, {
+    scopes: order(LEGATUS_SCOPE, ...refs.map(ref => `decision:${ref.id}`)),
+    adoptDecision: refs.map((ref, i) => ({ evidence: ref.id, to: LEGATUS_SCOPE,
+      rule: `Apply operator choice ${i} to the existing review surface before proceeding.`, why, note: why })),
+  }, at(61));
+  patchPass(first.id, { state: "succeeded", endedAt: at(62) });
+
+  const next = claimPass({ project: serviceProject, now: START + CURATION_INTERVAL_MS + 100, repoDir: null })!;
+  expect(next.decisionEvidence).toHaveLength(1);
+  expect(next.decisionEvidence?.[0]).toMatchObject({ reviewId: rounds[0]!.id });
+  expect(next.decisionEvidenceHasMore).toBe(false);
 });
 
 test("a saved task answer uses the current task project and the operator's custom text", () => {
@@ -253,4 +313,29 @@ test("Legatus lessons use their own scope and a decision cites one delivered or 
   expect(legatusDecisionRule(formProject, "conversation_rotated", ref.id)).toBe(ref.id);
   deleteRule(ref.id, at(4));
   expect(() => legatusDecisionRule(formProject, conversation, ref.id)).toThrow("active rule readable");
+});
+
+test("a partial Legatus rule open cannot authorize a citation, while a complete open can", async () => {
+  lesson();
+  const round = form(40);
+  answer(round, 0, words, 1);
+  const pass = claimPass({ project: serviceProject, now: START + 2, repoDir: null })!;
+  const ref = pass.decisionEvidence![0]!;
+  const longRule = "Keep the existing review surface when it presents the complete operator choice. ".repeat(3).trim();
+  applyCuration(pass, { scopes: order(LEGATUS_SCOPE, `decision:${ref.id}`), adoptDecision: [
+    { evidence: ref.id, quote: "existing review surface", to: LEGATUS_SCOPE, rule: longRule, why, note: why },
+  ] }, at(3));
+
+  setCallerConversationResolverForTests(() => conversation);
+  const open = (requestId: string, maxBytes: number) => openMemory(new Request("http://localhost/api/search/memory", {
+    method: "POST", headers: { [VIEWER_SPAWN_CAPABILITY_HEADER]: "k".repeat(43) },
+    body: JSON.stringify({ id: ref.id, requestId, project: formProject, reader: "legatus", conversationId: conversation, maxBytes }),
+  }));
+  const partial = await (await open("partial", 320)).json() as { item: { body: string; summary: string } };
+  expect(partial.item.body.length).toBeLessThan(longRule.length);
+  expect(() => legatusDecisionRule(formProject, conversation, ref.id)).toThrow("received or opened");
+
+  const complete = await (await open("complete", 16_000)).json() as { item: { body: string } };
+  expect(complete.item.body).toBe(longRule);
+  expect(legatusDecisionRule(formProject, conversation, ref.id)).toBe(ref.id);
 });

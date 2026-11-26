@@ -35,6 +35,7 @@ export interface CuratorPass extends CuratorPassView {
   finalText?: string;
   importBatch?: ImportBatch;
   decisionEvidence?: DecisionEvidenceRef[];
+  decisionEvidenceHasMore?: boolean;
   budgetSweepCandidates?: Record<string, string[]>;
   budgetSweep?: { scope: string; candidates: number; restored: number; integrated: number; remaining: number }[];
 }
@@ -595,12 +596,14 @@ export function claimPass(input: { project: string; repoDir: string | null; now:
   const machine = curationCollection()?.get("machine");
   const claimedAt = new Date(input.now).toISOString();
   const decisionsThrough = machine?.kind === "machine" ? machine.decisionsThrough : undefined;
-  // A new installation starts with the ordinary interval. Existing passes
-  // advance a machine-wide cutoff because any project can host the curator.
+  // The machine cursor moves only after a complete successful scan. Falling
+  // back to a project timestamp or rolling interval can skip evidence after a
+  // failed first pass. Freeze the initial interval floor on the first claim.
   const firstWindow = new Date(input.now - setting.intervalMs).toISOString();
-  const after = decisionsThrough ?? (prior?.lastAt && prior.lastAt > firstWindow ? prior.lastAt : firstWindow);
-  const decisionEvidence = input.importOnly || !roleMemoryEnabled() ? undefined
+  const after = decisionsThrough ?? firstWindow;
+  const decisionSelection = input.importOnly || !roleMemoryEnabled() ? undefined
     : withViewerOperation("memory.curation-admission", () => selectDecisionEvidence(after, claimedAt));
+  const decisionEvidence = decisionSelection?.refs;
   const sweepRevision = roleMemoryCollection()?.revision();
   const sweepCandidates: Record<string, string[]> | undefined = !input.importOnly && !(machine?.kind === "machine" && machine.budgetSweepCompletedAt) ? {} : undefined;
   if (sweepCandidates) for (const { id, scope } of budgetArchiveCandidates()) (sweepCandidates[scope] ??= []).push(id);
@@ -628,9 +631,11 @@ export function claimPass(input: { project: string; repoDir: string | null; now:
       ...(completed?.failure === "no-account" ? { noAccountEpisode: completed.noAccountEpisode ?? completed.id } : {}),
       ...(importBatch ? { importBatch } : {}),
       ...(decisionEvidence ? { decisionEvidence } : {}),
+      ...(decisionSelection ? { decisionEvidenceHasMore: decisionSelection.hasMore } : {}),
       ...(sweepCandidates ? { budgetSweepCandidates: sweepCandidates } : {}),
       counts: { calls: 0, changed: 0, rewritten: 0, merged: 0, moved: 0, split: 0, archived: 0, restored: 0 } };
     tx.put(pass); tx.put({ ...(machine?.kind === "machine" ? machine : {}), kind: "machine", current: id,
+      ...(decisionSelection && decisionsThrough === undefined ? { decisionsThrough: firstWindow } : {}),
       ...(decisionEvidence ? { decisionsScannedAt: claimedAt } : {}),
       ...(sweepCandidates ? { budgetSweepAttemptedAt: claimedAt } : {}) });
     tx.put({ kind: "project", project, current: id, lastClaimAt: claimedAt, claimRevisions, lastAt: held?.kind === "project" ? held.lastAt : null, passes: [...(held?.kind === "project" ? held.passes : []), id] });
@@ -669,7 +674,7 @@ export function patchPass(id: string, patch: Partial<CuratorPass>): CuratorPass 
     }
     if (!passIsLive(next)) {
       const machine = tx.get("machine"); if (machine?.kind === "machine" && machine.current === id) tx.put({ ...machine, current: null,
-        ...(next.state === "succeeded" && held.decisionEvidence && held.claimedAt > (machine.decisionsThrough ?? "")
+        ...(next.state === "succeeded" && held.decisionEvidence && !held.decisionEvidenceHasMore && held.claimedAt > (machine.decisionsThrough ?? "")
           ? { decisionsThrough: held.claimedAt } : {}),
         ...(held.budgetSweepCandidates ? { budgetSweepEndedAt: next.endedAt ?? held.claimedAt } : {}),
         ...(next.state === "succeeded" && held.budgetSweepCandidates ? { budgetSweepCompletedAt: next.endedAt ?? held.claimedAt } : {}) });

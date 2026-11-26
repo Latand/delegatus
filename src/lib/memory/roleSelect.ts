@@ -22,7 +22,11 @@ const failure = (reason: string): ShadowSelection => ({ selector: "whole", selec
 export function alwaysOn(rules: readonly RoleMemoryRule[]): Set<string> {
   let reserved = 0;
   const kept = rules.filter(rule => rule.keptByOperatorAt);
-  const typed = rules.filter(rule => !rule.keptByOperatorAt && rule.source?.origin === "decision" && rule.source.author === "typed");
+  // The source records who supplied the evidence. A later agent rewrite owns
+  // the current wording, so the old typed decision no longer gives that text
+  // operator priority.
+  const typed = rules.filter(rule => !rule.keptByOperatorAt && rule.source?.origin === "decision" && rule.source.author === "typed"
+    && rule.revisedBy?.by !== "agent");
   return new Set([...kept, ...typed].filter(rule => {
     const length = points(ruleLine(rule)) + (reserved ? 1 : 0);
     if (reserved + length > 3_000) return false;

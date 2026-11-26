@@ -287,7 +287,7 @@ export interface RuleView {
   mergedFrom?: string[];
   movedFrom?: string;
   splitFrom?: string;
-  versions?: { id: string; rule: string; why: string; hints: RulePrivacyHint[]; createdAt: string; revisedBy?: RuleRevisionView }[];
+  versions?: { id: string; rule: string; why: string; hints: RulePrivacyHint[]; createdAt: string; decisionAuthor?: DecisionAuthor; revisedBy?: RuleRevisionView }[];
 }
 
 export interface ScopeView {

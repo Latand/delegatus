@@ -276,7 +276,7 @@ function EarlierTexts({ rule, onRevert }: { rule: RuleView; onRevert?: (id: stri
     <summary className="cursor-pointer py-1">{t("roleMemory.versions", { count: rule.versions.length })}</summary>
     <ul className="m-0 list-none p-0">{rule.versions.slice().reverse().map(version => <li key={version.id} className="border-t border-border py-1">
       <p className="m-0 [overflow-wrap:anywhere]">{version.rule}</p><p className="m-0 text-muted [overflow-wrap:anywhere]">{version.why}</p>
-      <p className="m-0 text-[10.5px] text-muted">{new Date(version.revisedBy?.at ?? version.createdAt).toLocaleString(locale === "uk" ? "uk-UA" : "en-US")}{version.revisedBy ? <> · <RoleMark role={revisionRole(version.revisedBy)} size={12} />{t(`roleMemory.revised.${version.revisedBy.by}`, { role: roleNameById(t, version.revisedBy.roleId ?? "") })}</> : null}</p>
+      <p className="m-0 text-[10.5px] text-muted">{version.decisionAuthor ? t(`roleMemory.decision.${version.decisionAuthor}`) : null}{version.decisionAuthor ? " · " : ""}{new Date(version.revisedBy?.at ?? version.createdAt).toLocaleString(locale === "uk" ? "uk-UA" : "en-US")}{version.revisedBy ? <> · <RoleMark role={revisionRole(version.revisedBy)} size={12} />{t(`roleMemory.revised.${version.revisedBy.by}`, { role: roleNameById(t, version.revisedBy.roleId ?? "") })}</> : null}</p>
       <button type="button" data-rule-revert={version.id} className="min-h-9 px-1 text-accent" onClick={() => onRevert?.(version.id)}>{t("roleMemory.restore")}</button>
     </li>)}</ul>
   </details>;
@@ -291,7 +291,7 @@ function LeftRow({ rule, kind, onRestore, counterpart, onFocus, onRevert, focuse
     <li ref={row} title={rule.note} data-left-rule={rule.id} data-focused={focused ? "" : undefined} className={`flex items-start gap-2 rounded-[8px] px-2 py-1 ${focused ? KIND_TONE[kind].soft : ""}`}>
       <span className="min-w-0 flex-1">
         <span className="text-[11.5px] leading-4 text-muted line-through line-clamp-2 [overflow-wrap:anywhere]">{rule.rule}</span>
-        <span className="block text-[10.5px] leading-4 text-muted [overflow-wrap:anywhere]">{t(reason)}{rule.where ? ` · ${rule.where}` : ""}</span>
+        <span className="block text-[10.5px] leading-4 text-muted [overflow-wrap:anywhere]">{rule.decisionAuthor ? `${t(`roleMemory.decision.${rule.decisionAuthor}`)} · ` : ""}{t(reason)}{rule.where ? ` · ${rule.where}` : ""}</span>
         {counterpart ? <button type="button" data-rule-counterpart={counterpart.id} onClick={() => onFocus?.(counterpart.id)} className="text-left text-[11px] leading-4 text-accent [overflow-wrap:anywhere]">{counterpart.rule.slice(0, 70)}…</button> : null}
         <EarlierTexts rule={rule} onRevert={onRevert} />
       </span>

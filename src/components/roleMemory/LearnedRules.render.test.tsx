@@ -547,3 +547,16 @@ test("the existing rule row shows the source of a remembered decision", () => {
   expect(opened(remembered.id)).toContain(translate("en", "roleMemory.decision.voice"));
   expect(opened(seatLesson.id)).toContain(translate("en", "roleMemory.legatus"));
 });
+
+test.each(["typed", "voice", "clicked"] as const)("archived decision rows and prior versions retain their %s attribution", async author => {
+  const left: RuleView = { ...rule(`r_left_${author}`, "An operator decision left this active scope."),
+    state: "archived", reason: "rewritten", stageId: "decision", decisionAuthor: author,
+    versions: [{ id: `v_${author}`, rule: "The prior decision wording.", why: "The source remains traceable.", hints: [], createdAt: "2026-10-08T00:00:00.000Z", decisionAuthor: author }] };
+  const label = translate("en", `roleMemory.decision.${author}`);
+  const view: RoleMemoryProjectView = { project: "atlas", enabled: true, scopes: [levelScope("project:atlas", "project", null, [], [left])] };
+  await withWindow({ view, focusRule: left.id }, async ({ dom }) => {
+    const row = dom.document.querySelector(`[data-left-rule="${left.id}"]`)!;
+    expect(row.textContent).toContain(label);
+    expect(row.textContent!.split(label).length - 1).toBe(2);
+  });
+});

@@ -339,6 +339,7 @@ export class MemoryIndex {
       db.query("UPDATE memory_offers SET outcome = 'opened', outcome_at = ? WHERE memory_id = ? AND conversation_id = ? AND channel = 'inject' AND outcome IS NULL").run(at, resolvedId, conversationId);
     };
     const opened = { ...item, sourcePath: displayPath(item.sourcePath), flags: parseSqliteJson(item.flags, this.database()) as string[] };
+    const citationRequiresWholeBody = reader === "legatus" && item.sourceKind === "role_rule";
     const budget = Math.min(MEMORY_RESPONSE_BYTES, maxBytes);
     if (Buffer.byteLength(JSON.stringify({ item: opened })) <= budget) {
       recordOpened();
@@ -368,7 +369,9 @@ export class MemoryIndex {
       }
       truncated[field] = best;
       if (Buffer.byteLength(JSON.stringify({ item: truncated })) <= budget) {
-        recordOpened();
+        // A short response can help retrieval, but it cannot authorize a
+        // citation to the omitted wording of an active role rule.
+        if (!citationRequiresWholeBody || truncated.body === opened.body) recordOpened();
         return truncated;
       }
     }

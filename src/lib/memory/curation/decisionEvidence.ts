@@ -118,7 +118,7 @@ function recentForms(after: string, through: string): Evidence[] {
     )
     SELECT body FROM answered WHERE at > ? AND at <= ?
       ORDER BY priority, at DESC, json_extract(body, '$.id') LIMIT ?
-  `).all(after, through, DECISION_BATCH_LIMIT);
+    `).all(after, through, DECISION_BATCH_LIMIT + 1);
   return rows.flatMap(({ body }) => {
     const evidence = formEvidence(JSON.parse(body) as PrototypeReviewRound);
     return evidence ? [evidence] : [];
@@ -145,13 +145,14 @@ function recentMessages(project: string, after: string, through: string): Eviden
     }));
 }
 
-export function selectDecisionEvidence(after: string, through: string): DecisionEvidenceRef[] {
+export function selectDecisionEvidence(after: string, through: string): { refs: DecisionEvidenceRef[]; hasMore: boolean } {
   const project = legatusProject();
   const rules = roleMemoryCollection();
-  return [...recentForms(after, through), ...(project ? recentMessages(project, after, through) : [])]
+  const selected = [...recentForms(after, through), ...(project ? recentMessages(project, after, through) : [])]
     .sort((a, b) => a.rank - b.rank || b.ref.at.localeCompare(a.ref.at) || a.ref.id.localeCompare(b.ref.id))
     .filter(({ ref }) => !rules?.get(`r:${ref.id}`))
-    .slice(0, DECISION_BATCH_LIMIT).map(({ ref }) => ref);
+    .slice(0, DECISION_BATCH_LIMIT + 1);
+  return { refs: selected.slice(0, DECISION_BATCH_LIMIT).map(({ ref }) => ref), hasMore: selected.length > DECISION_BATCH_LIMIT };
 }
 
 export function evidenceScopes(refs: readonly DecisionEvidenceRef[]): string[] {
