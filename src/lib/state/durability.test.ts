@@ -594,8 +594,13 @@ test("activation checks a retained-size database off-thread and awaits its verdi
     return child;
   });
   progress.arm(() => { fs.writeFileSync(go, "release"); });
+  const completed: Array<[number, number]> = [];
   try {
-    await progress.run(() => checkStateDatabasesBeforeStores(directory));
+    await progress.run(() => checkStateDatabasesBeforeStores(directory, (done: number, total: number) => {
+      completed.push([done, total]);
+    }));
+    const databaseCount = stateDatabases(directory).length;
+    expect(completed).toEqual(Array.from({ length: databaseCount }, (_, index) => [index + 1, databaseCount]));
     expect(started).toBe(true);
     expect(readStorageIncidents(directory)).toEqual([]);
     expect(fs.existsSync(database.filename)).toBe(true);

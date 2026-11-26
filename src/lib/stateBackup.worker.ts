@@ -1,7 +1,8 @@
 import { answerBackupWorkerRequest, type BackupWorkerRequest } from "./state/durability";
 
 /* One state database backup or activation pass off the Viewer's thread:
-   reads a request on stdin, answers one JSON line on stdout. */
+   reads a request on stdin and writes a final JSON verdict on stdout.
+   Activation can stream completed database checks before the verdict. */
 
 let input = "";
 process.stdin.setEncoding("utf8");
@@ -24,6 +25,8 @@ process.stdin.on("end", async () => {
     const { checkpointHotStateRollbackMirrorsForDemotion } = await import("./state/checkpointRollbackMirrors");
     const { withStateMutationActivation } = await import("./state/stateMutationBarrier");
     return { outcomes: [], checkpoint: await withStateMutationActivation(checkpointHotStateRollbackMirrorsForDemotion) };
-  })() : answerBackupWorkerRequest(request);
+  })() : answerBackupWorkerRequest(request, (done, total) => {
+    process.stdout.write(`${JSON.stringify({ activationProgress: [done, total] })}\n`);
+  });
   process.stdout.write(`${JSON.stringify(response)}\n`);
 });

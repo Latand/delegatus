@@ -33,7 +33,7 @@ import { cancelRecordedHost } from "@/lib/recordedChecks/service";
 import { recordedHostHeld } from "@/lib/recordedChecks/store";
 import { withRecordedHostFence } from "@/lib/recordedChecks/hostFence";
 import { wakeRecordedChecks } from "@/lib/recordedChecks/signal";
-import { providerRecoveryAttempt, providerRecoveryTurnProven } from "@/lib/pipelines/hostRetirement";
+import { providerRecoveryAttempt, readProviderRecoveryTurnProof } from "@/lib/pipelines/hostRetirement";
 import { handoffQueue } from "./handoffQueueStore";
 import { blockingHostActivityFlags } from "./hostActivityFlags";
 import { runtimeIdleKillMatches } from "./contracts";
@@ -64,7 +64,7 @@ import { BRANCH_SHARED_HOST_ERROR, branchSharesRootHost } from "@/lib/conversati
 import { captureProcessIdentity, processIdentityStatus, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { canonicalOrchestratorProject, isCurrentOrchestratorSeat, readOrchestratorSeatRetirementEvidenceOrNull, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 
-import { isRuntimeHostTransportFailure, readRuntimeSession, runtimeHostClient, type RuntimeHostClient } from "./client";
+import { isRuntimeHostTransportFailure, readRuntimeSession, runtimeHostClient, RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import { runtimeHostKindForEngine, runtimeSettingsCapability, runtimeSteerCapability, type RuntimeEventInput, type RuntimeOperationReceipt, type RuntimeSession } from "./contracts";
 import { readConfirmedSendEvidence } from "./confirmedSend";
 import { readEvidence } from "./evidence";
@@ -139,6 +139,7 @@ type RegisterStructuredDeliveryHost = (
   item: StructuredDeliveryHost,
   ownsOperation?: () => Promise<boolean>,
   ownsStartupHost?: () => boolean,
+  stagedLaunchId?: string,
 ) => Promise<() => Promise<void>>;
 
 /* One lifecycle per host (#1191). The seat a delivery resolves the host from
@@ -192,7 +193,7 @@ interface ControllerState {
   detachRetiredActiveHost: ((key: SessionKey) => Promise<boolean>) | null;
   /* Optional: a controller published by a bundle realm built before #2515
      shares this object and has no such hook. */
-  settleHostlessSessions?: (() => Promise<number>) | null;
+  settleHostlessSessions?: ((conversationId?: string, idleLaunchId?: string) => Promise<number>) | null;
   updateStartupDeferral?: ((conversationId: string, deferred: boolean) => void) | null;
   allowStartupRecovery?: (() => void) | null;
   completeActive: ((adopted: readonly StructuredDeliveryHost[], progress?: (phase: StructuredHostStartupPhase) => void, assertActive?: () => void, deferredConversationIds?: ReadonlySet<string>, prepared?: PreparedStartupPublication) => Promise<void>) | null;
@@ -339,6 +340,26 @@ export async function publishStructuredHostProjection(
 ): Promise<void> {
   await client.append(event);
   if (invalidateFiles) await publishFilesRevision(client);
+}
+
+const stagedFilesInvalidations = new WeakMap<RuntimeHostClient, { pending: boolean }>();
+
+function invalidateStagedHostFiles(client: RuntimeHostClient): void {
+  const queued = stagedFilesInvalidations.get(client);
+  if (queued) {
+    queued.pending = true;
+    return;
+  }
+  const batch = { pending: false };
+  stagedFilesInvalidations.set(client, batch);
+  withoutOperationLease(() => {
+    void publishFilesRevision(client).catch(() => {
+      controllerDiagnosticError("[structured delivery] staged host file invalidation failed");
+    }).finally(() => {
+      stagedFilesInvalidations.delete(client);
+      if (batch.pending) invalidateStagedHostFiles(client);
+    });
+  });
 }
 
 function hostResolver(
@@ -699,6 +720,7 @@ async function publishHostState(
   adopted: StructuredDeliveryHost,
   state: HostState | null,
   projectionKey?: string,
+  launch?: { id: string; ownsWriter: () => boolean },
 ): Promise<void> {
   const entry = entryForHost(registry, adopted);
   if (!entry) return;
@@ -725,31 +747,35 @@ async function publishHostState(
      engine drain, an active-account reseat — which otherwise wait on a 60s
      poll. */
   if (turn === "idle" && pendingAccountSwitch(registry, conversationId)) requestAccountMigrationTick();
-  await publishStructuredHostProjection(client, {
+  const producerKind = runtimeHostKindForEngine(adopted.key.engine);
+  const producerKey = [
+    "structured-host",
+    sessionKeyId(adopted.key),
+    entry.claimEpoch,
+    state.eventCursor,
+    state.status,
+    state.activeTurnRef ?? "idle",
+    state.pendingAttention.join(","),
+    ...(projectionKey ? [projectionKey] : []),
+  ].join(":");
+  const launchPrefix = launch ? `structured-launch:${launch.id}:${producerKey}:` : null;
+  const writerClaim = entry.claimOwner && entry.structuredHost ? `${entry.claimOwner}:${entry.structuredHost.writerClaimEpoch}` : null;
+  const event: RuntimeEventInput = {
     scope: { type: "session", id: conversationId },
     kind: "session-status",
     producer: {
-      kind: runtimeHostKindForEngine(adopted.key.engine),
-      eventKey: [
-        "structured-host",
-        sessionKeyId(adopted.key),
-        entry.claimEpoch,
-        state.eventCursor,
-        state.status,
-        state.activeTurnRef ?? "idle",
-        state.pendingAttention.join(","),
-        ...(projectionKey ? [projectionKey] : []),
-      ].join(":"),
+      kind: producerKind,
+      eventKey: launchPrefix ? `${launchPrefix}1` : producerKey,
     },
     payload: {
       conversationId,
       sessionKey: adopted.key,
-      hostKind: runtimeHostKindForEngine(adopted.key.engine),
+      hostKind: producerKind,
       host,
       turn,
       provenance: "structured",
       accountId: entry.accountId,
-      writerClaim: entry.claimOwner && entry.structuredHost ? `${entry.claimOwner}:${entry.structuredHost.writerClaimEpoch}` : null,
+      writerClaim,
       parentConversationId: entry.launchProfile?.parentConversationId ?? null,
       cwd: entry.cwd,
       artifactPath: entry.artifactPath,
@@ -772,7 +798,60 @@ async function publishHostState(
       activeTurnId: state.activeTurnRef,
       diagnostics: state.diagnostics,
     },
-  });
+  };
+  if (!launch || !launchPrefix) {
+    await publishStructuredHostProjection(client, event);
+    return;
+  }
+  const assertWriter = () => {
+    if (!launch.ownsWriter()) throw new Error("staged launch writer changed before host projection");
+  };
+  assertWriter();
+  if (!client.readSession || !client.appendSessionFenced) {
+    throw new RuntimeHostUnavailableError("staged host projection session fence is unavailable", "HOST_BUSY");
+  }
+  let observedSession: RuntimeSession | null;
+  try { observedSession = await client.readSession({ conversationId }); }
+  catch (error) {
+    if (!isRuntimeHostTransportFailure(error)) throw error;
+    throw new RuntimeHostUnavailableError("staged host projection session read timed out", "HOST_BUSY");
+  }
+  assertWriter();
+  event.expectedSessionRevision = observedSession?.revision ?? null;
+  let appendNeedsReconciliation = false;
+  try {
+    assertWriter();
+    await client.appendSessionFenced(event as RuntimeEventInput & { expectedSessionRevision: number | null });
+  } catch (error) {
+    const revisionFenceRefusal = error instanceof Error
+      && error.message.includes("the session row changed after this event's writer read it");
+    if ((!isRuntimeHostTransportFailure(error) && !revisionFenceRefusal)
+      || !client.readSession || !writerClaim || !launch.ownsWriter()) throw error;
+    appendNeedsReconciliation = true;
+  }
+  if (client.readSession && writerClaim) {
+    /* The producer receipt proves this exact append. The session read proves
+       that the projection still belongs to the same writer, including when
+       append answered from an older idempotency receipt. */
+    let receipt: number;
+    let session: RuntimeSession | null;
+    try {
+      [receipt, session] = await Promise.all([
+        appendNeedsReconciliation ? client.producerCursor(producerKind, launchPrefix) : 1,
+        client.readSession({ conversationId }),
+      ]);
+    } catch (error) {
+      if (!isRuntimeHostTransportFailure(error)) throw error;
+      throw new RuntimeHostUnavailableError("staged host projection reconciliation timed out", "HOST_BUSY");
+    }
+    if (!launch.ownsWriter() || receipt !== 1 || !session || session.writerClaim !== writerClaim
+      || session.conversationId !== conversationId || session.artifactPath !== entry.artifactPath
+      || session.accountId !== entry.accountId
+      || sessionKeyId(session.sessionKey) !== sessionKeyId(adopted.key)
+      || session.host !== host || session.turn !== turn || session.activeTurnId !== state.activeTurnRef) {
+      throw new RuntimeHostUnavailableError("staged host projection acknowledgement could not be verified", "HOST_BUSY");
+    }
+  }
 }
 
 /* One guard per registry for the life of the process, so a controller swap
@@ -1349,6 +1428,7 @@ export async function bindStructuredDeliveryQueue(
       let capturedRetirement: { root: ProcessIdentity; claimEpoch: number } | null = null;
       let controllerCapture: StructuredTerminationCapture | null = null;
       let recoveryStartedAt: string | null = null;
+      let recoveryTurnCurrent: (() => boolean) | null = null;
       let pipelineReader: Awaited<ReturnType<typeof pipelineRetirementReader>> | null = null;
       const recoveryTarget = () => ({ conversationId, sessionId: expectedKey.sessionId, engine: expectedKey.engine,
         agentPath: registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)]?.artifactPath ?? null });
@@ -1356,6 +1436,7 @@ export async function bindStructuredDeliveryQueue(
         if (!onlyIfIdle) return true;
         if (!authority || stopped || state.activeQueue !== queue) return false;
         recoveryStartedAt = null;
+        recoveryTurnCurrent = null;
         try { pipelineReader = await pipelineRetirementReader(); }
         catch { pipelineReader = null; return false; }
         if (providerRecovery) {
@@ -1364,7 +1445,9 @@ export async function bindStructuredDeliveryQueue(
             const pipeline = findPipelineRecord(providerRecovery.pipelineId);
             const attempt = providerRecoveryAttempt(pipeline ? [pipeline] : [], providerRecovery, recoveryTarget(),
               id => resolveConversationAlias(snapshot, id as ViewerConversationId));
-            if (!attempt || !await providerRecoveryTurnProven(attempt, providerRecovery)) return false;
+            if (!attempt) return false;
+            recoveryTurnCurrent = await readProviderRecoveryTurnProof(attempt, providerRecovery);
+            if (!recoveryTurnCurrent) return false;
             recoveryStartedAt = attempt.startedAt;
           } catch { return false; }
         }
@@ -1396,7 +1479,8 @@ export async function bindStructuredDeliveryQueue(
           const pipeline = providerRecovery ? findPipelineRecord(providerRecovery.pipelineId) : null;
           const recoveryAttempt = providerRecovery
             ? providerRecoveryAttempt(pipeline ? [pipeline] : [], providerRecovery, recoveryTarget(), resolve) : null;
-          if (providerRecovery && (!recoveryAttempt || !recoveryStartedAt || recoveryAttempt.startedAt !== recoveryStartedAt)) return false;
+          if (providerRecovery && (!recoveryAttempt || !recoveryStartedAt || recoveryAttempt.startedAt !== recoveryStartedAt
+            || recoveryTurnCurrent?.() !== true)) return false;
           const target: RetirementTarget = {
             conversations: conversationIdsResolvingTo(snapshot, resolve(conversationId) as ViewerConversationId),
             sessionId: expectedKey.sessionId, agentPath: entry?.artifactPath ?? null,
@@ -1911,7 +1995,7 @@ export async function bindStructuredDeliveryQueue(
      sweep retries through the same socket, with no cached capability verdict. */
   const settledRows = new Map<string, { endedAt: string; sweep: number }>();
   let settleSweep = 0;
-  const settleHostlessSessions = async (): Promise<number> => {
+  const settleHostlessSessions = async (onlyConversationId?: string, idleLaunchId?: string): Promise<number> => {
     if (superseded() || !client.appendSessionFenced) return 0;
     /* Selection only: every row is read again by key below. A whole snapshot
        here was one 0.3 s slice per sweep on retained history. */
@@ -1919,7 +2003,8 @@ export async function bindStructuredDeliveryQueue(
     if (superseded()) return 0;
     const hostless = hostlessConversations(registrySnapshot);
     for (const id of settledRows.keys()) if (!hostless.has(id)) settledRows.delete(id);
-    const candidates = [...hostless].filter(([, row]) => !registrations.has(row.key));
+    const candidates = [...hostless].filter(([id, row]) => (!onlyConversationId || id === onlyConversationId)
+      && !registrations.has(row.key));
     const unread = candidates
       .filter(([id, row]) => settledRows.get(id)?.endedAt !== row.endedAt)
       .sort((left, right) => right[1].endedAt.localeCompare(left[1].endedAt))
@@ -1951,7 +2036,11 @@ export async function bindStructuredDeliveryQueue(
       catch { break; }
       const current = hostlessConversationEvidence(registry.conversationRetentionSnapshot(conversationId), conversationId);
       if (!current || current.key !== row.key || current.endedAt !== row.endedAt || registrations.has(row.key)) continue;
-      if (session && sessionClaimsOpenTurn(session)) {
+      const failedLaunch = idleLaunchId ? registry.spawnReceipt(idleLaunchId) : null;
+      const launchOwnsIdleProjection = !!failedLaunch && failedLaunch.state === "failed"
+        && failedLaunch.conversationId === conversationId && failedLaunch.key
+        && session?.host === "hosted" && sessionKeyId(session.sessionKey) === row.key;
+      if (session && (sessionClaimsOpenTurn(session) || launchOwnsIdleProjection)) {
         /* A write the journal refused or never received settles nothing, as
            a failed read does. */
         try { await publishCurrentFallback(conversationId, session, session.revision); }
@@ -2018,14 +2107,14 @@ export async function bindStructuredDeliveryQueue(
      host while the caller was told it is live (#1191). Re-drive the item
      through whoever owns the publication now; with nobody owning it, the
      caller learns the controller is unavailable and can retry. */
-  const registerThroughSuccessor: RegisterStructuredDeliveryHost = async (item, ownsOperation, ownsStartupHost) => {
+  const registerThroughSuccessor: RegisterStructuredDeliveryHost = async (item, ownsOperation, ownsStartupHost, stagedLaunchId) => {
     const successor = state.registerActiveHost;
     if (!successor || successor === register) throw new StructuredDeliveryControllerUnavailableError();
-    return await successor(item, ownsOperation, ownsStartupHost);
+    return await successor(item, ownsOperation, ownsStartupHost, stagedLaunchId);
   };
-  const register: RegisterStructuredDeliveryHost = async (item, ownsOperation, ownsStartupHost) => {
-    if (superseded()) return await registerThroughSuccessor(item, ownsOperation, ownsStartupHost);
+  const register: RegisterStructuredDeliveryHost = async (item, ownsOperation, ownsStartupHost, stagedLaunchId) => {
     if ((ownsOperation && !await ownsOperation()) || ownsStartupHost?.() === false) return async () => {};
+    if (superseded()) return await registerThroughSuccessor(item, ownsOperation, ownsStartupHost, stagedLaunchId);
     const key = sessionKeyId(item.key);
     const current = registrations.get(key);
     const publicationEntry = entryForHost(registry, item);
@@ -2060,6 +2149,23 @@ export async function bindStructuredDeliveryQueue(
     const publicationConversationId = publicationEntry
       ? conversationIdForEntry(registry, publicationEntry)
       : null;
+    const launchId = stagedLaunchId && stagedLaunchId === publicationEntry?.structuredHostOperationId ? stagedLaunchId : null;
+    const ownsLaunchWriter = () => {
+      if (!launchId || !publicationEntry || superseded() || abandoned()
+        || registrations.get(key) !== (seat ?? undefined)) return false;
+      const snapshot = registry.spawnRecoverySnapshot([launchId]);
+      const receipt = snapshot.receipts[launchId];
+      const current = snapshot.entries[key];
+      const originalProcess = publicationEntry.structuredHost?.process;
+      const process = current?.structuredHost?.process;
+      return receipt?.state === "path-pending" && receipt.conversationId === publicationConversationId
+        && !!receipt.key && sessionKeyId(receipt.key) === key
+        && receipt.artifactPath === publicationEntry.artifactPath && current?.artifactPath === receipt.artifactPath
+        && current.structuredHostOperationId === launchId
+        && current.claimOwner === publicationEntry.claimOwner && current.claimEpoch === publicationEntry.claimEpoch
+        && current.structuredHost?.writerClaimEpoch === item.writerEpoch
+        && (originalProcess ? !!process && sameRecordedProcessIdentity(originalProcess, process) : !process);
+    };
     let acknowledgedEventCursor = 0;
     if (publicationConversationId) {
       /* A transport failure leaves durable acknowledgement unknown. Pause the
@@ -2080,14 +2186,28 @@ export async function bindStructuredDeliveryQueue(
     /* The journal read above is an await of its own: the operation is asked
        again before anything about this host is projected. */
     if ((ownsOperation && !await ownsOperation()) || ownsStartupHost?.() === false) return async () => {};
-    await publishHostState(client, registry, item, initialState);
+    await publishHostState(client, registry, item, initialState, undefined,
+      launchId ? { id: launchId, ownsWriter: ownsLaunchWriter } : undefined);
     // Startup custody is a keyed read. Keep it synchronous with installing
     // the attachment so a queued replacement cannot cross the final check.
     if (abandoned() || (ownsOperation && !await ownsOperation()) || ownsStartupHost?.() === false) {
       const restoreCurrentProjection = async () => {
+        if (launchId) {
+          if (!publicationConversationId || !client.readSession || !client.appendSessionFenced || !ownsLaunchWriter()) return;
+          const session = await client.readSession({ conversationId: publicationConversationId });
+          if (!ownsLaunchWriter() || !session || sessionKeyId(session.sessionKey) !== key
+            || !publicationEntry?.claimOwner
+            || session.writerClaim !== `${publicationEntry.claimOwner}:${item.writerEpoch}`) return;
+          await publishCurrentFallback(publicationConversationId, session, session.revision);
+          return;
+        }
         await refreshCurrentProjection(publicationConversationId);
       };
-      await restoreCurrentProjection();
+      const restoration = restoreCurrentProjection();
+      if (launchId) await restoration.catch(() => {
+        controllerDiagnosticError("[structured delivery] refused host projection could not be restored");
+      });
+      else await restoration;
       return restoreCurrentProjection;
     }
     /* The last yield point before the commit. Nothing below awaits, so a
@@ -2096,7 +2216,8 @@ export async function bindStructuredDeliveryQueue(
        is never handed on: the successor carried it over only if it still
        existed at the swap, and re-driving a released host would republish it. */
     if (abandoned()) return async () => {};
-    if (superseded()) return await registerThroughSuccessor(item, ownsOperation, ownsStartupHost);
+    if (superseded()) return await registerThroughSuccessor(item, ownsOperation, ownsStartupHost, stagedLaunchId);
+    if (launchId && !ownsLaunchWriter()) throw new Error("staged launch writer changed before host registration");
     const observable = item.host as ObservableEngineHost;
     let deliveryState = deliveryStateKey(initialState);
     let projectedState = hostProjectionKey(initialState);
@@ -2199,6 +2320,9 @@ export async function bindStructuredDeliveryQueue(
     registration.attachment = { unsubscribe, stopEvents };
     seatRegistration(key, registration);
     if (unpublishedLaunchHosts.get(key)?.host === item.host) unpublishedLaunchHosts.delete(key);
+    // File observers can wait for an invalidation. Delivery can use the
+    // confirmed journal projection and registered writer immediately.
+    if (launchId) invalidateStagedHostFiles(client);
     requestDrain();
     if (conversationId) wakeRecordedChecks(undefined, true, conversationId);
     return () => unregisterHost(key, item.host);
@@ -2786,8 +2910,8 @@ export function structuredDeliveryHeldHosts(): ReadonlyMap<string, EngineHost> {
  * what the controller does on its own timer. Zero when this process publishes
  * no delivery controller, since only its owner writes projections.
  */
-export async function settleHostlessSessionProjections(): Promise<number> {
-  return await state.settleHostlessSessions?.() ?? 0;
+export async function settleHostlessSessionProjections(conversationId?: string, idleLaunchId?: string): Promise<number> {
+  return await state.settleHostlessSessions?.(conversationId, idleLaunchId) ?? 0;
 }
 
 export function structuredDeliveryHostForConversation(conversationId: string, registry?: AgentRegistry): EngineHost | null {
@@ -2834,8 +2958,9 @@ export async function publishStructuredDeliveryHost(
   item: StructuredDeliveryHost,
   ownsOperation?: () => Promise<boolean>,
   ownsStartupHost?: () => boolean,
+  stagedLaunchId?: string,
 ): Promise<() => Promise<void>> {
-  return requireStructuredDeliveryControllerPublication()(item, ownsOperation, ownsStartupHost);
+  return requireStructuredDeliveryControllerPublication()(item, ownsOperation, ownsStartupHost, stagedLaunchId);
 }
 
 /** Adjust one startup row without replaying historical publication or disturbing

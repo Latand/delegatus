@@ -20,6 +20,7 @@ import { Database } from "bun:sqlite";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { procBackend } from "@/lib/proc";
+import { statePath } from "@/lib/configDir";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
 import { clearTelegramConnection, saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
@@ -61,6 +62,10 @@ VOICE_PERSONA_FILE,
 voiceSessionPersona,
 } from "./voicePersona";
 import { installCodexHostFixture, MemoryEventStore, FakeAppServer, fakeSpawn, waitForCondition } from "./codexAppServerHost.fixture";
+import net from "node:net";
+import { adoptStructuredHostsAtStartup } from "./startup";
+import { bindStructuredDeliveryQueue } from "./structuredDeliveryController";
+import { addStructuredRestartConversation, runtimeJournalClient } from "./startupRecipient.fixture";
 
 const COMPACT_SELECTED: SelectedContextRef = { version: 1, state: "selected", conversationId: "conversation_marker_fixture", capturedAt: "2026-09-22T00:00:00.000Z" };
 test.each([false, true])("launch observations reach fresh and adopted Codex requests with clean memory=%s", async cleanMemory => {
@@ -336,16 +341,16 @@ test("negotiates provider and per-model capabilities independently of userAgent"
   } finally { await host.release(); }
 });
 
-test.each(["0.162.7", "0.165.0", "0.166.0", "0.167.0", "0.168.0", "0.169.0", "0.170.0", "0.170.1"])("compatible CLI %s reaches thread/start and turn/start under its reviewed pin", async version => {
+test.each(["0.162.7", "0.165.0", "0.166.0", "0.167.0", "0.168.0", "0.169.0", "0.170.0", "0.171.0", "0.172.0", "0.172.1"])("compatible CLI %s reaches thread/start and turn/start under its reviewed pin", async version => {
   // Exact pins load their own schema; other CLIs stand on a newer real schema above their pin.
-  const unpinned: Record<string, { pin: string; schema: string }> = { "0.162.7": { pin: "0.162.1", schema: "0.163.0" }, "0.170.1": { pin: "0.170.0", schema: "0.170.0" } };
+  const unpinned: Record<string, { pin: string; schema: string }> = { "0.162.7": { pin: "0.162.1", schema: "0.163.0" }, "0.172.1": { pin: "0.172.0", schema: "0.172.0" } };
   const pin = unpinned[version]?.pin ?? version;
   const schemaVersion = unpinned[version]?.schema ?? version;
   const server = new FakeAppServer("unpinned-cli");
-  if (version === "0.170.1") server.threadResponseExtra = { futureHint: "available" };
+  if (version === "0.172.1") server.threadResponseExtra = { futureHint: "available" };
   const schemas = (name: string) => {
     const raw = fs.readFileSync(path.join(import.meta.dir, `../accounts/protocol/${schemaVersion}`, `${name}.json`), "utf8");
-    if (version !== "0.170.1") return raw;
+    if (version !== "0.172.1") return raw;
     const bundle = JSON.parse(raw);
     bundle.definitions.v2.ThreadStartResponse.properties.futureHint = { type: ["string", "null"] };
     return JSON.stringify(bundle);
@@ -373,7 +378,7 @@ test.each(["0.162.7", "0.165.0", "0.166.0", "0.167.0", "0.168.0", "0.169.0", "0.
       expect(generated).toEqual(["codex-fixture"]);
     }
     expect(await host.send({ id: "unpinned-turn", text: "continue" })).toMatchObject({ outcome: "turn-started" });
-    if (version === "0.170.1") {
+    if (version === "0.172.1") {
       expect(writes.mock.calls.some(([chunk]) => JSON.parse(String(chunk)).result?.futureHint === "available")).toBeTrue();
     }
   } finally {
@@ -388,7 +393,7 @@ test("a self-updated CLI with a breaking schema is refused before spawning", asy
     cwd: "/repo", readProtocolVersion: () => "0.162.8", eventStore: new MemoryEventStore(),
     spawnProcess: (...args) => { spawned = true; return fakeSpawn(server)(...args); },
     generateProtocolSchemas: async () => ({ stable: '{"definitions":{}}', experimental: '{"definitions":{}}' }),
-  })).rejects.toThrow("CLI 0.162.8; Supported: 0.170.0, 0.169.0, 0.168.0; cause: not an additive extension of pin 0.162.1");
+  })).rejects.toThrow("CLI 0.162.8; Supported: 0.172.0, 0.171.0, 0.170.0; cause: not an additive extension of pin 0.162.1");
   expect(spawned).toBe(false);
 });
 
@@ -7446,8 +7451,77 @@ test.each([false, true])("Codex child environments preserve the production evide
   try {
     expect(captured.options?.env?.LLV_EVIDENCE_DIR).toBe(access.env.LLV_EVIDENCE_DIR);
     expect(captured.options?.env?.TMPDIR).toBe(access.env.TMPDIR);
+    /* The launched Codex process gets the attempt scratch under the state
+       root as TMPDIR, TMP and TEMP, fresh and adopted alike. */
+    expect(access.env.TMPDIR).toBe(path.join(access.scratchDirectory!, "tmp"));
+    expect(path.dirname(access.scratchDirectory!)).toBe(statePath("scratch"));
+    expect(captured.options?.env?.TMP).toBe(access.env.TMPDIR);
+    expect(captured.options?.env?.TEMP).toBe(access.env.TMPDIR);
   } finally { await host.release(); access.cleanup(); }
 });
+
+/* A Viewer restart finds the host's socket owner dead and re-hosts the row:
+   the relaunched engine gets an attempt scratch again, from the production
+   adoption pass. */
+test.skipIf(process.platform === "win32")("startup re-hosting a Codex row whose socket owner died launches it with its attempt scratch as TMPDIR, TMP and TEMP", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-restart-"));
+  fs.chmodSync(directory, 0o700);
+  const socket = path.join(directory, "rpc.sock");
+  const listener = net.createServer(connection => { connection.on("error", () => {}); connection.end(); });
+  await new Promise<void>((resolve, reject) => { listener.once("error", reject); listener.listen(socket, resolve); });
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const sessionId: string = randomUUID();
+  /* A turn the restart cut: the row is owed a new engine. */
+  addStructuredRestartConversation(registry, directory, { sessionId, status: "live", turn: "busy", activeTurnRef: "turn" });
+  /* The recorded owner is a process of this test that has exited. */
+  const owner = spawn(process.execPath, ["-e", "process.stdin.resume()"], { stdio: ["pipe", "ignore", "ignore"] });
+  await new Promise<void>((resolve, reject) => { owner.once("spawn", () => resolve()); owner.once("error", reject); });
+  const identity = captureProcessIdentity(owner.pid!)!;
+  await new Promise<void>(resolve => { owner.once("exit", () => resolve()); owner.stdin!.end(); });
+  const stored = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!;
+  /* No event of it is retained either, so the new host starts its ledger. */
+  registry.upsert({ ...stored, structuredHost: { ...stored.structuredHost!, endpoint: `codex-unix:${socket}`, process: identity, eventCursor: 0, activeTurnRef: null } });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const server = new FakeAppServer(sessionId);
+  const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
+  const hosts: CodexAppServerHost[] = [];
+  const launched: Array<{ reconnected: boolean }> = [];
+  /* The fake engine runs in no memory cell: the row must record none. */
+  const memory = process.env.DELEGATUS_AGENT_MEMORY;
+  process.env.DELEGATUS_AGENT_MEMORY = "off";
+  try {
+    await adoptStructuredHostsAtStartup({ registry, client: runtimeJournalClient(journal),
+      orchestratorSeats: () => [],
+      schedule: () => ({ unref() {} }),
+      resolveCodexOwner: () => null,
+      adoptCodexHost: async (nativeId, options) => {
+        launched.push({ reconnected: !!options.socketOwner });
+        const host = await CodexAppServerHost.adopt(nativeId, { ...options, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server, captured) });
+        hosts.push(host);
+        return host;
+      },
+      adoptClaude: async () => [],
+    });
+    expect(launched).toEqual([{ reconnected: false }]);
+    const environment = captured.options!.env!;
+    const temporary = environment.TMPDIR!;
+    expect(path.basename(temporary)).toBe("tmp");
+    expect(path.dirname(path.dirname(temporary))).toBe(statePath("scratch"));
+    expect(path.basename(path.dirname(temporary))).toMatch(/^llv-(?:read-only-)?stage-/);
+    expect(fs.statSync(temporary).isDirectory()).toBeTrue();
+    expect(environment.TMP).toBe(temporary);
+    expect(environment.TEMP).toBe(temporary);
+    expect(temporary).not.toBe(process.env.TMPDIR);
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    for (const host of hosts) await host.release();
+    await new Promise<void>(resolve => listener.close(() => resolve()));
+    journal.close();
+    registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+    if (memory === undefined) delete process.env.DELEGATUS_AGENT_MEMORY; else process.env.DELEGATUS_AGENT_MEMORY = memory;
+  }
+}, 60_000);
 
 test("native accounting clocks reach the retained time reader through the real Codex producer", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-timing-"));

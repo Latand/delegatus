@@ -10,6 +10,7 @@ import postcss from "postcss";
 import sharp from "sharp";
 
 import { translate } from "@/lib/i18n";
+import type { Pipeline } from "@/lib/pipelines/types";
 import { taskIconNodes } from "@/lib/tasks/taskIconNodes";
 import { stubVoiceDevices as stubVoiceDevicesForSettings } from "@/test-helpers/voiceDevicesStub";
 import { createGateSandbox } from "../../../scripts/local-gate";
@@ -662,6 +663,161 @@ export function ownedBrowserSocketEnvironment() {
   return { env: { ...process.env, TMPDIR: process.platform === "linux"
     ? `/proc/${process.pid}/cwd/${path.basename(directory)}` : directory },
     close: () => fs.rmSync(directory, { recursive: true, force: true }) };
+}
+
+export async function captureProvisioningStepGeometry(browser: Browser, out: string, widths: number[]) {
+  const { buildPipeline, savePipelines } = await import("@/lib/pipelines/store");
+  const { pipelineRoleLookup, resolvePipelineRole } = await import("@/lib/pipelines/roles");
+  const { GET } = await import("@/app/api/pipelines/route");
+  const { NextRequest } = await import("next/server");
+  const now = Date.parse("2026-11-24T10:00:15Z");
+  const at = new Date(now - 8000).toISOString();
+  const id = "provision-geometry";
+  const task = { id: "provision-task", text: "Prepare the release checkout", project: "atlas",
+    status: "assigned", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at };
+  const role = { roleId: "builder" as const };
+  const resolved = resolvePipelineRole({ role }, "run", pipelineRoleLookup);
+  if (!resolved.role) throw new Error(resolved.error);
+  const lane = buildPipeline({ id, task: task.text, taskIds: [task.id], project: "atlas", repoDir: "/fixture/atlas",
+    srcPath: null, srcConversationId: null, now: at,
+    stages: [{ id: "build", kind: "run", role, effectiveRole: resolved.role, next: null, prompt: "{{task}}" }] });
+  const update = (phase: "checking" | "timed-out" | "retrying" | "running") => {
+    lane.state = phase === "running" ? "running" : "provisioning";
+    if (phase === "running") delete lane.provisioningJob;
+    else lane.provisioningJob = { version: 1, kind: "provision", token: "fixture-provision-owner",
+      subject: "a".repeat(64), planSubject: "b".repeat(64), generation: phase === "retrying" ? 2 : 1,
+      owner: { pid: 17, bootEpoch: "fixture-epoch", startIdentity: "fixture-start", instance: "fixture-instance", release: "fixture" },
+      step: phase === "retrying" ? "verifyingCheckout" : "checkingDependencies", since: now - (phase === "retrying" ? 1000 : 8000),
+      deadlineAt: now + 2000, executionDeadlineAt: now + 360_000, status: phase === "timed-out" ? "waiting" : "running",
+      ...(phase === "retrying" ? { interruption: { step: "checkingDependencies", since: now - 13_000,
+        deadlineAt: now - 5_000, observedAt: now - 5_000, reason: "provision-step-timeout" } } : {}),
+      ...(phase === "timed-out" ? { retryAt: now + 5000, interruption: {
+        step: "checkingDependencies", since: now - 8000, deadlineAt: now, observedAt: now, reason: "provision-step-timeout",
+      }, blockingOwnerToken: "4f3a9c21-owner-fixture" } : {}),
+    };
+    savePipelines([lane]);
+  };
+  let sequence = 0;
+  const server = await serveEvidenceFixture(path.join(process.env.TMPDIR!, "provision-geometry"), undefined, {
+    "/api/team": { mode: "solo", me: null, members: [], methods: {} },
+    "/api/tasks": { tasks: [task] },
+    "/api/files": async () => {
+      const answer = await GET(new NextRequest("http://127.0.0.1/api/pipelines"));
+      if (!answer.ok) throw new Error("fixture pipeline list is unavailable");
+      const value = await answer.json() as { pipelines: Pipeline[] };
+      expect(value.pipelines).toHaveLength(1);
+      expect(value.pipelines[0]?.provisioningJob).toBeUndefined();
+      if (lane.state === "provisioning") {
+        expect(value.pipelines[0]?.provisioningStep?.since).toBe(now - (lane.provisioningJob?.step === "verifyingCheckout" ? 1000 : 8000));
+        if (lane.provisioningJob?.step === "verifyingCheckout") expect(value.pipelines[0]?.provisioningStep?.retrying).toBe(true);
+      }
+      return Response.json({ ...value, files: [], tasks: [task], flows: [], workflows: [],
+        projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 0, smt: 1 }],
+        projectCwds: { atlas: "/fixture/atlas" }, systemHealth: {} }, { headers: { ETag: `"catalog-${++sequence}"` } });
+    },
+  });
+  const frames = [];
+  const reading = async (reason: Locator) => reason.evaluate(element => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const rectangles = [...range.getClientRects()];
+    const clippedBy: string[] = [];
+    const whole = rectangles.every(rect => {
+      if (rect.left < -1 || rect.right > innerWidth + 1 || rect.top < -1 || rect.bottom > innerHeight + 1) {
+        clippedBy.push("viewport");
+        return false;
+      }
+      for (let parent: Element | null = element; parent; parent = parent.parentElement) {
+        const style = getComputedStyle(parent), box = parent.getBoundingClientRect();
+        if ((/(clip|hidden|scroll|auto)/.test(style.overflowX) && (rect.left < box.left - 1 || rect.right > box.right + 1))
+          || (/(clip|hidden|scroll|auto)/.test(style.overflowY) && (rect.top < box.top - 1 || rect.bottom > box.bottom + 1))) {
+          clippedBy.push(parent.className?.toString() ?? "");
+          return false;
+        }
+      }
+      return true;
+    });
+    const rgb = (value: string) => (value.match(/[\d.]+/g) ?? []).map(Number);
+    const luminance = (color: number[]) => color.slice(0, 3).map(value => {
+      const channel = value / 255;
+      return channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4;
+    }).reduce((sum, value, index) => sum + value * [.2126, .7152, .0722][index]!, 0);
+    const foreground = luminance(rgb(getComputedStyle(element).color));
+    let contrast = 0;
+    for (let parent: Element | null = element; parent; parent = parent.parentElement) {
+      const background = rgb(getComputedStyle(parent).backgroundColor);
+      if (background.length !== 3 && background[3] !== 1) continue;
+      const light = luminance(background);
+      contrast = (Math.max(foreground, light) + .05) / (Math.min(foreground, light) + .05);
+      break;
+    }
+    return { whole: rectangles.length > 0 && whole, clippedBy, contrast, text: element.textContent };
+  });
+  fs.mkdirSync(out, { recursive: true });
+  try {
+    for (const width of widths) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+      update("checking");
+      const phone = width === 390;
+      const { page, context, pageErrors } = await openFixture(browser, "about:blank", { width, height: 900 }, theme, lang, "reduce", phone);
+      try {
+        page.setDefaultTimeout(8_000);
+        await context.addInitScript(theme => {
+          localStorage.setItem("llv-theme", theme);
+          localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null }));
+        }, theme);
+        await page.clock.install({ time: new Date(now) });
+        await page.goto(`${server.base}?scenario=board-timeline#p=atlas`);
+        if (phone) await page.locator('[data-phone-kanban-tab="assigned"]').click();
+        const selector = `[data-pipeline-reason="${id}"]`;
+        const reason = page.locator(selector).first();
+        const refresh = async () => {
+          await page.evaluate(() => {
+            window.dispatchEvent(new Event("llv:files-changed"));
+            window.dispatchEvent(new Event("llv:pipelines-changed"));
+          });
+          await page.clock.runFor(500);
+        };
+        const phaseTexts = lang === "en" ? ["Checking dependency inputs", "Retry pending · Checking dependency inputs", "Retrying · Verifying the worktree"]
+          : ["Перевірка вхідних даних залежностей", "Очікування повтору · Перевірка вхідних даних залежностей", "Повторна перевірка · Перевірка робочої копії"];
+        for (const [index, phase] of (["checking", "timed-out", "retrying"] as const).entries()) {
+          update(phase);
+          if (index) await refresh();
+          await reason.waitFor();
+          await page.waitForFunction(({ selector, expected }) => document.querySelector(selector)?.textContent?.startsWith(expected),
+            { selector, expected: phaseTexts[index]! });
+          const geometry = await reading(reason);
+          const name = `${width}-${lang}-${theme}-${phase}`;
+          await page.screenshot({ path: path.join(out, name + ".png") });
+          expect(geometry.whole, JSON.stringify(geometry)).toBe(true);
+          expect(geometry.contrast).toBeGreaterThanOrEqual(4.5);
+          if (phase === "timed-out") {
+            expect(geometry.text).toMatch(lang === "en"
+              ? / · \d+ s · Waiting: the step deadline expired · Owner token 4f3a9c21$/
+              : / · \d+ с · Очікування: сплив строку кроку · Токен власника 4f3a9c21$/);
+          } else expect(geometry.text).toMatch(lang === "en" ? / · \d+ s$/ : / · \d+ с$/);
+          frames.push({ name, ...geometry });
+          if (index === 0) {
+            await page.clock.runFor(31_000);
+            await page.waitForFunction(({ selector, text }) => document.querySelector(selector)?.textContent !== text,
+              { selector, text: geometry.text });
+          }
+        }
+        update("running");
+        await refresh();
+        await reason.waitFor({ state: "hidden" });
+        await page.locator(`[data-pipeline="${id}"][data-lane-state="running"]`).first().waitFor();
+        const name = `${width}-${lang}-${theme}-running`;
+        await page.screenshot({ path: path.join(out, name + ".png") });
+        frames.push({ name, cleared: true });
+        expect(pageErrors).toEqual([]);
+      } catch (error) {
+        await page.screenshot({ path: path.join(out, `${width}-${lang}-${theme}-failure.png`) });
+        throw error;
+      } finally { await context.close(); }
+    }
+    fs.writeFileSync(path.join(out, "geometry.json"), JSON.stringify(frames, null, 2) + "\n");
+    return frames.length;
+  } finally { server.stop(); }
 }
 
 export async function serveEvidenceFixture(
@@ -2508,7 +2664,8 @@ const SETTINGS_FRAMES: SettingsFrame[] = [
   { surface: "window", name: "over-onboarding", scene: "privacy-notice", steps: async (page) => {
     await page.evaluate(() => window.dispatchEvent(new CustomEvent("llv:open-onboarding", { detail: { mode: "guide", step: null } })));
     await page.locator("[data-onboarding-dialog]").waitFor();
-    await page.locator("[data-telemetry-notice] button").first().click();
+    /* While the guide is open the notice is the guide's own line (docs/design/onboarding-v2.md §12.2). */
+    await page.locator("[data-onboarding-dialog] [data-telemetry-guide-notice] button").first().click();
   }, defining: "[data-telemetry-settings]" },
   { surface: "window", name: "memory", scene: "telegram-rest", section: "memory", defining: "[data-memory-page]" },
   { surface: "window", name: "roles", scene: "telegram-rest", section: "roles", defining: "[data-header-menu-workers]" },

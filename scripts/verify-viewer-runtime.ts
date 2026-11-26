@@ -31,6 +31,7 @@
  * Exit status is the verdict; the evidence is printed as JSON.
  */
 
+import { provisioningFixtureEnvironment, removeProvisioningFixture, verifyProvisioningRelease, verifyProvisioningTrace } from "./verify-provisioning-release.mjs";
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -61,6 +62,14 @@ const START_BUDGET_MS = 120_000;
 const START_POLL_MS = 250;
 /** Bounded tail of a child's own output, kept with a failure. */
 const LOG_LINES = 40;
+/** Byte bound of the unbroken output a check may search, whatever the line count. */
+const SEARCH_BYTES = 128_000;
+
+/** A synthetic lifecycle shim may contain route.js without a completed build. */
+export function hasBuiltPipelineRoute(root: string): boolean {
+  return fs.existsSync(path.join(root, ".next/BUILD_ID"))
+    && fs.existsSync(path.join(root, ".next/server/app/api/pipelines/route.js"));
+}
 
 export interface ViewerModuleFailure {
   /** Repository-relative, because that is what a reader can go and open. */
@@ -182,9 +191,14 @@ export function sandboxEnvironment(sandbox: string): NodeJS.ProcessEnv {
   };
 }
 
-function collector(child: ChildProcess, label: string): () => string[] {
+/** The tail kept with a failure, plus `search()` over a byte-bounded window of everything printed. */
+type OutputLog = (() => string[]) & { search: () => string[] };
+
+export function collector(child: ChildProcess, label: string): OutputLog {
   const lines: string[] = [];
+  let raw = "";
   const collect = (chunk: unknown) => {
+    raw = (raw + String(chunk)).slice(-SEARCH_BYTES);
     for (const line of String(chunk).split("\n")) {
       if (!line.trim()) continue;
       lines.push(`${label}: ${line}`);
@@ -194,7 +208,7 @@ function collector(child: ChildProcess, label: string): () => string[] {
   child.stdout?.on("data", collect);
   child.stderr?.on("data", collect);
   child.on("error", (error) => collect(`failed to start: ${error.message}`));
-  return () => [...lines];
+  return Object.assign(() => [...lines], { search: () => raw.split("\n") });
 }
 
 /**
@@ -403,6 +417,7 @@ export async function verifyBuiltCodexSocket(root: string): Promise<{ ok: boolea
 async function serveOnce(root: string, sandbox: string): Promise<{ status: number; bytes: number; readyMs: number; log: string[]; detail?: string }> {
   const port = await freePort();
   const origin = `http://127.0.0.1:${port}`;
+  const fixtureEnvironment = await provisioningFixtureEnvironment(sandbox, sandboxEnvironment(sandbox));
   const contained = process.platform === "linux" && (Boolean(process.env.LLV_OWNED_TEST_RUN_CGROUP)
     || Number(process.env.LLV_PORTABLE_TEST_RUNNER_PID) === process.pid);
   const command = [process.execPath, "--bun", "node_modules/.bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)];
@@ -412,11 +427,11 @@ async function serveOnce(root: string, sandbox: string): Promise<{ status: numbe
   const child = spawn(process.execPath, contained ? [path.join(import.meta.dir, "owned-runner.ts"), ...command] : command.slice(1), {
     cwd: root,
     env: {
-      ...sandboxEnvironment(sandbox), PORT: String(port),
+      ...fixtureEnvironment, PORT: String(port),
       ...(contained ? {
         XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR,
         DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS,
-        LLV_OWNED_RUN_TIMEOUT_MS: String(START_BUDGET_MS + 10_000),
+        LLV_OWNED_RUN_TIMEOUT_MS: String(START_BUDGET_MS + 75_000),
         LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)),
       } : {}),
     },
@@ -453,6 +468,19 @@ async function serveOnce(root: string, sandbox: string): Promise<{ status: numbe
     try {
       const response = await fetch(origin, { headers: { accept: "text/html" }, signal: AbortSignal.timeout(5_000) });
       const body = await response.text();
+      // The lifecycle driver also uses a deliberately synthetic Next shim to
+      // exercise process cleanup. Run release tracing only for a built App
+      // Router tree; a real build has route.js even when its required trace is
+      // missing, so the verifier still reports that packaging defect.
+      if (response.status === 200 && body.length > 0 && hasBuiltPipelineRoute(root)) {
+        await verifyProvisioningTrace(root);
+        const evidence = await verifyProvisioningRelease(origin, sandbox, fixtureEnvironment);
+        // The baseline lane's frame precedes two held-reply lanes whose own
+        // output would push it out of the 40-line failure tail.
+        if (!log.search().some(line => line.includes(`"pipelineId":"${evidence.lane}"`) && line.includes('"phase":"toolchain-ready"'))) {
+          throw new Error("provisioning fixture did not report a ready frame");
+        }
+      }
       return { status: response.status, bytes: body.length, readyMs, log: log() };
     } catch (error) {
       /* It answered the readiness probe and then did not answer this. Whatever
@@ -541,7 +569,7 @@ export async function verifyViewerRuntime(root: string): Promise<ViewerRuntimeEv
     }
     return verdict(modules.length, [], evidence, null);
   } finally {
-    fs.rmSync(sandbox, { recursive: true, force: true });
+    await removeProvisioningFixture(sandbox);
   }
 }
 

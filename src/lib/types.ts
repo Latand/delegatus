@@ -912,6 +912,8 @@ export interface ResourcesPayload {
   agentState?: import("./agentState/model").AgentStateMetrics;
   /** Free space on the volumes Delegatus writes to, and the open pressure episode. */
   diskPressure?: import("./state/diskPressure").DiskPressure;
+  /** RAM and swap use, the tmpfs /tmp, and the open memory pressure episode. */
+  memoryPressure?: import("./state/memoryPressure").MemoryPressure;
   /** The last worktree sweep, counts and bytes per reason. */
   worktreeSweep?: ReturnType<typeof import("./pipelines/worktreeSweep").worktreeSweepStatus>;
   /** Release retention counts, reclaimed cache bytes and errors. */

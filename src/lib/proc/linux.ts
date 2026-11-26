@@ -96,6 +96,10 @@ function processExited(pid: number): boolean {
   return true;
 }
 
+async function resourceProcessExited(pid: number): Promise<boolean> {
+  return processExited(pid);
+}
+
 /** utime + stime from /proc/<pid>/stat, in milliseconds. USER_HZ is 100 on
     every Linux this runs on, which is what makes the ticks convertible. */
 function processCpuMs(pid: number): number | null {
@@ -196,6 +200,10 @@ function listProcesses(): ProcSnapshotEntry[] {
   return list;
 }
 
+async function resourceListProcesses(): Promise<ProcSnapshotEntry[]> {
+  return listProcesses();
+}
+
 /** The permission bits of a /proc fd symlink encode the open mode
     ("l-wx…" for a writer, "lr-x…" for a reader). */
 function fdWritable(fdPath: string): boolean {
@@ -245,10 +253,18 @@ function scanFdTargetsUnder(_underDir: string, visit: (target: string, pid: numb
   scanAllFdTargets(visit);
 }
 
+async function resourceScanFdTargetsUnder(underDir: string, visit: (target: string, pid: number, writable: () => boolean) => void): Promise<void> {
+  scanFdTargetsUnder(underDir, visit);
+}
+
 /** paths is unused for the same reason as scanFdTargetsUnder: the whole-/proc
     walk is already as cheap as a scoped one, so callers filter by target. */
 function scanFdTargetsFor(_paths: string[], visit: (target: string, pid: number, writable: () => boolean) => void): void {
   scanAllFdTargets(visit);
+}
+
+async function resourceScanFdTargetsFor(paths: string[], visit: (target: string, pid: number, writable: () => boolean) => void): Promise<void> {
+  scanFdTargetsFor(paths, visit);
 }
 
 function pidWritesPath(pid: number, pathname: string): boolean {
@@ -306,14 +322,18 @@ export const linuxBackend: ProcBackend = {
   processCpuMs,
   readEnvVar,
   listProcesses,
+  resourceListProcesses,
   systemMemory,
   resourceSystemMemory,
   processMemory,
   resourceProcessMemory,
   ppidMap,
   resourcePpidMap,
+  resourceProcessExited,
   scanFdTargetsUnder,
+  resourceScanFdTargetsUnder,
   scanFdTargetsFor,
+  resourceScanFdTargetsFor,
   pidWritesPath,
   pidHoldsPath,
 };
