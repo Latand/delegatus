@@ -288,7 +288,7 @@ function cardText(project: string, card: SeatTickCard, at: string, existing?: Bo
     ].join("\n"), CARD_TEXT_LIMIT - marker.length - 2)}\n\n${marker}`;
   }
   if (card.kind === "auto-rotation" || card.kind === "host-recovery") return redactBounded(card.detail, CARD_TEXT_LIMIT);
-  if (card.kind === "auth-failed" || card.kind === "disk-pressure") return redactBounded(`${card.detail}\n\n${MONITOR_REF_PREFIX} ${card.ref}`, CARD_TEXT_LIMIT);
+  if (card.kind === "auth-failed" || card.kind === "disk-pressure" || card.kind === "memory-pressure") return redactBounded(`${card.detail}\n\n${MONITOR_REF_PREFIX} ${card.ref}`, CARD_TEXT_LIMIT);
   if (card.kind === "no-seat") return orchestratorAlertCardText(card.detail, at);
   if (card.kind === "mcp-unavailable") return redactBounded([
     "Orchestrator seat cannot use its Viewer MCP",
@@ -408,7 +408,7 @@ function completedSeatTickCard(tasks: readonly BoardTask[], project: string, car
 export function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): boolean {
   // Authentication and automatic rotation notices are separate occurrences. An older owed card can
   // finish beside a newer incident without rewriting or closing its notice.
-  if ((card.kind === "auth-failed" || card.kind === "auto-rotation" || card.kind === "host-recovery" || card.kind === "disk-pressure") && card.instance) card = { ...card, ref: `${card.ref}-${crypto.createHash("sha256").update(card.instance).digest("hex").slice(0, 32)}` };
+  if ((card.kind === "auth-failed" || card.kind === "auto-rotation" || card.kind === "host-recovery" || card.kind === "disk-pressure" || card.kind === "memory-pressure") && card.instance) card = { ...card, ref: `${card.ref}-${crypto.createHash("sha256").update(card.instance).digest("hex").slice(0, 32)}` };
   /* The board file is resolved HERE, per call, rather than taken from the
      module-load default `mutateTasksFile` would otherwise use. That default is
      frozen the first time `@/lib/tasks/store` is imported anywhere in the
@@ -1741,6 +1741,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
       now: input.now,
       project: input.project,
       workers: input.workers,
+      ...(input.machine ? { machine: input.machine } : {}),
       snapshotAt,
       reasons: verdict.reasons,
       ...(verdict.catchUp ? { catchUp: verdict.catchUp } : {}),
