@@ -7,7 +7,7 @@ import { matchesOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { pairedTelegramOwner } from "@/lib/externalRelay/store";
 
-import { MEMBER_REQUIRED_CODE, type TeamActor } from "./contract";
+import { MEMBER_REQUIRED_CODE, type OwnerTelegramGap, type TeamActor } from "./contract";
 import { requestSession, teamMode, type LiveSession } from "./sessions";
 import { existingTeamStore } from "./store";
 
@@ -48,16 +48,32 @@ export function activeDeliveryActor(actor: TeamActor): boolean {
   return actor.kind === "operator" && teamMode() === "solo";
 }
 
-/** Telegram sign-in proves the session belongs to the independently paired owner.
- * A local install claim or a newly enrolled passkey supplies no such proof. */
-export function authenticatedOwner(req: ActorRequest, telegramUserId: string | undefined): boolean {
-  if (!telegramUserId) return false;
+/**
+ * Telegram sign-in proves the session belongs to the independently paired owner.
+ * A local install claim or a newly enrolled passkey supplies no such proof.
+ *
+ * Returns the first missing step, in the order a person can fix them, or null
+ * when the session is the owner's Telegram sign-in for the paired account.
+ * `"unverified"` names no step: nobody is signed in, or the store was unreadable.
+ */
+export function ownerTelegramGap(req: ActorRequest, telegramUserId: string | undefined): OwnerTelegramGap | "unverified" | null {
   try {
+    const store = existingTeamStore();
+    if (!store || !store.hasActiveOwner()) return "team";
     const live = requestSession(req);
-    return live?.session.method === "telegram" && live.member.role === "owner" && live.member.telegram?.userId === telegramUserId;
+    if (!live) return "unverified";
+    if (live.member.role !== "owner") return "owner";
+    if (!telegramUserId) return "pairing";
+    if (!live.member.telegram) return "telegram_link";
+    if (live.member.telegram.userId !== telegramUserId) return "telegram_account";
+    return live.session.method === "telegram" ? null : "telegram_session";
   } catch {
-    return false;
+    return "unverified";
   }
+}
+
+export function authenticatedOwner(req: ActorRequest, telegramUserId: string | undefined): boolean {
+  return ownerTelegramGap(req, telegramUserId) === null;
 }
 
 export function teamActor(req: ActorRequest): TeamActor {
