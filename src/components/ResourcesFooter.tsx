@@ -386,7 +386,7 @@ export function MemoryPressureLines({ pressure, density = "full" }: { pressure: 
     : inMemory ? t("resources.usedOfTotal", { used: fmtBytes(tmp.usedBytes), total: fmtBytes(tmp.totalBytes) })
       : t("resources.tmpOnDisk", { amount: fmtBytes(tmp.usedBytes) });
   const hint = !tmp ? t("resources.tmpUnknownHint") : tmp.tmpfs ? t("resources.tmpTmpfsHint") : t("resources.tmpOnDiskHint");
-  const share = inMemory ? (100 * tmp.usedBytes) / tmp.totalBytes : 0;
+  const share = tmp && inMemory ? (100 * tmp.usedBytes) / tmp.totalBytes : 0;
   const warnings = pressure.episode ? [
     ...(pressure.reasons.includes("swap") ? [t("resources.memorySwapHigh", { percent: String(pressure.swapWarnPercent) })] : []),
     ...(pressure.reasons.includes("tmp") ? [t("resources.memoryTmpHigh", { amount: `${(pressure.tmpWarnBytes / 1e9).toFixed(0)} GB` })] : []),
