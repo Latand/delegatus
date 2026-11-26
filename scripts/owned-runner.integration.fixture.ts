@@ -69,6 +69,8 @@ for (const mode of ["complete", "exit", "deadline", "TERM", "INT", "KILL", "test
     const { root, env, repo } = portableFixture("unreachable");
     const record = path.join(root, "ready.json"), release = path.join(root, "release"), received = path.join(root, "signal");
     const portableOwner = path.join(root, "portable-runner-pid");
+    const portableOwnerTemp = portableOwner + ".tmp", portableOwnerPublishing = portableOwner + ".publishing";
+    const portableOwnerRelease = portableOwner + ".release";
     const shutdownTail = path.join(root, "shutdown-tail-entered"), shutdownRelease = path.join(root, "shutdown-tail-release");
     const shutdownTailTemp = shutdownTail + ".tmp", shutdownTailPublishing = path.join(root, "shutdown-tail-publishing");
     const heldShutdown = entry === "direct" && mode === "KILL";
@@ -78,7 +80,14 @@ for (const mode of ["complete", "exit", "deadline", "TERM", "INT", "KILL", "test
       // dispatcher exited while the inherited diagnostic pipe remains open.
       fs.writeFileSync(path.join(root, "shutdown-tail.ts"), `import fs from "node:fs";
 if (process.argv[1] === ${JSON.stringify(path.join(repo, "scripts/owned-runner.ts"))}) {
-  fs.writeFileSync(${JSON.stringify(portableOwner)}, String(process.pid));
+  const owner = ${JSON.stringify(portableOwner)};
+  const ownerTemp = ${JSON.stringify(portableOwnerTemp)};
+  fs.writeFileSync(ownerTemp, "");
+  fs.writeFileSync(${JSON.stringify(portableOwnerPublishing)}, "publishing");
+  const ownerWait = new Int32Array(new SharedArrayBuffer(4));
+  while (!fs.existsSync(${JSON.stringify(portableOwnerRelease)})) Atomics.wait(ownerWait, 0, 0, 20);
+  fs.writeFileSync(ownerTemp, String(process.pid));
+  fs.renameSync(ownerTemp, owner);
   process.once("exit", () => {
     const marker = ${JSON.stringify(shutdownTail)};
     const temporary = marker + ".tmp";
@@ -127,10 +136,17 @@ test("portable lifetime", async () => {
     let owned: ProcessIdentity[] = [];
     let portableRunner: ProcessIdentity | undefined;
     try {
+      if (heldShutdown) {
+        await until(() => fs.existsSync(portableOwnerPublishing), 5_000);
+        expect(fs.existsSync(portableOwnerTemp)).toBe(true);
+        expect(fs.existsSync(portableOwner)).toBe(false);
+        fs.writeFileSync(portableOwnerRelease, "publish");
+      }
       await until(() => fs.existsSync(record) || closed);
       if (!fs.existsSync(record)) throw new Error(diagnostic);
       owned = JSON.parse(fs.readFileSync(record, "utf8"));
       if (heldShutdown) {
+        expect(fs.existsSync(portableOwner)).toBe(true);
         portableRunner = captureProcessIdentity(Number(fs.readFileSync(portableOwner, "utf8")));
         expect(processIdentityStatus(portableRunner)).toBe("alive");
         expect(portableRunner.pid).not.toBe(runner.pid!);
