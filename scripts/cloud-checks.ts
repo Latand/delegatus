@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { checkEnvironment, checkInputEnvironment } from "./gate-cache";
+import { decisiveRefusal } from "../src/lib/pipelines/publication";
 import { HostedCloudError as CloudRpcError, HostedSessionTimeout, HostedRpcRefusal, HostedEnvironmentOffline, cloudDiagnosticText, hostedRpcFailure as rpcFailure } from "../src/lib/pipelines/cloudHostedErrors";
 import type { HostedCloudDependencies } from "../src/lib/pipelines/cloudHostedClient";
 import type { CloudCheckConfig } from "./cloud-check-config";
@@ -11,7 +12,7 @@ export { CloudRpcError, rpcFailure };
 /** Cloud and local execute the same admitted pre-push plan. Only infrastructure
  * failures permit a confirmed, single local fallback; check failures never do. */
 export type CloudCheckInputs = Record<string, string | null | { file: string }>;
-export interface CloudJob { head: string; tree: string; base: string; inputs: CloudCheckInputs; bundle: string; timeoutMs: number }
+export interface CloudJob { head: string; tree: string; base: string; inputs: CloudCheckInputs; bundle: string; timeoutMs: number; deadlineAt?: number }
 export interface CloudDiagnostic {
   category: "connect/transport" | "environment" | "task failed" | "test failure" | "timeout" | "missing receipt" | "invalid receipt" | "account-limit" | "cloud-limit" | "cancelled";
   reason: string;
@@ -40,6 +41,9 @@ export async function runCloudChecks(job: CloudJob, transport: CloudTransport, l
     }
     report(cloudRefusalLine(result.diagnostic ?? { category: result.kind === "invalid" ? "missing receipt" : result.kind === "unavailable" ? "connect/transport" : result.kind, reason: "Cloud checks returned no valid verdict" }));
     if (result.kind === "account-limit") return 75;
+    if (result.kind === "invalid" && result.diagnostic?.category === "timeout") {
+      return /\bcleanup confirmed\b/.test(result.diagnostic.reason) ? 75 : 1;
+    }
     if (result.kind === "invalid") {
       const code = result.code;
       return typeof code === "number" && Number.isInteger(code) && code > 0 && code <= 255 ? code : 1;
@@ -128,6 +132,10 @@ function inputName(name: string): void {
  * cannot silently disappear or read a different Cloud file. */
 export function cloudCheckInputs(root: string, env: Partial<NodeJS.ProcessEnv>): CloudCheckInputs {
   const canonical = checkInputEnvironment(checkEnvironment(env));
+  // Tool routing is selected by the trusted Cloud command below. It is not a
+  // candidate-controlled portable input and must never cross input capture.
+  delete canonical.LLV_GATE_CANONICAL_TOOLS;
+  delete canonical.LLV_GATE_CANONICAL_COMPARATOR;
   const result: CloudCheckInputs = {};
   const repository = realpathSync(root);
   for (const [name, value] of Object.entries(canonical)) {
@@ -170,28 +178,38 @@ export function cloudCommand(job: CloudJob, upload?: { directory: string; source
   }).filter(Boolean).join(" ");
   const files = Object.values(job.inputs).filter((value): value is { file: string } => value !== null && typeof value === "object")
     .map(value => `test -f "$PWD"/${quote(value.file)}`).join("\n");
-  const environment = `env -i PATH="$PATH" ${inputs} HOME="$root/home" XDG_CONFIG_HOME="$root/config" TMPDIR="$root/tmp" LLV_STATE_DIR="$root/state"`;
-  const cleanup = quote("import shutil,sys; [shutil.rmtree(p) for p in sys.argv[1:]]");
+  const environment = `env -i PATH="$PATH" ${inputs} LLV_GATE_CANONICAL_TOOLS=1 LLV_GATE_CANONICAL_COMPARATOR="$setup_source/scripts/local-gate-tests.ts" LLV_GATE_CHECKPOINT_CLEANUP=cloud-owned-runner HOME="$root/home" XDG_CONFIG_HOME="$root/config" TMPDIR="$root/tmp" LLV_STATE_DIR="$root/state"`;
+  const deadlineAt = job.deadlineAt ?? Date.now() + job.timeoutMs;
   return `set -eu
 setup_source=${upload ? quote(upload.source) : '"$PWD"'}
-root=$(mktemp -d)
-${upload ? `upload=${quote(upload.directory)}\ntrap ${quote(`python3 -c ${cleanup} "$root" "$upload"`)} EXIT` : `trap ${quote(`python3 -c ${cleanup} "$root"`)} EXIT`}
+git_common=$(git rev-parse --git-common-dir)
+case "$git_common" in /*) ;; *) git_common="$PWD/$git_common" ;; esac
+root="$git_common/delegatus-cloud-checks/${randomUUID()}"
+umask 077
+mkdir -p "$root"
+chmod 700 "$root"
+upload=${upload ? quote(upload.directory) : ""}
+trap 'rm -rf "$root"; if [ -n "$upload" ]; then rm -rf "$upload"; fi' EXIT
 ${upload ? `base64 -d ${quote(`${upload.directory}/bundle`)} > "$root/source.bundle"
-git clone -q --no-hardlinks ${quote(upload.source)} "$root/repo"
+if ! git -C "$root/repo" rev-parse --git-dir >/dev/null 2>&1; then git clone -q --no-hardlinks ${quote(upload.source)} "$root/repo"; fi
 if ! git -C "$root/repo" cat-file -e ${quote(`${job.base}^{commit}`)} 2>/dev/null; then
   git -C "$root/repo" fetch -q --no-tags "$(git -C ${quote(upload.source)} remote get-url origin)" ${quote(job.base)}
 fi
 git -C "$root/repo" fetch -q "$root/source.bundle" HEAD` : `printf %s ${quote(job.bundle)} | base64 -d > "$root/source.bundle"
-git clone -q "$root/source.bundle" "$root/repo"`}
+if ! git -C "$root/repo" rev-parse --git-dir >/dev/null 2>&1; then git clone -q "$root/source.bundle" "$root/repo"; else git -C "$root/repo" fetch -q "$root/source.bundle" HEAD; fi`}
+rm -f "$root/source.bundle"
 cd "$root/repo"
+git reset --hard -q
+git clean -fdq
 git checkout -q --detach ${quote(job.head)}
 git update-ref refs/remotes/origin/main ${quote(job.base)}
 test "$(git rev-parse HEAD^{tree})" = ${quote(job.tree)}
+test "$(git status --porcelain --untracked-files=normal)" = ""
 ${files}
 mkdir -p "$root/home" "$root/config" "$root/tmp" "$root/state"
 ${environment} bun scripts/cloud-check-dependencies.ts "$setup_source"
 set +e
-${environment} LLV_SKIP_HOOKS=0 LLV_GATE_PUSH_HEAD=${quote(job.head)} LLV_GATE_RUNNER=off LLV_GATE_EXECUTION=local DELEGATUS_AGENT_CPU=off bun scripts/local-gate.ts pre-push --admitted
+${environment} LLV_SKIP_HOOKS=0 LLV_GATE_PUSH_HEAD=${quote(job.head)} LLV_GATE_PUSH_DEADLINE=${quote(String(deadlineAt))} LLV_GATE_RUNNER=off LLV_GATE_EXECUTION=local DELEGATUS_AGENT_CPU=off bun scripts/local-gate.ts pre-push --admitted
 code=$?
 set -e
 test "$(git rev-parse HEAD^{tree})" = ${quote(job.tree)}
@@ -322,6 +340,12 @@ export class AppServerCloudTransport implements CloudTransport {
         || !isExactCommand(item.command, command)) continue;
       const match = item.aggregatedOutput?.match(/DELEGATUS_GATE ([a-f0-9]{40}) ([a-f0-9]{40}) ([a-f0-9]{40}) ([a-f0-9]{64}) (\d+)\s*$/);
       if (item.status !== "declined" && !(item.status === "failed" && item.exitCode === 0) && match && Number(match[5]) === item.exitCode) {
+        const output = item.aggregatedOutput ?? "";
+        const deadlineExit = item.exitCode === 75
+          && /^(?:pre-push: no verdict within the push budget of \d+ s:|touched-tests: no verdict: |owned runner: (?:deadline expired|execution guard expired)|command timed out after \d+ms)/m.test(output)
+          && !output.split("\n").some(line => decisiveRefusal(line.trim()));
+        if (deadlineExit) return { kind: "invalid", code: 75,
+          diagnostic: { category: "timeout", reason: "Cloud check deadline expired; remote cleanup confirmed" } };
         // The raw command log can contain private test output; the bound exit
         // and reduced diagnostic are the publication record.
         const failedStep = item.aggregatedOutput?.match(/^pre-push: (types|eslint|touched tests|Linux tests|Linux backend|runtime verdict tests|Viewer build|MCP size budgets|Viewer runtime|runtime host|runtime negative controls|supply chain|frozen install): failed \(/m)?.[1];

@@ -532,7 +532,9 @@ test("the leased fixture resumes its pressure inventory across restarts and repo
       const directory = path.join(scratch, `llv-stage-${pad(n)}`); directories.push(directory);
       fs.mkdirSync(directory, { mode: 0o700 }); fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(4096));
       store.register({ directory, pipelineId: "retention-lane", launchId: "retention-launch", retainUntilClose: false, createdAt: NOW - 1000 + n });
-      store.measure(directory, 12288 + n);
+      // Seed fresh measurements on the helper's clock so the first tick
+      // builds its pressure inventory from the intended size order.
+      store.measure(directory, 12288 + n, NOW);
       store.retainRoot(directory, NOW + 6 * 86400_000);
     }
     const kept = directories[count - 1]!;

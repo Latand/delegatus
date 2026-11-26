@@ -24,7 +24,12 @@ test("Docker publishing stays on main and tags; PR scope admits image inputs and
   expect(docker.jobs.build?.needs).toBe("scope");
   expect(docker.jobs.build?.if).toBe("${{ !cancelled() && (github.event_name != 'pull_request' || needs.scope.outputs.build == 'true') }}");
   for (const file of ["Dockerfile", ".dockerignore", "package.json", "bun.lock", "patches/dependency.patch", "src/runtime-host/main.ts", "src/app/page.tsx", "public/icon.svg", "bin/cli.mjs", "scripts/published-image-entrypoint.sh", "scripts/build-mcp.ts", "vendor/connector/index.js", "landing/site/demo/taskIcons.json", "scripts/demo-capture-browser.cjs", ".env.production", ".postcssrc.json", ".github/workflows/docker-image.yml", "scripts/local-gate.ts"]) expect(isImageInput(file), file).toBeTrue();
-  for (const file of ["CONTRIBUTING.md", "docs/guide.md", ".githooks/pre-commit", "scripts/audit-with-retry.sh"]) expect(isImageInput(file), file).toBeFalse();
+  for (const file of ["CONTRIBUTING.md", "docs/guide.md", ".githooks/pre-commit"]) expect(isImageInput(file), file).toBeFalse();
+  const imageRecipe = readFileSync(path.join(root, "Dockerfile"), "utf8");
+  expect(imageRecipe).toContain("COPY --from=build /app/scripts ./scripts");
+  expect(imageRecipe).toContain("COPY --from=build /app/.githooks/pre-push ./.githooks/pre-push");
+  expect(isImageInput("scripts/local-gate-capabilities.json")).toBeTrue();
+  expect(isImageInput(".githooks/pre-push")).toBeTrue();
   expect(docker.jobs.build!["timeout-minutes"]).toBe("${{ github.event_name == 'pull_request' && 45 || 360 }}");
   expect(docker.concurrency["cancel-in-progress"]).toBe("${{ github.ref_type != 'tag' }}");
   const build = docker.jobs.build!.steps!.find(step => step.name === "Publish both architectures")!;

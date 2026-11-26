@@ -43,13 +43,15 @@ test("image inputs build, while prose, unrelated CI and shell tooling skip", () 
   ]) expect(isImageInput(file), file).toBe(true);
   for (const file of [
     "README.md", "CONTRIBUTING.md", "docs/docker.md", "docs/guide.md", "evidence/report.txt",
-    ".github/workflows/privacy-publication.yml", ".githooks/pre-push", "scripts/audit-with-retry.sh",
+    ".github/workflows/privacy-publication.yml", ".githooks/pre-commit",
     "landing/site/index.html", "docker-compose.yml",
     "evidence/docker-image/incident.json", "docs/unused.json", "docs/unused.js",
     "external/unused.cjs", "external/unused.mjs", "external/unused.jsx",
     ".env.development", ".env.test", ".env.example", "docs/.env.production",
     "docs/.gitignore", "docs/design/desktop-v2/.gitignore", "landing/site/.gitignore",
   ]) expect(isImageInput(file), file).toBe(false);
+  expect(isImageInput("scripts/local-gate-capabilities.json")).toBe(true);
+  expect(isImageInput(".githooks/pre-push")).toBe(true);
 });
 
 test("native installation and runtime inputs verify both architectures; app changes verify amd64", () => {
@@ -221,7 +223,7 @@ test("real Git diff excludes main merges and retains deletions, renames and file
       ["evidence/docker-image/incident.json", false], ["docs/unused.json", false],
       ["docs/unused.js", false], ["external/unused.cjs", false],
       ["external/unused.mjs", false], ["external/unused.jsx", false],
-      ["scripts/check-worker-client.mjs", true], ["scripts/unused.mjs", false],
+      ["scripts/check-worker-client.mjs", true], ["scripts/unused.mjs", true],
       ["docs/.gitignore", false], ["docs/design/desktop-v2/.gitignore", false],
       ["landing/site/.gitignore", false],
       [".gitignore", true], ["src/.gitignore", true], ["src/components/.gitignore", true],

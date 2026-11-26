@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { CompanionStorage } from "@/lib/voiceCompanion/storage";
-import { companionBody, companionFailure, companionOperator } from "@/lib/voiceCompanion/http";
+import { companionBody, companionFailure, companionOperator, companionStarter } from "@/lib/voiceCompanion/http";
+import { existingCompanionSessions } from "@/lib/voiceCompanion/server";
 import { LIVE_USD_PER_SECOND } from "@/lib/voiceCompanion/usage";
 
 export const runtime = "nodejs";
@@ -9,7 +10,12 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest) {
   const rejection = companionOperator(req);
   if (rejection) return rejection;
-  try { return NextResponse.json(new CompanionStorage().settings(), { headers: { "Cache-Control": "no-store" } }); }
+  try {
+    const planBilling = existingCompanionSessions()?.planBillingFor(companionStarter(req));
+    if (req.nextUrl.searchParams.get("view") === "plan-billing") return NextResponse.json({ planBilling }, { headers: { "Cache-Control": "no-store" } });
+    const settings = new CompanionStorage().settings();
+    return NextResponse.json({ ...settings, ...(planBilling ? { planBilling } : {}) }, { headers: { "Cache-Control": "no-store" } });
+  }
   catch (error) { return companionFailure(error); }
 }
 export async function PUT(req: NextRequest) {
