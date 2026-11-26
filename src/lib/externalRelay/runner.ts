@@ -1,5 +1,5 @@
 import { requesterCodeMatch, redactRequesterCodes } from "./requesterEnrolment";
-import { answerDmTask, dmTaskTrigger, recoverPendingDmTaskDeliveries } from "./dmTask";
+import { answerDmTask, dmTaskTrigger } from "./dmTask";
 import { safeRelayHttpReason } from "./httpDiagnostics";
 import { checkProviderOpens } from "./providerOpens";
 import { deliverOwnerLateAnswer } from "./ownerLateDelivery";
@@ -813,10 +813,6 @@ export async function runClaimedRequest(
       acked = true;
       heartbeatAt = Date.now();
     }
-    // Recovery is independent of this claim. Start only after its first
-    // heartbeat, and leave callback validation/handling free of side effects.
-    if (!recovery && !request?.button_choice)
-      void recoverPendingDmTaskDeliveries().catch(error => console.warn("Relay DM task delivery recovery deferred", error));
     notifyInitialLease();
     pendingBeat = Promise.resolve();
     heartbeatTimer = setInterval(() => {

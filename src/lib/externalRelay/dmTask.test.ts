@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -12,14 +13,16 @@ const originalState = process.env.LLV_STATE_DIR;
 const taskState = path.join(root, "initial");
 process.env.LLV_STATE_DIR = taskState;
 const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
+const { accountManager } = await import("@/lib/accounts/manager");
 const { selfFile } = await import("@/lib/links/self");
 const { persistProjectAliases } = await import("@/lib/projects/aliases");
 const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
 const structured = await import("@/lib/runtime/structuredMessageDelivery");
-const { loadTasks, loadTasksFile, saveTasksFile } = await import("@/lib/tasks/store");
+const taskStore = await import("@/lib/tasks/store");
+const { loadTasks, loadTasksFile, saveTasksFile } = taskStore;
 const { runClaimedRequest } = await import("./runner");
-const { dmTaskTrigger, recoverPendingDmTaskDeliveries } = await import("./dmTask");
-const { relayClaimCapabilities } = await import("./poller");
+const { DmTaskDeliveryRecovery, dmTaskTrigger } = await import("./dmTask");
+const { ensureExternalRelayPollers, relayClaimCapabilities, stopExternalRelayPollers } = await import("./poller");
 const { RELAY_DM_TASK_CHOICES, requestSchema, relayChoiceButtonsSchema } = await import("./protocol");
 const { updateRelayStore, writeRelayFile } = await import("./store");
 const { startTestRelay } = await import("./testRelay");
@@ -44,6 +47,7 @@ let claims: number;
 let directives: StructuredMessageRequest[];
 let completions: ExternalRelayCompletion[];
 let heartbeat: () => void;
+let emptyClaim: (() => Promise<void>) | undefined;
 let completionRefusal: 415 | 422 | null;
 let service: Awaited<ReturnType<typeof startTestRelay>>;
 let paired: PairedRelay;
@@ -83,6 +87,7 @@ beforeEach(async () => {
   directives = [];
   completions = [];
   heartbeat = () => {};
+  emptyClaim = undefined;
   completionRefusal = null;
   send = spyOn(structured, "enqueueStructuredMessage").mockImplementation(async message => {
     message.admissionGuard?.();
@@ -90,6 +95,7 @@ beforeEach(async () => {
     return { ok: true, structured: true, target: message.conversationId ?? null, outcome: "held", operationId: "fixture-operation" };
   });
   service = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/requests/claim") && emptyClaim) return emptyClaim().then(() => ({ status: 204 }));
     if (req.url?.endsWith("/heartbeat")) {
       heartbeat();
       return { body: { status: "ok" } };
@@ -165,6 +171,12 @@ function newTasks() {
   return tasks.filter(task => !startingTasks.some(row => row.id === task.id));
 }
 
+function dmFiles(directory: "dm-tasks" | "dm-task-pending") {
+  const dir = path.join(process.env.LLV_STATE_DIR!, "external-relay", directory);
+  try { return fs.readdirSync(dir).filter(name => name.endsWith(".json")).sort().map(name => path.join(dir, name)); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
+}
+
 test("an owner gets one assigned card and one owner directive on the inferred project across claim IDs and a process restart", async () => {
   const first = claim(owner, "Fix Beacon build output");
   const duplicates = [{ ...first, request_id: "replay-one" }, { ...first, request_id: "replay-two" }];
@@ -228,6 +240,85 @@ test("seat delivery retries a temporary refusal with one durable directive ident
   expect(directives[0]?.text).toBe(initial.text);
 });
 
+test("a receipt-only replay requires durable intent and can recover after a post-commit receipt failure", async () => {
+  const original = claim(owner, "Fix Atlas build output", "receipt-only-replay");
+  const rename = fs.renameSync;
+  const write = spyOn(fs, "renameSync").mockImplementation((source, destination) => {
+    if (path.basename(path.dirname(String(destination))) === "dm-task-pending") throw new Error("Fixture outbox refusal");
+    return rename(source, destination);
+  });
+  try {
+    for (const request_id of [original.request_id, "outbox-still-unavailable"]) {
+      expect(await runClaimedRequest(paired, { ...original, request_id }, undefined, { leaseWorker: false }))
+        .toMatchObject({ outcome: "failed" });
+      const [receipt] = dmFiles("dm-tasks");
+      expect(JSON.parse(fs.readFileSync(receipt!, "utf8"))).toMatchObject({ phase: "creating" });
+      expect(dmFiles("dm-task-pending")).toEqual([]);
+      expect(newTasks()).toEqual([]);
+      expect(directives).toEqual([]);
+    }
+    write.mockImplementation((source, destination) => {
+      if (path.basename(path.dirname(String(destination))) === "dm-tasks"
+        && JSON.parse(fs.readFileSync(source, "utf8")).phase === "created") throw new Error("Fixture receipt refusal after commit");
+      return rename(source, destination);
+    });
+    expect(await runClaimedRequest(paired, { ...original, request_id: "commit-without-receipt-update" }, undefined, { leaseWorker: false }))
+      .toMatchObject({ outcome: "failed" });
+    expect(newTasks()).toMatchObject([{ project: atlas, status: "assigned" }]);
+    const [pending] = dmFiles("dm-task-pending");
+    expect(JSON.parse(fs.readFileSync(pending!, "utf8"))).toMatchObject({ receipt: { phase: "creating" } });
+    expect(directives).toEqual([]);
+  } finally { write.mockRestore(); }
+
+  const recovery = new DmTaskDeliveryRecovery(() => true);
+  try {
+    await recovery.run();
+    await recovery.run();
+    expect(newTasks()).toHaveLength(1);
+    expect(directives).toHaveLength(1);
+    expect(directives[0]?.text).toContain(newTasks()[0]!.id);
+    expect(dmFiles("dm-task-pending")).toEqual([]);
+  } finally { await recovery.close(); }
+});
+
+test("the bounded worker retires four refused board writes and delivers the fifth intent once", async () => {
+  const messages = ["attempt-one", "attempt-two", "attempt-three", "attempt-four", "attempt-five"]
+    .map(message => ({ message, hash: createHash("sha256").update(JSON.stringify([paired.id, sampleRequest.target_id, chatKey, message])).digest("hex") }))
+    .sort((a, b) => a.hash.localeCompare(b.hash));
+  const refuseBoard = spyOn(taskStore, "mutateTasksFile").mockImplementation(() => { throw new Error("Fixture board refusal"); });
+  try {
+    for (const { message } of messages.slice(0, 4)) {
+      const request = claim(owner, "Fix Atlas build output", message);
+      expect(await runClaimedRequest(paired, request, undefined, { leaseWorker: false })).toMatchObject({ outcome: "failed" });
+    }
+    expect(refuseBoard).toHaveBeenCalledTimes(4);
+    expect(newTasks()).toEqual([]);
+    expect(directives).toEqual([]);
+  } finally { refuseBoard.mockRestore(); }
+
+  const [eligible] = messages.slice(4);
+  send.mockImplementationOnce(async () => ({ ok: false, structured: true, status: 503, outcome: "failed", error: "Fixture refusal" }))
+    .mockImplementationOnce(async () => ({ ok: false, structured: true, status: 503, outcome: "failed", error: "Fixture refusal" }));
+  expect((await reply(claim(owner, "Fix Beacon build output", eligible!.message))).text).toContain("unconfirmed");
+  const cards = newTasks();
+  expect(cards).toMatchObject([{ project: beacon, status: "assigned" }]);
+  expect(dmFiles("dm-task-pending").map(file => path.basename(file, ".json"))).toEqual(messages.map(row => row.hash));
+  expect(directives).toEqual([]);
+
+  const recovery = new DmTaskDeliveryRecovery(() => true);
+  try {
+    await recovery.run();
+    expect(dmFiles("dm-task-pending")).toHaveLength(1);
+    await recovery.run();
+    expect(dmFiles("dm-task-pending")).toEqual([]);
+    await recovery.run();
+    expect(newTasks()).toEqual(cards);
+    expect(directives).toHaveLength(1);
+    expect(directives[0]).toMatchObject({ conversationId: "conversation_beacon" });
+    expect(directives[0]?.text).toContain(cards[0]!.id);
+  } finally { await recovery.close(); }
+});
+
 test("pending owner delivery recovers after restart without Telegram replay and rechecks live authorization", async () => {
   let first: StructuredMessageRequest | undefined;
   send.mockImplementation(async message => {
@@ -272,12 +363,15 @@ test("pending owner delivery recovers after restart without Telegram replay and 
       process.env.LLV_STATE_DIR = state;
       const { AgentRegistry, setAgentRegistryForTests } = await import("./src/lib/agent/registry");
       setAgentRegistryForTests(new AgentRegistry(state + "/registry.json"));
-      const { recoverPendingDmTaskDeliveries } = await import("./src/lib/externalRelay/dmTask");
-      await recoverPendingDmTaskDeliveries(async (project, key, text, allowed) => {
-        allowed();
-        await Bun.write(output, JSON.stringify({ project, key, text }) + "\\n");
-        return true;
-      });
+      const { DmTaskDeliveryRecovery } = await import("./src/lib/externalRelay/dmTask");
+      const recovery = new DmTaskDeliveryRecovery(() => true);
+      try {
+        await recovery.run(async (project, key, text, allowed) => {
+          if (!allowed()) return false;
+          await Bun.write(output, JSON.stringify({ project, key, text }) + "\\n");
+          return true;
+        });
+      } finally { await recovery.close(); }
     `], { stdin: new Blob([JSON.stringify({ state: process.env.LLV_STATE_DIR, output: recoveryOutput })]), stdout: "pipe", stderr: "pipe" });
     const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
     if (exit !== 0) throw new Error(`Recovery process exited with ${exit}\n${stdout}\n${stderr}`);
@@ -407,36 +501,66 @@ test("a foreign callback has no pending-delivery recovery effects; independent r
   expect((await reply({ ...original, request_id: "foreign-press", button_choice: invalid })).buttons).toEqual([]);
   expect(directives).toEqual([]);
 
-  await recoverPendingDmTaskDeliveries();
+  const recovery = new DmTaskDeliveryRecovery(() => true);
+  try { await recovery.run(); }
+  finally { await recovery.close(); }
   expect(directives).toHaveLength(1);
   expect(directives[0]?.text).toContain(newTasks()[0]!.id);
 });
 
-test("a held unrelated recovery send starts only after the next claim heartbeat", async () => {
+test("an accepted DM retries on the release poller cadence while claims stay empty", async () => {
   send.mockImplementationOnce(async () => ({ ok: false, structured: true, status: 503, outcome: "failed", error: "Fixture refusal" }))
     .mockImplementationOnce(async () => ({ ok: false, structured: true, status: 503, outcome: "failed", error: "Fixture refusal" }));
-  expect((await reply(claim(owner, "Fix Atlas build output", "held-recovery-seed"))).text).toContain("unconfirmed");
-  let heartbeatSeen = false;
-  heartbeat = () => { heartbeatSeen = true; };
-  let entered!: () => void;
-  let release!: () => void;
-  const recoveryStarted = new Promise<void>(resolve => { entered = resolve; });
-  const gate = new Promise<void>(resolve => { release = resolve; });
-  send.mockImplementationOnce(async message => {
-    expect(heartbeatSeen).toBe(true);
-    entered();
-    await gate;
-    return { ok: false, structured: true, status: 503, outcome: "failed", error: "Still pending" };
+  expect((await reply(claim(owner, "Fix Atlas build output", "idle-recovery-seed"))).text).toContain("unconfirmed");
+  const [card] = newTasks();
+  expect(card).toMatchObject({ project: atlas, status: "assigned" });
+  expect(completions).toHaveLength(1);
+  expect(dmFiles("dm-task-pending")).toHaveLength(1);
+  expect(directives).toEqual([]);
+
+  let claimCount = 0;
+  const emptyPolls = Promise.withResolvers<void>();
+  const stopClaiming = Promise.withResolvers<void>();
+  emptyClaim = async () => {
+    if (++claimCount === 3) emptyPolls.resolve();
+    if (claimCount >= 3) await stopClaiming.promise;
+  };
+  // The startup pass leaves the original directive pending for the next
+  // tick. Drive the registered timer directly with a frozen clock.
+  send.mockImplementationOnce(async () => ({ ok: false, structured: true, status: 503, outcome: "failed", error: "Startup refusal" }));
+  const realInterval = globalThis.setInterval;
+  let retry: (() => void) | undefined;
+  const timer = spyOn(globalThis, "setInterval").mockImplementation((callback, delay, ...args) => {
+    if (delay === 60_000) retry = () => callback(...args);
+    return realInterval(callback, delay, ...args);
   });
-  const nextClaim = reply(claim(owner, "Fix Beacon build output", "while-recovery-held"));
+  const recovery = spyOn(DmTaskDeliveryRecovery.prototype, "run");
   try {
-    await recoveryStarted;
-    expect(heartbeatSeen).toBe(true);
+    ensureExternalRelayPollers();
+    expect(recovery).toHaveBeenCalledTimes(1);
+    await recovery.mock.results[0]!.value;
+    await emptyPolls.promise;
+    expect(send).toHaveBeenCalledTimes(3);
+    expect(directives).toEqual([]);
+    expect(retry).toBeDefined();
+    now += 60_000;
+    retry!();
+    expect(recovery).toHaveBeenCalledTimes(2);
+    await recovery.mock.results[1]!.value;
+    expect(directives).toHaveLength(1);
+    expect(directives[0]?.clientMessageId).toBe(send.mock.calls[0]![0].clientMessageId);
+    expect(directives[0]?.text).toContain(card!.id);
+    expect(dmFiles("dm-task-pending")).toEqual([]);
+    retry!();
+    await recovery.mock.results[2]!.value;
+    expect(directives).toHaveLength(1);
+    expect(completions).toHaveLength(1);
   } finally {
-    release();
+    stopExternalRelayPollers();
+    stopClaiming.resolve();
+    recovery.mockRestore();
+    timer.mockRestore();
   }
-  await nextClaim;
-  expect(newTasks()).toHaveLength(2);
 });
 
 test("an explicit Ukrainian task directive creates one project card and owner directive", async () => {
@@ -466,6 +590,26 @@ test("polite explicit task wording enters the claim handler while status request
   expect(investigation.buttons?.[0]?.[0]?.url).toContain("#task=");
   expect(newTasks()).toHaveLength(2);
   expect(directives).toHaveLength(2);
+});
+
+test("a task-list request uses ordinary relay routing and explicit card creation still works", async () => {
+  const list = claim(owner, "Create a task list for Atlas so I can see what is already open.", "list-open");
+  const select = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "exhausted", resetsAt: null });
+  try {
+    expect(await runClaimedRequest(paired, list, undefined, { leaseWorker: false }))
+      .toMatchObject({ outcome: "declined", reason: "no_capacity" });
+    expect(select).toHaveBeenCalledTimes(1);
+    expect(completions.at(-1)).toMatchObject({ outcome: "declined", reason: "no_capacity" });
+    expect(newTasks()).toEqual([]);
+    expect(directives).toEqual([]);
+  } finally { select.mockRestore(); }
+  for (const text of ["Add a task list for Atlas", "File an issue summary for Atlas", "Створи список задач Atlas"]) {
+    expect(dmTaskTrigger(requestSchema.parse(claim(owner, text)))).toBeNull();
+  }
+  const answer = await reply(claim(owner, "Create a task for Atlas to fix the build", "explicit-create"));
+  expect(answer.text).toContain("#task=");
+  expect(newTasks()).toMatchObject([{ project: atlas, status: "assigned" }]);
+  expect(directives).toHaveLength(1);
 });
 
 for (const refusal of [null, 415, 422] as const) test(`the card URL survives tight limits${refusal ? ` after HTTP ${refusal}` : " without URL buttons"}`, async () => {

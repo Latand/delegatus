@@ -15,11 +15,13 @@ import {
   terminateHeadlessReviewerGroup,
 } from "@/lib/agent/headless";
 import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
+import { activeDrain } from "@/lib/selfUpdate/drain";
 import { isStagingMode } from "@/lib/staging";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { noteRelayOutcome, relayActivity, relayOutcomeLabel } from "./activity";
 import { pruneAnswerRecords, recordAnswerCompletionRefusal, relayAnswersRoot, settleInterruptedAnswer, type RelayAnswerDelivery } from "./answers";
 import { recordCompletionRefusal } from "./completionRefusal";
+import { DmTaskDeliveryRecovery } from "./dmTask";
 import { discoverRelay, ExternalRelayError, fetchRelayTargets, isUnknownFeatureRefusal, relayCall } from "./client";
 import { requestSchema, RELAY_DM_TASK_CHOICES, RELAY_OWNER_TOOLS, RELAY_TOOLS_ON_DEMAND, type ExternalRelayCompletion } from "./protocol";
 import { RELAY_HISTORY_MEDIA, RELAY_MEDIA_ANY_DOCUMENT } from "./mediaInputValidation";
@@ -62,6 +64,7 @@ type TargetRefresh = {
 type PollerController = {
   loops: Map<string, PollLoop>;
   sweepTimer: ReturnType<typeof setInterval> | null;
+  dmTaskRecovery?: DmTaskDeliveryRecovery;
   armed: boolean;
   targetRefreshes?: Map<string, TargetRefresh>;
   descriptorRefreshes?: Map<string, TargetRefresh>;
@@ -635,10 +638,16 @@ export function ensureExternalRelayPollers(): void {
   if (isStagingMode()) return;
   if (!controller.armed) {
     controller.armed = true;
-    void sweepAndRefresh();
-    controller.sweepTimer = setInterval(() => {
+    if (mayRunStateStartupMutation(externalRelayFile("runs")))
+      controller.dmTaskRecovery = new DmTaskDeliveryRecovery(() => !activeDrain());
+    const tick = () => {
       void sweepAndRefresh();
-    }, 60_000);
+      const recovery = controller.dmTaskRecovery;
+      if (recovery) void withViewerOperation("telegram.dm-task-recovery", () => recovery.run())
+        .catch(error => console.warn("Relay DM task delivery recovery deferred", error instanceof Error ? error.name : "unknown"));
+    };
+    tick();
+    controller.sweepTimer = setInterval(tick, 60_000);
     controller.sweepTimer.unref();
     return;
   }
@@ -708,6 +717,10 @@ export function stopExternalRelayPollers(): void {
   controller.armed = false;
   if (controller.sweepTimer) clearInterval(controller.sweepTimer);
   controller.sweepTimer = null;
+  const recovery = controller.dmTaskRecovery;
+  delete controller.dmTaskRecovery;
+  if (recovery) void recovery.close()
+    .catch(error => console.warn("Relay DM task recovery shutdown failed", error instanceof Error ? error.name : "unknown"));
   for (const [id, loop] of loops) {
     loop.stopped = true;
     loop.retiring = true;

@@ -19,11 +19,11 @@ import { waitForStateLock } from "@/lib/state/lockWait";
 import { createTask, patchTask, TASK_DETAILS_LIMIT, TASK_TEXT_LIMIT } from "@/lib/tasks/commands";
 import { readMutationTask } from "@/lib/tasks/mutationView";
 import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
-import { loadTasks, mutateTasksFile, withTaskPreparation } from "@/lib/tasks/store";
+import { loadTasksByIds, mutateTasksFile, withTaskPreparation } from "@/lib/tasks/store";
 import { safeRelayUrl, type AnswerCapabilities } from "./answerV2";
 import { elevatedRequesterFor, ownerBindingRefusal } from "./profile";
 import { ownerRequesterTrigger, relayChoiceButtonsSchema, RELAY_DM_TASK_CHOICES, requesterTrigger, type ExternalRelayAnswer, type ExternalRelayRequest } from "./protocol";
-import { readRelayStore, withFileLockAsync, writeRelayFile, type PairedRelay } from "./store";
+import { readRelayStore, RelayStoreBusy, withFileLockAsync, writeRelayFile, type PairedRelay } from "./store";
 import { canonicalRelayProject, pairedOwnerTier } from "./trustedRequesters";
 
 const choiceLifetimeMs = 10 * 60_000;
@@ -58,14 +58,19 @@ function readReceipt(file: string): Receipt | null {
   }
 }
 
-// Require a task command or an imperative request for project work. Ordinary
-// conversation goes through the existing relay path.
-const taskRequest = /^(?:\/task(?:\s|$)|(?:(?:please|could you|can you|would you|будь ласка|пожалуйста)[,\s]+)?(?:create (?:a |the )?task|add (?:a |the )?task|file (?:a |an )?(?:task|issue|bug)|fix|implement|investigate|refactor|update (?:the |a )?(?:task|build|docs?|documentation|feature|project)|обнови|онови|створи|створіть|додай|додайте|виправ|виправте|реалізуй|закинь|постав\s+задачу|створи\s+задачу|создай|добавь|исправь|реализуй|заведи)(?=$|[^\p{L}\p{N}_]))/iu;
+const taskPoliteness = /^(?:please|could you|can you|would you|будь ласка|пожалуйста)[,\s]+/iu;
+// The object of a card-creation request must end at the task noun. A following
+// noun can make a different object, such as a task list or an issue summary.
+const createCard = /^(?:(?:create|add)\s+(?:(?:a|the)\s+)?task|file\s+(?:(?:a|an)\s+)?(?:task|issue|bug))(?=$|\s*[:.!?,–—“"]|\r?\n|\s+(?:for|to|about|on|in|with|called|named)\b)/iu;
+const projectWork = /^(?:fix|implement|investigate|refactor|update (?:the |a )?(?:task|build|docs?|documentation|feature|project)|обнови|онови|виправ|виправте|реалізуй|исправь|реализуй|(?:створи|створіть|додай|додайте|закинь|постав|создай|добавь|заведи)\s+(?:задачу|завдання))(?=$|[^\p{L}\p{N}_])/iu;
 
 export function dmTaskTrigger(request: ExternalRelayRequest) {
   if (request.delivery === "guest" || request.chat?.type !== "private") return null;
   const trigger = requesterTrigger(request.input);
-  return trigger && (request.button_choice || taskRequest.test(trigger.text.trim())) ? trigger : null;
+  if (!trigger || request.button_choice) return trigger;
+  const text = trigger.text.trim();
+  const imperative = text.replace(taskPoliteness, "");
+  return /^\/task(?:\s|$)/iu.test(text) || createCard.test(imperative) || projectWork.test(imperative) ? trigger : null;
 }
 
 function liveScope(relay: PairedRelay, request: ExternalRelayRequest): { project: string | null } | null {
@@ -121,10 +126,12 @@ const replies = {
 
 const seats = () => authorizedManagerSeats(productionManagerAuthoritySources()).filter(seat => seat.project !== null);
 const pendingDirectory = () => statePath("external-relay/dm-task-pending");
+const receiptPath = (identity: string) => statePath(`external-relay/dm-tasks/${identity}.json`);
+const pendingSchema = z.strictObject({ identity: hashSchema, relayId: z.string().min(1).max(128), receipt: receiptSchema });
+const recoveryBatchSize = 4;
 
 function pendingPath(identity: string) { return path.join(pendingDirectory(), `${identity}.json`); }
 function writePendingDelivery(identity: string, relayId: string, receipt: Receipt) {
-  fs.mkdirSync(pendingDirectory(), { recursive: true });
   writeRelayFile(pendingPath(identity), { identity, relayId, receipt });
 }
 function removePendingDelivery(identity: string) {
@@ -132,32 +139,78 @@ function removePendingDelivery(identity: string) {
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
 }
 
-/** Retry accepted cards from the durable outbox on any subsequent relay claim.
- * Authorization is rebuilt from the persisted trigger and checked against the
- * current pairing and requester grants before admission. */
-export async function recoverPendingDmTaskDeliveries(
-  deliver: typeof submitDirective = submitDirective,
-  maxEntries = 4,
-): Promise<void> {
-  let names: string[];
-  try { names = fs.readdirSync(pendingDirectory()).filter(name => /^[a-f0-9]{64}\.json$/.test(name)).sort(); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
-  const { relays } = readRelayStore();
-  for (const name of names.slice(0, Math.max(0, Math.min(16, maxEntries)))) {
-    const file = path.join(pendingDirectory(), name);
-    let pending: { identity: string; relayId: string; receipt: Receipt };
+/** The serving poller owns one directory cursor and one batch at a time.
+ * Each tick resumes the scan, so locked, revoked or unreadable entries cannot
+ * keep later files out of the bounded batch. */
+export class DmTaskDeliveryRecovery {
+  private directory: fs.Dir | null = null;
+  private running: Promise<void> | null = null;
+  private stopped = false;
+
+  constructor(private readonly canRun: () => boolean) {}
+
+  run(deliver = submitDirective): Promise<void> {
+    return this.running ??= this.scan(deliver).finally(() => { this.running = null; });
+  }
+
+  async close(): Promise<void> {
+    this.stopped = true;
+    try { await this.running; }
+    finally { await this.closeDirectory(); }
+  }
+
+  private async closeDirectory() {
+    const directory = this.directory;
+    this.directory = null;
+    await directory?.close();
+  }
+
+  private enabled = () => !this.stopped && this.canRun();
+
+  private async scan(deliver: typeof submitDirective) {
+    if (!this.enabled()) return;
     try {
-      const raw = JSON.parse(fs.readFileSync(file, "utf8"));
-      pending = z.strictObject({ identity: hashSchema, relayId: z.string().min(1).max(128), receipt: receiptSchema }).parse(raw);
+      this.directory ??= await fs.promises.opendir(pendingDirectory(), { bufferSize: recoveryBatchSize });
+      let relays: PairedRelay[] | undefined;
+      for (let count = 0; count < recoveryBatchSize && this.enabled(); count++) {
+        const entry = await this.directory.read();
+        if (!entry) { await this.closeDirectory(); break; }
+        if (!this.enabled()) break;
+        if (!entry.isFile() || !/^[a-f0-9]{64}\.json$/.test(entry.name)) continue;
+        const identity = entry.name.slice(0, -5);
+        try {
+          relays ??= readRelayStore().relays;
+          await recoverPendingDelivery(identity, relays, deliver, this.enabled);
+        } catch (error) {
+          if (!(error instanceof RelayStoreBusy) && (error as NodeJS.ErrnoException).code !== "ENOENT")
+            console.warn("Relay DM task outbox entry deferred", error instanceof Error ? error.name : "unknown");
+        }
+      }
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-      throw error;
+      await this.closeDirectory();
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
-    const receipt = pending.receipt;
-    if (receipt.phase === "choice") continue;
-    const requestContext = receipt.requestContext;
+  }
+}
+
+async function recoverPendingDelivery(identity: string, relays: PairedRelay[], deliver: typeof submitDirective, enabled: () => boolean) {
+  const file = receiptPath(identity);
+  await withFileLockAsync(file, async () => {
+    if (!enabled()) return;
+    const pending = pendingSchema.parse(JSON.parse(fs.readFileSync(pendingPath(identity), "utf8")));
+    if (pending.identity !== identity) throw new Error("Relay DM task outbox identity mismatch");
+    const receipt = readReceipt(file) ?? pending.receipt;
+    const taskId = taskIdFor(identity);
+    const cardExists = (project: string) => loadTasksByIds(new Set([taskId]))[0]?.project === project;
+    // The claim uses this same lock through board commit and seat admission.
+    // A receipt-only retry can recreate its intent before trying the board again.
+    if (receipt.phase === "submitted" || receipt.phase === "choice" || !cardExists(receipt.project)) {
+      removePendingDelivery(identity);
+      return;
+    }
+    const { requestContext } = receipt;
     const relay = relays.find(item => item.id === pending.relayId);
-    if (!relay || !requestContext || receipt.phase === "submitted") continue;
+    if (!relay || !requestContext) return;
     const request = {
       target_id: requestContext.targetId,
       chat: { key: requestContext.chatKey, type: "private" },
@@ -166,28 +219,21 @@ export async function recoverPendingDmTaskDeliveries(
           author: { key: requestContext.trigger.authorKey, self: false } }] },
       ...(requestContext.ownerChatId ? { owner_delivery: { chat_id: requestContext.ownerChatId } } : {}),
     } as ExternalRelayRequest;
-    const boardTask = readMutationTask(loadTasks(), taskIdFor(pending.identity));
-    if (!boardTask || boardTask.project !== receipt.project) continue;
-    if (receipt.phase === "creating") {
-      const created = { ...receipt, phase: "created" as const };
-      writeRelayFile(statePath(`external-relay/dm-tasks/${pending.identity}.json`), created);
-      pending = { ...pending, receipt: created };
-    }
-    const scope = liveScope(relay, request);
-    if (!scope || scope.project !== null && scope.project !== receipt.project) continue;
-    const instruction = bridgeDirectiveBody(`Owner request via the Telegram relay. Work on the existing board task ${taskIdFor(pending.identity)}.\n\nRequest: ${JSON.stringify(requestContext.trigger.text)}`);
-    const key = bridgeDirectiveId(`telegram_dm_${pending.identity}`, 0);
     const allowed = () => {
+      if (!enabled()) return false;
       const current = liveScope(relay, request);
       return current !== null && (current.project === null || current.project === receipt.project)
-        && seats().some(seat => seat.project === receipt.project);
+        && seats().some(seat => seat.project === receipt.project) && cardExists(receipt.project);
     };
-    try {
-      if (!await deliver(receipt.project, key, instruction, allowed)) continue;
-      writeRelayFile(statePath(`external-relay/dm-tasks/${pending.identity}.json`), { ...receipt, phase: "submitted" });
-      removePendingDelivery(pending.identity);
-    } catch { /* Keep the durable outbox entry for the next relay claim. */ }
-  }
+    if (!allowed()) return;
+    if (receipt.phase === "creating") writeRelayFile(file, { ...receipt, phase: "created" });
+    const instruction = bridgeDirectiveBody(`Owner request via the Telegram relay. Work on the existing board task ${taskId}.\n\nRequest: ${JSON.stringify(requestContext.trigger.text)}`);
+    const key = bridgeDirectiveId(`telegram_dm_${identity}`, 0);
+    if (await deliver(receipt.project, key, instruction, allowed)) {
+      writeRelayFile(file, { ...receipt, phase: "submitted" });
+      removePendingDelivery(identity);
+    }
+  }, Date.now());
 }
 
 function taskIdFor(identity: string): string {
@@ -233,7 +279,7 @@ export async function answerDmTask(
   const promptId = `dm_${identity.slice(0, 48)}`;
   const taskId = taskIdFor(identity);
   const key = bridgeDirectiveId(`telegram_dm_${identity}`, 0);
-  const file = statePath(`external-relay/dm-tasks/${identity}.json`);
+  const file = receiptPath(identity);
   const requestHash = digest(text);
   const sender = trigger.author.key;
   const choice = request.button_choice;
@@ -252,7 +298,7 @@ export async function answerDmTask(
     };
     let committed = prior?.phase === "created" || prior?.phase === "submitted";
     if (!committed && prior?.phase === "creating") {
-      const boardTask = readMutationTask(loadTasks(), taskId);
+      const [boardTask] = loadTasksByIds(new Set([taskId]));
       if (boardTask?.project === prior.project) {
         prior = { ...prior, phase: "created" };
         committed = true;
@@ -320,11 +366,11 @@ export async function answerDmTask(
     if (!prior || prior.phase === "choice") {
       prior = { ...next, phase: "creating" };
       writeRelayFile(file, prior);
-      // Persist recoverable intent before the board transaction. A restart
-      // can dispatch it only after confirming the task really committed.
-      writePendingDelivery(identity, relay.id, prior);
     }
     const alreadyCreated = prior.phase !== "creating";
+    // Every attempt starts with recoverable intent, including a retry after
+    // writing only the receipt. The worker needs no post-commit outbox write.
+    if (prior.phase !== "submitted") writePendingDelivery(identity, relay.id, { ...next, phase: prior.phase });
     type CreateResult = "created" | "denied" | "expired" | "missing" | "noSeat" | "blocked";
     const result = await withTaskPreparation(() => waitForStateLock("relay.dm-task.create", () => mutateTasksFile<CreateResult>(state => {
       if (!projectAllowed(selected)) return { state: undefined, result: "denied" };
@@ -347,7 +393,6 @@ export async function answerDmTask(
       return { state: { tasks: assigned.tasks, recentCreates: made.recentCreates }, result: "created" };
     }), { waitMs: Math.max(0, deadline - Date.now()), subject: "tasks" }));
     if (result !== "created") return leaseHeld() ? answer(copy[result]) : null;
-    if (prior.phase !== "submitted") writePendingDelivery(identity, relay.id, { ...next, phase: "created" });
     if (!alreadyCreated) writeRelayFile(file, { ...next, phase: "created" });
     if (!projectAllowed(selected)) return leaseHeld() ? answer(copy.denied) : null;
     const instruction = bridgeDirectiveBody(`Owner request via the Telegram relay. Work on the existing board task ${taskId}.\n\nRequest: ${JSON.stringify(text)}`);
@@ -359,9 +404,6 @@ export async function answerDmTask(
     if (submitted && prior.phase !== "submitted") {
       writeRelayFile(file, { ...next, phase: "submitted" });
       removePendingDelivery(identity);
-    } else if (!submitted) {
-      writeRelayFile(file, { ...next, phase: "created" });
-      writePendingDelivery(identity, relay.id, { ...next, phase: "created" });
     }
     if (!projectAllowed(selected)) return leaseHeld() ? answer(copy.denied) : null;
     const message = submitted ? copy.created : copy.pending;
