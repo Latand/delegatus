@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 
 import type { ConnectionState } from "@/components/runtime/runtimeModel";
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
 import { useLocale, type TFunction } from "@/lib/i18n";
 
-import { useRuntime } from "@/hooks/useRuntime";
+import { useRuntimeEnabled, useRuntimeSelector } from "@/hooks/useRuntime";
 import { Z } from "@/components/layers";
 
 /** Badge tone + status dot per connection state (six-tone vocabulary, §3.7). */
@@ -104,11 +104,12 @@ export function ConnectionPillBody({ connection, resynced, compact, announce, t 
  * disabled (the flag is off), so it is inert on the landing page until the
  * backend routes exist and the flag flips on.
  */
-export function ConnectionPill({ compact }: ConnectionPillProps) {
+export const ConnectionPill = memo(function ConnectionPill({ compact }: ConnectionPillProps) {
   const { t } = useLocale();
-  const { enabled, connection, resyncedAt } = useRuntime();
-  const resynced = resyncedAt !== null;
+  const enabled = useRuntimeEnabled();
+  const connection = useRuntimeSelector(state => state.connection, "offline");
+  const resynced = useRuntimeSelector(state => state.resyncedAt !== null, false);
   const announce = useThrottledAnnounce(resynced ? t("runtime.announce.resynced") : t(ANNOUNCE_KEY[connection]));
   if (!enabled) return null;
   return <ConnectionPillBody connection={connection} resynced={resynced} compact={compact} announce={announce} t={t} />;
-}
+});

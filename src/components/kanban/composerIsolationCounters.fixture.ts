@@ -1,6 +1,10 @@
 import ts from "typescript";
 
 const components: Record<string, [string, string]> = {
+  "ConnectionPill.tsx": ["ConnectionPill","connectionCommits"],
+  "DeploymentStatusPill.tsx": ["DeploymentStatusPill","deploymentCommits"],
+  "MobileFocusView.tsx": ["MobileFocusView","mobileFocusCommits"],
+  "MobileShell.tsx": ["MobileBannerSlot","mobileBannerCommits"],
   "Viewer.tsx": ["ViewerApp", "viewerCommits"],
   "ProjectDashboard.tsx": ["ProjectDashboardView", "dashboardCommits"],
   "KanbanCard.tsx": ["KanbanCard", "cardCommits"],

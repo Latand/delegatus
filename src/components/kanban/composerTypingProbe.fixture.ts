@@ -59,7 +59,8 @@ export function installTypingProbe() {
       total = chars.length; finished = 0;
       if (structural) {
         const probes = (w as TypingWindow & { __composerIsolationModules?: Set<string> }).__composerIsolationModules;
-        for (const name of ["Viewer.tsx","ProjectDashboard.tsx","KanbanCard.tsx","ConversationComposer.tsx","KanbanSeat.tsx","runtimeFilesStatus.ts"]) {
+        for (const name of ["Viewer.tsx","ProjectDashboard.tsx","KanbanCard.tsx","ConversationComposer.tsx","KanbanSeat.tsx","runtimeFilesStatus.ts",
+          "ConnectionPill.tsx","DeploymentStatusPill.tsx","MobileShell.tsx","MobileFocusView.tsx"]) {
           if (!probes?.has(name)) throw Error("instrumented bundle missing " + name);
         }
         w.isolationCounters = w.composerIsolation.counters();

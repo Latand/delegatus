@@ -5,7 +5,7 @@ import { isolationCatalogReplies } from "./composerIsolationCatalog.fixture";
 import type { FileEntry } from "@/lib/types";
 import { installIsolationStream, isolationCorpus } from "./composerIsolation.fixture";
 
-test("the timing streams update the intended conversations and replay all six envelopes in order", () => {
+test("the timing streams update the intended conversations and replay all six envelopes in order", async () => {
   function row(id: string): FileEntry {
     return { path: `/fixture/${id}.jsonl`, name: id, conversationId:id, project:"atlas", title:id,
       root:"claude-projects", engine:"claude", kind:"session", fmt:"claude", parent:null,
@@ -25,6 +25,13 @@ test("the timing streams update the intended conversations and replay all six en
       if (result.outcome !== "applied") throw Error("invalid fixture envelope: " + result.outcome);
       store = result.store; envelopes.push(envelope);
     }, () => ({}));
+  const health = stream.fileProbe("GET",new URLSearchParams("view=storage-health"));
+  expect(health?.headers.get("cache-control")).toBe("no-store");
+  expect(await health?.json()).toEqual({state:"ok",since:null,freeBytes:1024 ** 3,registryIssues:[]});
+  expect(stream.fileProbe("HEAD",new URLSearchParams("project=atlas"))?.status).toBe(204);
+  expect(stream.reads).toMatchObject({storageHealth:1,presence:1,catalog:0});
+  expect(stream.fileProbe("GET",new URLSearchParams("view=summary"))).toBeUndefined();
+  expect(stream.reads.catalog).toBe(1);
   stream.admitCatalog(files);
   expect(stream.census()).toMatchObject({ sessions:1710, projectSessions:1500, otherSessions:210, openId:"seat" });
   expect(files.find(f => f.path === corpus.subagentPath)?.parent).toBe(store.sessions[corpus.missingId]!.artifactPath);

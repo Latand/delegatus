@@ -14,6 +14,10 @@ export type IsolationCounters = {
   projectArraysPublished: number;
   dashboardCommits: number;
   viewerCommits: number;
+  connectionCommits: number;
+  deploymentCommits: number;
+  mobileFocusCommits: number;
+  mobileBannerCommits: number;
   cardCommits: number;
   editorCommits: number;
   seatMeasures: number;
@@ -23,7 +27,7 @@ export type IsolationCounters = {
 export function emptyIsolationCounters(): IsolationCounters {
   return { projectRowVisits: 0, mappedArrays: 0, publishedArrays: 0, replacedRows: 0, projectReplacedRows: 0,
     dashboardFilterVisits: 0, dashboardFilterArrays: 0, projectArraysPublished: 0, dashboardCommits: 0,
-    viewerCommits: 0, cardCommits: 0, editorCommits: 0, seatMeasures: 0, fieldGeometry: 0 };
+    viewerCommits: 0, connectionCommits: 0, deploymentCommits: 0, mobileFocusCommits: 0, mobileBannerCommits: 0, cardCommits: 0, editorCommits: 0, seatMeasures: 0, fieldGeometry: 0 };
 }
 
 /** Build the same catalog for both bundles. One other-project runtime session has no catalog row. */
@@ -109,11 +113,24 @@ export function installIsolationStream(corpus: ReturnType<typeof isolationCorpus
   const fixtureDigest = crypto.subtle.digest("SHA-256", new TextEncoder().encode(manifest))
     .then(buffer => Array.from(new Uint8Array(buffer), n => n.toString(16).padStart(2,"0")).join(""));
   let emitted = 0;
-  const reads = { catalog: 0, board: 0, snapshots: 0, presence: 0 };
+  const reads = { catalog: 0, board: 0, snapshots: 0, presence: 0, storageHealth: 0 };
   let initialBody = "", revision = 1, routed = false;
   let admittedRows = 0;
   const API = {
     reads,
+    fileProbe(method: string, query: URLSearchParams) {
+      if (method === "HEAD") {
+        reads.presence++;
+        return new Response(null, { status:204 });
+      }
+      if (query.get("view") === "storage-health") {
+        reads.storageHealth++;
+        return Response.json({ state:"ok", since:null, freeBytes:1024 ** 3, registryIssues:[] },
+          { headers:{ "cache-control":"no-store" } });
+      }
+      reads.catalog++;
+      return undefined;
+    },
     saveCatalog(body: string) { initialBody ||= body; },
     catalogSeed() {
       if (!initialBody) throw Error("no full catalog to transfer to the route");

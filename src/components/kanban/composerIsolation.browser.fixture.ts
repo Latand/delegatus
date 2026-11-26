@@ -48,6 +48,87 @@ async function keys(page: Page, text: string, delay = 100) {
   return dispatch;
 }
 
+async function seatMutationProbe(page: Page) {
+  return page.evaluate(async () => {
+    const w = window as IsolationWindow;
+    const field = document.activeElement;
+    const section = field?.closest<HTMLElement>("[data-composer-grows]");
+    const conversation = section?.querySelector<HTMLElement>("[data-orchestrator-conversation]");
+    if (!field || !section || !conversation) throw Error("missing top-seat geometry control");
+    const settle = () => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    await settle();
+    const before = section.getBoundingClientRect();
+    const counters = w.isolationCounters = w.composerIsolation.counters();
+    try {
+      conversation.style.setProperty("--isolation-decoration", "1");
+      await settle();
+      const decoration = counters.seatMeasures;
+      const sameSize = section.getBoundingClientRect().height === before.height && section.getBoundingClientRect().width === before.width;
+      field.dispatchEvent(new Event("llv:composer-field-resize", { bubbles: true }));
+      const explicitResize = counters.seatMeasures - decoration;
+      return { decoration, explicitResize, sameSize };
+    } finally { delete w.isolationCounters; conversation.style.removeProperty("--isolation-decoration"); }
+  });
+}
+
+async function testFieldGrowth(page: Page) {
+  const field = page.locator("textarea[data-composer-field]:focus");
+  const initialText = await field.inputValue();
+  const settledHeight = () => field.evaluate(async element => {
+    await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    return element.getBoundingClientRect().height;
+  });
+  try {
+    await field.fill("x");
+    const short = await settledHeight();
+    await field.fill("wrapped text ".repeat(90));
+    const wrapped = await settledHeight();
+    await field.fill("x");
+    const shrunk = await settledHeight();
+    if (wrapped <= short || Math.abs(shrunk - short) > 1) {
+      throw Error("field did not grow and return to its original height: " + JSON.stringify({ short, wrapped, shrunk }));
+    }
+    return { short, wrapped, shrunk };
+  } finally {
+    await field.fill(initialText);
+    await settledHeight();
+  }
+}
+
+async function ownReceiptDuringForeignTraffic(page: Page, instrumented: boolean) {
+  return page.evaluate(async diagnostic => {
+    const w = window as IsolationWindow;
+    const field = document.activeElement;
+    const root = field?.closest("[data-kanban-seat], main");
+    if (!root) throw Error("missing focused seat");
+    const selector = "[data-receipt-problem-count], [data-receipts-chip]";
+    if (root.querySelector(selector)) throw Error("receipt positive control needs an empty slot");
+    const start = performance.now(); let sent = 0;
+    const deliver = () => {
+      const due = 1 + Math.floor((performance.now()-start)*6/1000);
+      while (sent < due) w.composerIsolation.event("foreign",sent++);
+    };
+    const timer = setInterval(deliver, 16);
+    try {
+      deliver();
+      await new Promise(resolve => setTimeout(resolve, 200));
+      if (diagnostic) w.isolationCounters = w.composerIsolation.counters();
+      return await new Promise<{ ms: number; editorCommits: number | null; events: number; focused: boolean }>((resolve, reject) => {
+        const at = performance.now();
+        const timeout = setTimeout(() => { observer.disconnect(); reject(Error("receipt never reached the focused composer")); }, 5000);
+        const observer = new MutationObserver(() => {
+          if (!root.querySelector(selector)) return;
+          const ms = performance.now()-at;
+          clearTimeout(timeout); observer.disconnect();
+          resolve({ ms, editorCommits: w.isolationCounters?.editorCommits ?? null, events:sent, focused: document.activeElement === field });
+        });
+        observer.observe(root,{ childList:true, subtree:true, attributes:true });
+        w.composerIsolation.ownReceipt();
+      });
+    } finally { clearInterval(timer); delete w.isolationCounters; }
+  }, instrumented);
+}
+
 export async function measureComposerIsolation(browser: Browser, hostSample: () => { load: number[]; groups: Array<{quota:string; memory:string; throttledUsec:number}> }) {
   const mode = process.env.ISOLATION_MODE ?? "timing";
   if (!["smoke", "structure", "timing"].includes(mode)) throw Error("unknown isolation mode");
@@ -87,11 +168,16 @@ export async function measureComposerIsolation(browser: Browser, hostSample: () 
             construct(target, args, newTarget) { return Reflect.construct(target, args.length ? args : [fixtureNow()], newTarget); },
           });
         }, Date.parse("2026-11-25T12:00:00Z"));
+        const requestedCatalog: Array<{ view:string | null; pinned:boolean; conditional:boolean; revision:number }> = [];
         const catalogRoute: { current?: ReturnType<typeof isolationCatalogReplies> } = {};
         await routeAssets(page, entry, assets, route => {
           const transport = catalogRoute.current;
           if (!transport) throw Error("catalog route was used before admission");
           const headers = route.request().headers();
+          const query = new URL(route.request().url()).searchParams;
+          requestedCatalog.push({view:query.get("view"),pinned:query.has("path"),conditional:Boolean(headers["if-none-match"]),
+            revision:Number(headers["x-isolation-revision"])});
+          if (route.request().method() !== "GET" || query.get("view") === "storage-health") throw Error("non-catalog probe reached the catalog transport");
           const delta = headers["x-llv-board-protocol"] === "2" && headers["x-llv-board-scope"] === "fixture.global";
           return route.fulfill(transport.reply(Number(headers["x-isolation-revision"]), headers["if-none-match"], delta));
         });
@@ -142,6 +228,7 @@ export async function measureComposerIsolation(browser: Browser, hostSample: () 
         await keys(page, mode === "smoke" ? "key " : "type ".repeat(4));
         await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
         const text = "type ".repeat(24).slice(0, structure ? 37 : mode === "smoke" ? 12 : 120);
+        const readsBefore = await page.evaluate(() => (window as IsolationWindow).composerIsolation.census().reads);
         const wireBefore = { ...transport.counts };
         const startedUtc = new Date().toISOString();
         const hostBefore = hostSample();
@@ -163,24 +250,15 @@ export async function measureComposerIsolation(browser: Browser, hostSample: () 
             return (read(target) ?? -1) > initial;
           }, { target: wire.targetPath, initial: initialSize }, { timeout: 5000 });
         }
-        const catalogResponses = { ...transport.counts, wireBefore, wireAfter, initialSize, acceptedSize: initialSize === undefined ? undefined : await certifySize(wire.targetPath) };
+        const catalogResponses = { ...transport.counts, requestedCatalog, readsBefore, wireBefore, wireAfter, initialSize, acceptedSize: initialSize === undefined ? undefined : await certifySize(wire.targetPath) };
         if (cell.mix === "catalog" && reading.events && !catalogResponses.delta) throw Error("catalog revision did not deliver its delta");
-        const ownReceiptMs = structure && cell.mix === "foreign" ? await page.evaluate(() => {
-          const root = document.activeElement?.closest("[data-kanban-seat], main");
-          if (!root) throw Error("missing focused seat");
-          const selector = "[data-receipt-problem-count], [data-receipts-chip]";
-          if (root.querySelector(selector)) throw Error("receipt positive control needs an empty slot");
-          return new Promise<number>((resolve, reject) => {
-            const start = performance.now();
-            const timeout = setTimeout(() => { observer.disconnect(); reject(Error("receipt never reached the focused composer")); }, 3000);
-            const observer = new MutationObserver(() => {
-              if (root.querySelector(selector)) { clearTimeout(timeout); observer.disconnect(); resolve(performance.now()-start); }
-            });
-            observer.observe(root,{ childList: true, subtree:true, attributes:true });
-            (window as IsolationWindow).composerIsolation.ownReceipt();
-          });
-        }) : null;
-        const result = { name, width, pair, side, mode, catalogResponses, startedUtc, hostBefore, hostAfter, seedDigest, finalReads, driverDispatchMs, cpuThrottle: 4, browser: browser.version(), ownReceiptMs, ...cell, corpus, bundle, stylesheet:hash(assets.css), p95,
+        const seatMutation = structure && width !== 390 && cell.mix === "foreign" ? await seatMutationProbe(page) : null;
+        const fieldGrowth = structure && cell.label === "foreign-6" ? await testFieldGrowth(page) : null;
+        const ownReceipt = cell.label === "foreign-6" ? await ownReceiptDuringForeignTraffic(page, structure) : null;
+        if (ownReceipt && (!ownReceipt.focused || !ownReceipt.events || (structure && !ownReceipt.editorCommits))) {
+          throw Error("the own-receipt positive control did not commit to the focused composer");
+        }
+        const result = { name, width, pair, side, mode, catalogResponses, startedUtc, hostBefore, hostAfter, seedDigest, finalReads, driverDispatchMs, cpuThrottle: 4, browser: browser.version(), seatMutation, fieldGrowth, ownReceipt, ownReceiptMs: ownReceipt?.ms ?? null, ...cell, corpus, bundle, stylesheet:hash(assets.css), p95,
           p50:sorted[Math.ceil(sorted.length/2)-1], max:sorted.at(-1), ...reading };
         fs.writeFileSync(file, JSON.stringify(result, null, 2)+"\n");
         if (structure && (cell.mix === "miss" || cell.mix === "foreign")) {
@@ -188,6 +266,13 @@ export async function measureComposerIsolation(browser: Browser, hostSample: () 
           if (reading.events !== 12 || !c || c.fieldGeometry || c.projectReplacedRows || c.projectArraysPublished
             || (cell.mix === "miss" && (c.publishedArrays || c.replacedRows))) {
             throw Error("baseline structural guard: " + JSON.stringify(c));
+          }
+          if (side === "after" && (c.dashboardCommits || c.cardCommits || c.editorCommits || c.mobileFocusCommits
+            || c.mobileBannerCommits || c.connectionCommits || c.deploymentCommits || c.seatMeasures)) {
+            throw Error("foreign frame committed an unrelated consumer: " + JSON.stringify(c));
+          }
+          if (seatMutation && (!seatMutation.sameSize || !seatMutation.explicitResize || (side === "after" && seatMutation.decoration))) {
+            throw Error("seat layout observation: " + JSON.stringify(seatMutation));
           }
         }
         if (structure && cell.mix === "foreign") await page.screenshot({ path:path.join(out, name+".png") });

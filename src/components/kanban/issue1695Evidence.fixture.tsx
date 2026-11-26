@@ -4735,11 +4735,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if (url.pathname === "/api/files") {
     if (isolationStream) {
-      if (method === "HEAD") {
-        isolationStream.reads.presence++;
-        return new Response(null, { status: 204 });
-      }
-      isolationStream.reads.catalog++;
+      const probe = isolationStream.fileProbe(method, url.searchParams);
+      if (probe) return probe;
       const revision = isolationStream.routedRevision();
       if (revision !== null) {
         const headers = new Headers(init?.headers);

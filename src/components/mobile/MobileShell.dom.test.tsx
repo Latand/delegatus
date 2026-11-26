@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, mock, test } from "bun:test";
 import { Window } from "happy-dom";
+import { useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
@@ -22,17 +23,31 @@ let runtime = {
   store: emptyStore(),
   structuredHostsEnabled: false,
 };
+const runtimeListeners = new Set<() => void>();
+function subscribeRuntime(listener: () => void) {
+  runtimeListeners.add(listener);
+  return () => { runtimeListeners.delete(listener); };
+}
+function useFixtureSelector<T>(select: (state: typeof runtime) => T): T {
+  return select(useSyncExternalStore(subscribeRuntime,() => runtime,() => runtime));
+}
+function publishRuntime(next: typeof runtime) {
+  flushSync(() => {
+    runtime = next;
+    for (const listener of runtimeListeners) listener();
+  });
+}
 mock.module("@/hooks/useRuntime", () => ({
   ...actualRuntimeHooks,
   useRuntimeBusState: () => runtime,
   useRuntime: () => runtime,
-  useRuntimeSelector: (selector: (state: typeof runtime) => unknown) => selector(runtime),
+  useRuntimeSelector: useFixtureSelector,
   useRuntimeSession: () => null,
   useRuntimeReceiptsForArtifact: () => [],
   useRuntimeFlow: () => null,
 }));
 
-const { ATTENTION_PX, bannerKind, MobileBarTitle, MobileShell, TITLE_MIN_PX, titleCellWidth } = await import("./MobileShell");
+const { ATTENTION_PX, bannerKind, MobileBarTitle, MobileShell, renderViewerSheet, ViewerSheetContext, TITLE_MIN_PX, titleCellWidth } = await import("./MobileShell");
 const { MobileSheet } = await import("./MobileSheet");
 const { receipts } = await import("./MobileReceipt");
 const { createMobileNav, MobileNavContext, topScreen, useMobileNav } = await import("./mobileNav");
@@ -184,7 +199,7 @@ test("the banner slot: offline outranks an arrival; a reconnect is no banner; th
   expect(bannerKind(true, "degraded", true, "board")).toBeNull();
   expect(bannerKind(true, "offline", true, "board")).toBe("offline");
 
-  const { root, nav, b, rerender } = mount(shellHost({ arrival: <div data-testid="arrival">Needs you · plan approval</div> }));
+  const { root, nav, b } = mount(shellHost({ arrival: <div data-testid="arrival">Needs you · plan approval</div> }));
   /* A queued arrival with a live runtime: the board renders no banner at all,
      and the ⚠ badge carries the count. */
   expect(q(root, '[data-mobile2-screen="board"]')).not.toBeNull();
@@ -202,15 +217,13 @@ test("the banner slot: offline outranks an arrival; a reconnect is no banner; th
   expect(q(root, "[data-mobile2-bar]")!.compareDocumentPosition(arrival as never) & dom.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   /* A degraded stream is a reconnect in progress (#2071): no banner, so the
      arrival keeps the slot and the board keeps nothing. */
-  runtime = { ...runtime, enabled: true, connection: "degraded" };
-  rerender();
+  publishRuntime({ ...runtime, enabled: true, connection: "degraded" });
   expect(q(root, "[data-mobile2-banner]")!.getAttribute("data-mobile2-banner-kind")).toBe("arrival");
   flushSync(() => b.back());
   expect(q(root, '[data-mobile2-screen="board"]')).not.toBeNull();
   expect(q(root, "[data-mobile2-banner]")).toBeNull();
   /* Offline outranks it, on every screen, the board included. */
-  runtime = { ...runtime, connection: "offline", lastEventAt: Date.UTC(2100, 0, 2, 14, 2) };
-  rerender();
+  publishRuntime({ ...runtime, connection: "offline", lastEventAt: Date.UTC(2100, 0, 2, 14, 2) });
   const offline = q(root, "[data-mobile2-banner]")!;
   expect(offline.getAttribute("data-mobile2-banner-kind")).toBe("offline");
   expect(offline.textContent).toContain(translate("en", "mobile2.banner.offlineTitle"));
@@ -219,8 +232,7 @@ test("the banner slot: offline outranks an arrival; a reconnect is no banner; th
   expect(offline.querySelectorAll("button").length).toBe(0);
   expect(q(root, "[data-mobile2-bar]")!.compareDocumentPosition(offline as never) & dom.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   /* Runtime UI off: the board stays bare, a pushed screen gets the arrival back. */
-  runtime = { ...runtime, enabled: false };
-  rerender();
+  publishRuntime({ ...runtime, enabled: false });
   expect(q(root, "[data-mobile2-banner]")).toBeNull();
   flushSync(() => nav.push({ kind: "accounts" }));
   expect(q(root, '[data-mobile2-banner-kind="arrival"]')).not.toBeNull();
@@ -356,4 +368,28 @@ test("the bar title's eyebrow names the workspace above the name, and gives way 
   draw("ok", "updating…");
   expect(q(root, "[data-mobile2-title-eyebrow]")).toBeNull();
   expect(q(root, "[data-mobile2-title-meta]")?.textContent).toBe("updating…");
+});
+
+test("the open project sheet reads new catalog data while its host stays mounted", () => {
+  const nav = createMobileNav(browser().host);
+  const container = dom.document.createElement("div");
+  dom.document.body.appendChild(container);
+  const root = createRoot(container as unknown as Element);
+  roots.push(root);
+  const host = shellHost({ renderSheet: renderViewerSheet });
+  let hostRenders = 0;
+  function Board() { hostRenders++; return <App nav={nav} host={host} />; }
+  const board = <MobileNavContext.Provider value={nav}><Board /></MobileNavContext.Provider>;
+  function render(label: string) {
+    flushSync(() => root.render(<ViewerSheetContext.Provider value={(name, close) =>
+      <MobileSheet name={name} title="Projects" onClose={close}><span data-current-project>{label}</span></MobileSheet>
+    }>{board}</ViewerSheetContext.Provider>));
+  }
+  render("Before admission");
+  flushSync(() => container.querySelector("button[data-mobile2-open=projects]")!.dispatchEvent(new dom.MouseEvent("click", { bubbles:true })));
+  expect(container.querySelector("[data-current-project]")?.textContent).toBe("Before admission");
+  const before = hostRenders;
+  render("After admission");
+  expect(container.querySelector("[data-current-project]")?.textContent).toBe("After admission");
+  expect(hostRenders).toBe(before);
 });
