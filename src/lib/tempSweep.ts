@@ -15,7 +15,8 @@ import { STRUCTURED_HOST_STAMP_ENV } from "@/lib/scanner/process";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { OWNED_TEMP_PREFIX } from "@/lib/tempDirs";
 import { attemptTempFailureDetail } from "@/lib/runtime/attemptTempDiagnostics";
-import { gateSandboxOwnerEnded, LOCAL_GATE_SANDBOX_NAME } from "../../scripts/gateSandboxRecords";
+import { GATE_ALLOCATION_FILE, gateSandboxOwnerEnded, LOCAL_GATE_SANDBOX_NAME } from "@/lib/gateSandboxProof";
+import { identitiesInUse, mappedFileIdentity, treeHoldsIdentity } from "@/lib/processFileIdentity";
 
 /**
  * The bounded sweeper for temp directories Delegatus left behind (#1957).
@@ -44,6 +45,10 @@ import { gateSandboxOwnerEnded, LOCAL_GATE_SANDBOX_NAME } from "../../scripts/ga
  *   `XDG_CONFIG_HOME`/`CLAUDE_CODE_TMPDIR`. A stage agent whose shell is idle
  *   still carries its scratch directory in `TMPDIR`, so it is kept. Roots
  *   claimed after startup keep an open directory descriptor in `tempDirs.ts`.
+ *   Before quarantine and again at removal, the device and inode behind every
+ *   process's cwd, root, descriptors, mappings and named paths are matched
+ *   against the tree, which finds a holder in another mount namespace or
+ *   behind a bind mount that spells the path differently.
  * - **Never a pipeline worktree**, or a directory holding one, or holding any
  *   git checkout: registered linked merger, review and attribution checkouts
  *   are freed by the worktree sweep after its commit preservation proof,
@@ -124,6 +129,10 @@ export type ScannedProcess = {
   /** Paths it is using: cwd, open files, and the directories named by {@link IN_USE_ENV}. */
   paths: string[];
   references?: string[];
+  /** Its `/proc` entry, where the files it uses can be identified. Absent off Linux. */
+  procDirectory?: string;
+  /** Identities of the files it has mapped. */
+  mapped?: string[];
 };
 
 export type ProcessScan = { ownNamespace: string | null; processes: ScannedProcess[]; unverified?: boolean };
@@ -148,7 +157,9 @@ export function scanProcesses(procRoot = "/proc", extraRoots: readonly string[] 
   try {
     entries = fs.readdirSync(procRoot);
   } catch {
-    return { ...portableScan(extraRoots), ...(process.platform === "linux" ? { unverified: true } : {}) };
+    const fallback = portableScan(extraRoots);
+    if (process.platform === "linux") fallback.unverified = true;
+    return fallback;
   }
   const processes: ScannedProcess[] = [];
   for (const name of entries) {
@@ -172,6 +183,7 @@ export function scanProcesses(procRoot = "/proc", extraRoots: readonly string[] 
       if (target?.startsWith("/") && target !== "/") paths.add(target);
     }
     const references: string[] = [];
+    const mapped = new Set<string>();
     try {
       for (const token of fs.readFileSync(path.join(base, "cmdline"), "utf8").split("\0")) {
         references.push(token);
@@ -181,7 +193,10 @@ export function scanProcesses(procRoot = "/proc", extraRoots: readonly string[] 
       }
       for (const line of fs.readFileSync(path.join(base, "maps"), "utf8").split("\n")) {
         const target = /^\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+(\/.*)$/.exec(line)?.[1];
-        if (target) paths.add(target.replace(/ \(deleted\)$/, ""));
+        if (!target) continue;
+        paths.add(target.replace(/ \(deleted\)$/, ""));
+        const identity = mappedFileIdentity(line);
+        if (identity) mapped.add(identity);
       }
     } catch { /* A process can exit during inspection. */ }
     let stamped = false;
@@ -197,7 +212,7 @@ export function scanProcesses(procRoot = "/proc", extraRoots: readonly string[] 
     } catch {
       /* Exited mid-scan, or not ours. */
     }
-    processes.push({ pid: Number(name), namespace, stamped, ...(cwd ? { cwd } : {}), paths: [...paths], references });
+    processes.push({ pid: Number(name), namespace, stamped, ...(cwd ? { cwd } : {}), paths: [...paths], references, procDirectory: base, mapped: [...mapped] });
   }
   return { ownNamespace: readLink(path.join(procRoot, "self", "ns", "mnt")), processes };
   });
@@ -328,20 +343,28 @@ function inside(candidate: string, directory: string): boolean {
 type OwnerHold = "agent-owner-unverified" | "gate-owner-unverified" | "conversation_reference";
 type ReferenceHold = OwnerHold | "process_reference" | "process-scan-unverified";
 
-/** Include flag values and path arguments inside a shell command, alongside
- * the paths the existing process scan collects from cwd and open descriptors. */
-function processUsesTemp(proc: ScannedProcess, holds: (file: string) => boolean): boolean {
-  if (proc.paths.some(holds)) return true;
-  const argumentHolds = (argument: string) => {
-    const absolute = path.isAbsolute(argument) ? argument : proc.cwd && path.join(proc.cwd, argument);
-    return !!absolute && processPathWithinLimits(absolute) && holds(absolute);
+/** The paths a process names: those the scan collected, then flag values and
+ * path arguments inside its command line and environment. */
+function* namedPaths(proc: ScannedProcess): Generator<string> {
+  yield* proc.paths;
+  const absolute = (argument: string) => {
+    const file = path.isAbsolute(argument) ? argument : proc.cwd && path.join(proc.cwd, argument);
+    return file && processPathWithinLimits(file) ? file : null;
   };
-  return proc.references?.some(value => {
+  for (const value of proc.references ?? []) {
     const argument = /^--?[^=\s]+=([\s\S]*)$/.exec(value)?.[1] ?? value;
-    if (argument && !argument.startsWith("-") && argumentHolds(argument)) return true;
-    return [...value.matchAll(/["']((?:\/|\.\.?\/)[^"']+)["']|(?:\/|\.\.?\/)[^\s\x00'"\x60=;|&<>]+/g)]
-      .some(match => argumentHolds(match[1] ?? match[0]));
-  }) ?? false;
+    const whole = argument && !argument.startsWith("-") ? absolute(argument) : null;
+    if (whole) yield whole;
+    for (const match of value.matchAll(/["']((?:\/|\.\.?\/)[^"']+)["']|(?:\/|\.\.?\/)[^\s\x00'"\x60=;|&<>]+/g)) {
+      const embedded = absolute(match[1] ?? match[0]);
+      if (embedded) yield embedded;
+    }
+  }
+}
+
+function processUsesTemp(proc: ScannedProcess, holds: (file: string) => boolean): boolean {
+  for (const file of namedPaths(proc)) if (holds(file)) return true;
+  return false;
 }
 
 export type TempSweepRemoval = { path: string; via: string; bytes: number; ageHours: number };
@@ -798,20 +821,43 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
       return { newestMs: 0, entries: 0, hold: "unreadable-tree" as const };
     }
   };
+  /** Hundreds of processes name the same files, so one check answers each
+   * spelling once. The answers live no longer than that check. */
+  const once = (answer: (file: string) => boolean) => {
+    const answers = new Map<string, boolean>();
+    return (file: string) => {
+      let known = answers.get(file);
+      if (known === undefined) answers.set(file, known = answer(file));
+      return known;
+    };
+  };
   const pathHolds = (root: TempSweepRoot, ...directories: string[]) => {
     const physical = directories.map(directory => resolvePhysicalPath(root.via + directory));
-    return (file: string) => {
+    return once((file: string) => {
       const resolved = path.resolve(file.replace(/ \(deleted\)$/, ""));
       return directories.some(directory => inside(resolved, directory))
         || physical.some(directory => inside(resolvePhysicalPath(root.via + resolved), directory));
-    };
+    });
   };
   const conversationHolds = (candidate: string, via = "") => (options.conversationCwds?.() ?? options.conversationProtection?.().held ?? []).some(entry =>
     inside(path.resolve(entry), via && candidate.startsWith(via) ? candidate.slice(via.length) : candidate)
       || inside(resolvePhysicalPath(via + entry), resolvePhysicalPath(candidate)));
   const detachedOwner = (root: TempSweepRoot, name: string) => !options.onlyDirectories && root.path !== options.scratchRoot
     ? detachedTempOwner(name) : null;
-  const detachedHold = (kind: "agent" | "gate", root: TempSweepRoot, original: string, reachable: string, observed: ProcessScan): ReferenceHold | null => {
+  const scanIdentities = new WeakMap<ProcessScan, Set<string>>();
+  /** A path check reads spellings. The identity of the files behind them also
+   * finds a holder in another mount namespace or behind a bind mount. */
+  const processHoldsFile = (observed: ProcessScan, tree: string) => {
+    let identities = scanIdentities.get(observed);
+    if (!identities) scanIdentities.set(observed, identities = identitiesInUse(observed.processes.flatMap(proc => proc.procDirectory
+      ? [{ directory: proc.procDirectory, namespace: proc.namespace, mapped: proc.mapped, paths: namedPaths(proc) }] : [])));
+    return treeHoldsIdentity(tree, identities, TREE_INSPECTION_ENTRY_LIMIT);
+  };
+  /** Registered attempt roots keep their own argument and consumer proof in `eligible`. */
+  const processNames = (observed: ProcessScan, holds: (file: string) => boolean) =>
+    observed.processes.some(proc => options.onlyDirectories ? proc.paths.some(holds) : processUsesTemp(proc, holds));
+  const detachedHold = (kind: "agent" | "gate", root: TempSweepRoot, original: string, reachable: string, observed: ProcessScan,
+    removalBegan = false): ReferenceHold | null => {
     const current = root.via ? reachable.slice(root.via.length) : reachable;
     const holds = pathHolds(root, original, current);
     const processHolds = (match: (file: string) => boolean) => observed.processes.some(proc => processUsesTemp(proc, match));
@@ -836,24 +882,24 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
       }
       return null;
     }
-    return gateSandboxOwnerEnded(reachable, original, root.via, journal => processHolds(pathHolds(root, journal)))
+    // Our interrupted removal can have taken the allocation record with it.
+    // The journal's snapshot shows the record was there when ownership was proven.
+    if (removalBegan && !fs.lstatSync(path.join(reachable, GATE_ALLOCATION_FILE), { throwIfNoEntry: false })) return null;
+    return gateSandboxOwnerEnded(reachable, original, root.via,
+      journal => processHolds(pathHolds(root, journal)) || processHoldsFile(observed, root.via + journal))
       ? null : "gate-owner-unverified";
   };
-  const trashHolds = (root: TempSweepRoot, trash: string, original: string, bytes = 0) => {
+  const trashHolds = (root: TempSweepRoot, trash: string, original: string, bytes = 0, removalBegan = false) => {
     if (!namespaceStill(root.anchor, procRoot)) return true;
     const owner = detachedOwner(root, path.basename(original));
-    if (owner) {
-      const hold = detachedHold(owner, root, original, trash, readScan());
-      if (hold) report.held!.push({ path: original, via: root.via, reason: hold, bytes });
-      return !!hold;
-    }
-    if (conversationHolds(trash, root.via)) return true;
-    const physical = resolvePhysicalPath(trash);
-    const canonical = root.via && trash.startsWith(root.via) ? trash.slice(root.via.length) : trash;
-    const processReferenced = readScan().processes.some(proc => proc.paths.some(entry => inside(path.resolve(entry), canonical)
-      || inside(resolvePhysicalPath(root.via + entry), physical)));
-    if (processReferenced) report.held!.push({ path: original, via: root.via, reason: "process_reference", bytes });
-    return processReferenced;
+    if (!owner && conversationHolds(trash, root.via)) return true;
+    const observed = readScan();
+    const current = root.via && trash.startsWith(root.via) ? trash.slice(root.via.length) : trash;
+    let hold = owner ? detachedHold(owner, root, original, trash, observed, removalBegan)
+      : processNames(observed, pathHolds(root, ...(options.onlyDirectories ? [current] : [original, current]))) ? "process_reference" : null;
+    if (!hold && !options.onlyDirectories && processHoldsFile(observed, trash)) hold = "process_reference";
+    if (hold) report.held!.push({ path: original, via: root.via, reason: hold, bytes });
+    return !!hold;
   };
   const pinned = (directory: string) => {
     try { fs.lstatSync(path.join(directory, ".delegatus-keep")); return true; } catch { return false; }
@@ -910,10 +956,11 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         const original = path.resolve(row.directory);
         const candidate = path.join(root.path, path.basename(original));
         const owner = detachedOwner(root, path.basename(candidate));
+        const removalBegan = owner === "gate" && !!row.snapshot?.entries?.[GATE_ALLOCATION_FILE];
         if (await finishTreeTrash(journal,
           async trash => (options.eligible && !await options.eligible(trash)) || (!owner && trashHolds(root, trash, candidate)),
           options.remove, trash => !trashPolicyHolds(root, trash, owner ? candidate : original) && (!options.dispatchGuard || options.dispatchGuard(trash)),
-          options.disposable, owner ? trash => !trashHolds(root, trash, candidate) : undefined, options.keepRefusedTrash)) report.trashFinished!++;
+          options.disposable, owner ? trash => !trashHolds(root, trash, candidate, 0, removalBegan) : undefined, options.keepRefusedTrash)) report.trashFinished!++;
       } catch (error) { report.errors.push(String(error)); }
     }
     for (const name of names.sort()) {
@@ -1040,9 +1087,10 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
       try {
         const bytes = await measure(reachable, seenAllocations, includeRoot, excluded);
         const freshScan = readScan();
-        const hold = owner ? detachedHold(owner, root, candidate, reachable, freshScan)
-          : freshScan.processes.some(process => process.paths.some(entry => processHolds(path.resolve(entry)))) ? "process_reference"
+        let hold = owner ? detachedHold(owner, root, candidate, reachable, freshScan)
+          : processNames(freshScan, once(entry => processHolds(path.resolve(entry)))) ? "process_reference"
           : conversationHolds(reachable, root.via) ? "conversation_reference" : null;
+        if (!hold && !options.onlyDirectories && processHoldsFile(freshScan, reachable)) hold = "process_reference";
         if (hold) {
           if (owner || hold === "process_reference") await keepReference(hold, bytes);
           else await keep("inUse", bytes);

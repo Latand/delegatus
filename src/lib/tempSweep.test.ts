@@ -1,5 +1,5 @@
 import { STRUCTURED_HOST_STAMP_ENV } from "@/lib/scanner/process";
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import * as attemptRemoval from "./runtime/attemptTempRemoval";
@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { procBackend } from "@/lib/proc";
+import { mappedFileIdentity } from "@/lib/processFileIdentity";
 import { AgentRegistry, agentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { plantKeepMarker, removeKeepMarkers } from "./runtime/keepMarker.testSupport";
 
@@ -273,6 +274,220 @@ test.skipIf(process.platform !== "linux").each(["ended", "retained"] as const)(
     expect(fs.existsSync(imitation)).toBeTrue();
   },
 );
+
+test.skipIf(process.platform !== "linux")("a gate sandbox whose interrupted removal took its allocation record is finished by the next sweep", async () => {
+  const root = tempRoot();
+  const directory = path.join(root, "delegatus-local-gate-G7h8I9");
+  fs.mkdirSync(directory, { mode: 0o700 });
+  fs.writeFileSync(path.join(directory, "payload"), "gate output");
+  const env: NodeJS.ProcessEnv = { ...process.env, TMPDIR: root };
+  delete env.LLV_GATE_SANDBOX_RECORD;
+  const records = JSON.stringify(path.resolve(import.meta.dir, "../../scripts/gateSandboxRecords.ts"));
+  // The supervisor dies without its exit cleanup, which leaves an orphan.
+  expect(spawnSync(process.execPath, ["-e", `
+    import { ownGateSandboxes, recordGateSandbox } from ${records};
+    ownGateSandboxes();
+    recordGateSandbox(process.argv[1]);
+    process.kill(process.pid, "SIGKILL");
+  `, directory], { env }).signal).toBe("SIGKILL");
+  const record = ".delegatus-gate-allocation.json";
+  expect(fs.existsSync(path.join(directory, record))).toBeTrue();
+  const options = { roots: [{ path: root, via: "" }], scan: { ownNamespace: null, processes: [] }, maxAgeMs: DAY, now: () => Date.now() + 2 * DAY };
+  const interrupted = await realSweep({ ...options, remove: async (trash, mutationStarted) => {
+    mutationStarted(); fs.unlinkSync(path.join(trash, record)); throw new Error("interrupted");
+  } });
+  expect(interrupted.errors).toHaveLength(1);
+  const trashed = () => fs.readdirSync(root).filter(name => name.startsWith(".delegatus-trash-"));
+  expect(trashed()).toHaveLength(1);
+  // The removal dirtied the directory; it is finished once it has aged again.
+  const resumed = await realSweep(options);
+  expect(resumed.errors).toEqual([]);
+  expect(resumed.trashFinished).toBe(1);
+  expect(trashed()).toEqual([]);
+  expect(fs.readdirSync(root).filter(name => name.startsWith(".delegatus-sweep-"))).toEqual([]);
+});
+
+const userNamespaceMounts = process.platform === "linux" && spawnSync("unshare", ["-Urm", "true"], { stdio: "ignore", timeout: 5_000 }).status === 0;
+
+/** A temp candidate holding `sub/file`, and an empty directory to mount it on. */
+function namespaceFixture(name: string) {
+  const root = tempRoot(), view = tempRoot(), outside = tempRoot();
+  const directory = path.join(root, name);
+  fs.mkdirSync(path.join(directory, "sub"), { recursive: true, mode: 0o700 });
+  fs.chmodSync(directory, 0o700);
+  const file = path.join(directory, "sub", "file");
+  fs.writeFileSync(file, "keep");
+  return { root, view, outside, directory, file };
+}
+
+/** A process in its own user and mount namespace which sees `source` at `view`.
+ * It prints `ready` once it holds what the script describes. */
+async function namespaceHolder(source: string, view: string, script: string, input = "") {
+  const child = spawn("unshare", ["-Urm", "sh", "-c", `mount --bind "$1" "$2" && ${script}`, "holder", source, view, process.execPath],
+    { cwd: "/", env: { NODE_ENV: "test", PATH: process.env.PATH }, stdio: ["pipe", "pipe", "inherit"] });
+  children.push(child);
+  if (input) child.stdin!.write(input);
+  const ready = await Promise.race([once(child.stdout!, "data"), once(child, "exit")]);
+  expect(String(ready[0]).trim()).toBe("ready");
+  return child;
+}
+
+function namespaceSweep(fixture: { root: string; directory: string }, extra: Partial<TempSweepOptions>) {
+  const now = Date.now() + 2 * DAY;
+  return realSweep({ roots: [{ path: fixture.root, via: "" }], maxAgeMs: DAY, now: () => now,
+    conversationProtection: () => ({ held: [], ended: new Map([[fixture.directory, now - DAY]]) }), ...extra });
+}
+
+async function stop(child: ChildProcess) {
+  const exited = once(child, "exit");
+  child.kill("SIGKILL");
+  await exited;
+}
+
+const waiting = `exec sh -c 'echo ready; exec sleep 60'`;
+const NAMESPACE_HOLDERS = {
+  cwd: { script: `cd "$2/sub" && ${waiting}` },
+  descriptor: { script: `exec 3<"$2/sub/file" && ${waiting}` },
+  // The whole temp root mounted elsewhere, as a container volume does it.
+  "root-volume": { script: `cd "$2/NAME/sub" && ${waiting}`, wholeRoot: true },
+  argument: { script: `exec "$3" -e 'process.stdin.resume(); console.log("ready")' "$2/sub/file"` },
+  environment: { script: `CACHE_ROOT="$2/sub" ${waiting}` },
+  // The path arrives on stdin, so only the mapping itself names the file.
+  mapping: { script: `exec "$3" -e 'process.stdin.once("data", data => { globalThis.mapped = Bun.mmap(String(data).trim()); console.log("ready"); })'`, sendPath: true },
+  "hard-linked-file": { script: `exec 3<"$2/sub/file" && ${waiting}`, linked: true },
+} satisfies Record<string, { script: string; wholeRoot?: boolean; sendPath?: boolean; linked?: boolean }>;
+
+for (const name of ["agyc-ns", "llv-nsbase"]) {
+  test.skipIf(!userNamespaceMounts).each(Object.keys(NAMESPACE_HOLDERS) as (keyof typeof NAMESPACE_HOLDERS)[])(
+    `a holder in another mount namespace keeps ${name} through its %s`, async kind => {
+      const holder: { script: string; wholeRoot?: boolean; sendPath?: boolean; linked?: boolean } = NAMESPACE_HOLDERS[kind];
+      const fixture = namespaceFixture(name);
+      if (holder.linked) fs.linkSync(fixture.file, path.join(fixture.outside, "cache"));
+      const child = await namespaceHolder(holder.wholeRoot ? fixture.root : fixture.directory, fixture.view,
+        holder.script.replace("NAME", name), holder.sendPath ? path.join(fixture.view, "sub", "file") + "\n" : "");
+      expect(fs.readlinkSync(`/proc/${child.pid}/ns/mnt`)).not.toBe(fs.readlinkSync("/proc/self/ns/mnt"));
+      const procRoot = fixtureProcRoot([child]);
+      const held = await namespaceSweep(fixture, { procRoot });
+      expect(held.errors).toEqual([]);
+      expect(held.removed).toEqual([]);
+      expect(held.held?.map(row => [row.path, row.reason])).toEqual([[fixture.directory, "process_reference"]]);
+      expect(fs.readFileSync(fixture.file, "utf8")).toBe("keep");
+      await stop(child);
+      const released = await namespaceSweep(fixture, { procRoot });
+      expect(released.errors).toEqual([]);
+      expect(released.removed.map(row => row.path)).toEqual([fixture.directory]);
+    }, 30_000);
+
+  test.skipIf(!userNamespaceMounts)(`a namespace holder first seen after quarantine restores ${name}`, async () => {
+    const fixture = namespaceFixture(name);
+    const child = await namespaceHolder(fixture.directory, fixture.view, NAMESPACE_HOLDERS.cwd.script);
+    const procRoot = fixtureProcRoot([child]);
+    const report = await namespaceSweep(fixture, {
+      currentScan: () => fs.existsSync(fixture.directory) ? { ownNamespace: null, processes: [] } : scanProcesses(procRoot),
+    });
+    expect(report.errors).toEqual([]);
+    expect(report.removed).toEqual([]);
+    expect(report.held?.map(row => [row.path, row.reason])).toEqual([[fixture.directory, "process_reference"]]);
+    expect(fs.readFileSync(fixture.file, "utf8")).toBe("keep");
+    expect(fs.readdirSync(fixture.root)).toEqual([name]);
+  }, 30_000);
+
+  test.skipIf(!userNamespaceMounts)(`a namespace holder inside the quarantine of ${name} stops its replay`, async () => {
+    const fixture = namespaceFixture(name);
+    const interrupted = await namespaceSweep(fixture, { scan: { ownNamespace: null, processes: [] },
+      remove: async (_trash, mutationStarted) => { mutationStarted(); throw new Error("interrupted"); } });
+    expect(interrupted.errors).toHaveLength(1);
+    const trash = path.join(fixture.root, fs.readdirSync(fixture.root).find(entry => entry.startsWith(".delegatus-trash-"))!);
+    const child = await namespaceHolder(trash, fixture.view, NAMESPACE_HOLDERS.descriptor.script);
+    const procRoot = fixtureProcRoot([child]);
+    const held = await namespaceSweep(fixture, { procRoot });
+    expect(held.errors).toEqual([]);
+    expect(held.trashFinished).toBe(0);
+    expect(held.held?.map(row => row.reason)).toEqual(["process_reference"]);
+    expect(fs.readFileSync(path.join(trash, "sub", "file"), "utf8")).toBe("keep");
+    await stop(child);
+    const released = await namespaceSweep(fixture, { procRoot });
+    expect(released.trashFinished).toBe(1);
+    expect(fs.readdirSync(fixture.root)).toEqual([]);
+  }, 30_000);
+}
+
+test.skipIf(!userNamespaceMounts)("a namespace holder that opened a hard-linked file by its other name does not keep the tree", async () => {
+  const fixture = namespaceFixture("llv-shared-cache");
+  const cache = path.join(fixture.outside, "cache");
+  fs.linkSync(fixture.file, cache);
+  const child = await namespaceHolder(fixture.view, fixture.view, `exec 3<'${cache}' && ${waiting}`);
+  const report = await namespaceSweep(fixture, { procRoot: fixtureProcRoot([child]) });
+  expect(report.errors).toEqual([]);
+  expect(report.removed.map(row => row.path)).toEqual([fixture.directory]);
+  expect(fs.readFileSync(cache, "utf8")).toBe("keep");
+}, 30_000);
+
+/** A `/proc` entry whose process sees its own root, without needing a namespace. */
+function foreignViewProc(entries: { root?: string; cmdline?: string; descriptor?: string; maps?: string }) {
+  const proc = tempRoot(), process_ = path.join(proc, "10");
+  fs.mkdirSync(path.join(process_, "ns"), { recursive: true });
+  fs.mkdirSync(path.join(process_, "fd"));
+  fs.symlinkSync("mnt:[2]", path.join(process_, "ns", "mnt"));
+  if (entries.root) fs.symlinkSync(entries.root, path.join(process_, "root"));
+  fs.writeFileSync(path.join(process_, "cmdline"), entries.cmdline ?? "");
+  if (entries.descriptor) fs.symlinkSync(entries.descriptor, path.join(process_, "fd", "3"));
+  if (entries.maps) fs.writeFileSync(path.join(process_, "maps"), entries.maps);
+  return proc;
+}
+
+test.skipIf(process.platform !== "linux").each(["argument", "mapping"] as const)(
+  "a %s which only identifies the tree under the process's own root keeps it", async kind => {
+    const fixture = namespaceFixture("llv-foreign-view");
+    const ownRoot = tempRoot(), spelled = `/delegatus-fixture-view-${path.basename(fixture.root)}`;
+    fs.symlinkSync(fixture.directory, path.join(ownRoot, spelled));
+    const stat = fs.statSync(fixture.file, { bigint: true });
+    const device = Number(stat.dev);
+    const columns = `${(Math.floor(device / 256) % 4096).toString(16)}:${(device % 256 + Math.floor(device / 1_048_576) * 256).toString(16)} ${stat.ino}`;
+    const procRoot = foreignViewProc(kind === "argument" ? { root: ownRoot, cmdline: `tool\0${spelled}/sub/file\0` }
+      : { maps: `7f0000000000-7f0000001000 r--p 00000000 ${columns} ${spelled}/sub/file\n` });
+    const report = await namespaceSweep(fixture, { procRoot });
+    expect(report.errors).toEqual([]);
+    expect(report.removed).toEqual([]);
+    expect(report.held?.map(row => [row.path, row.reason])).toEqual([[fixture.directory, "process_reference"]]);
+  },
+);
+
+test.skipIf(process.platform !== "linux")("a descriptor on the other name of a hard-linked file does not keep the tree", async () => {
+  const fixture = namespaceFixture("llv-shared-link");
+  const cache = path.join(fixture.outside, "cache");
+  fs.linkSync(fixture.file, cache);
+  const report = await namespaceSweep(fixture, { procRoot: foreignViewProc({ descriptor: cache }) });
+  expect(report.errors).toEqual([]);
+  expect(report.removed.map(row => row.path)).toEqual([fixture.directory]);
+});
+
+test.skipIf(process.platform !== "linux")("a mapped file's maps columns give the identity stat reports", () => {
+  // btrfs reports a per-subvolume device to stat; the path walk covers it.
+  const file = path.join(tempRoot(), "mapped");
+  fs.writeFileSync(file, Buffer.alloc(8192, 1));
+  if (fs.statfsSync(file).type === 0x9123683e) return;
+  const mapped = Bun.mmap(file);
+  const stat = fs.statSync(file, { bigint: true });
+  const line = fs.readFileSync("/proc/self/maps", "utf8").split("\n").find(entry => entry.endsWith(file));
+  expect(mapped.length).toBe(8192);
+  expect(mappedFileIdentity(line!)).toBe(`${stat.dev}:${stat.ino}`);
+  expect(mappedFileIdentity("7f0000000000-7f0000001000 rw-p 00000000 00:00 0 ")).toBeNull();
+});
+
+test.each(["measurement", "quarantine"] as const)("a flag value naming a stale owned tree during %s keeps it", async when => {
+  const { root, directory, options } = boundedFixture();
+  const flagged: ProcessScan = { ownNamespace: null, processes: [{ pid: 42, namespace: null, stamped: false, paths: [],
+    references: ["tool", `--data-dir=${directory}`] }] };
+  let reads = 0;
+  const report = await sweepStaleTempDirs({ ...options, currentScan: () => {
+    const quarantined = fs.readdirSync(root).some(name => name.startsWith(".delegatus-trash-"));
+    return (when === "quarantine" ? quarantined : ++reads > 1) ? flagged : noProcesses;
+  } });
+  expect(report.removed).toEqual([]);
+  expect(report.held?.map(row => [row.path, row.reason])).toEqual([[directory, "process_reference"]]);
+  expect(fs.existsSync(directory)).toBeTrue();
+});
 
 test("the threshold defaults to 24 h, reads hours from the environment, and 0 turns the sweep off", () => {
   expect(tempSweepMaxAgeMs({})).toBe(DAY);
