@@ -3255,11 +3255,14 @@ describe("ProjectDashboard derivation", () => {
 
   browserTest("measures composer isolation on a routed 1710-conversation board", async () => {
     const { measureComposerIsolation } = await import("./composerIsolation.browser.fixture");
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
     const listener = spyOn(Bun, "serve").mockImplementation(() => { throw Error("the isolation fixture must use page.route"); });
+    /* Chrome's singleton socket path is bounded, and an isolated TMPDIR is long. */
+    const sockets = ownedBrowserSocketEnvironment();
     try {
-      const browser = await chromium.launch(LAUNCH);
+      const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
       try { await measureComposerIsolation(browser, derivationHostSample); } finally { await browser.close(); }
-    } finally { listener.mockRestore(); }
+    } finally { sockets.close(); listener.mockRestore(); }
   }, 10_800_000);
 
   browserTest("keeps derivation below 50 ms while 357 cards stream and the open conversation scrolls", async () => {
