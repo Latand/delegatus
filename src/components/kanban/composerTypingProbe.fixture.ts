@@ -1,6 +1,7 @@
 import type { IsolationCounters, IsolationMix, IsolationWindow } from "./composerIsolation.fixture";
 
 export interface TypingResult {
+  nativeClock: true;
   samples: number[];
   keyTimes: number[];
   frameTimes: number[];
@@ -27,6 +28,11 @@ export type TypingWindow = IsolationWindow & {
 /** Playwright installs this function verbatim in the document. All clocks below belong to the page. */
 export function installTypingProbe() {
   const w = window as TypingWindow;
+  const timestamp = Object.getOwnPropertyDescriptor(Event.prototype, "timeStamp")?.get;
+  if ("__pwClock" in window || ![timestamp, performance.now, window.requestAnimationFrame, window.setInterval]
+    .every(fn => fn && Function.prototype.toString.call(fn).includes("[native code]"))) {
+    throw Error("typing evidence requires native Event.timeStamp, performance.now, timers and animation frames");
+  }
   let finished = 0;
   let finish: () => TypingResult;
   let total = 0;
@@ -134,7 +140,7 @@ export function installTypingProbe() {
         const counters = w.isolationCounters ?? null; delete w.isolationCounters;
         const derivations = w.__pdRows ?? []; w.__pdRecording = false; delete w.__pdRows;
         if (inputs !== total || keyTimes.length !== total || frames.length !== total) throw Error("incomplete trusted input sample");
-        return { samples: frames.map((time,i) => time-keyTimes[i]!), keyTimes, frameTimes: frames, eventTimings,
+        return { nativeClock: true, samples: frames.map((time,i) => time-keyTimes[i]!), keyTimes, frameTimes: frames, eventTimings,
           longTasks: longTasks.filter(e => e.startTime < last && e.startTime + e.duration > first).map(e => ({ start:e.startTime, duration:e.duration })),
           events: emitted, envelopes, geometryMethods, focus: field === document.activeElement && document.hasFocus() && document.visibilityState === "visible", text: field.value === initial + chars,
           caret: field.selectionStart === field.value.length && field.selectionEnd === field.value.length, counters, derivations };
