@@ -101,8 +101,11 @@ export function stateDatabases(stateDirectory: string): StateDatabase[] {
       check: "integrity_check",
       // Verifying every index against every row is O(N log N) and made a
       // multi-gigabyte registry consume the entire 90-second deploy window.
-      // quick_check still validates B-tree structure and page integrity; any
-      // recovery candidate continues to require the full integrity_check.
+      // quick_check validates B-tree structure and page integrity, but it does
+      // not detect index-to-table or uniqueness mismatches. Those remain in
+      // place at activation; the next backup pass reports and refuses a bad
+      // copy, without automatically repairing the live registry. Recovery
+      // candidates continue to require the full integrity_check.
       activationCheck: "quick_check",
       backup: { intervalMs: LARGE_STORE_BACKUP_INTERVAL_MS, retention: { kind: "tiered" } },
       revisionSql: "SELECT value AS revision FROM registry_meta WHERE key = 'revision'",
@@ -359,13 +362,20 @@ export type SwapStepHook = (step: "recovery-lock" | "set-aside-main" | "set-asid
 
 export function checkDatabaseAtActivation(
   database: StateDatabase,
-  options: { stateDirectory: string; backupDirectory?: string; now?: Date; beforeSwapStep?: SwapStepHook },
+  options: {
+    stateDirectory: string; backupDirectory?: string; now?: Date; beforeSwapStep?: SwapStepHook;
+    testHooks?: {
+      inspect?: (filename: string, pragma: StateDatabase["check"], readonly: boolean) => Verdict;
+      dropRebuiltTriggers?: typeof dropRebuiltTriggers;
+    };
+  },
 ): DatabaseCheckOutcome {
   /* A marker left by a swap that died would refuse every open until it aged. */
   fs.rmSync(databaseSwapMarker(database.filename), { force: true });
   if (!exists(database.filename)) return { state: "absent" };
   const now = options.now ?? new Date();
-  let verdict = inspect(database.filename, database.activationCheck ?? database.check, true);
+  const inspectActivation = options.testHooks?.inspect ?? inspect;
+  let verdict = inspectActivation(database.filename, database.activationCheck ?? database.check, true);
   let repaired: StorageIncident | null = null;
   if (verdict.verdict === "incompatible") {
     const first = verdict;
@@ -382,12 +392,12 @@ export function checkDatabaseAtActivation(
     if (!database.rebuiltTriggers.includes(first.object)) return incompatible(first);
     let kept: string[];
     try {
-      kept = dropRebuiltTriggers(database.filename, database.rebuiltTriggers, `${database.filename}.schema-${stamp(now)}`);
+      kept = (options.testHooks?.dropRebuiltTriggers ?? dropRebuiltTriggers)(database.filename, database.rebuiltTriggers, `${database.filename}.schema-${stamp(now)}`);
     } catch (error) {
       console.error(`[state durability] ${database.name}: dropping the triggers its store rebuilds failed: ${errorText(error)}`);
       return incompatible(first);
     }
-    verdict = inspect(database.filename, database.activationCheck ?? database.check, true);
+    verdict = inspectActivation(database.filename, database.activationCheck ?? database.check, true);
     if (verdict.verdict === "incompatible") return incompatible(verdict, kept);
     repaired = {
       kind: "database-schema-repaired", database: database.name, at: now.toISOString(), detail: first.detail,

@@ -169,7 +169,7 @@ test("a healthy or absent database is left alone", () => {
   expect(readTaskIds(directory)).toEqual(["kept"]);
 });
 
-test("agent registry activation selects quick_check and still refuses a structurally corrupt database", () => {
+test("agent registry quick_check leaves logical index damage for backup integrity validation", () => {
   const directory = sandbox();
   const registry = stateDatabases(directory).find((database) => database.name === "agent-registry.sqlite");
   if (!registry) throw new Error("agent-registry.sqlite is not a durable database");
@@ -177,15 +177,58 @@ test("agent registry activation selects quick_check and still refuses a structur
   expect(registry.activationCheck).toBe("quick_check");
 
   const healthy = new Database(registry.filename, { create: true });
-  healthy.exec("CREATE TABLE retained(value TEXT); INSERT INTO retained VALUES ('ready')");
+  healthy.exec("CREATE TABLE registry_meta(key TEXT PRIMARY KEY, value TEXT); CREATE TABLE retained(value TEXT); CREATE INDEX retained_value ON retained(value)");
+  healthy.query("INSERT INTO registry_meta VALUES (?, ?)").run("revision", "1");
+  healthy.query("INSERT INTO retained VALUES (?)").run("indexed-key");
+  const page = Number(healthy.query<{ pageno: number }, [string]>("SELECT pageno FROM dbstat WHERE name = ?").get("retained_value")?.pageno);
+  const pageSize = Number(healthy.query<{ page_size: number }, []>("PRAGMA page_size").get()?.page_size);
   healthy.close();
-  expect(checkDatabaseAtActivation(registry, { stateDirectory: directory })).toEqual({ state: "ok" });
 
-  overwrite(registry.filename, 4096, Buffer.alloc(8192, 0xff));
-  const outcome = checkDatabaseAtActivation(registry, { stateDirectory: directory, now: new Date("2026-09-19T12:30:00Z") });
-  expect(outcome.state).toBe("fresh");
-  expect(fs.existsSync(registry.filename)).toBe(false);
-  expect(fs.readdirSync(directory).some((name) => name.startsWith("agent-registry.sqlite.corrupt-"))).toBe(true);
+  const pageStart = (page - 1) * pageSize;
+  const bytes = fs.readFileSync(registry.filename);
+  const keyOffset = bytes.indexOf(Buffer.from("indexed-key"), pageStart);
+  if (keyOffset < pageStart || keyOffset >= pageStart + pageSize) throw new Error("indexed key was not found on its index page");
+  overwrite(registry.filename, keyOffset, Buffer.from("jndexed-key"));
+
+  const damaged = new Database(registry.filename, { readonly: true });
+  try {
+    expect(damaged.query("PRAGMA quick_check").all()).toEqual([{ quick_check: "ok" }]);
+    expect(damaged.query("PRAGMA integrity_check").all()).toContainEqual({ integrity_check: "row 1 missing from index retained_value" });
+  } finally { damaged.close(); }
+
+  expect(checkDatabaseAtActivation(registry, { stateDirectory: directory })).toEqual({ state: "ok" });
+  expect(fs.existsSync(registry.filename)).toBe(true);
+
+  const backup = backupDatabase(registry, {
+    backupDirectory: backupDirectory(directory),
+    now: new Date("2026-09-19T12:30:00Z"),
+  });
+  expect(backup.state).toBe("failed");
+  if (backup.state === "failed") expect(backup.detail).toContain("row 1 missing from index retained_value");
+  expect(fs.readdirSync(backupDirectory(directory))).toEqual([]);
+});
+
+test("agent registry schema repair rechecks with its activation pragma", () => {
+  const directory = sandbox();
+  const registry = stateDatabases(directory).find((database) => database.name === "agent-registry.sqlite");
+  if (!registry) throw new Error("agent-registry.sqlite is not a durable database");
+  fs.writeFileSync(registry.filename, "private fixture");
+  const checks: string[] = [];
+  const outcome = checkDatabaseAtActivation({ ...registry, rebuiltTriggers: ["retained_rebuild_trigger"] }, {
+    stateDirectory: directory,
+    now: new Date("2026-09-19T12:30:00Z"),
+    testHooks: {
+      inspect: (_filename, pragma) => {
+        checks.push(pragma);
+        return checks.length === 1
+          ? { verdict: "incompatible", detail: "schema syntax is unsupported", object: "retained_rebuild_trigger", reason: "syntax error" }
+          : { verdict: "ok" };
+      },
+      dropRebuiltTriggers: () => [],
+    },
+  });
+  expect(outcome.state).toBe("repaired");
+  expect(checks).toEqual(["quick_check", "quick_check"]);
 });
 
 test("a backup is skipped when nothing changed or it is not due, and taken after a change", () => {
