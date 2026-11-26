@@ -18,6 +18,65 @@ test("a base that failed its first sample needs no reruns even when later sample
   expect(readFileSync(f.marker + "-head", "utf8")).toBe("1");
 });
 
+test.each([
+  ["between-tests", "shared"], ["hook", "shared"],
+  ["between-tests", "head-only"], ["hook", "head-only"],
+  ["between-tests", "no diagnostic"],
+] as const)("paired CLI confirmation judges %s diagnostics (%s)", (kind, mode) => {
+  const f = fixture(source(true));
+  const counter = path.join(f.dir, "paired-diagnostics");
+  const schedule = `import { afterAll, describe, expect, test } from "bun:test";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { basename } from "node:path";
+const side = basename(process.cwd()) === "baseline" ? "base" : "head";
+const marker = ${JSON.stringify(counter)} + "-" + side;
+const run = existsSync(marker) ? Number(readFileSync(marker, "utf8")) + 1 : 1;
+writeFileSync(marker, String(run));
+test("contract", () => expect(side === "base" || run !== 1).toBe(true));
+const mode = ${JSON.stringify(mode)};
+if (run === 2 && (mode === "shared" || (mode === "head-only" && side === "head"))) {
+  if (${JSON.stringify(kind)} === "hook") afterAll(() => {
+    const pid = side === "base" ? 21 : 31;
+    throw new Error(\`owned test scope children survived teardown: \${pid} (\${pid}:1)\`);
+  });
+  else {
+    describe("confirmation diagnostic", () => { throw new TypeError("confirmation tail"); });
+    if (side === "base") describe("additional base diagnostic", () => { throw new Error("base storage unavailable"); });
+  }
+}`;
+  writeFileSync(path.join(f.dir, "example.test.ts"), schedule);
+  f.git("add", "example.test.ts"); f.git("commit", "-m", "Paired confirmation schedule");
+  const outcome = cliAt(f, f.git("rev-parse", "HEAD"));
+  expect(outcome.status, outcome.stdout + outcome.stderr).toBe(mode === "head-only" ? 1 : 0);
+  expect(readFileSync(counter + "-base", "utf8")).toBe("2");
+  expect(readFileSync(counter + "-head", "utf8")).toBe("2");
+  expect(outcome.stdout).toContain("FLAKY example.test.ts: contract (base 2 pass/0 fail; head 1 pass/1 fail)");
+  if (mode === "no diagnostic") return;
+  const expected = kind === "hook" ? "<hook error> owned test scope children survived teardown: 31 (31:1)" : "<between-tests error> TypeError: confirmation tail";
+  expect(outcome.stdout).toContain(`${mode === "shared" ? "PRE-EXISTING" : "NEW"} example.test.ts: ${expected}`);
+  if (mode === "shared") expect(outcome.stdout).toContain(`Base diagnostic example.test.ts: ${expected.replace("31 (31:1)", "21 (21:1)")}`);
+});
+
+test("paired full-file confirmation can reproduce an initially head-only diagnostic on base", () => {
+  const f = fixture(source(true));
+  const counter = path.join(f.dir, "full-diagnostics");
+  const schedule = `import { describe, test } from "bun:test";
+import { existsSync, writeFileSync } from "node:fs";
+import { basename } from "node:path";
+const base = basename(process.cwd()) === "baseline";
+const marker = ${JSON.stringify(counter)};
+test("contract", () => {});
+const repeated = existsSync(marker);
+if (base) writeFileSync(marker, "sampled");
+if (!base || repeated) describe("diagnostic", () => { throw new Error("repeated full diagnostic"); });`;
+  writeFileSync(path.join(f.dir, "example.test.ts"), schedule);
+  f.git("add", "example.test.ts"); f.git("commit", "-m", "Full diagnostic confirmation schedule");
+  const outcome = cliAt(f, f.git("rev-parse", "HEAD"));
+  expect(outcome.status, outcome.stdout + outcome.stderr).toBe(0);
+  expect(outcome.stdout).toContain("PRE-EXISTING example.test.ts: <between-tests error> error: repeated full diagnostic");
+  expect(outcome.stdout).toContain("Base diagnostic example.test.ts: <between-tests error> error: repeated full diagnostic");
+});
+
 test.each(["recovers", "changes", "repeats"] as const)("a head-only between-tests error gets one isolated full-file retry: %s", mode => {
   const f = fixture(source(true));
   const marker = path.join(f.dir, "diagnostic-runs");

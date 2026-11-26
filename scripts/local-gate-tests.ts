@@ -76,7 +76,7 @@ export function comparatorEnding(error: unknown): { line: string; code: number }
     : { line: `touched-tests: ${message}; gate error (blocking)`, code: 1 };
 }
 
-function assertWorkersSucceeded(workers: readonly PromiseSettledResult<unknown>[], diagnostics: readonly string[] = []): void {
+function assertWorkersSucceeded<T>(workers: readonly PromiseSettledResult<T>[], diagnostics: readonly string[] = []): asserts workers is readonly PromiseFulfilledResult<T>[] {
   const rejected = workers.filter((worker): worker is PromiseRejectedResult => worker.status === "rejected");
   if (!rejected.length) return;
   // Filtered workers can throw before recording a file result. Inspect every
@@ -90,17 +90,17 @@ const RUNNER_ERROR = "<runner error> ";
 interface Counts { pass: number; fail: number }
 interface FlakySite extends TestSite { base: Counts; head: Counts }
 const occurrenceCount = (sites: readonly TestSite[], site: TestSite) => sites.filter(other => occurrenceKey(other) === occurrenceKey(site)).length;
+const fileDiagnostics = (run: TestRun) => run.failures.filter(site => site.kind === "error");
+const describeDiagnostics = (sites: readonly TestSite[]) => sites.map(site => `${site.file}: ${diagnosticName(site)}`).join("; ");
 
-/** Confirm assertions that failed the first head sample and did not fail the
- * first base sample: those alone can refuse the push. A failure the base sample
- * already showed stays PRE-EXISTING on that one sample per side and costs no
- * reruns, since neither label it could end with blocks. Mixed results on either
- * side make a confirmed assertion non-blocking FLAKY and retire that occurrence
- * from later rounds; runner and between-tests errors keep their comparison by
- * identity. Never treat absence as a pass.
+/** Confirm new assertion failures and collect file diagnostics from the same
+ * samples. A first-sample match is already PRE-EXISTING. Mixed assertion
+ * results retire the occurrence as FLAKY. File diagnostics are compared by
+ * identity, and missing samples cannot certify a recovery.
  */
 export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side: "base" | "head", sites: readonly TestSite[]) => TestRun | Promise<TestRun>) {
   const comparison = compareTests(base, head);
+  let baseDiagnostics = fileDiagnostics(base);
   const initialAssertions = new Set(head.failures.filter(site => site.kind === "test").map(comparisonKey));
   const needsConfirmation = (site: TestSite) => site.kind === "test" && initialAssertions.has(comparisonKey(site));
   const flaky: FlakySite[] = [];
@@ -111,31 +111,43 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
   let diagnosticRetryCompleted = false;
   try {
     if (diagnostics.length) {
-      const retry = await rerun("head", diagnostics);
       const files = new Set(diagnostics.map(site => site.file));
-      if ([...files].some(file => !retry.completed.includes(file))) throw new Error("head diagnostic retry: incomplete file");
+      const samples = await Promise.allSettled((["base", "head"] as const).map(async side => {
+        const run = await rerun(side, diagnostics);
+        const incomplete = fileDiagnostics(run).filter(site => !run.completed.includes(site.file)
+          && (side === "head" || !baseDiagnostics.some(known => key(known) === key(site))));
+        if (incomplete.length) throw new Error(`${side} diagnostic retry: ${describeDiagnostics(incomplete)}`);
+        if (side === "head" && [...files].some(file => !run.completed.includes(file))) throw new Error("head diagnostic retry: incomplete file");
+        return run;
+      }));
+      assertWorkersSucceeded(samples);
+      const baseRetry = samples[0]!.value, retry = samples[1]!.value;
+      baseDiagnostics = mergeObservedSites(baseDiagnostics, fileDiagnostics(baseRetry));
+      const observedBase = { ...base, failures: [...base.failures.filter(site => site.kind === "test"), ...baseDiagnostics] };
+      const initial = compareTests(observedBase, head);
       const recovered = new Set<string>();
-      for (const site of diagnostics) {
+      for (const site of initial.introduced.filter(site => diagnostics.includes(site))) {
         if (retry.failures.some(other => key(other) === key(site))) continue;
         recovered.add(key(site));
         flaky.push({ ...site, base: { pass: base.completed.includes(site.file) ? 1 : 0, fail: 0 }, head: { pass: 1, fail: 1 } });
       }
-      comparison.introduced = comparison.introduced.filter(site => !recovered.has(key(site)));
+      comparison.introduced = initial.introduced.filter(site => !recovered.has(key(site)));
       // Compare the complete retry against the base so base occurrences are
       // consumed once. Merge the two samples by maximum multiplicity: repeated
       // observations do not inflate evidence, while an extra retry occurrence
       // remains visible even when its identity appeared in the first sample.
-      const retried = compareTests(base, retry);
+      const retried = compareTests(observedBase, retry);
       comparison.introduced = mergeObservedSites(comparison.introduced, retried.introduced);
-      comparison.preexisting = mergeObservedSites(comparison.preexisting, retried.preexisting);
-      comparison.fixed = mergeObservedSites(comparison.fixed, retried.fixed);
-      comparison.absent = mergeObservedSites(comparison.absent, retried.absent);
+      comparison.preexisting = mergeObservedSites(initial.preexisting, retried.preexisting);
+      comparison.fixed = mergeObservedSites(initial.fixed, retried.fixed);
+      comparison.absent = mergeObservedSites(initial.absent, retried.absent);
       diagnosticRetryCompleted = true;
     }
     // Only assertions in the initial sample have the occurrence counts required
     // for filtered confirmation. New retry failures above remain blocking.
     const candidates = [...new Map(comparison.introduced.filter(needsConfirmation).map(site => [occurrenceKey(site), site])).values()];
-    if (!candidates.length) return { ...comparison, flaky };
+    if (!candidates.length) return { ...comparison, flaky, baseDiagnostics };
+    let headDiagnostics = [...comparison.preexisting, ...comparison.introduced].filter(site => site.kind === "error");
     const evidence = candidates.map(site => ({ site,
       base: { pass: occurrenceCount(base.passed, site), fail: occurrenceCount(base.failures, site) },
       head: { pass: occurrenceCount(head.passed, site), fail: occurrenceCount(head.failures, site) },
@@ -151,14 +163,10 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
       const sides = ["base", "head"] as const;
       // The two isolated sides owe the same samples and share one deadline.
       // Await both even on refusal so no owned runner outlives this round.
+      const observed: Partial<Record<(typeof sides)[number], TestRun>> = {};
       const samples = await Promise.allSettled(sides.map(async side => {
         const run = await rerun(side, sites);
-        // A between-tests error the same side already showed in its first sample
-        // is that file's known state; only a diagnostic the first sample lacked
-        // leaves the retry without usable evidence.
-        const known = new Set((side === "base" ? base : head).failures.filter(site => site.kind === "error").map(key));
-        const newDiagnostics = run.failures.filter(site => site.kind === "error" && !known.has(key(site)));
-        if (newDiagnostics.length) throw new Error(`${side} rerun: incomplete runner or between-tests error: ${newDiagnostics.map(site => `${site.file}: ${diagnosticName(site)}`).join("; ")}`);
+        observed[side] = run;
         for (const item of pending) {
           const first = side === "base" ? base : head;
           if (occurrenceCount(run.failures, item.site) + occurrenceCount(run.passed, item.site)
@@ -168,11 +176,24 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
         }
         return run;
       }));
-      assertWorkersSucceeded(samples);
+      // A complete paired sample can compare hook and between-tests errors
+      // alongside the filtered assertions. If either sample is unusable, a
+      // newly observed diagnostic still prevents a capacity-only verdict.
+      const unpaired = sides.flatMap(side => {
+        const run = observed[side];
+        const known = new Set(fileDiagnostics(side === "base" ? base : head).map(key));
+        const errors = run && fileDiagnostics(run).filter(site => !known.has(key(site)));
+        return errors?.length ? [`${side} rerun: incomplete runner or between-tests error: ${describeDiagnostics(errors)}`] : [];
+      });
+      assertWorkersSucceeded(samples, unpaired);
+      const baseRetry = samples[0]!.value, headRetry = samples[1]!.value;
+      baseDiagnostics = mergeObservedSites(baseDiagnostics, fileDiagnostics(baseRetry));
+      headDiagnostics = mergeObservedSites(headDiagnostics, fileDiagnostics(headRetry));
+      const retried = compareTests({ ...baseRetry, failures: baseDiagnostics }, { ...headRetry, failures: headDiagnostics });
+      comparison.introduced = [...comparison.introduced.filter(site => site.kind === "test"), ...retried.introduced];
+      comparison.preexisting = [...comparison.preexisting.filter(site => site.kind === "test"), ...retried.preexisting];
       for (const [index, side] of sides.entries()) {
-        const sample = samples[index]!;
-        if (sample.status === "rejected") throw sample.reason;
-        const run = sample.value;
+        const run = samples[index]!.value;
         for (const item of pending) {
           const fail = occurrenceCount(run.failures, item.site), pass = occurrenceCount(run.passed, item.site);
           if (side === "base" && fail) item.baseRetryFailed = true;
@@ -190,7 +211,7 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
       flaky.push({ ...item.site, base: item.base, head: item.head });
     }
     const keepNonFlaky = (sites: TestSite[]) => sites.filter(site => !flakyOccurrences.has(occurrenceKey(site)));
-    return { ...comparison, introduced: keepNonFlaky(comparison.introduced), preexisting: keepNonFlaky(comparison.preexisting), flaky };
+    return { ...comparison, introduced: keepNonFlaky(comparison.introduced), preexisting: keepNonFlaky(comparison.preexisting), flaky, baseDiagnostics };
   } catch (error) {
     // Every exceptional exit retains refusals already established against
     // the base, including retry-only assertions outside filtered confirmation.
@@ -788,21 +809,28 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     const retryStarted = performance.now(), deadline = retryStarted - budget.elapsed() + FLAKY_BUDGET_MS;
     let reruns = 0, diagnosticReruns = 0;
     const comparison = await confirmFailures(baseline, head, async (side, sites) => {
-      if (sites.some(site => site.kind === "error")) diagnosticReruns++;
-      else reruns++;
+      const fullFile = sites.some(site => site.kind === "error");
+      if (side === "head") {
+        if (fullFile) diagnosticReruns++;
+        else reruns++;
+      }
       const retryFiles = [...new Set(sites.map(site => site.file))].filter(file => side === "head" || baseFiles.has(file));
       if (!retryFiles.length) return { failures: [], passed: [], completed: [], elapsedMs: 0 };
-      return await runFiles(side === "head" ? root : prepareBaseline(deadline), retryFiles, sandbox, inherited, `${side} rerun`, { ...runOptions, ...(sites.some(site => site.kind === "error") ? {} : { sites }), confirmationDeadline: deadline });
+      return await runFiles(side === "head" ? root : prepareBaseline(deadline), retryFiles, sandbox, inherited, `${side} rerun`, { ...runOptions, sites: fullFile ? undefined : sites, confirmationDeadline: deadline });
     });
     // Observed intermittency cannot become a frozen baseline allowance.
     for (const file of new Set(comparison.flaky.map(site => site.file))) cache.remove(cacheKey(file));
-    if (diagnosticReruns) log(`touched-tests: between-tests diagnostic retry: ${diagnosticReruns} isolated full-file run (shared budget ${FLAKY_BUDGET_MS}ms)`);
-    if (reruns) log(`touched-tests: flaky confirmation ${reruns / 2} round${reruns === 2 ? "" : "s"} per side (maximum ${FLAKY_RERUNS}), ${(performance.now() - retryStarted).toFixed(0)}ms (shared budget ${FLAKY_BUDGET_MS}ms)`);
+    if (diagnosticReruns) log(`touched-tests: between-tests diagnostic retry: paired full-file selection (shared budget ${FLAKY_BUDGET_MS}ms)`);
+    if (reruns) log(`touched-tests: flaky confirmation ${reruns} round${reruns === 1 ? "" : "s"} per side (maximum ${FLAKY_RERUNS}), ${(performance.now() - retryStarted).toFixed(0)}ms (shared budget ${FLAKY_BUDGET_MS}ms)`);
     for (const site of comparison.flaky) log(`FLAKY ${site.file}: ${site.suite ? `${site.suite} > ` : ""}${diagnosticName(site)} (base ${site.base.pass} pass/${site.base.fail} fail; head ${site.head.pass} pass/${site.head.fail} fail)`);
     for (const [label, sites] of [["NEW", comparison.introduced], ["PRE-EXISTING", comparison.preexisting], ["FIXED", comparison.fixed], ["REMOVED/SKIPPED", comparison.absent]] as const) {
       for (const site of sites) {
         const evidence = label === "PRE-EXISTING" ? " (base: FAIL; head: FAIL; non-blocking note)" : "";
         log(`${label} ${site.file}: ${site.suite ? `${site.suite} > ` : ""}${diagnosticName(site)}${label === "PRE-EXISTING" && site.kind === "error" ? " (the base run of this file is broken the same way)" : ""}${evidence}`);
+        if (label === "PRE-EXISTING" && site.kind === "error") {
+          const match = comparison.baseDiagnostics.find(other => key(other) === key(site));
+          if (match) log(`  Base diagnostic ${site.file}: ${diagnosticName(match)}`);
+        }
       }
     }
     logTiming();

@@ -20,8 +20,9 @@ test("a failing base retry still requires a complete paired head sample before r
   const base = sample([], [site]), head = sample([site], []);
   await expect(confirmFailures(base, head, side => side === "base" ? head : sample([], [])))
     .rejects.toThrow("head rerun: missing or skipped test");
-  await expect(confirmFailures(base, head, side => side === "base" ? head : sample([{ ...site, kind: "error", name: "new diagnostic" }], [])))
-    .rejects.toThrow("head rerun: incomplete runner or between-tests error: example.test.ts: new diagnostic");
+  const diagnostic: TestSite = { ...site, kind: "error", name: "<hook error> new diagnostic" };
+  const outcome = await confirmFailures(base, head, side => side === "base" ? head : sample([diagnostic], [site]));
+  expect(outcome.introduced).toEqual([diagnostic]);
 });
 
 test.each(["accepts", "refuses"] as const)("confirmation sides overlap and await their peer when the base %s", async mode => {
@@ -131,7 +132,7 @@ test.each(["assertion confirmation", "diagnostic retry"] as const)("initial file
         return base;
       }).catch(error => error);
       const ending = comparatorEnding(error);
-      expect(calls).toEqual(boundary === "diagnostic retry" ? ["head"] : ["base", "head"]);
+      expect(calls).toEqual(["base", "head"]);
       const blocking = !known && reason !== "runner did not finish (124)";
       expect(ending.code).toBe(blocking ? 1 : 75);
       expect(ending.line).toContain("head confirmation deadline");
@@ -151,7 +152,7 @@ test.each(["repeated between-tests error", "new ownership error"] as const)("a c
   const base: TestRun = { failures: [], passed: [site], completed: [site.file], elapsedMs: 0 };
   const head: TestRun = { ...base, failures: [site, diagnostic], passed: [] };
   const error = await confirmFailures(base, head, (side, sites) => {
-    if (sites.some(site => site.kind === "error")) return { ...head, failures: [site, retained] };
+    if (sites.some(site => site.kind === "error")) return side === "base" ? base : { ...head, failures: [site, retained] };
     if (side === "head") throw new BudgetExhausted("later confirmation deadline");
     return base;
   }).catch(error => error);
@@ -233,7 +234,7 @@ test.each(["base", "head"] as const)("diagnostic retry assertions retain later %
   for (const cause of [new BudgetExhausted("confirmation deadline"), new Error("confirmation cancelled"),
     new Error("ownership refused"), new Error("cleanup refused")]) {
     const error = await confirmFailures(base, head, (side, sites) => {
-      if (sites.some(site => site.kind === "error")) return { ...head, failures: [initial, added], passed: [] };
+      if (sites.some(site => site.kind === "error")) return side === "base" ? base : { ...head, failures: [initial, added], passed: [] };
       if (side === failingSide) throw cause;
       return side === "base" ? base : { ...head, failures: [initial], passed: [added] };
     }).catch(error => error);
