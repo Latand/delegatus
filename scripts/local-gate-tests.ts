@@ -57,11 +57,11 @@ export function comparisonPhaseBudgetMs(fileCount: number): number {
 const nestedComparisonFile = (file: string): boolean =>
   /^scripts\/(?:local-gate(?:-tests)?(?:\.|$)|gate-slot\.|owned-runner\.|compiler-admission\.|check-worker-broker\.|privacy-)/.test(file.split(path.sep).join("/"));
 
-/** Portable runners have no kernel CPU or memory quota, so serialize files.
- * With service containment, reserve only two workers for nested gate fixtures. */
+/** Multiple gate fixtures can exhaust a service's task limit. Limit that
+ * class while letting ordinary source tests use the remaining file workers. */
 export function comparisonFileWorkers(files: readonly string[], ceiling: number, sharedPortable = false): number {
-  if (sharedPortable) return Math.min(1, files.length);
   const nested = files.filter(nestedComparisonFile).length;
+  if (nested && sharedPortable) return 1;
   return Math.min(ceiling, files.length - nested + Math.min(nested, NESTED_FILE_WORKERS));
 }
 
