@@ -18,6 +18,7 @@ import {
   verifyViewerRuntime,
 } from "./verify-viewer-runtime";
 import { isOperatorOwnedDirectory, setStateOwnershipPathsForTests } from "../src/lib/stateOwnership";
+import { recordProvisionFixtureEvent, waitForProvisionFixtureReply } from "../src/lib/pipelines/provisionFixtureSupervisor";
 
 /* What this file is defending is the shape of the check rather than its
    verdict: the verdict is produced by CI, under the pinned interpreter, on a
@@ -143,6 +144,52 @@ test("runtime probes preserve their signal namespace boundary without inheriting
   } finally {
     if (previous === undefined) delete process.env.LLV_SIGNAL_SANDBOX;
     else process.env.LLV_SIGNAL_SANDBOX = previous;
+  }
+});
+
+test.each(["check-ignore", "cache-permit"] as const)("private release fixture supervisor holds the %s reply", async reply => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provision-supervisor-test-"));
+  roots.push(root);
+  const previous = process.env.LLV_PROVISION_FIXTURE_SUPERVISOR;
+  process.env.LLV_PROVISION_FIXTURE_SUPERVISOR = root;
+  const abort = new AbortController();
+  try {
+    fs.writeFileSync(path.join(root, `hold-${reply}`), "");
+    const held = waitForProvisionFixtureReply(reply, abort.signal, { workerPid: 1234, resultCode: 0 });
+    const entered = path.join(root, `entered-${reply}.json`);
+    const deadline = Date.now() + 1_000;
+    while (!fs.existsSync(entered) && Date.now() < deadline) await Bun.sleep(5);
+    expect(fs.existsSync(entered)).toBe(true);
+    expect(JSON.parse(fs.readFileSync(entered, "utf8"))).toMatchObject({ reply, workerPid: 1234, resultCode: 0 });
+    await recordProvisionFixtureEvent("dependency-effect", { effect: "install-cache" });
+    fs.writeFileSync(path.join(root, `release-${reply}`), "");
+    await held;
+    expect(fs.readFileSync(path.join(root, "events.ndjson"), "utf8")).toContain('"effect":"install-cache"');
+  } finally {
+    if (previous === undefined) delete process.env.LLV_PROVISION_FIXTURE_SUPERVISOR;
+    else process.env.LLV_PROVISION_FIXTURE_SUPERVISOR = previous;
+  }
+});
+
+test("private release fixture supervisor interruption rejects before a late permit reply", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provision-supervisor-abort-"));
+  roots.push(root);
+  const previous = process.env.LLV_PROVISION_FIXTURE_SUPERVISOR;
+  process.env.LLV_PROVISION_FIXTURE_SUPERVISOR = root;
+  const abort = new AbortController();
+  try {
+    fs.writeFileSync(path.join(root, "hold-cache-permit"), "");
+    const held = waitForProvisionFixtureReply("cache-permit", abort.signal, { workerPid: 1234 });
+    const entered = path.join(root, "entered-cache-permit.json");
+    const deadline = Date.now() + 1_000;
+    while (!fs.existsSync(entered) && Date.now() < deadline) await Bun.sleep(5);
+    expect(fs.existsSync(entered)).toBe(true);
+    fs.writeFileSync(path.join(root, "interrupt-cache-permit"), "");
+    await expect(held).rejects.toThrow("fixture supervisor interrupted the held reply");
+    expect(fs.existsSync(path.join(root, "events.ndjson"))).toBe(false);
+  } finally {
+    if (previous === undefined) delete process.env.LLV_PROVISION_FIXTURE_SUPERVISOR;
+    else process.env.LLV_PROVISION_FIXTURE_SUPERVISOR = previous;
   }
 });
 

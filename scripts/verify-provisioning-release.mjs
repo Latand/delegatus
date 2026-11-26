@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { processIdentityStatus } from "../src/lib/processIdentity.ts";
 
 const run = promisify(execFile);
 const workerPath = ".next/server/provision-toolchain-worker.js";
@@ -39,12 +40,16 @@ export async function removeProvisioningFixture(root) {
 export async function provisioningFixtureEnvironment(sandbox, env) {
   const home = path.join(sandbox, "fixture-codex");
   const binary = path.join(sandbox, "fixture-bin", "codex");
+  const supervisor = path.join(sandbox, "provision-supervisor");
   await mkdir(home, { recursive: true });
   await mkdir(path.dirname(binary), { recursive: true });
+  await mkdir(supervisor, { recursive: true, mode: 0o700 });
+  await chmod(supervisor, 0o700);
   // The admission read checks file presence. The fixture has no provider credentials.
   await writeFile(path.join(home, "auth.json"), "{}\n", { mode: 0o600 });
   await writeFile(binary, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
-  return { ...env, LLV_CODEX_HOME: home, LLV_CODEX_BINARY: binary, PATH: [path.dirname(binary), env.PATH].filter(Boolean).join(path.delimiter) };
+  return { ...env, LLV_CODEX_HOME: home, LLV_CODEX_BINARY: binary, LLV_PROVISION_FIXTURE_SUPERVISOR: supervisor,
+    PATH: [path.dirname(binary), env.PATH].filter(Boolean).join(path.delimiter) };
 }
 
 /** @param {() => void | Promise<void>} [beforePackageResponse] */
@@ -91,7 +96,7 @@ export async function verifyProvisioningTrace(root) {
   await realpath(bundle);
 }
 
-export async function verifyProvisioningRelease(origin, sandbox, env) {
+async function withProvisioningRepository(sandbox, env, runLane) {
   const repository = await mkdtemp(path.join(sandbox, "provision-fixture-"));
   const remote = path.join(repository, "remote.git");
   const checkout = path.join(repository, "source");
@@ -101,11 +106,30 @@ export async function verifyProvisioningRelease(origin, sandbox, env) {
   await git(repository, "init", "--bare", "--initial-branch=main", remote);
   await git(checkout, "init", "--initial-branch=main");
   const close = await seedProvisioningPackage(checkout, sandbox, env, env.LLV_BUN_EXECUTABLE || process.execPath);
-  try { return await verifyFixtureLane(origin, checkout, remote, git); }
-  finally { await close(); }
+  try { return await runLane(checkout, remote, git); }
+  finally { await close(); await removeProvisioningFixture(repository); }
 }
 
-async function verifyFixtureLane(origin, checkout, remote, git) {
+export async function verifyProvisioningRelease(origin, sandbox, env) {
+  const baseline = await withProvisioningRepository(sandbox, env,
+    (checkout, remote, git) => verifyFixtureLane(origin, checkout, remote, git, env));
+  const heldReplies = [];
+  for (const reply of ["check-ignore", "cache-permit"]) {
+    const root = env.LLV_PROVISION_FIXTURE_SUPERVISOR;
+    if (!root) throw new Error("release fixture has no private supervisor directory");
+    for (const name of ["entered", "hold", "interrupt", "release"]) {
+      await rm(path.join(root, `${name}-${reply}`), { force: true });
+    }
+    await rm(path.join(root, "events.ndjson"), { force: true });
+    await writeFile(path.join(root, `hold-${reply}`), "", { mode: 0o600 });
+    const result = await withProvisioningRepository(sandbox, env,
+      (checkout, remote, git) => verifyFixtureLane(origin, checkout, remote, git, env, reply));
+    heldReplies.push(result);
+  }
+  return { ...baseline, heldReplies };
+}
+
+async function verifyFixtureLane(origin, checkout, remote, git, env, holdReply) {
   await git(checkout, "add", ".");
   await git(checkout, "-c", "user.name=Provisioning Fixture", "-c", "user.email=noreply", "commit", "-m", "provisioning fixture");
   await git(checkout, "remote", "add", "origin", remote);
@@ -134,17 +158,76 @@ async function verifyFixtureLane(origin, checkout, remote, git) {
   if (!started.ok || startedBody.pipeline?.state !== "provisioning") {
     throw new Error(`provisioning fixture draft start refused (${started.status})`);
   }
+  const supervisor = holdReply ? env.LLV_PROVISION_FIXTURE_SUPERVISOR : undefined;
+  const gateEntry = supervisor && path.join(supervisor, `entered-${holdReply}.json`);
+  const interrupt = supervisor && path.join(supervisor, `interrupt-${holdReply}`);
+  const release = supervisor && path.join(supervisor, `release-${holdReply}`);
+  const eventsFile = supervisor && path.join(supervisor, "events.ndjson");
+  const common = holdReply ? await git(checkout, "rev-parse", "--path-format=absolute", "--git-common-dir") : "";
+  const cacheFence = holdReply ? path.join(common, "delegatus-dependencies", "v4", "owner.lock") : "";
+  let faultEntry;
+  let interrupted = false;
+  let faultVerified = false;
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
     const response = await fetch(`${origin}/api/pipelines/${encodeURIComponent(laneId)}`, { headers, signal: AbortSignal.timeout(5_000) });
     const lane = (await response.json()).pipeline;
+    if (holdReply && !interrupted && await lstat(gateEntry).then(() => true, error => {
+      if (error.code === "ENOENT") return false;
+      throw error;
+    })) {
+      faultEntry = JSON.parse(await readFile(gateEntry, "utf8"));
+      const expectedStep = holdReply === "check-ignore" ? "checkingDependencies" : "preparingToolchain";
+      if (lane?.provisioningStep?.step !== expectedStep || lane.provisioningStep.status !== "running") {
+        throw new Error(`${holdReply} held the worker outside ${expectedStep}`);
+      }
+      if (holdReply === "check-ignore" && faultEntry.resultCode !== 0) throw new Error("held check-ignore reply was not a successful result");
+      if (holdReply === "cache-permit") {
+        const info = await lstat(cacheFence, { bigint: true });
+        if (`${info.dev}:${info.ino}` !== faultEntry.fenceIdentity) throw new Error("held cache permit changed fence identity");
+        if (process.platform === "linux" && await fixtureLockAvailable(cacheFence, env)) {
+          throw new Error("cache permit was not held at the post-acquisition barrier");
+        }
+      }
+      await writeFile(interrupt, "");
+      interrupted = true;
+    }
+    if (holdReply && interrupted && !faultVerified
+      && lane?.provisioningStep?.status === "waiting" && lane.provisioningStep.reason === "toolchain-reply-lost") {
+      if (!faultEntry.worker || processIdentityStatus(faultEntry.worker) !== "dead") {
+        const stopAt = Date.now() + 3_000;
+        while (Date.now() < stopAt && processIdentityStatus(faultEntry.worker) !== "dead") {
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }
+        if (processIdentityStatus(faultEntry.worker) !== "dead") throw new Error(`${holdReply} worker survived its lost reply`);
+      }
+      if (process.platform === "linux" && !await fixtureLockAvailable(cacheFence, env)) {
+        throw new Error(`${holdReply} worker exit retained the cache fence`);
+      }
+      const beforeRelease = await readFile(eventsFile, "utf8").catch(error => error.code === "ENOENT" ? "" : Promise.reject(error));
+      await writeFile(release, "");
+      await new Promise(resolve => setTimeout(resolve, 250));
+      const afterRelease = await readFile(eventsFile, "utf8").catch(error => error.code === "ENOENT" ? "" : Promise.reject(error));
+      if (afterRelease !== beforeRelease) throw new Error(`${holdReply} worker wrote effects after its reply was interrupted`);
+      faultVerified = true;
+    }
     if (lane?.provisioningStep?.status === "parked") {
       throw new Error(`provisioning fixture parked at ${lane.provisioningStep.step} (${lane.provisioningStep.reason ?? "refused"})`);
     }
-    if (["toolchain-start-failed", "toolchain-reply-lost"].includes(lane?.provisioningStep?.reason)) {
+    if (["toolchain-start-failed", "toolchain-reply-lost"].includes(lane?.provisioningStep?.reason)
+      && !(holdReply && faultVerified && lane.provisioningStep.reason === "toolchain-reply-lost")) {
       throw new Error(`provisioning fixture interrupted at ${lane.provisioningStep.step} (${lane.provisioningStep.reason})`);
     }
     if (lane && lane.state !== "provisioning" && !lane.provisioningStep && lane.lastPassedCommit === planned) {
+      if (holdReply && !faultVerified) throw new Error(`${holdReply} fixture never verified the held reply transition`);
+      if (lane.runs?.[0]?.attempts?.length !== 1) throw new Error(`${holdReply ?? "release"} fixture did not start exactly one first-stage child`);
+      if (holdReply) {
+        const events = (await readFile(eventsFile, "utf8")).trim().split("\n").filter(Boolean).map(line => JSON.parse(line));
+        const adds = events.filter(event => event.type === "worktree-add" && event.pipelineId === laneId);
+        const installs = events.filter(event => event.type === "dependency-effect" && event.effect === "install-cache");
+        if (adds.length !== 1) throw new Error(`${holdReply} fixture dispatched ${adds.length} worktree adds`);
+        if (installs.length !== 1) throw new Error(`${holdReply} fixture dispatched ${installs.length} cold installs`);
+      }
       if ((await git(lane.worktreeDir, "rev-parse", "HEAD")) !== planned) throw new Error("release fixture checkout has an unexpected HEAD");
       const graph = await realpath(path.join(lane.worktreeDir, "node_modules"));
       const common = await git(checkout, "rev-parse", "--path-format=absolute", "--git-common-dir");
@@ -154,11 +237,26 @@ async function verifyFixtureLane(origin, checkout, remote, git) {
         || !/^[a-f0-9]{64}$/.test(key) || relative[3] !== "node_modules") throw new Error("release fixture has no linked shared graph");
       const receipt = JSON.parse(await readFile(path.join(graph, "..", "installed.json"), "utf8"));
       if (receipt.key !== key) throw new Error("release fixture graph has no matching receipt");
-      return { lane: laneId, planned, graph: key, workerEntry: workerPath };
+      return { lane: laneId, planned, graph: key, workerEntry: workerPath, ...(holdReply ? { heldReply: holdReply } : {}) };
     }
     await new Promise(resolve => setTimeout(resolve, 150));
   }
   throw new Error("release fixture did not consume its cold provisioning receipt inside 60 s");
+}
+
+async function fixtureLockAvailable(filename, env) {
+  const info = await lstat(filename).catch(error => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (!info) return true;
+  try {
+    await run("flock", ["-n", filename, "true"], { env, timeout: 2_000 });
+    return true;
+  } catch (error) {
+    if (error.code === 1) return false;
+    throw error;
+  }
 }
 
 async function freePort() {

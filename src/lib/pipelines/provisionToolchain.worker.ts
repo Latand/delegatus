@@ -6,6 +6,7 @@ import { containedDependencyExec, prepareLockedDependencies } from "./lockedDepe
 import { preparePrivateDependencies } from "./provisionPrivateDependencies";
 import { restrictInstallWrites } from "./provisionInstallBinding";
 import { provisionFrame, provisionFrames, validPrivateIntent, validPrivateReceipt } from "./provisionToolchainProtocol";
+import { recordProvisionFixtureEvent } from "./provisionFixtureSupervisor";
 
 const args = process.argv.slice(2);
 const send = (message: object) => new Promise<void>((resolve, reject) => {
@@ -85,7 +86,10 @@ async function prepare(): Promise<void> {
       return result;
     },
     onStep: async step => { await request("step", { step }); },
-    beforeEffect: async effect => { await request("dispatch", { effect }); },
+    beforeEffect: async effect => {
+      await recordProvisionFixtureEvent("dependency-effect", { effect });
+      await request("dispatch", { effect });
+    },
     onWriterWait: async identity => { await request("cacheBusy", { identity }); },
     onWriterAcquired: async fence => { await request("cacheAcquired", { fence }); },
   });

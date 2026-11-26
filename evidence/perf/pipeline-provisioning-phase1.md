@@ -176,7 +176,7 @@ The `candidate-gate` image built the `f722ae26c` source and ran the disposable p
 
 The orchestrator seat owns these three checks after deployment.
 
-- Hold toolchain replies through the built and installed serving Viewers. Their smoke fixtures need a supervisor-reply barrier. The earlier container replay used the shipped worker with the source controller.
+- The existing built Viewer verifier, installed-package smoke and candidate-image release verifier now share a private file-based supervisor barrier. Each serving-layout run holds the real `check-ignore` reply and the post-acquisition cache permit in turn, then checks the persisted `toolchain-reply-lost` step, worker exit, cache lock release, one worktree add, one cold install, one first child and no late fixture writes. The orchestrator seat owns rerunning and reviewing this acceptance on the authorized deployed release; the source-level barrier unit and controller recovery tests are local evidence, not a serving-release verdict.
 - Exercise native macOS custody and in-place binding controls on a macOS runner. Linux custody and binding use the pinned Bun.
 - Repeat the seven-stage desktop contention measurement after a reviewed and authorized deployment. The existing fixture passes with 18.349, 17.852 and 18.097 s.
 

@@ -7,6 +7,7 @@ import type { LegacyInstallerObservation } from "./provisionLegacyInstaller";
 import type { ProvisionExecPort } from "./git";
 import { provisionToolchainEntry } from "./provisionToolchainEntry";
 import { provisionFrame, provisionFrames, validCacheFence, validCacheIdentity, validPrivateIntent, validPrivateReceipt } from "./provisionToolchainProtocol";
+import { waitForProvisionFixtureReply } from "./provisionFixtureSupervisor";
 
 type ToolchainStep = DependencyPreparationStep | "installingPrivateDependencies";
 type ToolchainEffect = DependencyPreparationEffect | PrivateInstallEffect;
@@ -111,6 +112,8 @@ export async function runProvisionToolchain(request: ToolchainRequest): Promise<
       } else if (frame.type === "cacheAcquired" && validCacheFence(frame.fence)) {
         const fence = frame.fence;
         await parent(() => request.cacheAcquired(fence));
+        await waitForProvisionFixtureReply("cache-permit", request.signal,
+          { workerPid: child.pid, fenceIdentity: fence.identity });
       } else if (frame.type === "legacyWriter" && validLegacyObservation(frame.observation)) {
         const cause = frame.observation;
         await parent(() => request.legacyWriter(cause));
@@ -128,6 +131,7 @@ export async function runProvisionToolchain(request: ToolchainRequest): Promise<
       } else if (frame.type === "checkIgnoredModules") {
         const result = await request.exec("git", ["check-ignore", "--quiet", "node_modules"], checkout, request.signal);
         await request.observeReply?.("checkIgnoredModules");
+        await waitForProvisionFixtureReply("check-ignore", request.signal, { workerPid: child.pid, resultCode: result.code });
         await send({ ...go, code: result.code });
         continue;
       } else if (frame.type === "result") {

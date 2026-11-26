@@ -23,6 +23,7 @@ import { physicalProvisioningPath, provisioningStripe, tryProvisioningLock, type
 import { observeLegacyInstaller, type LegacyInstallerObservation } from "./provisionLegacyInstaller";
 import { ProvisionToolchainFailure, runProvisionToolchain } from "./provisionToolchain";
 import { provisionToolchainEntry } from "./provisionToolchainEntry";
+import { recordProvisionFixtureEvent } from "./provisionFixtureSupervisor";
 import { PROVISION_STEPS, provisioningStepView, validProvisioningRecord, type ProvisioningRecord, type ProvisioningStepView, type ProvisionStep } from "./provisioningRecord";
 import { controllerPipelineVersionNow, deliveryJournal, findControllerPipeline, provisioningCacheOwnerKeys, withProvisioningCheckpoint } from "./store";
 import type { Pipeline, PipelineBoundedWait } from "./types";
@@ -770,6 +771,7 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
     let ok = false;
     try {
       read();
+      if (add) await recordProvisionFixtureEvent("worktree-add", { pipelineId: id });
       const timeoutMs = Math.min(options?.timeoutMs ?? Infinity, Math.max(1, Math.floor(stopAt - clock.monotonicMs())));
       const result = launcher ? await git.exec(launcher.command,
         ["--no-env-file", launcher.entry, "add", String(Date.now() + timeoutMs), effectCwd, ...effectArgs],
