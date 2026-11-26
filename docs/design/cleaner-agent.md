@@ -163,6 +163,22 @@ shared with a running process does not pin the tree. Processes of another user,
 container root included, stay unreadable. Registered attempt roots keep their own
 reference proof.
 
+A process of this user that refuses inspection (non-dumpable: `ssh-agent`, `gpg-agent`,
+`scdaemon`, or any program that clears its dumpable flag) shows only its command line.
+The scan keeps it with the paths that line names, so a tree named there is held for every
+class above and by the attempt ledger's reference proof. Its working directory, open
+files, mappings and environment cannot be read: a tree of the `llv-*`, agent or gate
+class that such a process uses only through those is not protected.
+
+The same sweep also takes **strays**: a private directory of this uid, of any name,
+directly in `/tmp` or `/var/tmp`, older than 12 h by its newest write, outside the
+keep-list (which holds `delegatus-gate-record-*`, the journal that proves a gate sandbox
+free), with no reference as above and no socket inside. Because of the blindness
+above, no stray is removed while a refusing process outside the known daemon list
+(`UNINSPECTABLE_DAEMONS`) runs, or while any refusing process, listed or not, names a
+path under `/tmp` or `/var/tmp`. Both hold every candidate as `process-scan-unverified`;
+a stray the command line names is held as `process_reference`.
+
 Cannot prove, and holds or skips instead:
 
 - **Names it did not choose.** `delegatus-test-comparison-*` (`scripts/local-gate-tests.ts:483`),

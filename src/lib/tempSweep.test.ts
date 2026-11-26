@@ -42,6 +42,7 @@ import {
   type TempProvenanceRow,
 } from "./tempSweep";
 import { removeTreeWithinAttemptBudget } from "./runtime/attemptTempRemoval";
+import { attemptProcessReferencesClear, RepositoryLinkInventory, warmCheckoutInventory } from "./runtime/attemptTempFilesystem";
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -1627,7 +1628,7 @@ test("a stale private stray of any name is removed with its proof, and owned nam
 test("keep-list entries, configured prefixes, foreign owners, shared modes, links and files are never strays", async () => {
   const root = tempRoot();
   const kept = ["systemd-private-abc-colord.service-x", ".X11-unix", ".ICE-unix", "tmux-1000", "ssh-XXXXabc", "claude-1000",
-    "snap-private-tmp", "llv-spawn-sandbox", "llv-gate", "notes-operator"].map(name => strayFixture(root, name));
+    "snap-private-tmp", "delegatus-gate-record-A1b2C3", "llv-spawn-sandbox", "llv-gate", "notes-operator"].map(name => strayFixture(root, name));
   const shared = aged(root, "shared-mode", 2 * DAY);
   fs.chmodSync(shared, 0o755);
   const target = strayFixture(tempRoot(), "link-target");
@@ -1726,9 +1727,7 @@ refusalTests("a live process that refuses inspection keeps the stray it works in
   const proc = fixtureProcRoot([holder])!;
   // The kernel refuses this user the holder's links: only its record remains.
   expect(() => fs.readlinkSync(`/proc/${holder.pid}/cwd`)).toThrow();
-  const scan = scanProcesses(proc);
-  expect(scan.processes).toEqual([]);
-  expect(scan.uninspectable).toEqual([expect.objectContaining({ pid: holder.pid, command: "python3", namespace: null })]);
+  expect(scanProcesses(proc).processes).toEqual([expect.objectContaining({ pid: holder.pid, uninspectable: "python3", namespace: null })]);
   const options = { ...strayOptions(root), scan: undefined, procRoot: proc };
   const report = await sweepStaleTempDirs(options);
   expect(report.removed).toEqual([]);
@@ -1739,25 +1738,107 @@ refusalTests("a live process that refuses inspection keeps the stray it works in
   expect((await sweepStaleTempDirs({ ...strayOptions(root), scan: undefined, procRoot: fixtureProcRoot([]) })).removed.map(row => row.path)).toEqual([directory]);
 });
 
-refusalTests("a refusing process holds the stray its command line names, even a known daemon", async () => {
+refusalTests("while a refusing daemon names a path inside the stray root, every stray stays", async () => {
   const root = tempRoot();
   const named = strayFixture(root, "rev-named-by-daemon");
   const other = strayFixture(root, "rev-unnamed");
   const holder = await refusingHolder(tempRoot(), "ssh-agent", ["-a", path.join(named, "agent.sock")]);
   const report = await sweepStaleTempDirs({ ...strayOptions(root), scan: undefined, procRoot: fixtureProcRoot([holder]) });
-  expect(report.held).toEqual([expect.objectContaining({ path: named, reason: "process_reference" })]);
-  // A known daemon that names nothing leaves the other stray its proof, and the proof counts it.
-  expect(report.removed.map(row => row.path)).toEqual([other]);
-  expect(report.removed[0]!.proof).toMatchObject({ processes: 0, uninspectable: 1 });
-  expect(fs.existsSync(named)).toBeTrue();
+  expect(report.removed).toEqual([]);
+  expect(report.held?.map(row => [row.path, row.reason]).sort()).toEqual([[named, "process_reference"], [other, "process-scan-unverified"]]);
+});
+
+refusalTests("a known daemon naming nothing in the stray root leaves the proof, which counts it", async () => {
+  const root = tempRoot();
+  const directory = strayFixture(root, "rev-beside-daemon");
+  // The root itself is no path inside it.
+  const holder = await refusingHolder(tempRoot(), "ssh-agent", ["-a", path.join(tempRoot(), "agent.sock"), `--tmpdir=${root}`]);
+  const report = await sweepStaleTempDirs({ ...strayOptions(root), scan: undefined, procRoot: fixtureProcRoot([holder]) });
+  expect(report.removed.map(row => row.path)).toEqual([directory]);
+  expect(report.removed[0]!.proof).toMatchObject({ processes: 0, namespaces: 0, uninspectable: 1 });
+});
+
+/** A tree of each class this sweep removes, removable but for a holder. */
+function classFixture(root: string, kind: "agent" | "gate" | "owned" | "stray"): string {
+  const directory = path.join(root, { agent: "agyc-refused", gate: "delegatus-local-gate-R7f8G9", owned: "llv-refused-owner", stray: "rev-refused" }[kind]);
+  fs.mkdirSync(directory, { mode: 0o700 });
+  if (kind === "gate") {
+    const env: NodeJS.ProcessEnv = { ...process.env, TMPDIR: root };
+    delete env.LLV_GATE_SANDBOX_RECORD;
+    const records = JSON.stringify(path.resolve(import.meta.dir, "../../scripts/gateSandboxRecords.ts"));
+    // The supervisor dies without its exit cleanup, which leaves an orphan.
+    expect(spawnSync(process.execPath, ["-e", `import { ownGateSandboxes, recordGateSandbox } from ${records};
+      ownGateSandboxes(); recordGateSandbox(process.argv[1]); process.kill(process.pid, "SIGKILL");`, directory], { env, timeout: 30_000 }).signal).toBe("SIGKILL");
+  }
+  fs.writeFileSync(path.join(directory, "payload"), "kept");
+  return directory;
+}
+
+test.skipIf(process.platform !== "linux" || process.getuid?.() === 0).each(
+  (["agent", "gate", "owned", "stray"] as const).flatMap(kind => (["a flag value", "a path"] as const).map(form => [kind, form] as const)),
+)("a refusing process that names an %s tree in %s holds it", async (kind, form) => {
+  const root = tempRoot();
+  const directory = classFixture(root, kind);
+  const file = path.join(directory, "payload");
+  const now = Date.now() + 2 * DAY;
+  const holder = await refusingHolder(tempRoot(), "python3", [form === "a path" ? file : `--input=${file}`]);
+  const options = (procRoot: string): TempSweepOptions => ({ ...strayOptions(root), scan: undefined, procRoot, now: () => now,
+    conversationProtection: () => ({ held: [], ended: new Map([[directory, now - DAY]]) }) });
+  const held = await realSweep(options(fixtureProcRoot([holder])!));
+  expect(held.errors).toEqual([]);
+  expect(held.removed).toEqual([]);
+  expect(held.held?.map(row => [row.path, row.reason])).toEqual([[directory, "process_reference"]]);
+  expect(fs.readFileSync(file, "utf8")).toBe("kept");
+  // Only the holder kept it: without that process the same sweep removes it.
+  await exited(holder);
+  const released = await realSweep(options(fixtureProcRoot([])!));
+  expect(released.removed.map(row => row.path)).toEqual([directory]);
+  // A gate's record stays: it is the proof, and never a stray.
+  if (kind === "gate") expect(fs.readdirSync(root).filter(name => name.startsWith("delegatus-gate-record-"))).toHaveLength(1);
+});
+
+test("the paths a refusing process names never stand in for its working directory", async () => {
+  const root = tempRoot();
+  const checkout = path.join(root, "checkout"), attempt = path.join(checkout, "data");
+  fs.mkdirSync(attempt, { recursive: true });
+  execFileSync("git", ["init", "-q", checkout]);
+  const refused = { pid: 4242, namespace: null, stamped: false, uninspectable: "python3", paths: [checkout], references: ["python3", checkout, "data/file"] };
+  const scan: ProcessScan = { ownNamespace: null, processes: [refused] };
+  // The directory it names is held; its relative argument resolves against nothing.
+  expect(attemptProcessReferencesClear(checkout, checkout, scan)).toBeFalse();
+  expect(attemptProcessReferencesClear(attempt, attempt, scan)).toBeTrue();
+  expect(await warmCheckoutInventory(scan, new RepositoryLinkInventory())).toEqual({ checkouts: 0, incomplete: 0 });
+  // The same paths read as a working directory would hold the tree and read the checkout.
+  const inspected: ProcessScan = { ownNamespace: null, processes: [{ ...refused, uninspectable: undefined }] };
+  expect(attemptProcessReferencesClear(attempt, attempt, inspected)).toBeFalse();
+  expect(await warmCheckoutInventory(inspected, new RepositoryLinkInventory())).toMatchObject({ checkouts: 1 });
+});
+
+test.skipIf(process.platform !== "linux")("a refusing daemon naming a temp root this pass does not read still holds every stray", async () => {
+  // Another namespace's view: its /tmp is a directory of the test's own, and
+  // no root of the pass is its /var/tmp. The policy names no roots, as in production.
+  const view = tempRoot(), proc = tempRoot();
+  fs.mkdirSync(path.join(view, "tmp"));
+  strayFixture(path.join(view, "tmp"), "rev-beside-other-root");
+  fs.mkdirSync(path.join(proc, "7", "ns"), { recursive: true });
+  fs.symlinkSync("mnt:[7]", path.join(proc, "7", "ns", "mnt"));
+  const sweep = (named: string) => sweepStaleTempDirs({
+    roots: [{ path: "/tmp", via: view, anchor: { pid: 7, namespace: "mnt:[7]" } }], procRoot: proc, mountPoints: () => [],
+    maxAgeMs: DAY, stray: { maxAgeMs: 12 * HOUR, keep: [] },
+    scan: { ownNamespace: "mnt:[1]", processes: [{ pid: 4242, namespace: null, stamped: false, uninspectable: "ssh-agent",
+      paths: [named], references: ["ssh-agent", "-a", named] }] } });
+  const held = await sweep("/var/tmp/agent.sock");
+  expect(held.removed).toEqual([]);
+  expect(held.held?.map(row => [row.path, row.reason])).toEqual([["/tmp/rev-beside-other-root", "process-scan-unverified"]]);
+  expect((await sweep("/run/user/agent.sock")).removed.map(row => row.path)).toEqual(["/tmp/rev-beside-other-root"]);
 });
 
 refusalTests("an unknown refusing process that appears after the rename restores the stray", async () => {
   const root = tempRoot();
   const directory = strayFixture(root, "review-late-refusal");
-  const refused = { pid: 4242, namespace: null, stamped: false, command: "python3", paths: [], references: ["python3"] };
+  const refused = { pid: 4242, namespace: null, stamped: false, uninspectable: "python3", paths: [], references: ["python3"] };
   const report = await sweepStaleTempDirs({ ...strayOptions(root), scan: undefined, currentScan: () =>
-    fs.readdirSync(root).some(name => name.startsWith(".delegatus-trash-")) ? { ...noProcesses, uninspectable: [refused] } : noProcesses });
+    fs.readdirSync(root).some(name => name.startsWith(".delegatus-trash-")) ? { ...noProcesses, processes: [refused] } : noProcesses });
   expect(report.removed).toEqual([]);
   expect(report.held).toEqual([expect.objectContaining({ path: directory, reason: "process-scan-unverified" })]);
   expect(fs.existsSync(path.join(directory, "file.txt"))).toBeTrue();
@@ -1783,11 +1864,11 @@ test.skipIf(process.platform !== "linux")("the scan records a refused process on
     return readlink(file, options);
   }) as typeof fs.readlinkSync);
   try {
-    expect(scanProcesses(proc).uninspectable).toEqual([{ pid: 11, namespace: null, stamped: false, command: "odd (name) Z",
+    expect(scanProcesses(proc).processes).toEqual([{ pid: 11, namespace: null, stamped: false, uninspectable: "odd (name) Z",
       paths: ["/tmp/named-by-11"], references: ["odd (name) Z", "/tmp/named-by-11"] }]);
     // Another user's process cannot work inside a private tree of this one.
     const uid = spyOn(process, "getuid").mockReturnValue((process.getuid!() + 1) as never);
-    try { expect(scanProcesses(proc).uninspectable).toBeUndefined(); } finally { uid.mockRestore(); }
+    try { expect(scanProcesses(proc).processes).toEqual([]); } finally { uid.mockRestore(); }
   } finally { spy.mockRestore(); }
 });
 
