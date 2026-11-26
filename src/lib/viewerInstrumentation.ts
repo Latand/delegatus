@@ -362,7 +362,7 @@ export async function completeViewerReleaseDemotion(
 
 export async function initializeHotStateStoresAtStartup(
   boundary: HotStateCutoverBoundary = { authority: null, reimportLegacy: false },
-  options: { afterCollectionImport?: (collection: string) => void; signal?: AbortSignal } = {},
+  options: { afterCollectionImport?: (collection: string) => void; signal?: AbortSignal; onStep?: () => void } = {},
 ): Promise<HotStateAuthority | null> {
   const [flows, pipelines, workflows] = await Promise.all([
     import("@/lib/flows/store"),
@@ -377,13 +377,16 @@ export async function initializeHotStateStoresAtStartup(
     reimportExisting: boundary.reimportLegacy,
     ...(options.afterCollectionImport ? { afterCollectionImport: options.afterCollectionImport } : {}),
   });
+  options.onStep?.();
   flows.loadFlows();
   pipelines.loadPipelines();
   pipelines.loadArchivedPipelinesForList();
   workflows.loadWorkflows();
+  options.onStep?.();
   // Requests consume the persisted narrow projections from their first call.
   const { readHistoryProjection } = await import("@/lib/state/historyProjection");
   await readHistoryProjection(() => undefined, { startup: true, signal: options.signal });
+  options.onStep?.();
   // MCP readers cannot install missing receipt indexes in operator state.
   // Prepare the existing schema and legacy import under the serving owner's
   // startup fence, before a thread's first task call reaches its worker.
@@ -394,6 +397,7 @@ export async function initializeHotStateStoresAtStartup(
     });
     receipts.close();
   }, { signal: options.signal });
+  options.onStep?.();
   if (boundary.authority?.mode === "preparing") {
     return completeHotStatePreparation(path.dirname(statePath("state.sqlite")), boundary.authority);
   }
@@ -430,22 +434,29 @@ export async function startCurrentReleaseControllers(
     loadSelfUpdateAuto: () => import("@/lib/selfUpdate/auto"),
     loadCloudEnvironmentController: () => import("@/lib/projects/cloudEnvironmentController"),
   },
-  options: { beforeSeatTick?: Promise<unknown> } = {},
+  options: { beforeSeatTick?: Promise<unknown>; onStep?: () => void } = {},
 ): Promise<void> {
+  const loaded = async <T>(loading: T): Promise<Awaited<T>> => {
+    const controller = await loading;
+    if (loading) options.onStep?.();
+    return controller;
+  };
   /* Stale role mapping rows (docs/design/model-sizing-tiers.md §5) are reset
      once, by the release that owns traffic, before its controller launches
      anything from them. A failure leaves the file as it was. */
   try {
-    const retirements = await loaders.loadRoleMappingRetirements?.();
+    const retirements = await loaded(loaders.loadRoleMappingRetirements?.());
     const outcome = await waitForStateLock("roles.retirements", () => retirements?.applyRoleMappingRetirements() as { state?: string; reset?: string[] } | undefined);
+    if (retirements) options.onStep?.();
     if (outcome?.state === "written" && outcome.reset?.length) console.error(`[roles] reset stale mapping rows to their defaults: ${outcome.reset.join(", ")}`);
   } catch (error) {
     console.error("[roles] mapping retirement failed", error instanceof Error ? error.name : "unknown");
   }
   // Restore a durable update hold before any autonomous launch admission.
   try {
-    const selfUpdate = await loaders.loadSelfUpdateAuto?.();
+    const selfUpdate = await loaded(loaders.loadSelfUpdateAuto?.());
     await selfUpdate?.startSelfUpdateAuto();
+    if (selfUpdate) options.onStep?.();
   } catch (error) {
     console.error("[self-update] auto start failed", error instanceof Error ? error.name : "unknown");
     const auto = readAuto(statePath("self-update", "auto.json"));
@@ -453,9 +464,9 @@ export async function startCurrentReleaseControllers(
     // autonomous startup until its owner can renew or release that custody.
     if (activeDrain() || (auto.drain && !auto.drain.overranAt && (auto.enabled || auto.drain.admitted || auto.managedPending))) throw error;
   }
-  const { startFlowPipelineController } = await loaders.loadFlowPipelineController();
+  const { startFlowPipelineController } = await loaded(loaders.loadFlowPipelineController());
   startFlowPipelineController();
-  try { (await loaders.loadCloudEnvironmentController?.())?.startCloudEnvironmentController(); }
+  try { (await loaded(loaders.loadCloudEnvironmentController?.()))?.startCloudEnvironmentController(); }
   catch { console.error("[cloud environments] preparation controller unavailable"); }
   /* The shared Telegram connector dies with the viewer container it is a child
      of (#1133), and the supervisor only ever started one when a consumer asked
@@ -464,7 +475,7 @@ export async function startCurrentReleaseControllers(
      account that already has one. NOT awaited: verifying a connector takes
      tens of seconds and the release-ready marker must not sit behind it. */
   try {
-    const connector = await loaders.loadTelegramConnectorBoot?.();
+    const connector = await loaded(loaders.loadTelegramConnectorBoot?.());
     if (connector) {
       void connector.provisionTelegramConnectorAtStartup()
         .catch((error) => console.error("[telegram connector] boot provisioning failed", error instanceof Error ? error.name : "unknown"));
@@ -478,7 +489,7 @@ export async function startCurrentReleaseControllers(
      no report and catches up no missed slot. It is idempotent per process, and
      a failure to start it must not take the other controllers down with it. */
   try {
-    const telegram = await loaders.loadTelegramReportScheduler?.();
+    const telegram = await loaded(loaders.loadTelegramReportScheduler?.());
     telegram?.ensureTelegramReportScheduler();
   } catch (error) {
     console.error("[telegram report] scheduler start failed", error instanceof Error ? error.name : "unknown");
@@ -487,20 +498,21 @@ export async function startCurrentReleaseControllers(
      reads for a connected bot in the release that owns traffic. It does
      nothing without a stored token, and its failure stays its own. */
   try {
-    const bot = await loaders.loadTelegramBotPoller?.();
+    const bot = await loaded(loaders.loadTelegramBotPoller?.());
     bot?.ensureTelegramBotPoller();
   } catch (error) {
     console.error("[telegram bot] poller start failed", error instanceof Error ? error.name : "unknown");
   }
   try {
-    const relays = await loaders.loadExternalRelayPollers?.();
+    const relays = await loaded(loaders.loadExternalRelayPollers?.());
     relays?.ensureExternalRelayPollers();
   } catch (error) {
     console.error("[external relay] poller start failed", error instanceof Error ? error.name : "unknown");
   }
   try {
-    const agentState = await loaders.loadAgentStateService?.();
+    const agentState = await loaded(loaders.loadAgentStateService?.());
     await agentState?.startAgentStateService();
+    if (agentState) options.onStep?.();
   } catch (error) {
     console.error("[agent state] service start failed", error instanceof Error ? error.name : "unknown");
   }
@@ -513,7 +525,7 @@ export async function startCurrentReleaseControllers(
      turning account migration off must not silently stop reclaiming hosts —
      retirement has its own off switch (`LLV_HOST_RETIREMENT_IDLE_HOURS=0`). */
   try {
-    const retirement = await loaders.loadStructuredHostRetirement?.();
+    const retirement = await loaded(loaders.loadStructuredHostRetirement?.());
     retirement?.startStructuredHostRetirement();
   } catch (error) {
     console.error("[host retirement] sweep start failed", error instanceof Error ? error.name : "unknown");
@@ -529,7 +541,7 @@ export async function startCurrentReleaseControllers(
      nobody configuring anything, and a Viewer restart resumes it from the
      durable stamps rather than from a timer that happened to survive. */
   try {
-    const seatTick = await loaders.loadSeatTick?.();
+    const seatTick = await loaded(loaders.loadSeatTick?.());
     if (options.beforeSeatTick) {
       void options.beforeSeatTick.then(() => seatTick?.startSeatTick()).catch(error => {
         console.error("[seat tick] project recovery is incomplete; actions remain held", error instanceof Error ? error.name : "unknown");
@@ -541,7 +553,7 @@ export async function startCurrentReleaseControllers(
   /* Turbo (docs/design/turbo-mode.md §2.7): an episode stored on, or ended and
      not yet returned, resumes from its stored rows after a restart or deploy. */
   try {
-    const turbo = await loaders.loadTurboSweep?.();
+    const turbo = await loaded(loaders.loadTurboSweep?.());
     turbo?.startTurboSweep();
   } catch (error) {
     console.error("[turbo] start failed", error instanceof Error ? error.name : "unknown");
@@ -552,16 +564,17 @@ export async function startCurrentReleaseControllers(
      sweeping the same roots would only find nothing left to remove.
      `LLV_TEMP_SWEEP_MAX_AGE_HOURS=0` turns it off. */
   try {
-    const pressure = await loaders.loadDiskPressureWatch?.();
+    const pressure = await loaded(loaders.loadDiskPressureWatch?.());
     pressure?.startDiskPressureWatch();
   } catch (error) {
     console.error("[disk pressure] watch start failed", error instanceof Error ? error.name : "unknown");
   }
   try {
-    const tempSweep = await loaders.loadTempSweep?.();
+    const tempSweep = await loaded(loaders.loadTempSweep?.());
     if (tempSweep) {
       const { AttemptTempStore } = await import("./runtime/attemptTempRetention");
       new AttemptTempStore().close();
+      options.onStep?.();
     }
     tempSweep?.startTempSweep();
   } catch (error) {
@@ -570,7 +583,7 @@ export async function startCurrentReleaseControllers(
   /* Merged lanes' worktrees (#2202), on the same clock for the same reason.
      `LLV_WORKTREE_SWEEP=0` turns it off, `dry-run` only reports. */
   try {
-    const worktreeSweep = await loaders.loadWorktreeSweep?.();
+    const worktreeSweep = await loaded(loaders.loadWorktreeSweep?.());
     worktreeSweep?.startWorktreeSweep();
   } catch (error) {
     console.error("[worktree sweep] start failed", error instanceof Error ? error.name : "unknown");
@@ -579,7 +592,7 @@ export async function startCurrentReleaseControllers(
      for the same reason. Each sweep reads the switch first; off, it reads one
      small file and stops. */
   try {
-    const asks = await loaders.loadAsksClassifier?.();
+    const asks = await loaded(loaders.loadAsksClassifier?.());
     asks?.startAsksClassifier();
   } catch (error) {
     console.error("[asks you] start failed", error instanceof Error ? error.name : "unknown");
@@ -587,7 +600,7 @@ export async function startCurrentReleaseControllers(
   /* Waits that no longer ask anyone leave «Waiting for you» on their own
      (docs/design/attention-auto-resolve.md), on the same clock. */
   try {
-    const reconcile = await loaders.loadAttentionReconcile?.();
+    const reconcile = await loaded(loaders.loadAttentionReconcile?.());
     reconcile?.startAttentionReconcile();
   } catch (error) {
     console.error("[attention reconcile] start failed", error instanceof Error ? error.name : "unknown");
@@ -597,7 +610,7 @@ export async function startCurrentReleaseControllers(
      when nothing is live, so this is one small read on an install that never
      asks in parallel. */
   try {
-    const deputySweep = await loaders.loadDeputySweep?.();
+    const deputySweep = await loaded(loaders.loadDeputySweep?.());
     deputySweep?.startDeputySweep();
   } catch (error) {
     console.error("[deputy] sweep start failed", error instanceof Error ? error.name : "unknown");
@@ -606,7 +619,7 @@ export async function startCurrentReleaseControllers(
      typed a pairing code calls each linked install on its own schedule. With
      no link a tick reads two small files and stops. */
   try {
-    const linkedBoards = await loaders.loadLinkedBoardSync?.();
+    const linkedBoards = await loaded(loaders.loadLinkedBoardSync?.());
     linkedBoards?.startLinkedBoardSync();
   } catch (error) {
     console.error("[linked boards] sync start failed", error instanceof Error ? error.name : "unknown");
@@ -615,7 +628,7 @@ export async function startCurrentReleaseControllers(
      its store on this clock, so an outcome no tab was open for is still there
      when the operator looks, after its own source has rolled over. */
   try {
-    const done = await loaders.loadDoneSweep?.();
+    const done = await loaded(loaders.loadDoneSweep?.());
     done?.startDoneSweep();
   } catch (error) {
     console.error("[done] sweep start failed", error instanceof Error ? error.name : "unknown");
@@ -625,30 +638,30 @@ export async function startCurrentReleaseControllers(
      The first sweep attempts every decision still owed, so a decision saved
      while the Viewer restarted or a deploy ran goes out now. */
   try {
-    const seatChannel = await loaders.loadSeatChannel?.();
+    const seatChannel = await loaded(loaders.loadSeatChannel?.());
     seatChannel?.startSeatChannel();
   } catch (error) {
     console.error("[seat channel] start failed", error instanceof Error ? error.name : "unknown");
   }
   try {
-    const prototypeDelivery = await loaders.loadPrototypeDelivery?.();
+    const prototypeDelivery = await loaded(loaders.loadPrototypeDelivery?.());
     prototypeDelivery?.startPrototypeDeliveryWorker();
   } catch (error) {
     console.error("[prototype delivery] start failed", error instanceof Error ? error.name : "unknown");
   }
-  try { (await loaders.loadMemberRevocations?.())?.startMemberRevocationWorker(); }
+  try { (await loaded(loaders.loadMemberRevocations?.()))?.startMemberRevocationWorker(); }
   catch { console.error("[team revocation] recovery worker unavailable"); }
-  try { (await loaders.loadAppConnect?.())?.startAppConnectPoller(); }
+  try { (await loaded(loaders.loadAppConnect?.()))?.startAppConnectPoller(); }
   catch (error) { console.error("[forge app connect] start failed", error instanceof Error ? error.name : "unknown"); }
   /* Voice timers fire whether or not a page is open, and one that came due during a restart fires now. */
   try {
-    const voiceTimers = await loaders.loadVoiceTimers?.();
+    const voiceTimers = await loaded(loaders.loadVoiceTimers?.());
     voiceTimers?.startVoiceTimers();
   } catch (error) {
     console.error("[voice timers] start failed", error instanceof Error ? error.name : "unknown");
   }
   if (env.LLV_ACCOUNT_CONTROLLER_DISABLED === "1") return;
-  const { startAccountMigrationController } = await loaders.loadAccountMigrationController();
+  const { startAccountMigrationController } = await loaded(loaders.loadAccountMigrationController());
   scheduleAccountMigrationController(startAccountMigrationController, accountControllerDelayMs(env));
 }
 
@@ -947,15 +960,25 @@ export async function runStructuredHostStartup(
 
 export async function completeViewerRuntimeActivation(
   steps: ViewerRuntimeActivationSteps,
+  onStep?: () => void,
 ): Promise<void> {
   await steps.initializeOperatorCapability();
-  await steps.runIdentityMigration?.();
+  onStep?.();
+  if (steps.runIdentityMigration) {
+    await steps.runIdentityMigration();
+    onStep?.();
+  }
   steps.publishHotStateActivation();
-  await steps.runClaudeLoginRecovery?.();
+  if (steps.runClaudeLoginRecovery) {
+    await steps.runClaudeLoginRecovery();
+    onStep?.();
+  }
   const { retireLegacyCodexMemoryHooksAtStartup } = await import("@/lib/memory/hookMigration");
   await retireLegacyCodexMemoryHooksAtStartup();
+  onStep?.();
   steps.startStructuredHosts?.();
   await steps.startControllers();
+  onStep?.();
   steps.publishViewerReleaseReady();
   // The board can load its saved summary on demand. Its startup build and
   // attention refinement may scan the catalog and should run in the background.
@@ -969,9 +992,11 @@ export async function completeViewerRuntimeActivation(
 export async function prepareRegistryForNativeCallers(
   registry: Pick<AgentRegistry, "prepareReadOnlySnapshot" | "prepareNativeCallerArtifacts">,
   signal: AbortSignal,
+  onSlice?: () => void,
 ): Promise<void> {
-  await registry.prepareReadOnlySnapshot(signal);
-  await registry.prepareNativeCallerArtifacts(signal, { waitUntilReady: true });
+  await registry.prepareReadOnlySnapshot(signal, { onSlice });
+  onSlice?.();
+  await registry.prepareNativeCallerArtifacts(signal, { waitUntilReady: true, onSlice });
 }
 
 /** Check every state database before a store opens one (#1870 slice 10):
@@ -980,10 +1005,11 @@ export async function prepareRegistryForNativeCallers(
     release is ready. A failed schema recovery blocks store initialization. */
 export async function checkStateDatabasesBeforeStores(
   stateDirectory: string,
+  onDatabaseChecked?: (done: number, total: number) => void,
 ): Promise<{ start(ownsTraffic: () => boolean): void }> {
   const { checkStateDatabasesInWorker, startStateDurability, SchemaRecoveryError } = await import("@/lib/state/durability");
   try {
-    const incidents = await checkStateDatabasesInWorker(stateDirectory);
+    const incidents = await checkStateDatabasesInWorker(stateDirectory, onDatabaseChecked);
     return { start: (ownsTraffic) => { startStateDurability({ stateDirectory, incidents, ownsTraffic }); } };
   } catch (error) {
     if (error instanceof SchemaRecoveryError) throw error;
@@ -1154,45 +1180,65 @@ export async function registerViewerRuntime(): Promise<void> {
     const { startManagedRetirementGuard } = await import("@/lib/state/managedRetirementGuard");
     await startManagedRetirementGuard(hotStateDirectory, activatedReleaseRevision);
     startup.begin("state-compatibility");
-    const durability = await startupBarrier.run(() => checkStateDatabasesBeforeStores(hotStateDirectory));
+    let stateSteps = 0;
+    let stateTotal = 0;
+    const stateStep = () => startup.progress(++stateSteps, stateTotal);
+    const durability = await startupBarrier.run(() => checkStateDatabasesBeforeStores(hotStateDirectory, (done, total) => {
+      // Ledger, role stores, four hot-state steps, legacy imports, transfers.
+      stateTotal = total + 8;
+      stateSteps = done;
+      startup.progress(done, stateTotal);
+    }));
     assertStartupActive();
     await startupBarrier.run(async () => {
       const { prepareDeliveryLedgerIndexes } = await import("@/lib/memory/deliveryLedger");
       await prepareDeliveryLedgerIndexes();
     });
     assertStartupActive();
+    stateStep();
     const { sweepOldLearnedRulesFiles } = await import("@/lib/memory/roleLaunch");
     try { sweepOldLearnedRulesFiles(); } catch { console.warn("[role-memory] old launch-file cleanup unavailable"); }
     const { startRoleSelectionRetention } = await import("@/lib/memory/roleSelectionRetention");
     startRoleSelectionRetention();
     const { startRoleHistoryDrain } = await import("@/lib/memory/roleHistoryDrain");
     startRoleHistoryDrain();
-    const authority = await initializeHotStateStoresAtStartup(boundary, { signal: startupAbort.signal });
+    stateStep();
+    const authority = await initializeHotStateStoresAtStartup(boundary, { signal: startupAbort.signal, onStep: stateStep });
     const { startServingHeapSeries } = await import("./heapSeries");
     startServingHeapSeries(viewerReleaseOwnsTraffic);
     const { ensureLegacyCollectionsImported } = await import("@/lib/state/legacyCollections");
     await ensureLegacyCollectionsImported();
+    stateStep();
     await startupBarrier.run(() => settleInterruptedTransfers());
+    stateStep();
     startup.begin("registry");
+    let registrySlices = 0;
+    const registrySlice = () => startup.progress(++registrySlices, 0);
     const { prepareAgentRegistry } = await import("@/lib/agent/registry");
     await startupBarrier.run(() => viewerLoopMonitor.run("registry.prepare", async () => {
       const registry = await prepareAgentRegistry(startupAbort.signal);
+      registrySlice();
       // The snapshot also prepares recovery indexes and backfills endings.
       // The first authorized native caller needs the complete artifact index;
       // its synchronous lookup intentionally advances only one bounded batch.
-      await prepareRegistryForNativeCallers(registry, startupAbort.signal);
+      await prepareRegistryForNativeCallers(registry, startupAbort.signal, registrySlice);
     }));
     assertStartupActive();
     startup.begin("activation");
+    let activationSteps = 0;
+    const activationStep = () => startup.progress(++activationSteps, 0);
     const { cleanupFinishedWorkAtStartup } = await import("@/lib/attention/finishedWorkCleanup");
     await startupBarrier.run(() => cleanupFinishedWorkAtStartup(undefined, assertStartupActive));
     assertStartupActive();
+    activationStep();
     let activatedAuthority: HotStateAuthority | null = null;
     const { retireCuratorPlaceholdersAtStartup } = await import("@/lib/memory/curation/cleanup");
     await startupBarrier.run(() => retireCuratorPlaceholdersAtStartup(undefined, assertStartupActive));
+    activationStep();
     const { retireSeatRecoveryPlaceholdersAtStartup } = await import("@/lib/tasks/seatRecoveryCleanup");
     await startupBarrier.run(() => retireSeatRecoveryPlaceholdersAtStartup(undefined, assertStartupActive));
     assertStartupActive();
+    activationStep();
     await completeViewerRuntimeActivation({
       initializeOperatorCapability: initializeOperatorSpawnCapabilityAtStartup,
       runClaudeLoginRecovery: async () => {
@@ -1234,7 +1280,7 @@ export async function registerViewerRuntime(): Promise<void> {
         }));
       },
       startControllers: async () => {
-        await startCurrentReleaseControllers(process.env, undefined, { beforeSeatTick: worktreeRecovery.committed });
+        await startCurrentReleaseControllers(process.env, undefined, { beforeSeatTick: worktreeRecovery.committed, onStep: activationStep });
         const { startRecordedCheckObserver } = await import("@/lib/recordedChecks/observer");
         await startRecordedCheckObserver();
       },
@@ -1250,7 +1296,7 @@ export async function registerViewerRuntime(): Promise<void> {
       publishViewerReleaseReady: () => {
         if (activatedAuthority) markViewerReleaseReady(hotStateDirectory, activatedAuthority);
       },
-    });
+    }, activationStep);
     durability.start(isCurrent);
     assertStartupActive();
     startup.finish();
