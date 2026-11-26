@@ -100,6 +100,7 @@ const describeDiagnostics = (sites: readonly TestSite[]) => sites.map(site => `$
  */
 export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side: "base" | "head", sites: readonly TestSite[]) => TestRun | Promise<TestRun>) {
   const comparison = compareTests(base, head);
+  const baseAssertions = base.failures.filter(site => site.kind === "test");
   let baseDiagnostics = fileDiagnostics(base);
   const initialAssertions = new Set(head.failures.filter(site => site.kind === "test").map(comparisonKey));
   const needsConfirmation = (site: TestSite) => site.kind === "test" && initialAssertions.has(comparisonKey(site));
@@ -123,7 +124,7 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
       assertWorkersSucceeded(samples);
       const baseRetry = samples[0]!.value, retry = samples[1]!.value;
       baseDiagnostics = mergeObservedSites(baseDiagnostics, fileDiagnostics(baseRetry));
-      const observedBase = { ...base, failures: [...base.failures.filter(site => site.kind === "test"), ...baseDiagnostics] };
+      const observedBase = { ...base, failures: [...baseAssertions, ...baseDiagnostics] };
       const initial = compareTests(observedBase, head);
       const recovered = new Set<string>();
       for (const site of initial.introduced.filter(site => diagnostics.includes(site))) {
@@ -147,7 +148,6 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
     // for filtered confirmation. New retry failures above remain blocking.
     const candidates = [...new Map(comparison.introduced.filter(needsConfirmation).map(site => [occurrenceKey(site), site])).values()];
     if (!candidates.length) return { ...comparison, flaky, baseDiagnostics };
-    let headDiagnostics = [...comparison.preexisting, ...comparison.introduced].filter(site => site.kind === "error");
     const evidence = candidates.map(site => ({ site,
       base: { pass: occurrenceCount(base.passed, site), fail: occurrenceCount(base.failures, site) },
       head: { pass: occurrenceCount(head.passed, site), fail: occurrenceCount(head.failures, site) },
@@ -188,10 +188,12 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
       assertWorkersSucceeded(samples, unpaired);
       const baseRetry = samples[0]!.value, headRetry = samples[1]!.value;
       baseDiagnostics = mergeObservedSites(baseDiagnostics, fileDiagnostics(baseRetry));
-      headDiagnostics = mergeObservedSites(headDiagnostics, fileDiagnostics(headRetry));
-      const retried = compareTests({ ...baseRetry, failures: baseDiagnostics }, { ...headRetry, failures: headDiagnostics });
-      comparison.introduced = [...comparison.introduced.filter(site => site.kind === "test"), ...retried.introduced];
-      comparison.preexisting = [...comparison.preexisting.filter(site => site.kind === "test"), ...retried.preexisting];
+      // Keep the established report order while rejudging diagnostics. The
+      // filtered assertion results still go through the occurrence counts.
+      const observedHead = mergeObservedSites([...comparison.introduced, ...comparison.preexisting], fileDiagnostics(headRetry));
+      const retried = compareTests({ ...base, failures: [...baseAssertions, ...baseDiagnostics] }, { ...head, failures: observedHead });
+      comparison.introduced = retried.introduced;
+      comparison.preexisting = retried.preexisting;
       for (const [index, side] of sides.entries()) {
         const run = samples[index]!.value;
         for (const item of pending) {
