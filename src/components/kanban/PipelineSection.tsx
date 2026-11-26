@@ -6,7 +6,7 @@ import { roleNameById } from "@/components/builderCopy";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import { ordinal, parseCpuQueueDetail } from "@/lib/runtime/cpuQueueText";
 import { edgeRoundsUsed, failEdgeExhaustion, failEdgeMaxRounds } from "@/lib/pipelines/failEdgeBudget";
-import type { Pipeline, PipelineGraphEdit, PipelineStage, PipelineStageReportEntry, StageFinding } from "@/lib/pipelines/types";
+import { PIPELINE_CONTROLLER_ROLE, PIPELINE_GRAPH_EDIT_CAUSES, type Pipeline, type PipelineGraphEdit, type PipelineStage, type PipelineStageReportEntry, type StageFinding } from "@/lib/pipelines/types";
 import { attemptStateLabel, latestAttempt, pipelineReviewHeads, pipelineStateLabel, type StageChipState } from "@/components/pipelines/pipelineModel";
 
 /* The stage-name rule lives beside `stageChipLabel` so the phone reads it
@@ -63,6 +63,7 @@ const SHOWN_STAGE_FINDINGS = 3;
     conversation itself is one click away on the stage's own pill. */
 function actorName(t: TFunction, actor: PipelineGraphEdit["actor"]): string {
   if (actor.kind === "operator") return t("kanban.graph.editedByOperator");
+  if (actor.role === PIPELINE_CONTROLLER_ROLE) return t("kanban.graph.editedByController");
   return actor.role ? roleNameById(t, actor.role) : t("kanban.actor.agent");
 }
 
@@ -132,11 +133,12 @@ export function GraphEditLine({ edit }: { edit: PipelineGraphEdit }) {
   const who = actorName(t, edit.actor);
   const change = [
     t(`kanban.graph.edit.${edit.action}`, { stage: edit.stageId ?? "" }),
+    edit.cause && PIPELINE_GRAPH_EDIT_CAUSES.includes(edit.cause) ? t(`kanban.graph.edit.cause.${edit.cause}`) : null,
     edit.runtimeSwitch ? t("kanban.graph.edit.appliedNow", { n: edit.runtimeSwitch.attempt }) : edit.effect === "pending-next-attempt" && edit.appliesFromAttempt ? t("kanban.graph.edit.nextAttempt", { n: edit.appliesFromAttempt }) : null,
   ].filter(Boolean).join(" · ");
   const at = Date.parse(edit.at);
   return (
-    <p className="graph-edit" data-graph-edit={edit.seq} data-graph-edit-actor={edit.actor.kind} title={edit.summary}>
+    <p className="graph-edit" data-graph-edit={edit.seq} data-graph-edit-actor={edit.actor.kind} data-graph-edit-cause={edit.cause} title={edit.summary}>
       {t("kanban.graph.edited", { who, age: Number.isFinite(at) ? fmtAge(at / 1000) : "", change })}
     </p>
   );

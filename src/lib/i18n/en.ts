@@ -5744,6 +5744,8 @@ export const en = {
   "kanban.graph.roundsAria": { one: "{count} review round, latest {verdict}", other: "{count} review rounds, latest {verdict}" },
   "kanban.graph.edited": "Graph edited by {who} {age}: {change}",
   "kanban.graph.editedByOperator": "operator",
+  "kanban.graph.editedByController": "the pipeline controller",
+  "kanban.graph.edit.cause.codex-cybersecurity-refusal": "moved to Claude Opus after two Codex cybersecurity refusals",
   "kanban.graph.edit.add-stage": "added {stage}",
   "kanban.graph.edit.remove-stage": "removed {stage}",
   "kanban.graph.edit.reorder-stage": "reordered stages",

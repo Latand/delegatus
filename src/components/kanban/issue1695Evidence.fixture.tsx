@@ -1910,6 +1910,23 @@ const stagePlacePipelines: Pipeline[] = STAGE_PLACE ? [pipeline("lane-stage-plac
     { stageId: "review", attempts: [attempt(1, "running", null, { definition: { runtime: "claude-cloud" }, cloud: { phase: "failed", fallback: { at: iso(5 * MIN), reason: "Claude Cloud session can write to GitHub; read-only access was not proven, so no assignment was sent. Connect GitHub read-only for this account (docs/design/claude-code-cloud.md, setup step 2)" } } })] },
   ],
   { stageId: "review", state: "running", input: null, activatedBy: null })] : [];
+/* `?scenario=codex-refusal-move`: Codex refused the review stage twice as a cybersecurity risk, so the
+   controller moved the stage to Claude Opus; its third attempt runs there and the card says why. */
+const CODEX_REFUSAL_MOVE = SCENARIO === "codex-refusal-move";
+const codexRefusalPipelines: Pipeline[] = CODEX_REFUSAL_MOVE ? [pipeline("lane-codex-refusal", L("Harden the upload token check", "Посилити перевірку токена завантаження"), "t-codex-refusal", "running",
+  [stage("implement", "builder", "review"), stage("review", "builder", null)],
+  [
+    { stageId: "implement", attempts: [attempt(1, "passed", null, { completedAt: iso(40 * MIN) })] },
+    { stageId: "review", attempts: [
+      attempt(1, "failed", null, { effectiveRole: role("builder", "codex"), completedAt: iso(30 * MIN), error: "stage cut by Codex cybersecurity refusal" }),
+      attempt(2, "failed", null, { effectiveRole: role("builder", "codex"), completedAt: iso(20 * MIN), error: "stage cut by Codex cybersecurity refusal" }),
+      attempt(3, "running", null, { startedAt: iso(19 * MIN) }),
+    ] },
+  ],
+  { stageId: "review", state: "running", input: null, activatedBy: null },
+  { graphEdits: [{ seq: 1, at: iso(20 * MIN), actor: { kind: "agent", role: "pipeline-controller", conversationId: null }, action: "override-stage",
+    stageId: "review", pipelineState: "running", effect: "pending-next-attempt", appliesFromAttempt: 3, cause: "codex-cybersecurity-refusal",
+    summary: "moved stage review to Claude opus high after Codex refused it twice as a cybersecurity risk; applies from attempt 3" }] })] : [];
 /* `?scenario=stageshapes` (redesign S2): one lane per graph shape the Stages window must draw, each on a task of
    its own, with invented stage ids and text (`stageShapes.fixture.ts`, which the phone's fixture reads too). */
 const STAGE_SHAPES = SCENARIO === "stageshapes";
@@ -1930,6 +1947,7 @@ const shapeTasks = (): BoardTask[] => stageShapeLanes.map((entry, index) => task
 const pipelines: Pipeline[] = [
   ...shapePipelines,
   ...stagePlacePipelines,
+  ...codexRefusalPipelines,
   ...cloudChecksPipelines,
   ...wallPipelines,
   ...unstartedPipelines,
@@ -2312,6 +2330,7 @@ const tasks: BoardTask[] = [
     task("t-finish-hold", "assigned", L("Merge when the review passes", "Мердж, коли ревʼю пройдено"), L("The setting, the runner, and its docs.", "Налаштування, мердж і документація."), 50 * MIN),
     task("t-finish-done", "done", L("Conversation: wider agent replies", "Ширші відповіді агентів"), "", 75 * MIN),
   ] : []),
+  ...(CODEX_REFUSAL_MOVE ? [task("t-codex-refusal", "assigned", L("Harden the upload token check", "Посилити перевірку токена завантаження"), "", 5 * MIN)] : []),
   ...(STAGE_PLACE ? [task("t-stage-place", "assigned", L("Run a stage in Claude Code cloud", "Запустити етап у хмарі Claude Code"), "", 5 * MIN)] : []),
   ...(CLOUD_CHECKS ? [task("t-cloud-checks", "assigned", L("Run heavy checks in Codex Cloud", "Важкі перевірки в Codex Cloud"), "", 5 * MIN)] : []),
   ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "An edge at rest, one fired once, a spent budget in flight, a lane parked on a spent budget, and two edges into one stage.", 3 * MIN)] : []),
