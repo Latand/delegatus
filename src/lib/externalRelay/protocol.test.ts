@@ -41,6 +41,27 @@ test("request limits and additive fields", () => {
   ).toBe(false);
 });
 
+test("sticker rows retain optional details within the service limits", () => {
+  const row = sampleRequest.input.conversation[0];
+  const sticker = { ...row, text: "", kind: "sticker", sticker_emoji: "⭐️", sticker_format: "tgs" } as const;
+  const parse = (message: unknown) => requestSchema.safeParse({
+    ...sampleRequest, input: { ...sampleRequest.input, conversation: [message] },
+  });
+  for (const sticker_format of ["webp", "tgs", "webm"] as const) {
+    const message = { ...sticker, sticker_format };
+    expect(parse(message).data?.input.conversation).toEqual([message]);
+  }
+  const described = { ...sticker, sticker_emoji: "😀".repeat(128), media_description: "😀".repeat(4000) };
+  expect(parse(described).data?.input.conversation).toEqual([described]);
+  for (const invalid of [{ sticker_emoji: "😀".repeat(129) }, { media_description: "😀".repeat(4001) }, { sticker_format: "gif" }])
+    expect(parse({ ...sticker, ...invalid }).success).toBe(false);
+  expect(parse(row).data?.input.conversation).toStrictEqual([row]);
+  const future = parse({ ...row, kind: "future" });
+  expect(future.success).toBe(true);
+  expect(future.data?.input.conversation[0]?.kind).toBeUndefined();
+  expect(JSON.stringify(future.data?.input.conversation)).toBe(JSON.stringify(parse(row).data?.input.conversation));
+});
+
 test("F4 descriptor features survive parsing and owner I10 schemas survive unchanged", () => {
   const descriptor = { protocol: "delegatus-relay", versions: [1], name: "Test", description: "Test",
     api_base: "https://relay.example/v1", kinds: ["answer"], liveness: sampleRequest.liveness,

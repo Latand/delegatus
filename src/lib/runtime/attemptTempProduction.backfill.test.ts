@@ -158,6 +158,10 @@ test("a fresh helper audits the old ledger after a crash before release, then re
     for (const target of [directory, unknown]) {
       fs.mkdirSync(target, { recursive: true, mode: 0o700 }); fs.writeFileSync(path.join(target, "data"), "payload");
     }
+    // Something wrote to the sibling within the last day, which keeps it ambiguous: an ownerless
+    // root idle for 24 hours with no live reference is removed by the unregistered-scratch pass.
+    const recent = new Date(NOW - 3_600_000);
+    fs.utimesSync(path.join(unknown, "data"), recent, recent); fs.utimesSync(unknown, recent, recent);
     const store = new AttemptTempStore(); filename = store.filename;
     store.register({ directory, launchId: "legacy-launch", pipelineId: pipeline.id, retainUntilClose: true, createdAt: Date.parse(closedAt) - 1 });
     store.retainRoot(directory, Date.parse(closedAt) + 8 * 86400000);
@@ -188,6 +192,57 @@ test("a fresh helper audits the old ledger after a crash before release, then re
   expect(fs.existsSync(path.join(state, "attempt-temp-report.json"))).toBeTrue();
 });
 
+test("retained change rows below the feed floor cannot restart the audit every tick", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "retention-feed-gap-")); roots.push(root);
+  const state = path.join(root, "state"), prior = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = state;
+  const store = new AttemptTempStore();
+  try {
+    const completedAt = "2035-01-13T00:00:00Z", lane = finishedLane(path.join(root, "repo"), completedAt);
+    lane.state = "needs_decision";
+    fs.mkdirSync(path.join(lane.worktreeDir!, ".git"), { recursive: true });
+    lane.runs = [{ stageId: "build", attempts: [{ n: 1, state: "failed", launchId: "finished", effectiveRole: lane.stages[0]!.effectiveRole,
+      conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null, startedAt: completedAt,
+      completedAt, input: null, activatedBy: null, output: null, verdict: { status: "fail" }, error: null }] }];
+    savePipelines([lane]);
+    const feed = new Database(path.join(state, "state.sqlite"));
+    try {
+      // Production pruning advances the floor even when its bounded DELETE
+      // leaves older rows. None of those rows carries this attempt's change.
+      feed.exec("DELETE FROM state_changes WHERE collection='pipelines'");
+      const insert = feed.query("INSERT INTO state_changes(collection,revision,row_key,operation) VALUES('pipelines',?,'other-lane','upsert')");
+      for (let i = 1; i <= 8; i++) insert.run(i);
+      feed.exec("UPDATE state_collections SET revision=12,change_floor=10 WHERE collection='pipelines'");
+    } finally { feed.close(); }
+    const directories = Array.from({ length: 129 }, (_, i) => path.join(state, "scratch", `llv-stage-a${String(i).padStart(3, "0")}`));
+    for (const directory of directories) fs.mkdirSync(directory, { recursive: true });
+    const target = directories.at(-1)!;
+    store.register(...directories.map(directory => ({ directory, launchId: directory === target ? "finished" : "unknown",
+      pipelineId: lane.id, retainUntilClose: false, createdAt: Date.parse(completedAt) - 1 })));
+    store.scheduleCheckpoint(0, "");
+    const tick = async (at: number) => {
+      const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"),
+        "--production-report", String(at), "--fixture-container-inventory"], { stdout: "pipe", stderr: "pipe" });
+      const [output, errors, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      expect(code, errors).toBe(0);
+      return JSON.parse(output.trim().split("\n").at(-1)!);
+    };
+    let tickNumber = 0;
+    await tick(NOW + tickNumber++ * 60_000);
+    expect(store.schedulePosition().revision).toBe(12);
+    let repaired = false;
+    for (; tickNumber <= 4 && fs.existsSync(target); tickNumber++) {
+      const report = await tick(NOW + tickNumber * 60_000);
+      repaired ||= report.backfill.updated === 1;
+      expect(report.errors).toBe(0);
+    }
+    expect(repaired).toBeTrue();
+    expect(store.has(target)).toBeFalse();
+    expect(fs.existsSync(target)).toBeFalse();
+    expect(fs.existsSync(directories[0]!)).toBeTrue();
+  } finally { store.close(); process.env.LLV_STATE_DIR = prior; }
+}, 20_000);
+
 test("cleanup metrics persist across ledger reopen and expire old minute buckets", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "retention-metrics-")); roots.push(root);
   const filename = path.join(root, "attempt-temp.sqlite"), first = new AttemptTempStore(filename);
@@ -216,5 +271,19 @@ test("bounded allocation refresh counts live registered growth without expiry se
     f.store.measure(directory, measured.bytes, NOW);
     expect(f.store.bytes()).toBeGreaterThanOrEqual(2 * 1024 ** 2);
     expect(f.store.allocationDue(NOW + 30_000, 4)).toEqual([]);
+  } finally { f.store.close(); }
+});
+
+test("an expiry retry leaves zero and stale allocations in the measurement queue", () => {
+  const f = fixture(), zero = f.make("unmeasured"), stale = f.make("stale"), recent = f.make("recent");
+  try {
+    for (const directory of [zero, stale, recent]) {
+      f.store.retainRoot(directory, NOW - 1);
+      f.store.defer(directory, NOW + 86400_000);
+    }
+    f.store.measure(stale, 8192, NOW - 3600_000);
+    f.store.measure(recent, 8192, NOW - 60_000);
+    expect(f.store.allocationDue(NOW).map(row => row.directory)).toEqual([zero, stale]);
+    expect(f.store.due(NOW, 4, true)).toEqual([]);
   } finally { f.store.close(); }
 });

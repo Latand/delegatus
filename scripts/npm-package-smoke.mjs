@@ -1,3 +1,4 @@
+import { serveProvisioningFixture } from "./verify-provisioning-release.mjs";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
@@ -696,6 +697,8 @@ async function main() {
       throw new Error(`packed audio cue failed: status ${cue.status}, type ${cue.headers["content-type"]}`);
     }
     console.log("npm package smoke: /audio/cues/tool-tick-1.mp3 returned audio bytes.");
+    const provisioned = await serveProvisioningFixture({ root: standalone, bun: bunRuntime, standalone: true, temporaryRoot: tempDirectory });
+    console.log(`npm package smoke: ${provisioned.workerEntry} emitted ready and consumed its verified graph under ${provisioned.runtime}.`);
     if (mcpAssetsOnly) return;
     const resourceResponse = await waitForOk(port, "/api/resources", server, safeOutput);
     assertHealthyResourceDiagnostic(resourceResponse.headers["x-llv-resource-phases"]);

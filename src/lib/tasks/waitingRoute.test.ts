@@ -5,7 +5,8 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { PrototypeReviewSummary } from "@/lib/prototypeReview/types";
 import { patchTask } from "./commands";
 import { TASK_HOLD_KINDS, type BoardTask, type TaskHold, type TaskHoldKind } from "./types";
-import { waitingRoute, waitingRouteIndex } from "./waitingRoute";
+import { waitingRoute, waitingRouteIndex, type HoldPullRequestState, type PublishedRound } from "./waitingRoute";
+import { prototypeReviewSummary } from "@/lib/prototypeReview/model";
 
 const NOW = Date.parse("2026-11-20T06:47:00Z");
 const at = (hours: number) => new Date(NOW + hours * 3_600_000).toISOString();
@@ -80,20 +81,23 @@ test("structured dates and refs tell a cleared wait from an open prerequisite", 
   const dependency = { ...task("aabbccdd", null), status: "assigned" as const };
   const held = task("ref", "task", { ref: dependency.id });
   const finished = { owner: "seat", rule: "wait-cleared", carriedBy: "task" };
-  expect(classify(held, [], [dependency])).toMatchObject({ owner: "seat", rule: "unowned" });
+  expect(classify(held, [], [dependency])).toMatchObject({ owner: "agents", rule: "dependency" });
   const owningLane = lane(dependency.id, "running");
   expect(classify(held, [owningLane], [dependency])).toMatchObject({ owner: "agents", rule: "dependency" });
-  expect(classify(held, [{ ...owningLane, state: "closed" }], [dependency])).toMatchObject({ owner: "seat", rule: "unowned" });
+  expect(classify(held, [{ ...owningLane, state: "closed" }], [dependency])).toMatchObject({ owner: "agents", rule: "dependency" });
   const assigned = { ...dependency, assignments: [{
     state: "delivered" as const, path: null, conversationId: "conversation_live", panePid: null, error: null, at: at(0),
   }] };
-  expect(classify(held, [], [assigned])).toMatchObject({ owner: "seat", rule: "unowned" });
+  expect(classify(held, [], [assigned])).toMatchObject({ owner: "agents", rule: "dependency" });
   expect(classify(held, [], [assigned], false, new Set(["conversation_live"]))).toMatchObject({ owner: "agents", rule: "dependency" });
-  expect(classify(held, [], [{ ...dependency, status: "inbox" }])).toMatchObject({ owner: "seat", rule: "unowned", carriedBy: "task" });
+  expect(classify(held, [], [{ ...dependency, status: "inbox" }])).toMatchObject({ owner: "agents", rule: "dependency" });
+  expect(classify(task("self", "task", { ref: "self" }))).toMatchObject({ owner: "seat", rule: "unowned", carriedBy: "task" });
   const cycleA = task("cycle-a", "task", { ref: "cycle-b" });
   const cycleB = task("cycle-b", "task", { ref: "cycle-a" });
   const cycleIndex = waitingRouteIndex([cycleA, cycleB], []);
-  expect(waitingRoute(cycleA, cycleIndex, NOW)).toMatchObject({ owner: "seat", rule: "unowned", carriedBy: "task" });
+  for (const row of [cycleA, cycleB]) {
+    expect(waitingRoute(row, cycleIndex, NOW)).toMatchObject({ owner: "seat", rule: "unowned", carriedBy: "task" });
+  }
   expect(classify(held, [], [{ ...dependency, status: "done" }])).toMatchObject(finished);
   expect(classify(held)).toMatchObject(finished);
   expect(classify(task("ref", "task", { ref: "unknown prerequisite" }))).toMatchObject({ owner: "seat", rule: "unowned" });
@@ -124,6 +128,100 @@ test("operator forms and provenance take priority, and an answered form goes bac
   expect(classify(revised.task)).toEqual({ owner: "operator", rule: "operator-hold" });
 });
 
+const roundRows = (...rows: Array<[string, boolean]>) => rows.map(([id, decided], index) => ({ id, title: id, createdAt: at(-10 + index), variants: [],
+  ...(decided ? { decision: { chosen: [], comment: "Proceed", at: at(-5 + index), delivery: { state: "sent" } } } : {}) })) as never;
+
+test("operator holds route through published seat forms by their stored state", () => {
+  const row = task("seat-form-hold", "operator", { ref: "seat-round", note: "Choose the release option" });
+  const dismissed = lane(row.id, "needs_decision", { dismissedAt: at(-1) });
+  const routeWith = (round: PublishedRound | undefined) =>
+    waitingRoute(row, waitingRouteIndex([row], [dismissed], new Set(), {}, undefined, id => id === "seat-round" ? round : undefined), NOW);
+  expect(routeWith({ project, open: true })).toEqual({ owner: "operator", rule: "operator-hold" });
+  expect(routeWith({ project, open: false, answeredBy: "seat-round" })).toMatchObject({ owner: "seat", rule: "form-answered", carriedBy: "task", action: expect.stringContaining("seat-round") });
+  expect(routeWith({ project: "another-project", open: true })).toMatchObject({ owner: "seat", rule: "unowned" });
+  expect(routeWith(undefined)).toMatchObject({ owner: "seat", rule: "unowned" });
+});
+
+test("a pending form on another task of the same project carries the hold; an absent or foreign round does not", () => {
+  const holder = task("round-holder", "operator", { ref: "round-elsewhere", note: "Choose the option" });
+  const owner = { ...task("round-owner", null), status: "assigned" as const, prototypeReview: { latestReviewId: "round-elsewhere", waitingReviewId: "round-elsewhere",
+    createdAt: at(-3), title: "Choose", rounds: 1 } };
+  const dismissed = lane(holder.id, "needs_decision", { dismissedAt: at(-1) });
+  const route = (rows: BoardTask[]) => waitingRoute(holder, waitingRouteIndex(rows, [dismissed]), NOW);
+  expect(route([holder, owner])).toEqual({ owner: "operator", rule: "operator-hold" });
+  expect(route([holder])).toMatchObject({ owner: "seat", rule: "unowned" });
+  expect(route([holder, { ...owner, project: "another-project" }])).toMatchObject({ owner: "seat", rule: "unowned" });
+  const answered = { ...owner, prototypeReview: { ...owner.prototypeReview, waitingReviewId: null, decision: { chosen: [], comment: "", at: at(-1), delivery: "sent" as const } } };
+  expect(route([holder, answered])).toMatchObject({ owner: "seat", rule: "form-answered", action: expect.stringContaining("round-elsewhere") });
+});
+
+test("a retired round returns the seat to the round that carries the answer, and an answered round to itself", () => {
+  const route = (ref: string, history: ReturnType<typeof roundRows>) => {
+    const row = { ...task("retired-round-hold", "operator", { ref }), prototypeReviews: history } as BoardTask;
+    row.prototypeReview = prototypeReviewSummary(history);
+    return waitingRoute(row, waitingRouteIndex([row], [lane(row.id, "needs_decision", { dismissedAt: at(-1) })]), NOW);
+  };
+  const superseded = roundRows(["round-a", false], ["round-b", true]);
+  expect(route("round-a", superseded)).toMatchObject({ owner: "seat", rule: "form-answered", action: expect.stringContaining("round-b") });
+  expect(route("round-a", superseded)).toMatchObject({ action: expect.not.stringContaining("round-a") });
+  expect(route("round-b", superseded)).toMatchObject({ rule: "form-answered", action: expect.stringContaining("round-b") });
+  const bothAnswered = roundRows(["round-a", true], ["round-b", true]);
+  expect(route("round-a", bothAnswered)).toMatchObject({ rule: "form-answered", action: expect.stringContaining("round-a") });
+  expect(route("round-b", bothAnswered)).toMatchObject({ rule: "form-answered", action: expect.stringContaining("round-b") });
+});
+
+test("a seat round answered through the real store points to the saved answer after delivery", async () => {
+  const { clearSeatRoundsForTests, insertSeatRound, mutateSeatRound } = await import("@/lib/prototypeReview/seatRounds");
+  const { seatRoundLookup } = await import("./holdEvidence");
+  const id = `pr_${"f".repeat(32)}`;
+  const row = task("seat-round-hold", "operator", { ref: id, note: "Choose the release option" });
+  const dismissed = lane(row.id, "needs_decision", { dismissedAt: at(-1) });
+  const notice = { id: `prototype:${id}`, project, taskId: null, reviewId: id, title: "Choose", createdAt: at(-3),
+    target: { kind: "seat-decision", project, reviewId: id } } as const;
+  clearSeatRoundsForTests();
+  try {
+    insertSeatRound({ id, taskId: null, project, title: "Choose", createdAt: at(-3), publicationKey: "seat-hold", inputDigest: "fixture", source: { conversationId: null }, variants: [] });
+    const route = (notices: readonly (typeof notice)[]) => waitingRoute(row, waitingRouteIndex([row], [dismissed], new Set(), {}, undefined, seatRoundLookup(notices)), NOW);
+    expect(route([notice])).toEqual({ owner: "operator", rule: "operator-hold" });
+    expect(route([])).toMatchObject({ owner: "seat", rule: "unowned" });
+    mutateSeatRound(id, round => { round.decision = { chosen: [], comment: "Proceed", at: at(-1), delivery: { state: "pending", clientMessageId: "a", conversationId: null, text: "" } } as never; });
+    mutateSeatRound(id, round => { round.decision!.delivery = { ...round.decision!.delivery, state: "sent" } as never; });
+    // A delivered answer leaves no notice behind; the store still holds it.
+    expect(route([])).toMatchObject({ owner: "seat", rule: "form-answered", action: expect.stringContaining(id) });
+  } finally { clearSeatRoundsForTests(); }
+});
+
+test("an operator hold on an open step follows only the card's own lanes", () => {
+  const row = task("linked-step-hold", "operator", { ref: "step-lane" });
+  row.steps = [{ id: "step-lane", text: "Finish linked work", state: "open", ref: "step-lane" }];
+  const dismissed = lane(row.id, "needs_decision", { dismissedAt: at(-1) });
+  const route = (...others: Pipeline[]) => waitingRoute(row, waitingRouteIndex([row], [dismissed, ...others]), NOW);
+  expect(route()).toMatchObject({ owner: "operator", rule: "operator-hold" });
+  const unrelated = { ...lane("elsewhere", "completed"), id: "step-lane" };
+  expect(route(unrelated)).toMatchObject({ owner: "operator", rule: "operator-hold" });
+  const linked = { ...lane(row.id, "completed"), id: "step-lane" };
+  expect(route(linked)).toMatchObject({ owner: "seat", rule: "wait-cleared" });
+});
+
+test("a lane pause keeps its date and never hides a prerequisite that already cleared", () => {
+  const dismissed = (id: string) => lane(id, "needs_decision", { dismissedAt: at(-1) });
+  const operatorPause = (id: string) => ({ ...lane(id, "paused", { pause: { reason: "Operator pause", resumeCondition: { kind: "date", at: at(5) } } }), id: `pause-${id}` });
+  const cases: Array<[string, Partial<TaskHold>, BoardTask[], HoldPullRequestState | undefined, string]> = [
+    ["merged PR", { kind: "pr", ref: "41" }, [], () => "merged", "wait-cleared"],
+    ["closed task", { kind: "task", ref: "aabbccdd" }, [{ ...task("aabbccdd", null), status: "done" }], undefined, "wait-cleared"],
+    ["expired date", { kind: "postponed", until: at(-1) }, [], undefined, "wait-cleared"],
+  ];
+  for (const [name, hold, others, pullRequestState, rule] of cases) {
+    const row = task(`pause-${rule}-${name}`.replace(/ /g, "-"), hold.kind as TaskHoldKind, hold);
+    const index = (...lanes: Pipeline[]) => waitingRouteIndex([row, ...others], lanes, new Set(), {}, pullRequestState);
+    expect(waitingRoute(row, index(dismissed(row.id), operatorPause(row.id)), NOW), name).toMatchObject({ owner: "seat", rule });
+    expect(waitingRoute(row, index(operatorPause(row.id)), NOW), name).toMatchObject({ owner: "seat", rule });
+  }
+  // Open prerequisites leave the pause in charge.
+  const open = task("pause-open", "pr", { ref: "41" });
+  expect(waitingRoute(open, waitingRouteIndex([open], [dismissed(open.id), operatorPause(open.id)], new Set(), {}, () => "open"), NOW)).toMatchObject({ owner: "agents", rule: "dated" });
+});
+
 test("changed routing evidence earns a new key while edits to the title or hold note preserve it", () => {
   const row = task("evidence", "task", { ref: "old prerequisite" });
   const changed = (hold: Partial<TaskHold>) => ({ ...row, hold: { ...row.hold!, ...hold } });
@@ -137,7 +235,7 @@ test("changed routing evidence earns a new key while edits to the title or hold 
   expect(key(classify({ ...answered, prototypeReview: { ...answered.prototypeReview, latestReviewId: "other-round" } }))).not.toBe(key(classify(answered)));
 });
 
-test("dry run over 111 synthetic Waiting cards reproduces the design counts", () => {
+test("the Waiting sample leaves waits with an exact open task prerequisite off the seat agenda", () => {
   const dependency = { ...task("open-dependency", null), status: "assigned" as const };
   const closed = { ...task("closed-dependency", null), status: "done" as const };
   const rows: BoardTask[] = [];
@@ -209,8 +307,8 @@ test("dry run over 111 synthetic Waiting cards reproduces the design counts", ()
     else outcomes[route.carriedBy]++;
     if (route.owner === "seat" && route.action.includes("deployment_status")) acceptance++;
   }
-  expect(outcomes).toEqual({ operator: 11, answered: 6, task: 52, lane: 34, agents: 8 });
+  expect(outcomes).toEqual({ operator: 11, answered: 6, task: 31, lane: 34, agents: 29 });
   expect(Object.fromEntries(rules)).toEqual({ "operator-hold": 11, "form-answered": 6, "lane-stop": 30, "lane-dismissed": 1,
-    "pause-ready": 4, "wait-cleared": 3, unowned: 48, running: 2, dated: 6 });
+    "pause-ready": 4, "wait-cleared": 3, unowned: 27, running: 2, dated: 6, dependency: 21 });
   expect(acceptance).toBe(11);
 });

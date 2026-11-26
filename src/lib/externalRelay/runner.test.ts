@@ -4361,7 +4361,7 @@ test("owner credentials, host paths and key material never reach completion, ans
   const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
   paired.credential = randomBytes(32).toString("base64url");
   updateRelayStore(s => ({ ...s, relays: [paired] }));
-  const paths = ["/srv/review-fixture/private-note.txt", "~/private-note.txt", "file:///srv/private-note.txt", String.raw`C:\fixture\private.txt`, String.raw`\\fixture-host\share\private.txt`];
+  const paths = ["/srv/review-fixture/private-note.txt", "~/private-note.txt", "~/private-fixture/nested/secret-notes.md", "file:///srv/private-note.txt", String.raw`C:\fixture\private.txt`, String.raw`\\fixture-host\share\private.txt`];
   const material = "fixture-private-material";
   const pgpMaterial = "fixture-pgp-private-material";
   const value = ["fixture", "host", "credential", "value"].join("-");
@@ -4381,6 +4381,8 @@ test("owner credentials, host paths and key material never reach completion, ans
     expect(completions).toHaveLength(1);
     expect(record?.answer?.text).toContain("Done");
     for (const surface of [completions, record, diagnostics]) for (const secret of [value, paired.credential, control, spawn, ...paths, material, pgpMaterial]) expect(JSON.stringify(surface)).not.toContain(JSON.stringify(secret).slice(1, -1));
+    for (const surface of [completions, record, diagnostics]) for (const component of ["private-fixture", "nested", "secret-notes.md"])
+      expect(JSON.stringify(surface)).not.toContain(component);
     const encoded = Array.from(paired.credential, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`).join("");
     const encodedOutcome = await runClaimedRequest(paired, { ...contextRequest, request_id: "owner_encoded",
       input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
@@ -5533,5 +5535,39 @@ test.each(["declared", "mismatch", "oversize", "unavailable", "marker", "documen
     expect(readAnswerRecord(paired.id, paired.targets[0]!.id, request.request_id)).toMatchObject({ outcome: "answered" });
     expect(await runClaimedRequest(paired, request)).toEqual(result);
     expect(completions).toBe(1);
+  } finally { await server.close(); }
+});
+
+test("an unreadable history photo does not suppress a sticker-only trigger", async () => {
+  const request = richRequest();
+  request.request_id = "unreadable-history-photo-sticker-trigger";
+  request.features!.push("requester_context", "relay_media_in", "relay_history_media");
+  request.input.request_text = null;
+  const sample = request.input.conversation[0]!;
+  const trigger = { ...sample, text: "", kind: "sticker" as const, sticker_emoji: "⭐️", sticker_format: "tgs" as const,
+    media_description: "A star spins slowly." };
+  const historyPhoto = { ...sample, id: "older-photo", text: "", media: [{ ref: "missing-history-photo", kind: "photo" as const,
+    availability: "missing" as const, mime_type: "image/jpeg", byte_size: 12, expires_at: "2099-01-01T00:00:00Z" }] };
+  request.input.respond_to = trigger.id;
+  request.input.conversation = [historyPhoto, trigger];
+  const completions: unknown[] = [];
+  const server = await startTestRelay(req => {
+    if (req.url?.endsWith("/complete")) completions.push(req);
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${server.origin}/v1`);
+  updateRelayStore(store => ({ ...store, relays: [paired] }));
+  const marker = path.join(root, "sticker-trigger-prompt");
+  const fake = stub(`const a=process.argv.slice(2), prompt=await Bun.stdin.text();
+    await Bun.write(${JSON.stringify(marker)},prompt);
+    await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Seen',reply_to:null}));`);
+  try {
+    const result = await runClaimedRequest(paired, request, undefined, { command: fake });
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: "Seen" } });
+    expect(completions).toHaveLength(1);
+    const prompt = fs.readFileSync(marker, "utf8");
+    expect(prompt).toContain("sticker ⭐️: A star spins slowly.");
+    expect(prompt).toContain('"sticker_format":"tgs"');
+    expect(prompt).not.toContain("Media could not be read");
   } finally { await server.close(); }
 });

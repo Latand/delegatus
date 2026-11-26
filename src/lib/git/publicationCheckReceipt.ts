@@ -16,6 +16,18 @@ export function publicationPreparationVersion(root: string): 1 | 2 | 3 | undefin
     if (version === 1 || version === 2 || version === 3) return version;
   } catch { /* Use the ordinary gated push for an unknown capability. */ }
 }
+
+/** Preparation and per-file checkpointing shipped in different revisions.
+ * An older candidate can create a publication receipt while still deferring
+ * every comparator write until final completion. */
+export function supportsPublicationCheckpoints(root: string): boolean {
+  try {
+    const file = path.join(root, "scripts/local-gate-capabilities.json");
+    const stat = fs.lstatSync(file);
+    if (!stat.isFile() || stat.size > 1024) return false;
+    return JSON.parse(fs.readFileSync(file, "utf8"))?.publicationCheckpoints === 1;
+  } catch { return false; }
+}
 export interface PublicationCheckReceipt {
   version: 1;
   binding: string;

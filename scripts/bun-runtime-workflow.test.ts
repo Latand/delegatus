@@ -227,20 +227,24 @@ test("runtime CI requires installed-package MCP and audio smoke after prepack", 
   expect(step.env?.LLV_VIEWER_CONTROL_URL).toBe("http://127.0.0.1:1");
 });
 
-test("one stable runtime context refuses every incomplete upstream verdict", () => {
-  const gate = workflow.jobs["runtime-gate"] as typeof workflow.jobs[string] & { needs: string[] };
-  expect(gate.needs).toEqual(["bun-runtime", "native-codex-runtime"]);
-  expect(gate.if).toBe(`always() && (${workflow.jobs["bun-runtime"]!.if})`);
-  const check = gate.steps[0]!.run!;
-  for (const bun of ["success", "failure", "cancelled", "skipped", ""]) {
-    for (const codex of ["success", "failure", "cancelled", "skipped", ""]) {
-      const run = Bun.spawnSync(["bash", "-c", check], { env: { ...process.env, BUN_RESULT: bun, CODEX_RESULT: codex } });
-      expect(run.exitCode === 0).toBe(bun === "success" && codex === "success");
-    }
-  }
+const runtimeGate = workflow.jobs["runtime-gate"];
+
+test("one stable runtime context requires both upstream jobs on every runtime run", () => {
+  expect(runtimeGate.needs).toEqual(["bun-runtime", "native-codex-runtime"]);
+  expect(runtimeGate.if).toBe(`always() && (${workflow.jobs["bun-runtime"]!.if})`);
   expect(scripts.join("\n").match(/bun scripts\/build-mcp\.ts/g)).toBeNull();
   expect(steps.findIndex(step => step.name === "Build the Viewer")).toBeLessThan(steps.findIndex(step => step.name?.startsWith("Enforce MCP")));
 });
+
+const runtimeVerdicts = ["success", "failure", "cancelled", "skipped", ""];
+test.each(runtimeVerdicts.flatMap(bun => runtimeVerdicts.map(codex => [bun, codex] as const)))(
+  "runtime gate verdict for Bun=%j and native Codex=%j", (bun, codex) => {
+    const run = Bun.spawnSync(["bash", "-c", runtimeGate.steps[0]!.run!], {
+      env: { ...process.env, BUN_RESULT: bun, CODEX_RESULT: codex },
+    });
+    expect(run.exitCode).toBe(bun === "success" && codex === "success" ? 0 : 1);
+  },
+);
 
 test("parallel runtime controls require both processes to finish successfully", () => {
   const script = scripts.find(script => script.includes("controls_pid="))!;

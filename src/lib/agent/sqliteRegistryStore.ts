@@ -796,6 +796,18 @@ type ColdMappingDelta = { removed: Map<RowCollection, Set<string>>; added: ColdH
  * a row at a time. */
 const HEADER_BATCH_ROWS = 1024;
 
+/** Bound each payload read by row count and by accumulated JSON text. */
+function* payloadBatches<Row extends { value_json: string }>(rows: IterableIterator<Row>): Generator<Row[]> {
+  try {
+    for (;;) {
+      let chars = 0;
+      const batch = nextSqliteRows(rows, 16, row => (chars += row.value_json.length) >= 16_384);
+      if (!batch.length) return;
+      yield batch;
+    }
+  } finally { rows.return?.(); }
+}
+
 /** Every row of one open statement, a measured batch for each step. The
  * statement is finished when the read ends, is refused or is abandoned. */
 function* headerRowSteps<Row>(rows: IterableIterator<Row>): Generator<void, Row[]> {
@@ -1155,6 +1167,7 @@ const conversationPathSql = (records: string) => `SELECT conversation_id FROM (
     Retained conversations, entries, receipts and deliveries of a long-running
     installation fit; operation owners, the largest payloads, stay per commit. */
 const COLD_STABLE_ROW_BYTES = 48 * 1024 * 1024;
+const PROCESSLESS_ARCHIVE_ENTRY_LIMIT = 2048;
 
 /** Journalled changes a preparation replays on the published reader in one
     synchronous step. A row change is a keyed read and one normalization. */
@@ -1769,6 +1782,8 @@ export class SqliteAgentRegistryStore {
     forgets: number;
     /** Operation owners synthesized from archived deliveries that no stored owner names. */
     syntheticOwners: Map<string, string>;
+    /** Immutable hot collections used to build this generation's row maps. */
+    hotSources: Map<RowCollection, object>;
     /** `built` yields the merged collection, making it on first use when only
         its hot rows changed; `cold` is the reader of its archived rows,
         carried from build to build while its versions and decisions stand. */
@@ -1789,6 +1804,8 @@ export class SqliteAgentRegistryStore {
   /** Per projector, its result for each current archived version. */
   private readonly coldRowProjectionResults = new Map<string, Map<number, unknown>>();
   private coldGrantCursor: { changeId: number; stamp: string } | null = null;
+  private processlessArchiveEntries = new Map<string, number>();
+  private processlessArchiveSchemaVersion: number | null = null;
   private coldKeys = new Set<string>();
   private coldKeysStamp = "";
   /** The change journal position the cold key set was read at; 0 forces a full read. */
@@ -2523,6 +2540,8 @@ export class SqliteAgentRegistryStore {
     }
     this.fileIdentityRead = null;
     this.databaseReopens += 1;
+    this.processlessArchiveEntries.clear();
+    this.processlessArchiveSchemaVersion = null;
     // A restored file may have the same revision and counter stamp as the file
     // it replaced. No parsed row or assembled grant from the old inode holds.
     for (const rows of this.rowCache.values()) rows.clear();
@@ -2771,8 +2790,10 @@ export class SqliteAgentRegistryStore {
   }
 
   private journalIsBounded(coldIds: ReadonlyMap<RowCollection, ReadonlyMap<string, number>>): boolean {
-    const journal = this.db.query<{ first: number; last: number }, []>(
-      "SELECT COALESCE(MIN(seq),0) AS first,COALESCE(MAX(seq),0) AS last FROM registry_changes").get()!;
+    // Separate aggregates let SQLite seek each end of the sequence in the pinned transaction.
+    const journal = this.db.query<{ first: number; last: number }, []>(`
+      SELECT (SELECT COALESCE(MIN(seq),0) FROM registry_changes) AS first,
+             (SELECT COALESCE(MAX(seq),0) FROM registry_changes) AS last`).get()!;
     if (journal.first === 0 || journal.first > this.snapshotChangeId + 1 || journal.last <= this.snapshotChangeId) return false;
     if (journal.last - this.snapshotChangeId > PREPARED_REPLAY_CHANGES) return false;
     const version = this.db.query<{ archive_id: number }, [string, string]>("SELECT archive_id FROM registry_cold WHERE collection=? AND row_key=?");
@@ -3202,18 +3223,49 @@ export class SqliteAgentRegistryStore {
     return file;
   }
 
+  /** The read transaction has proved this collection has no archived rows.
+      Keep the header reader's page boundaries and buffer at most sixteen
+      payloads, stopping the batch as soon as one takes it over 16 Ki chars. */
+  private *fullyHotPayloadSteps(collection: RowCollection): Generator<Pick<StoredRow, "row_key" | "row_order" | "value_json">> {
+    const page = this.db.prepare<Pick<StoredRow, "row_key" | "row_order" | "value_json">, [string, number]>(
+      "SELECT row_key,row_order,value_json FROM registry_rows WHERE collection=? AND row_order>? ORDER BY row_order LIMIT 16");
+    let after = -1;
+    try {
+      for (;;) {
+        let count = 0;
+        for (const batch of payloadBatches(page.iterate(collection, after))) {
+          count += batch.length;
+          after = batch[batch.length - 1]!.row_order;
+          yield* batch;
+        }
+        if (count < 16) return;
+      }
+    } finally { page.finalize(); }
+  }
+
   private *loadHotSteps(): Generator<void, SqliteRegistrySnapshot> {
     yield* this.refreshColdKeySteps();
     const input: Record<string, unknown> = { version: 2,entries: {},receipts: {} };
+    const hasCold = this.db.query("SELECT 1 FROM registry_cold WHERE collection=? LIMIT 1");
     for (const collection of ROW_COLLECTIONS) {
       const values: Record<string, unknown> = {};
       let after = -1;
+      if (!this.coldKeys.size || !hasCold.get(collection)) {
+        for (const row of this.fullyHotPayloadSteps(collection)) {
+          this.onRowPayloadRead?.(collection, 1);
+          values[row.row_key] = this.parseRow(collection, row.row_key, row.value_json, true);
+          yield;
+        }
+        input[collection] = values;
+        continue;
+      }
+      const headerPage = this.db.query<Pick<StoredRow,"row_key"|"row_order">, [string, number]>(
+        "SELECT row_key,row_order FROM registry_rows WHERE collection=? AND row_order>? ORDER BY row_order LIMIT 16");
+      const payload = this.db.query<{ value_json: string }, [string, string]>("SELECT value_json FROM registry_rows WHERE collection=? AND row_key=?");
       for (;;) {
         // A limit on hot results can scan thousands of cold compatibility
         // rows before finding sixteen matches. Bound candidate headers first.
-        const headers = this.db.query<Pick<StoredRow,"row_key"|"row_order">, [string, number]>(
-          "SELECT row_key,row_order FROM registry_rows WHERE collection=? AND row_order>? ORDER BY row_order LIMIT 16").all(collection, after);
-        const payload = this.db.query<{ value_json: string }, [string, string]>("SELECT value_json FROM registry_rows WHERE collection=? AND row_key=?");
+        const headers = headerPage.all(collection, after);
         for (const header of headers) {
           after = header.row_order;
           if (!this.coldKeys.has(grantDecisionKey(collection, header.row_key))) {
@@ -3999,8 +4051,16 @@ export class SqliteAgentRegistryStore {
         CASE WHEN json_type(value_json,'$.requestDigest')='text' AND json_extract(value_json,'$.requestDigest')!=''
           THEN json_extract(value_json,'$.command.operationId') END AS operation_id
         FROM registry_archive WHERE id IN (${ids.map(() => "?").join(",")})`).all(...ids);
+      // Many rows in one page carry identical projected JSON. Share its
+      // decoding, while evaluating each row and recording its own operation.
+      const decodedClaims = new Map<string, unknown>();
       for (const row of claims) {
-        this.coldRowProjections.set(row.id,{ claimsGrant: rowClaimsBeyondBaselineGrant(parseSqliteJson(row.claims, this.db)),operationId: row.operation_id });
+        let decoded = decodedClaims.get(row.claims);
+        if (decoded === undefined) {
+          decoded = parseSqliteJson(row.claims, this.db);
+          decodedClaims.set(row.claims, decoded);
+        }
+        this.coldRowProjections.set(row.id,{ claimsGrant: rowClaimsBeyondBaselineGrant(decoded),operationId: row.operation_id });
         yield;
       }
     }
@@ -4475,7 +4535,9 @@ export class SqliteAgentRegistryStore {
       }
     }
     const hot = { ...snapshot.file };
-    if (syntheticOwners.size) {
+    const ownersAlreadyFiltered = prior?.syntheticOwners === syntheticOwners
+      && prior.hotSources.get("deliveryOperationOwners") === hot.deliveryOperationOwners;
+    if (syntheticOwners.size && !ownersAlreadyFiltered) {
       hot.deliveryOperationOwners = { ...hot.deliveryOperationOwners };
       for (const key of syntheticOwners.keys()) {
         delete hot.deliveryOperationOwners[key];
@@ -4483,6 +4545,8 @@ export class SqliteAgentRegistryStore {
       }
     }
     for (const [collection,keys] of coldKeys) {
+      // The previous generation filtered this frozen collection against these keys.
+      if (prior && prior.hotSources.get(collection) === hot[collection] && prior.coldKeys.get(collection) === keys) continue;
       const rows: Record<string, unknown> = {};
       for (const key in hot[collection]) {
         if (Object.hasOwn(hot[collection],key) && !keys.has(key)) rows[key] = hot[collection][key];
@@ -4519,8 +4583,10 @@ export class SqliteAgentRegistryStore {
        unchanged), its pinned grant decisions, and for operation owners the
        deliveries they normalize against and the owners synthesized from them. */
     const hotRows = function* (collection: RowCollection): Generator<void, Map<string, unknown>> {
-      const rows = new Map<string, unknown>();
       const source = file[collection] as Record<string, unknown>;
+      const kept = prior?.collections.get(collection);
+      if (kept && prior?.hotSources.get(collection) === source) return kept.hot;
+      const rows = new Map<string, unknown>();
       for (const key in source) {
         if (Object.hasOwn(source,key)) rows.set(key,source[key]);
         yield;
@@ -4528,6 +4594,7 @@ export class SqliteAgentRegistryStore {
       return rows;
     };
     const sameRows = function* (left: Map<string, unknown> | undefined, right: Map<string, unknown>): Generator<void, boolean> {
+      if (left === right) return true;
       if (!left || left.size !== right.size) return false;
       /* In the same order too: a row deleted and added again with the same
          content is the same frozen row at a new place. */
@@ -4555,7 +4622,7 @@ export class SqliteAgentRegistryStore {
       yield;
     }
     const synthetic = syntheticHash.digest("hex");
-    const nextCache: NonNullable<typeof this.coldViewCache> = { signature,headers,coldKeys,coldIds,grouped,coldSignatures,forgets: this.coldGrantForgets,syntheticOwners,collections: new Map() };
+    const nextCache: NonNullable<typeof this.coldViewCache> = { signature,headers,coldKeys,coldIds,grouped,coldSignatures,forgets: this.coldGrantForgets,syntheticOwners,hotSources: new Map(),collections: new Map() };
     const reused = new Set<RowCollection>();
     /* Collections whose archived versions and pinned decisions are the ones
        the previous build held: only their hot rows differ, so the accessors
@@ -4565,9 +4632,11 @@ export class SqliteAgentRegistryStore {
     /* Read every hot side before any collection is replaced by a merged one. */
     const hotSides = new Map<RowCollection, Map<string, unknown>>();
     for (const collection of layered) {
+      nextCache.hotSources.set(collection,file[collection]);
       hotSides.set(collection,yield* hotRows(collection));
     }
-    const hotDeliveries = layered.includes("deliveryOperationOwners") ? yield* hotRows("heldDeliveries") : undefined;
+    const hotDeliveries = layered.includes("deliveryOperationOwners")
+      ? hotSides.get("heldDeliveries") ?? (yield* hotRows("heldDeliveries")) : undefined;
     for (const collection of layered) {
       /* Another writer's archive pass changed the mapping: a collection whose
          own archived versions are the ones it held reuses its build. */
@@ -5362,6 +5431,58 @@ export class SqliteAgentRegistryStore {
       "SELECT 1 AS present FROM registry_termination_paths WHERE conversation_id=? AND path=?").get(id, pathname));
   }
 
+  /** A processless archive version stays processless after validation. Rows with grant
+   * claims still go through admission each pass because their attestors can change. */
+  readAgentStateProcessEntries(kinds: string[], copy: (entry: AgentRegistryEntry) => AgentRegistryEntry): AgentRegistryEntry[] {
+    const cacheable = this.recordsSource === "registry_records" && !this.db.inTransaction;
+    const reopens = this.databaseReopens;
+    const next = new Map<string, number>();
+    let schemaVersion: number | null = null;
+    const entries = this.read(file => {
+      // A migration can rewrite archive bodies while retaining their IDs. Pin the
+      // schema generation to the same read transaction as the mappings and entries.
+      if (cacheable) schemaVersion = this.db.query<{ schema_version: number }, []>("PRAGMA main.schema_version").get()!.schema_version;
+      const previous = schemaVersion === this.processlessArchiveSchemaVersion ? this.processlessArchiveEntries : null;
+      const keys = registryKeysMatching(file, "entries", "structuredHost.kind", kinds);
+      const versions = new Map<string, number>();
+      if (cacheable) {
+        for (const row of this.db.query<{ row_key: string; archive_id: number }, []>(
+          "SELECT row_key, archive_id FROM registry_cold WHERE collection='entries'").all()) {
+          versions.set(row.row_key, row.archive_id);
+        }
+      }
+      const selected: AgentRegistryEntry[] = [];
+      for (const key of keys) {
+        const id = versions.get(key);
+        // Keep the first eligible keys in scan order. Overflow takes the ordinary row path.
+        if (id !== undefined && next.size < PROCESSLESS_ARCHIVE_ENTRY_LIMIT
+          && (previous?.get(key) === id || this.archivedEntryWithoutProcess(key, id))) {
+          next.set(key, id);
+          continue;
+        }
+        const entry = file.entries[key];
+        if (entry?.structuredHost?.process) selected.push(entry);
+      }
+      return selected.map(copy);
+    });
+    if (cacheable && this.databaseReopens === reopens) {
+      this.processlessArchiveEntries = next;
+      this.processlessArchiveSchemaVersion = schemaVersion;
+    }
+    return entries;
+  }
+
+  private archivedEntryWithoutProcess(key: string, id: number): boolean {
+    const stored = this.db.query<{ value_json: string }, [number, string]>(
+      "SELECT value_json FROM registry_archive WHERE id=? AND collection='entries' AND row_key=?").get(id, key);
+    if (!stored) return false;
+    this.onRowPayloadRead?.("entries", 1);
+    const raw = this.parseRow("entries", key, stored.value_json, false);
+    if (rowClaimsBeyondBaselineGrant(raw)) return false;
+    const entry = this.normalizePartial({ version: 2, entries: { [key]: raw }, receipts: {} }).entries[key];
+    return !!entry && !entry.structuredHost?.process && !rowClaimsBeyondBaselineGrant(entry);
+  }
+
   read<T>(reader: (file: RegistryFile) => T, options: { skipColdKeyInitialization?: boolean } = {}): T {
     // A mutation consumes writer admission before calling its guard. Nested
     // readers borrow the open transaction; only its owner may end it.
@@ -5975,7 +6096,9 @@ export class SqliteAgentRegistryStore {
     return { result, file: null, revision };
   }
 
-  mutate<T>(operation: (file: RegistryFile) => T, includeSnapshot = true, options: { operationName?: string; noWait?: boolean; spawnMarkerRepair?: SpawnMarkerRepair } = {}): SqliteRegistryMutation<T> {
+  mutate<T>(operation: (file: RegistryFile) => T, includeSnapshot = true, options: {
+    operationName?: string; noWait?: boolean; skipColdKeyInitialization?: boolean; spawnMarkerRepair?: SpawnMarkerRepair;
+  } = {}): SqliteRegistryMutation<T> {
     if (options.spawnMarkerRepair && (!this.writerHeld || this.mutationBatch)) {
       throw new Error("spawn marker settlement needs its own admitted writer");
     }
@@ -5995,7 +6118,10 @@ export class SqliteAgentRegistryStore {
       let result: T;
       try {
         if (pessimistic && !writerHeld) this.noteWriterWait(performance.now() - waitStartedAt, operationName, options.noWait);
-        current = this.loadLazyInTransaction();
+        // A keyed sweep already selected its candidates. Read each payload
+        // directly from the admitted revision without refreshing the archive
+        // index or filling the hot cache with historical rows.
+        current = this.loadLazyInTransaction(true, !options.skipColdKeyInitialization, false, options.skipColdKeyInitialization);
         result = operation(current.file);
         changes = current.changes();
         if (!pessimistic) this.db.exec("COMMIT");
@@ -6548,24 +6674,26 @@ export class SqliteAgentRegistryStore {
         const baseline = new Map<string, string | null>();
         if (!trackMutations) {
           const storedValue = {} as typeof value;
-          const storedRows = this.db.query<Pick<StoredRow, "row_key" | "value_json">, [string]>(
-            `SELECT row_key, value_json FROM ${this.recordsSource} WHERE collection = ? ORDER BY row_order`,
-          ).all(collection);
-          this.onRowPayloadRead?.(collection, storedRows.length);
-          for (const row of storedRows) {
-            const parsed = this.parseRow(collection, row.row_key, row.value_json, useRowCache);
-            (storedValue as Record<string, unknown>)[row.row_key] = trackMutations
-              ? structuredClone(parsed)
-              : parsed;
-            if (trackMutations) baseline.set(row.row_key, row.value_json);
-          }
+          // With no cold mappings, the collection-order index can stream the hot table directly.
+          const source = this.changesReady && !this.coldKeys.size ? "registry_rows" : this.recordsSource;
+          const statement = this.db.prepare<Pick<StoredRow, "row_key" | "value_json">, [string]>(
+            `SELECT row_key, value_json FROM ${source} WHERE collection = ? ORDER BY row_order`);
+          const storedKeys = useRowCache ? new Set<string>() : undefined;
+          try {
+            for (const batch of payloadBatches(statement.iterate(collection))) {
+              this.onRowPayloadRead?.(collection, batch.length);
+              for (const row of batch) {
+                (storedValue as Record<string, unknown>)[row.row_key] = this.parseRow(collection, row.row_key, row.value_json, useRowCache);
+                storedKeys?.add(row.row_key);
+              }
+            }
+          } finally { statement.finalize(); }
           /* Every stored row is cached by now, so a larger cache holds rows
              this complete read proved gone. Without this a deleted row's parsed
              JSON stayed in the process for its lifetime. */
           const parsedRows = useRowCache ? this.rowCache.get(collection) : undefined;
-          if (parsedRows && parsedRows.size > storedRows.length) {
-            const stored = new Set(storedRows.map((row) => row.row_key));
-            for (const key of parsedRows.keys()) if (!stored.has(key)) parsedRows.delete(key);
+          if (parsedRows && storedKeys && parsedRows.size > storedKeys.size) {
+            for (const key of parsedRows.keys()) if (!storedKeys.has(key)) parsedRows.delete(key);
           }
           const input: Record<string, unknown> = { version: 2, entries: {}, receipts: {} };
           input[collection] = storedValue;
@@ -7356,6 +7484,11 @@ export class SqliteAgentRegistryStore {
       `).run(collection, key, valueJson, order);
       return;
     }
+    // Existing rows, including the compatibility copy of archived rows,
+    // retain their position. Their update triggers promote cold payloads.
+    // Skip the archive and ordering lookups on this common write path.
+    if (this.db.query("UPDATE registry_rows SET value_json=? WHERE collection=? AND row_key=?")
+      .run(valueJson, collection, key).changes) return;
     /* The next position comes from the two order indexes. Aggregating over
        registry_records expanded every cold row of the collection on each
        insert, under the writer lock (#2761). */

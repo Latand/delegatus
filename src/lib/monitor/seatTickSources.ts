@@ -69,6 +69,7 @@ import { recordDeploySnapshots } from "@/lib/bridge/taskChanges";
 import type { SeatTickReportLog } from "./seatTickReports";
 import { operatorLocale } from "@/lib/operator/settings";
 import { bridgeReportsEnabled } from "@/lib/projects/settings";
+import { diskCleanerSignals } from "@/lib/cleaner/diskReport";
 import { viewerRepositoryProjects } from "@/lib/projects/viewerRepository";
 import viewerPackageManifest from "../../../package.json";
 import type { AgentLivenessRecord } from "@/lib/lifecycle/liveness";
@@ -3646,7 +3647,7 @@ async function gatherSeatTickInputWork(
     pullRequestsUnavailable,
     pullRequestsObserved,
     pullRequestEvidenceKey: pullRequestEvidenceKeyAtRead,
-    signals: [...ledgerWarnings, ...signals(canonical, seat, sources, state.itemsShown ?? [], canonicalProject.keys(canonical)), ...(localPending ?? []), ...(sources.memoryProblems?.(canonical, state.itemsShown ?? [], seat?.conversationId ? seat : null) ?? []), ...await diskPressureSignals(sources), ...memoryPressureSignals(memory)],
+    signals: [...ledgerWarnings, ...signals(canonical, seat, sources, state.itemsShown ?? [], canonicalProject.keys(canonical)), ...(localPending ?? []), ...(sources.memoryProblems?.(canonical, state.itemsShown ?? [], seat?.conversationId ? seat : null) ?? []), ...await diskPressureSignals(sources), ...await diskCleanerSignals(canonical, state.itemsShown ?? [], seat), ...memoryPressureSignals(memory)],
     ownLanes,
     settledDeploys,
     settledMaintenance,

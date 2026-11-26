@@ -84,7 +84,7 @@ test("the ordinary watch preserves alarm effects with no launcher or cleaner rec
   expect(notice).not.toHaveProperty("cleaner");
   expect(loadTasksForList(path.join(state, "tasks.json"))).toHaveLength(1);
   expect(readBridgeReportLog().reports).toHaveLength(1);
-  expect(fs.readFileSync(path.join(state, "fixture-sweeps"), "utf8").trim().split("\n")).toHaveLength(2);
+  expect(fs.existsSync(path.join(state, "fixture-sweeps"))).toBeFalse();
 });
 
 test("pressure waits for the wake, joins overlapping processes, links the card and retries after a live run", async () => {

@@ -171,22 +171,29 @@ function staleQuotaWindow(quota: ReconciledQuota) {
   return [quota.weekly, quota.session, ...quota.tiers].find((window) => window?.stale) ?? null;
 }
 
+/** The reading an inactive account's own row carries, as the footer line shows it. */
+function accountReading(account: AccountOption, now: number): { quota: ReconciledQuota; limits: EngineLimits | null } {
+  const quota = reconcileQuotaReadings(null, quotaReadingFromAccountLimits(account.limits), now);
+  return { quota, limits: quotaAsEngineLimits(quota) };
+}
+
 /** The compact footer's line for an account that is not the active one: its name,
     what is left of its weekly window and the bar of that share, from the
-    reading its own account row carries. It has no burndown chart (the history
-    belongs to the active account), so the whole line opens the accounts panel
-    focused on it. */
-function InactiveAccountLine({ account, engine, label, now, onOpen }: {
+    reading its own account row carries. The name opens the accounts panel
+    focused on the account (and so switches to it); the value and bar open the
+    account's burndown chart, as they do on the active line. */
+function InactiveAccountLine({ account, engine, label, now, chartOpen, onOpen, onChart }: {
   account: AccountOption;
   engine: Engine;
   label: string;
   now: number;
+  chartOpen: boolean;
   onOpen: (accountId: string) => void;
+  onChart: (accountId: string) => void;
 }) {
   const { locale, t } = useLocale();
   const tint = engineTintOf(engine);
-  const quota = reconcileQuotaReadings(null, quotaReadingFromAccountLimits(account.limits), now);
-  const accountLimits = quotaAsEngineLimits(quota);
+  const { quota, limits: accountLimits } = accountReading(account, now);
   const weekly = weeklyQuota(quota);
   const staleWindow = staleQuotaWindow(quota);
   const windows = quotaWindowsSummary(t, quota, accountLimits);
@@ -196,22 +203,24 @@ function InactiveAccountLine({ account, engine, label, now, onOpen }: {
   const summary = [label, account.label, account.plan, windows || t("limits.noDataYet"), staleReason].filter(Boolean).join(" · ");
   const color = weekly ? barColor(weekly.percent, tint.color) : tint.color;
   return (
-    <div data-meter-line="" data-footer-account={account.id} data-footer-account-active="false" className={`flex h-[26px] items-center pl-[13px] pr-1.5 ${anyStale ? "opacity-60" : ""}`} onClick={() => onOpen(account.id)}>
-      <button type="button" aria-haspopup="dialog" aria-label={t("accounts.triggerAria", { engine: `${label} · ${account.label}` })} title={summary} className={`flex h-[22px] min-w-0 items-center gap-1.5 rounded-[7px] px-1.5 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${weekly ? "flex-1" : "flex-initial"}`} onClick={(event) => { event.stopPropagation(); onOpen(account.id); }}>
+    <div data-meter-line="" data-footer-account={account.id} data-footer-account-active="false" className={`flex h-[26px] items-center pl-[13px] pr-1.5 pointer-coarse:h-11 ${anyStale ? "opacity-60" : ""}`} onClick={() => onOpen(account.id)}>
+      <button type="button" aria-haspopup="dialog" aria-label={t("accounts.triggerAria", { engine: `${label} · ${account.label}` })} title={summary} className={`flex h-[22px] min-w-0 items-center gap-1.5 rounded-[7px] px-1.5 text-left pointer-coarse:h-11 hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${weekly ? "flex-1" : "flex-initial"}`} onClick={(event) => { event.stopPropagation(); onOpen(account.id); }}>
         <span data-meter-name="" className="min-w-0 truncate text-[11.5px] font-medium text-secondary">{account.label}</span>
         <span className="relative flex shrink-0">
           <EngineMark engine={engine} size={12} label={label} />
           {staleReason ? <span data-limits-stale-dot="" title={staleReason} className="absolute -right-[3px] -top-[3px] h-1.5 w-1.5 rounded-full bg-warning ring-1 ring-card" /> : null}
         </span>
       </button>
-      {weekly ? (
-        <span className="flex h-[22px] shrink-0 cursor-pointer items-center gap-1.5 px-1.5">
-          <span data-meter-value="" className="text-[11px] tabular-nums text-muted">{t("limits.weekValue")} <span className="font-bold" style={{ color: weekly.percent <= 30 ? color : "var(--color-primary)" }}>{Math.round(weekly.percent)}%</span></span>
-          <ReserveBar percent={weekly.percent} color={color} />
-        </span>
-      ) : (
-        <span data-limits-reason="" title={staleReason || undefined} className="min-w-0 flex-1 cursor-pointer truncate px-1.5 text-right text-[10px] text-muted">{t(accountLimits ? "limits.noWeekly" : "limits.noDataYet")}</span>
-      )}
+      <button type="button" data-footer-chart={account.id} aria-haspopup="dialog" aria-expanded={chartOpen} aria-label={t("burndown.openAria", { engine: `${label} · ${account.label}` })} title={summary} className={`flex h-[22px] items-center gap-1.5 rounded-[7px] px-1.5 pointer-coarse:h-11 hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${weekly ? "shrink-0" : "min-w-0 flex-1 justify-end"}`} onClick={(event) => { event.stopPropagation(); onChart(account.id); }}>
+        {weekly ? (
+          <>
+            <span data-meter-value="" className="text-[11px] tabular-nums text-muted">{t("limits.weekValue")} <span className="font-bold" style={{ color: weekly.percent <= 30 ? color : "var(--color-primary)" }}>{Math.round(weekly.percent)}%</span></span>
+            <ReserveBar percent={weekly.percent} color={color} />
+          </>
+        ) : (
+          <span data-limits-reason="" title={staleReason || undefined} className="min-w-0 truncate text-right text-[10px] text-muted">{t(accountLimits ? "limits.noWeekly" : "limits.noDataYet")}</span>
+        )}
+      </button>
     </div>
   );
 }
@@ -246,11 +255,10 @@ function EngineLimitsBlock({
   const { locale, t } = useLocale();
   const accounts = useEngineAccounts(engine);
   const [open, setOpen] = useState(false);
-  const [chartOpen, setChartOpen] = useState(false);
+  const [chartAccountId, setChartAccountId] = useState<string | null>(null);
   const [focusAccountId, setFocusAccountId] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const chartTriggerRef = useRef<HTMLButtonElement>(null);
   const identityVersion = useRef(accounts.identityVersion);
 
   const close = () => {
@@ -265,7 +273,7 @@ function EngineLimitsBlock({
   // dispatched a moment earlier is claimed from the retained pending slot here.
   useEffect(() => {
     const openFocused = (accountId: string) => {
-      setChartOpen(false);
+      setChartAccountId(null);
       setFocusAccountId(accountId);
       setOpen(true);
     };
@@ -277,14 +285,23 @@ function EngineLimitsBlock({
   }, [engine]);
 
   const openOn = (accountId: string) => {
-    setChartOpen(false);
+    setChartAccountId(null);
     setFocusAccountId(accountId);
     setOpen(true);
   };
 
   const closeChart = () => {
-    setChartOpen(false);
-    chartTriggerRef.current?.focus();
+    const accountId = chartAccountId;
+    setChartAccountId(null);
+    const triggers = containerRef.current?.querySelectorAll<HTMLElement>("[data-footer-chart]") ?? [];
+    if (accountId !== null) Array.from(triggers).find((trigger) => trigger.dataset.footerChart === accountId)?.focus();
+  };
+
+  // Opening a chart replaces the accounts panel; a second tap on the same
+  // account's trigger closes it.
+  const toggleChart = (accountId: string) => {
+    setOpen(false);
+    setChartAccountId((current) => (current === accountId ? null : accountId));
   };
 
   // Outside-pointer close only. Escape is owned by the panel's dialog subtree
@@ -306,13 +323,13 @@ function EngineLimitsBlock({
   // The panel renders inside containerRef, so clicks inside it are "contained"
   // and never self-close it.
   useEffect(() => {
-    if (!chartOpen) return;
+    if (chartAccountId === null) return;
     const onDown = (event: PointerEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) setChartOpen(false);
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) setChartAccountId(null);
     };
     window.addEventListener("pointerdown", onDown);
     return () => window.removeEventListener("pointerdown", onDown);
-  }, [chartOpen]);
+  }, [chartAccountId]);
 
   // Every mounted account surface of this engine shares one store. A version
   // bump arrives for both the compact Switchboard selector and the footer panel,
@@ -369,10 +386,13 @@ function EngineLimitsBlock({
   const otherAccounts = density === "line" ? accounts.accounts.filter((account) => account.id !== accounts.active) : [];
   const listsActive = accounts.accounts.some((account) => account.id === accounts.active);
   const several = otherAccounts.length > 0;
-  const inactiveLine = (account: AccountOption) => <InactiveAccountLine key={account.id} account={account} engine={engine} label={label} now={now} onOpen={openOn} />;
+  /* The charted account must still be listed; the active one reads from the reconciled quota the line shows. */
+  const chartAccount = chartAccountId === null ? null : accounts.accounts.find((account) => account.id === chartAccountId) ?? null;
+  const chartReading = chartAccount ? (chartAccount.id === accounts.active ? accountLimits : accountReading(chartAccount, now).limits) : null;
+  const inactiveLine = (account: AccountOption) => <InactiveAccountLine key={account.id} account={account} engine={engine} label={label} now={now} chartOpen={chartAccountId === account.id} onOpen={openOn} onChart={toggleChart} />;
   const activeLine = (
-      <div data-meter-line="" data-footer-account={accounts.active} data-footer-account-active="true" className={`flex h-[26px] items-center pl-[13px] pr-1.5 ${anyStale ? "opacity-60" : ""}`}>
-        <button ref={triggerRef} type="button" aria-expanded={open} aria-haspopup="dialog" aria-current={several ? "true" : undefined} aria-label={t("accounts.triggerAria", { engine: label })} title={summary} className={`flex h-[22px] min-w-0 items-center gap-1.5 rounded-[7px] px-1.5 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${hasWindows ? "flex-1" : "flex-initial"}`} onClick={() => { setChartOpen(false); setFocusAccountId(null); setOpen((value) => !value); }}>
+      <div data-meter-line="" data-footer-account={accounts.active} data-footer-account-active="true" className={`flex h-[26px] items-center pl-[13px] pr-1.5 pointer-coarse:h-11 ${anyStale ? "opacity-60" : ""}`}>
+        <button ref={triggerRef} type="button" aria-expanded={open} aria-haspopup="dialog" aria-current={several ? "true" : undefined} aria-label={t("accounts.triggerAria", { engine: label })} title={summary} className={`flex h-[22px] min-w-0 items-center gap-1.5 rounded-[7px] px-1.5 text-left pointer-coarse:h-11 hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${hasWindows ? "flex-1" : "flex-initial"}`} onClick={() => { setChartAccountId(null); setFocusAccountId(null); setOpen((value) => !value); }}>
           {/* The account starts on the edge every name in the sidebar starts on, and the mark that names
               the engine follows it, as an icon follows its word in the list above. The amber dot
               stands on the mark's corner, where it takes no width from the name. */}
@@ -384,7 +404,7 @@ function EngineLimitsBlock({
           {draining ? <Loader2 className="h-3 w-3 shrink-0 animate-spin text-accent motion-reduce:animate-none" aria-hidden /> : null}
         </button>
         {hasWindows ? (
-          <button ref={chartTriggerRef} type="button" aria-expanded={chartOpen} aria-haspopup="dialog" aria-label={t("burndown.openAria", { engine: label })} title={windows} className="flex h-[22px] shrink-0 items-center gap-1.5 rounded-[7px] px-1.5 hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" onClick={() => { setOpen(false); setChartOpen((value) => !value); }}>
+          <button type="button" data-footer-chart={accounts.active} aria-expanded={chartAccountId === accounts.active} aria-haspopup="dialog" aria-label={t("burndown.openAria", { engine: label })} title={windows} className="flex h-[22px] shrink-0 items-center gap-1.5 rounded-[7px] px-1.5 pointer-coarse:h-11 hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" onClick={() => toggleChart(accounts.active)}>
             {weekly ? (
               <>
                 <span data-meter-value="" className="text-[11px] tabular-nums text-muted">{t("limits.weekValue")} <span className="font-bold" style={{ color: weekly.percent <= 30 ? color : "var(--color-primary)" }}>{Math.round(weekly.percent)}%</span></span>
@@ -394,6 +414,11 @@ function EngineLimitsBlock({
               /* A reading without a weekly window says so; its other windows stay in the tooltip and the chart. */
               <span data-limits-reason="" className="text-[10px] text-muted">{t("limits.noWeekly")}</span>
             )}
+          </button>
+        ) : accounts.active && accounts.status !== "loading" && !identityPending ? (
+          /* An account with no reading still opens its chart: the whole window, drawn as an estimate. */
+          <button type="button" data-footer-chart={accounts.active} aria-expanded={chartAccountId === accounts.active} aria-haspopup="dialog" aria-label={t("burndown.openAria", { engine: label })} title={staleReason || undefined} className="flex h-[22px] min-w-0 flex-1 items-center justify-end rounded-[7px] px-1.5 pointer-coarse:h-11 hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" onClick={() => toggleChart(accounts.active)}>
+            <span data-limits-reason="" className="min-w-0 truncate text-right text-[10px] text-muted">{visibleFailureReason ?? t("limits.noDataYet")}</span>
           </button>
         ) : (
           /* The reason takes what the account's name leaves: the name is never cut to make room for it. */
@@ -424,7 +449,7 @@ function EngineLimitsBlock({
         </div>
       ) : null}
       {open ? <AccountsPanel state={accounts} onClose={close} focusAccountId={focusAccountId} quotaOverride={{ accountId: accounts.active, quota, now }} /> : null}
-      {chartOpen ? <BurndownPanel key={accounts.active} engine={engine} label={label} plan={accountLimits?.plan ?? null} activeAccountId={accounts.active} onClose={closeChart} /> : null}
+      {chartAccount ? <BurndownPanel key={chartAccount.id} engine={engine} label={label} plan={chartReading?.plan ?? null} accountId={chartAccount.id} accountLabel={chartAccount.label} reading={chartReading} onClose={closeChart} /> : null}
     </div>
   );
 }

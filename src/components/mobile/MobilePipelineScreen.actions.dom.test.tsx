@@ -76,6 +76,10 @@ const recordingFetch = (async (input: string | URL | Request, init?: RequestInit
     patches.push({ url, method: "PATCH", body: JSON.parse(String(init.body)) });
     return json({ pipeline: served });
   }
+  if (url.startsWith("/api/logs")) {
+    const { reqs } = JSON.parse(String(init?.body ?? "{}")) as { reqs: Array<{ id: string }> };
+    return json({ chunks: Object.fromEntries(reqs.map((req) => [req.id, { data: "", start: 0, offset: 0, size: 0 }])) });
+  }
   /* The ⋯ sheet reads where the lane's checks run; that read is no pipeline act. */
   if (url.startsWith("/api/pipelines/") && url.includes("/checks")) return json({ project: "cloud", override: null, effective: "cloud" });
   if (url.startsWith("/api/pipelines/")) {
@@ -93,7 +97,9 @@ const OVERRIDES: Record<string, unknown> = {
   requestAnimationFrame: (cb: (t: number) => void) => setTimeout(() => cb(0), 0) as unknown as number,
   cancelAnimationFrame: (id: number) => clearTimeout(id),
   fetch: recordingFetch,
+  ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
 };
+(dom as unknown as { matchMedia: (query: string) => unknown }).matchMedia = (query: string) => ({ matches: false, media: query, addEventListener() {}, removeEventListener() {} });
 const HAS: Record<string, boolean> = {};
 const SAVED: Record<string, unknown> = {};
 beforeAll(() => { for (const key of Object.keys(OVERRIDES)) { HAS[key] = key in G; SAVED[key] = G[key]; G[key] = OVERRIDES[key]; } });
@@ -405,7 +411,11 @@ test("a lane hidden from the board offers Show on board, which sends undismiss a
   const host = mount(
     <MobilePipelineScreen pipeline={hidden} files={[REVIEW_FILE]} now={NOW} onOpenConversation={() => {}} acts={createPendingPipelineActs({ set: () => 1, clear: () => {} })} />,
   );
-  const show = q(host, '[data-mobile2-pipeline-action="showOnBoard"]')!;
+  /* It is a row of the bar's ⋯ now, not a button on the body. */
+  expect(q(host, "[data-mobile2-pipeline-body] [data-mobile2-pipeline-action]")).toBeNull();
+  click(q(host, '[data-mobile2-open="menu"]'));
+  await settle();
+  const show = dom.document.querySelector('[data-mobile2-pipeline-menu] [data-mobile2-pipeline-action="showOnBoard"]') as unknown as HTMLElement;
   expect(show).not.toBeNull();
   expect(show.textContent).toContain(translate("en", "mobile2.pipeline.showOnBoard"));
   expect(show.className).toContain("min-h-11");
@@ -416,7 +426,9 @@ test("a lane hidden from the board offers Show on board, which sends undismiss a
 
   /* A lane still on the board has nothing to bring back. */
   const onBoard = mount(<MobilePipelineScreen pipeline={pipeline("needs_decision")} files={[REVIEW_FILE]} now={NOW} onOpenConversation={() => {}} />);
-  expect(q(onBoard, '[data-mobile2-pipeline-action="showOnBoard"]')).toBeNull();
+  click(q(onBoard, '[data-mobile2-open="menu"]'));
+  await settle();
+  expect(dom.document.querySelectorAll('[data-mobile2-pipeline-action="showOnBoard"]')).toHaveLength(0);
 });
 
 test("a second held act sends the first rather than dropping it, and a held act's own sender is what goes out", () => {

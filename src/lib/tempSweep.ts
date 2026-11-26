@@ -683,6 +683,9 @@ export function mountPointsUnder(directory: string, via = "", read = (file: stri
 export function inspectTree(directory: string, options: {
   limit?: number; threshold?: number; git?: boolean | "linked"; mounts?: readonly string[];
   preserveEvidence?: boolean;
+  preserveKeep?: boolean;
+  /** The caller proved this root's own Git registration. Nested Git still holds. */
+  registeredWorktree?: boolean;
   /** A quarantine rename may refresh only this directory's ctime. */
   ignoreRootCtime?: boolean;
   /** Hold a tree holding a Unix socket: a listener keeps its socket open as a
@@ -708,12 +711,14 @@ export function inspectTree(directory: string, options: {
       if (result.newestMs > (options.threshold ?? Infinity)) return result;
       if (!own.isDirectory()) continue;
       const names = fs.readdirSync(current);
+      if (options.preserveKeep && names.includes(".delegatus-keep")) return { ...result, hold: "evidence" };
       if (options.preserveEvidence && names.some(name => name === ".artifacts" || isPreservedMedia(name)))
         return { ...result, hold: "evidence" };
       if (options.git !== false) {
         if (options.git === "linked" && names.includes("worktrees") && (path.basename(current) === ".git" || names.includes("objects")))
           return { ...result, hold: "git-checkout" };
-        if (names.includes(".git") && (options.git !== "linked" || !stat(path.join(current, ".git")).isDirectory())
+        if (names.includes(".git") && !(options.registeredWorktree && current === directory)
+          && (options.git !== "linked" || !stat(path.join(current, ".git")).isDirectory())
           && gitCheckoutMarker(path.join(current, ".git"), stat(path.join(current, ".git")).isDirectory()))
           return { ...result, hold: "git-checkout" };
         if (options.git !== "linked" && names.includes("objects") && ["HEAD", "config", "refs"].some(name => names.includes(name)))
@@ -744,6 +749,7 @@ export async function removeTreeViaTrash(directory: string, options: {
   /** Marks the intent as a stray's, so an interrupted removal is replayed
       under the stray proof rather than refused for its unowned name. */
   stray?: boolean;
+  cleaner?: import("@/lib/cleaner/diskJournal").CleanerAuditBinding;
 }): Promise<boolean> {
   const trash = path.join(path.dirname(directory), `.delegatus-trash-${path.basename(directory)}-${randomUUID()}`);
   const original = fs.lstatSync(directory);
@@ -752,7 +758,8 @@ export async function removeTreeViaTrash(directory: string, options: {
   const uid = original.uid;
   const identity = `${original.dev}:${original.ino}`;
   const snapshot = options.disposable ? null : snapshotTree(directory);
-  writeJsonDurably(options.journal, { directory, trash, uid, identity, snapshot, ...(options.disposable ? { disposable: true } : {}), ...(options.stray ? { stray: true } : {}), ...(options.context ? { context: options.context } : {}) });
+  writeJsonDurably(options.journal, { directory, trash, uid, identity, snapshot, ...(options.disposable ? { disposable: true } : {}),
+    ...(options.stray ? { stray: true } : {}), ...(options.context ? { context: options.context } : {}), ...(options.cleaner ? { cleaner: options.cleaner } : {}) });
   fs.renameSync(directory, trash);
   const moved = fs.lstatSync(trash);
   let holdError: unknown;
@@ -777,7 +784,7 @@ export async function removeTreeViaTrash(directory: string, options: {
     try { fs.lstatSync(directory); throw new Error("original path was acquired while trash is held; preserved both paths"); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     fs.renameSync(trash, directory);
-    fs.unlinkSync(options.journal);
+    if (!options.cleaner) fs.unlinkSync(options.journal);
     if (holdError) throw holdError;
     return false;
   }
@@ -795,25 +802,25 @@ export async function removeTreeViaTrash(directory: string, options: {
         try { fs.lstatSync(directory); throw new Error(`original path was acquired while removal was refused (${attemptTempFailureDetail(error)}); preserved both paths`, { cause: error }); }
         catch (restoreError) { if ((restoreError as NodeJS.ErrnoException).code !== "ENOENT") throw restoreError; }
         fs.renameSync(trash, directory);
-        fs.unlinkSync(options.journal);
+        if (!options.cleaner) fs.unlinkSync(options.journal);
       }
     }
     throw error;
   }
-  fs.unlinkSync(options.journal);
+  if (!options.cleaner) fs.unlinkSync(options.journal);
   return true;
 }
 
 /** Replay only a same-parent, same-owner trash path from our durable intent. */
 export async function finishTreeTrash(journal: string, held: (trash: string) => boolean | Promise<boolean>,
   remove?: (trash: string, mutationStarted: () => void) => Promise<void>, validate?: (trash: string) => boolean, allowDisposable = false, dispatch?: (trash: string) => boolean, keepRefusedTrash = false): Promise<boolean> {
-  const row = JSON.parse(fs.readFileSync(journal, "utf8")) as { directory: string; trash: string; uid: number; identity: string; snapshot?: TreeSnapshot; disposable?: boolean };
+  const row = JSON.parse(fs.readFileSync(journal, "utf8")) as { directory: string; trash: string; uid: number; identity: string; snapshot?: TreeSnapshot; disposable?: boolean; cleaner?: unknown };
   const recovered = readAttemptTempTrash(journal, path.dirname(row.directory));
   const trashPath = recovered?.trash ?? claimedTrashForJournal(row) ?? row.trash;
   const matches = () => row.snapshot ? matchesSnapshot(trashPath, row.snapshot) : allowDisposable && row.disposable === true;
   if (path.dirname(row.directory) !== path.dirname(row.trash)
     || !path.basename(row.trash).startsWith(`.delegatus-trash-${path.basename(row.directory)}-`)) return false;
-  if (!fs.existsSync(trashPath)) { fs.unlinkSync(journal); return false; }
+  if (!fs.existsSync(trashPath)) { if (!row.cleaner) fs.unlinkSync(journal); return false; }
   const stat = fs.lstatSync(trashPath);
   if (!stat.isDirectory() || stat.dev !== fs.statSync(path.dirname(trashPath)).dev || `${stat.dev}:${stat.ino}` !== row.identity || stat.uid !== row.uid || (process.getuid && stat.uid !== process.getuid())
     || !matches() || mountPointsUnder(trashPath).length) return false;
@@ -839,12 +846,12 @@ export async function finishTreeTrash(journal: string, held: (trash: string) => 
         try { fs.lstatSync(row.directory); throw new Error(`original path was acquired while removal was refused (${attemptTempFailureDetail(error)}); preserved both paths`, { cause: error }); }
         catch (restoreError) { if ((restoreError as NodeJS.ErrnoException).code !== "ENOENT") throw restoreError; }
         fs.renameSync(trashPath, row.directory);
-        fs.unlinkSync(journal);
+        if (!row.cleaner) fs.unlinkSync(journal);
       }
     }
     throw error;
   }
-  fs.unlinkSync(journal);
+  if (!row.cleaner) fs.unlinkSync(journal);
   return true;
 }
 
@@ -1665,7 +1672,6 @@ const sweepHost = globalThis as typeof globalThis & {
   __llvTempSweepTimer?: ReturnType<typeof setTimeout>;
   __llvAttemptTempTimer?: ReturnType<typeof setTimeout>;
   __llvTempPressureStop?: () => void;
-  __llvAttemptPressureStop?: () => void;
 };
 
 /** Starts the hourly sweep once per process, from the release that owns
@@ -1700,31 +1706,26 @@ export function startTempSweep(ports: {
   });
   arm(ports.firstDelayMs ?? FIRST_SWEEP_DELAY_MS);
   if (!Object.keys(ports).length) {
-    let attemptRunning = false;
     const attemptArm = (delayMs = 60_000) => {
       const timer = setTimeout(() => {
-        attemptRunning = true;
         void import("@/lib/pipelines/worktreeSweepWorker")
           .then(({ runAttemptTempSweepOffThread }) => runAttemptTempSweepOffThread())
           .catch(error => console.error("[attempt temp] tick failed", attemptTempFailureDetail(error)))
           .then(() => import("@/lib/pipelines/worktreeSweepWorker"))
           .then(({ runTemporaryDataMaintenanceOffThread }) => sweepHost.__llvAttemptTempTimer === timer ? runTemporaryDataMaintenanceOffThread() : null)
           .catch(error => console.error("[temporary data] tick failed", attemptTempFailureDetail(error)))
-          .finally(() => { attemptRunning = false; if (sweepHost.__llvAttemptTempTimer === timer) attemptArm(); });
+          .finally(() => { if (sweepHost.__llvAttemptTempTimer === timer) attemptArm(); });
       }, delayMs);
       timer.unref?.();
       sweepHost.__llvAttemptTempTimer = timer;
     };
-    sweepHost.__llvAttemptPressureStop = registerDiskPressureSweep("attempt-temp", () => {
-      if (!attemptRunning && sweepHost.__llvAttemptTempTimer) { clearTimeout(sweepHost.__llvAttemptTempTimer); attemptArm(0); }
-    });
     attemptArm();
   }
 }
 
 /** Test seam: the timer is process-global. */
 export function stopTempSweep(): void {
-  sweepHost.__llvTempPressureStop?.(); sweepHost.__llvAttemptPressureStop?.();
+  sweepHost.__llvTempPressureStop?.();
   if (sweepHost.__llvTempSweepTimer) clearTimeout(sweepHost.__llvTempSweepTimer);
   sweepHost.__llvTempSweepTimer = undefined;
   if (sweepHost.__llvAttemptTempTimer) clearTimeout(sweepHost.__llvAttemptTempTimer);

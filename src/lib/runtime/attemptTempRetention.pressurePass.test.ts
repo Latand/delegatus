@@ -237,8 +237,7 @@ test.each(["closed", "completed"] as const)("a large %s lane root retires in one
     expect(elapsedMs).toBeLessThan(40_000);
     expect(report).toMatchObject({ checked: 1, removed: 1, removedBytes: 16 * 1024 ** 3, errors: 0, deferred: 0 });
     expect(report.outcomes[0]?.allocation).toBe("recorded");
-    expect(report.pass?.ticks).toBe(1);
-    expect(report.pass!.elapsedMs).toBeLessThanOrEqual(40_000);
+    expect(report).toMatchObject({ pressure: false, pass: null, rootPageLimit: 32 });
     expect(fs.existsSync(directory)).toBeFalse();
     console.error(JSON.stringify({ fixture: "large-finished-root", state, directories: 10001, logicalBytes: 16 * 1024 ** 3,
       elapsedMs, tickBudgetMs: 40_000, removed: report.removed, deferred: report.deferred }));
@@ -519,7 +518,7 @@ test("protected, live and newly protected roots survive a multi-tick pass; vanis
   try { expect(store.has(directories.get("vanished")!)).toBeFalse(); } finally { store.close(); }
 }, 120_000);
 
-test("the real helper resumes one pass across restarts and reports its progress and duration", async () => {
+test("the leased fixture resumes its pressure inventory across restarts and reports progress and duration", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pressure-pass-")); roots.push(root);
   const originalEnv = { ...process.env };
   const state = path.join(root, "state"), scratch = path.join(state, "scratch"); fs.mkdirSync(scratch, { recursive: true });
@@ -533,7 +532,9 @@ test("the real helper resumes one pass across restarts and reports its progress 
       const directory = path.join(scratch, `llv-stage-${pad(n)}`); directories.push(directory);
       fs.mkdirSync(directory, { mode: 0o700 }); fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(4096));
       store.register({ directory, pipelineId: "retention-lane", launchId: "retention-launch", retainUntilClose: false, createdAt: NOW - 1000 + n });
-      store.measure(directory, 12288 + n);
+      // Seed fresh measurements on the helper's clock so the first tick
+      // builds its pressure inventory from the intended size order.
+      store.measure(directory, 12288 + n, NOW);
       store.retainRoot(directory, NOW + 6 * 86400_000);
     }
     const kept = directories[count - 1]!;
@@ -544,10 +545,10 @@ test("the real helper resumes one pass across restarts and reports its progress 
     let ticks = 0, removed = 0, restarts = 0, last: Awaited<ReturnType<typeof realParentPass>> | undefined;
     worker = realParentWorker();
     // Real cold starts after the first and second ticks
-    // prove recovery. Warm continuations match the production helper owner.
+    // prove recovery. Warm continuations keep the same leased helper.
     // Measurements spend one fixture second; the progress page caps visits at 32.
     for (; ticks < 40 && !last?.pass?.ended; ticks++) {
-      fs.writeFileSync(config + ".next", JSON.stringify({ now: NOW + ticks * 105_000, freeBytes: 1e12, measureCost: 1_000,
+      fs.writeFileSync(config + ".next", JSON.stringify({ pressureInventory: true, now: NOW + ticks * 105_000, freeBytes: 1e12, measureCost: 1_000,
         fixtureMutationFence: true, fixtureRemoval: true, tickClock: true }));
       fs.renameSync(config + ".next", config);
       if (ticks === 1 || ticks === 2) { await worker.close(); worker = realParentWorker(); restarts++; }

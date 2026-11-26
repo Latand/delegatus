@@ -1,5 +1,10 @@
 # Attempt temp under disk pressure
 
+The serving Viewer's [Cleaner](cleaner-agent.md#automatic-pressure-pass) owns
+automatic pressure-triggered retirement. The minute timer keeps its ordinary
+expiry page and reports the working reserve and effective cap. The pressure
+cursor described below belongs to the lower-level retention sweep.
+
 ## Persistent pressure passes
 
 The scheduler follows the worktree sweep's pass and continuation pattern

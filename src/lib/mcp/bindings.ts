@@ -1,3 +1,4 @@
+import { publicProvisioningPipeline } from "@/lib/pipelines/provisioningRecord";
 import { prototypeStageForConversation, prototypeProjectReceiptScope, PROTOTYPE_RECEIPT_SCOPE_HEADER } from "@/lib/prototypeReview/world";
 import { existingTeamStore } from "@/lib/team/store";
 import { workspaceDirectory } from "@/lib/team/workspaces";
@@ -2899,7 +2900,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     revision: recordRevision(result.pipeline),
     changedFields: changedFieldNames(beforeFields, result.pipeline),
     taskIds: result.pipeline.taskIds,
-    ...(fullAnswer(args) ? { pipeline: result.pipeline } : { omittedRecordCount: 1 }),
+    ...(fullAnswer(args) ? { pipeline: publicProvisioningPipeline(result.pipeline) } : { omittedRecordCount: 1 }),
     ...answerHint(args, "get_pipeline(pipelineId, full:true) or pipeline_action with full:true returns the full record."),
     ...(result.pipeline.delivery && (fullAnswer(args) || action === "publish" || action === "set-delivery-remote" || action === "takeover" || action === "retry-stage" || beforeFields.get("delivery") !== JSON.stringify(result.pipeline.delivery)) ? { delivery: deliveryAcknowledgement(result.pipeline) } : {}),
     ...(action === "attach-link" || action === "detach-link" ? { workLinks: pipelineWorkLinks(result.pipeline), ...(result.unchanged ? { unchanged: true } : {}) } : {}),
@@ -6478,7 +6479,7 @@ async function getPipeline(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
   /* Full reads retain the saved record plus the same explicit runtime result
      as compact and stage reads, without rewriting historical storage. */
   const definitions = new Map(pipeline.stages.map(stage => [stage.id, stage]));
-  const projected = { ...pipeline, runs: pipeline.runs.map(run => ({ ...run,
+  const projected = { ...publicProvisioningPipeline(pipeline), runs: pipeline.runs.map(run => ({ ...run,
     attempts: run.attempts.map(attempt => ({ ...attempt, execution: stageExecution(definitions.get(run.stageId) ?? {}, attempt) })),
   })) };
   /* The digests a guarded graph edit names as expectedStageDigest. */
@@ -6754,9 +6755,9 @@ function captureBoardRead(args: McpToolArgs, dependencies: ViewerMcpDomainDepend
   } };
 }
 
-function pipelineReferenceRows(dependencies: ViewerMcpDomainDependencies, project: string): Pipeline[] {
-  const source = dependencies.pipelineSelectionSource?.();
-  return source ? boardSelection(source.filename, "pipelines").referenceRecords(source, project)
+function pipelineReferenceRows(dependencies: ViewerMcpDomainDependencies, project: string, includeArchived = false): Pipeline[] {
+  const source = dependencies.pipelineSelectionSource?.(includeArchived);
+  return source ? boardSelection(source.filename, "pipelines", includeArchived).referenceRecords(source, project)
     : (dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines).filter(row => !project || canonicalProject(row.project) === project);
 }
 
@@ -6795,6 +6796,7 @@ async function listPipelines(
   const scope = { project: board.project, states, includeClosed: args.includeClosed === true,
     ids: stringSet(args.ids), query: normalizedBoardQuery(text(args.query)), updatedSince: sinceTime(args.updatedSince),
     queryIds: undefined as string[] | undefined };
+  const includeArchived = scope.includeClosed && !scope.ids.length;
   // Resolve explicit ids once so PR matching and paging share the same
   // hot-or-archive records without traversing either collection.
   const requested = scope.ids.length && dependencies.readPipelineRecord
@@ -6804,14 +6806,14 @@ async function listPipelines(
     }))
     : undefined;
   const number = pullRequestQuery(scope.query);
-  if (number !== null) scope.queryIds = (requested ? [...requested.values()] : pipelineReferenceRows(dependencies, scope.project))
+  if (number !== null) scope.queryIds = (requested ? [...requested.values()] : pipelineReferenceRows(dependencies, scope.project, includeArchived))
     .filter(row => (!scope.project || canonicalProject(row.project) === scope.project) && pipelineMatchesPr(row, number)).map(row => row.id).sort();
-  const hotSource = dependencies.pipelineSelectionSource?.();
+  const selection = dependencies.pipelineSelectionSource?.(includeArchived);
   // Explicit ids share get_pipeline's hot-or-archive lookup. Keep ordinary
   // lists on their scalar selection index and materialize only requested rows.
-  const source = hotSource && requested
-    ? { ...hotSource, read: (id: string) => requested.get(id) ?? null }
-    : hotSource;
+  const source = selection && requested
+    ? { ...selection, read: (id: string) => requested.get(id) ?? null }
+    : selection;
   /* #2059: the compact row names its PR in one string, the full forms carry
      every resolved link. */
   const project = (source: Pipeline) => {
@@ -6821,7 +6823,7 @@ async function listPipelines(
     const { stages, ...status } = pipelineCompactRow(pipeline);
     return { ...(args.statusOnly === true ? status : { ...status, stages }), ...pipelineCheckFields(pipeline), ...compactPullRequest(pipeline), ...compactMergeFields(pipeline) };
   };
-  const page = source ? boardSelection(source.filename, "pipelines").page(source, scope, args.cursor,
+  const page = source ? boardSelection(source.filename, "pipelines", includeArchived).page(source, scope, args.cursor,
     Math.max(1, Math.min(200, integer(args.limit, PIPELINE_LIST_DEFAULT_LIMIT))), project)
     : await listPageAsync(requested
       ? [...requested.values()]

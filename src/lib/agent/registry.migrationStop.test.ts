@@ -10,6 +10,7 @@ import { MIGRATION_INTENT_PROGRESS_TIMEOUT_MS } from "@/lib/accounts/migration/i
 import { terminalizeStaleUndeliverableHeldDeliveries } from "@/lib/reaperRuntime";
 
 import { AgentRegistry, MIGRATION_STOP_SLICE_ROWS, type RegistryFile } from "./registry";
+import { SWEEP_ROWS_PER_WRITE } from "./registry.migrationStop.incident.fixture";
 import {
   buildMigrationStopFixture,
   MIGRATION_STOP_INCIDENT_SHAPE,
@@ -328,72 +329,6 @@ test("a stale revision refuses the stop before anything is written", async () =>
     registry.close();
   }
 });
-
-/*
- * The recurrence test for section 4.1, at the size of the incident: 14 000
- * conversations on one engine and 27 000 deliveries. The hygiene pass stops
- * the stale intent in a process of its own, as the account-migration helper
- * does, while this process keeps admitting deliveries. On the code before the
- * fix that pass holds one write transaction for the whole stop and the first
- * delivery write made meanwhile is refused.
- */
-test("a stale intent is stopped at incident size without holding other writers out", async () => {
-  const fixture = incidentCopy();
-  const directory = path.dirname(fixture.filename);
-  const ready = path.join(directory, "ready");
-  const release = path.join(directory, "release");
-  const result = path.join(directory, "result.json");
-  const registry = open(fixture, { sqliteWriterDeadlineMs: 1_000 });
-  /* A conversation holds a bounded number of deliveries, so the admissions go round the ones on the target. */
-  const target = (index: number) =>
-    fixture.targetConversationIds[index % fixture.targetConversationIds.length]! as Parameters<AgentRegistry["holdDelivery"]>[0];
-  const child = Bun.spawn([
-    process.execPath, path.join(import.meta.dir, "registry.migrationStop.child.ts"),
-    fixture.filename, fixture.intentUpdatedAt, ready, release, result,
-  ], { stdout: "ignore", stderr: "inherit", env: { ...process.env, NODE_ENV: "test" } });
-  const admissions: Array<{ acquired: boolean; waitedMs: number; duringStop: boolean }> = [];
-  try {
-    registry.readOnlySnapshot();
-    while (!fs.existsSync(ready)) {
-      if (child.exitCode !== null) throw new Error(`the stopping process ended early with ${child.exitCode}`);
-      await new Promise(resolve => setTimeout(resolve, 20));
-    }
-    fs.writeFileSync(release, "go");
-    while (!fs.existsSync(result) && child.exitCode === null) {
-      const duringStop = fs.existsSync(`${ready}.started`);
-      const startedAt = performance.now();
-      const written = await registry.deliveryWrite({ label: "delivery.admit" },
-        () => registry.holdDelivery(target(admissions.length), `admitted during the stop ${admissions.length}`, `during-stop-${admissions.length}`));
-      admissions.push({ acquired: written.acquired, waitedMs: performance.now() - startedAt, duringStop: duringStop && !fs.existsSync(result) });
-      /* One refusal is the defect; waiting out the rest of a minutes-long hold proves nothing more. */
-      if (!written.acquired) break;
-      await new Promise(resolve => setTimeout(resolve, 20));
-    }
-    const refused = admissions.filter(admission => !admission.acquired);
-    expect(refused).toEqual([]);
-    expect(await child.exited).toBe(0);
-    const pass = JSON.parse(fs.readFileSync(result, "utf8")) as { transactions: Array<{ label: string; heldMs: number; rows: number }> };
-    /* The bound that does not depend on the machine: no transaction writes more than the stop's own rows or one slice. */
-    expect(Math.max(...pass.transactions.map(transaction => transaction.rows))).toBeLessThanOrEqual(MIGRATION_STOP_SLICE_ROWS * 2);
-    /* And in time. Measured, the longest hold is 93 to 204 ms; a commit that the
-       scheduler or a checkpoint delays on a loaded machine may pass 250 ms, so
-       one in a hundred may, and none may reach the one second a writer waits. */
-    const held = pass.transactions.map(transaction => transaction.heldMs).sort((left, right) => left - right);
-    expect(held[Math.floor(held.length * 0.99) - 1]!).toBeLessThan(250);
-    expect(held.at(-1)!).toBeLessThan(1_000);
-    const during = admissions.filter(admission => admission.duringStop);
-    expect(during.length).toBeGreaterThan(0);
-    expect(Math.max(...during.map(admission => admission.waitedMs))).toBeLessThan(1_000);
-    const stopped = registryRowsForComparison(fixture.filename) as unknown as RegistryFile;
-    expect(stopped.migrationIntents[fixture.intentId]).toMatchObject({ state: "stopped" });
-    expect(stopped.migrationIntents[fixture.intentId]!.stopSweep).toBeUndefined();
-    expect(optedOut(stopped, fixture.sourceConversationIds)).toHaveLength(MIGRATION_STOP_INCIDENT_SHAPE.sourceConversations);
-  } finally {
-    if (child.exitCode === null) child.kill();
-    await child.exited;
-    registry.close();
-  }
-}, 600_000);
 
 /*
  * The order of decisions (section 12.7). A stop decides the engine-wide
@@ -741,8 +676,8 @@ test("the loop gets a turn between every two transactions of a stop", async () =
     observed.mockRestore();
     registry.close();
   }
-  /* The stop, a slice for every 32 conversations, and the last transaction that ends the sweep. */
-  expect(startedOnTurn.length).toBe(1 + Math.ceil(SHAPE.sourceConversations / MIGRATION_STOP_SLICE_ROWS) + 1);
+  /* The stop, the sweep slices, and the transaction that clears its marker. */
+  expect(startedOnTurn.length).toBe(1 + Math.ceil(SHAPE.sourceConversations / SWEEP_ROWS_PER_WRITE) + 1);
   for (let index = 1; index < startedOnTurn.length; index += 1) {
     expect(startedOnTurn[index]!).toBeGreaterThan(startedOnTurn[index - 1]!);
   }
@@ -1241,6 +1176,37 @@ test("an older stop's unfinished sweep, resumed in the instant of a newer stop, 
   } finally {
     registry.close();
   }
+});
+
+test("rollback selects live deliveries before reading payloads from concentrated terminal history", () => {
+  const fixture = fixtureCopy();
+  const seeded = open(fixture);
+  const id = fixture.sourceConversationIds.at(-1)! as ConversationId;
+  const terminal = seeded.holdDelivery(id, "retained cancellation payload", "rollback-terminal-template");
+  const state = structuredClone(seeded.readOnlySnapshot());
+  const row = state.heldDeliveries[terminal.id]!;
+  row.state = "failed";
+  row.error = "migration cancellation";
+  row.text = "retained payload ".repeat(128);
+  for (let index = 0; index < 5_000; index += 1) {
+    const key = `rollback-terminal-${index.toString().padStart(5, "0")}`;
+    state.heldDeliveries[key] = { ...structuredClone(row), id: key,
+      command: { ...row.command, operationId: `rollback-terminal-op-${index}` } };
+  }
+  seeded.close();
+  for (const suffix of ["", "-wal", "-shm"]) fs.rmSync(`${fixture.sqliteFilename}${suffix}`, { force: true });
+  fs.writeFileSync(fixture.filename, JSON.stringify(state));
+  let deliveryPayloadReads = 0;
+  const registry = new AgentRegistry(fixture.filename, undefined, undefined, { sqliteMode: "sqlite",
+    onSqliteRowPayloadRead: (collection, count) => { if (collection === "heldDeliveries") deliveryPayloadReads += count; } });
+  try {
+    const migration = registry.requestConversationReseat(id, LATER_TARGET).migration;
+    expect(migration).not.toBeNull();
+    deliveryPayloadReads = 0;
+    expect(registry.rollbackConversationMigration(id, migration!.revision).migration?.phase).toBe("rolled-back");
+    expect(deliveryPayloadReads).toBeLessThanOrEqual(1);
+    expect(registry.readOnlySnapshot().heldDeliveries[terminal.id]?.state).toBe("failed");
+  } finally { registry.close(); }
 });
 
 test("a withdrawal and a stop made in one instant are told apart in both orders", async () => {

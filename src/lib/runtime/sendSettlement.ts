@@ -13,10 +13,12 @@ import {
   deliveryRegistryEntriesForKey,
   ownsItsSettlement,
   readOnlyConversationLookupFromSnapshot,
+  resolveConversationAlias,
   type AgentRegistry,
   type DeliveryOperationOwner,
   type DeliveryRoute,
   type DeliveryTerminalDisposition,
+  type RegistryConversation,
   type RegistryFile,
 } from "@/lib/agent/registry";
 import { MIGRATION_DELIVERY_CANCELLATION_PREFIX } from "@/lib/accounts/migration/intentLiveness";
@@ -558,20 +560,22 @@ export async function confirmJournalDelivery(client: RuntimeHostClient, operatio
 async function fenceOperation(
   client: RuntimeHostClient,
   operationId: string,
-  status: RuntimeReceiptStatus,
+  receipt: RuntimeOperationReceipt,
 ): Promise<JournalVerdict> {
-  if (!OPEN_RECEIPT_STATUSES.has(status)) {
-    /* Not open, not terminal: a send in `delivering` or `applying` is already
-       in an executor's hands. It cannot be proved undelivered, so it is
-       terminalized as `uncertain` — which fences it just as firmly against a
-       SECOND execution while saying nothing about the first. A runtime host
-       from before that transition rejects the word; the operation must stop
-       being open either way, so the fallback keeps the fence and the record
-       keeps the unverified disposition it is read back by. */
+  if (!pristineJournalAdmission(receipt)) {
+    /* Earlier actuation can leave a delivering or requeued receipt. Close it
+       as unverified. Older runtime hosts use the same reason on failed. */
     try {
       await client.transitionOperation(operationId, "uncertain", { reason: SEND_UNVERIFIED_REASON });
     } catch {
-      await client.transitionOperation(operationId, "failed", { reason: SEND_UNVERIFIED_REASON });
+      try {
+        await client.transitionOperation(operationId, "failed", { reason: SEND_UNVERIFIED_REASON });
+      } catch (error) {
+        const current = await client.operationStatus(operationId);
+        const verdict = journalVerdict(current?.receipt.status ?? null, current?.receipt.reason, current?.receipt.primaryFailure);
+        if (verdict) return verdict;
+        throw error;
+      }
     }
     return { state: "failed", disposition: "unverified", reason: SEND_UNVERIFIED_REASON };
   }
@@ -585,11 +589,16 @@ async function fenceOperation(
     const current = await client.operationStatus(operationId, { currentRetryLeaf: true });
     const verdict = journalVerdict(current?.receipt.status ?? null, current?.receipt.reason, current?.receipt.primaryFailure);
     if (verdict) return verdict;
-    if (current && !OPEN_RECEIPT_STATUSES.has(current.receipt.status)) {
-      return fenceOperation(client, current.operationId, current.receipt.status);
+    if (current && !pristineJournalAdmission(current.receipt)) {
+      return fenceOperation(client, current.operationId, current.receipt);
     }
     throw error;
   }
+}
+
+function pristineJournalAdmission(receipt: RuntimeOperationReceipt): boolean {
+  return OPEN_RECEIPT_STATUSES.has(receipt.status) && receipt.revision === 1
+    && receipt.deliveryUnverified !== true && receipt.reason !== "delivery-auto-retry";
 }
 
 /**
@@ -727,13 +736,20 @@ async function recipientStillWorking(
  * required the very health it did not have (#1131).
  *
  * A held reservation has the same settlement bound as every accepted send.
- * Fresh evidence of a working recipient renews its turn-boundary deadline.
+ * A failed switch keeps its original admission bound even if the recipient
+ * is still working on its current account.
  */
 const SETTLEABLE_DELIVERY_STATES: ReadonlySet<HeldDelivery["state"]> = new Set<HeldDelivery["state"]>([
   "delivery-uncertain",
   "assigned",
   "held",
 ]);
+
+/** Older held rows can still carry an assignment from before the switch. */
+function pristineReservation(delivery: HeldDelivery): boolean {
+  return delivery.attempts === 0
+    && (delivery.state === "assigned" || (delivery.state === "held" && delivery.assignedAt === null));
+}
 
 /** What the deadline is measured against: an unsettled reservation, or a retry
     attempt's own row, which ages from its OWN admission. */
@@ -742,27 +758,49 @@ interface SettlementSubject {
   conversationId: ViewerConversationId;
   acceptedAt: string;
   settleable: boolean;
+  failedSwitch: boolean;
 }
 
-function settlementSubject(
-  attempt: DeliveryOperationOwner | null,
-  delivery: HeldDelivery | null,
-): SettlementSubject | null {
-  if (attempt) {
-    return {
-      operationId: attempt.command.operationId,
-      conversationId: attempt.conversationId,
-      acceptedAt: attempt.createdAt,
-      settleable: attempt.terminalState === null,
-    };
-  }
-  if (!delivery) return null;
+function settlementSubjectForRow(
+  row: HeldDelivery | DeliveryOperationOwner,
+  conversation: RegistryConversation | null | undefined,
+  file: RegistryFile,
+  ports: SendSettlementPorts = {},
+): SettlementSubject {
+  const reservation = "state" in row ? row : file.heldDeliveries[row.deliveryId];
+  const originalOperationId = reservation?.command.operationId ?? row.command.operationId;
+  const retainedProgress = settlementProgress(ports, originalOperationId);
+  const originalAcceptedAt = reservation ? parseTime(reservation.createdAt) : null;
+  const rowAcceptedAt = parseTime(row.createdAt);
+  const originalSettledAt = parseTime(file.deliveryOperationOwners[originalOperationId]?.settledAt);
+  const retainedFailedSwitch = (retainedProgress?.waitReason === "switch-failed"
+    || retainedProgress?.deadlinePolicy === "failed-switch")
+    && reservation !== undefined
+    && originalAcceptedAt !== null
+    && rowAcceptedAt !== null
+    && rowAcceptedAt <= failedSwitchDeadlineAt(originalAcceptedAt, ports)
+    && (originalSettledAt === null || rowAcceptedAt < originalSettledAt);
+  const failedSwitch = (row.command.kind === "send" || row.command.kind === "steer")
+    && (Boolean(conversation?.switchHold)
+      || ("state" in row && row.state === "held" && conversation?.migration?.phase === "failed-recoverable")
+      || retainedFailedSwitch);
   return {
-    operationId: delivery.command.operationId,
-    conversationId: delivery.conversationId,
-    acceptedAt: acceptedAtOf(delivery),
-    settleable: SETTLEABLE_DELIVERY_STATES.has(delivery.state),
+    operationId: row.command.operationId,
+    conversationId: row.conversationId,
+    acceptedAt: failedSwitch ? reservation?.createdAt ?? row.createdAt
+      : "state" in row ? acceptedAtOf(row) : row.createdAt,
+    settleable: "state" in row ? SETTLEABLE_DELIVERY_STATES.has(row.state) : row.terminalState === null,
+    failedSwitch,
   };
+}
+
+function settlementSubject(file: RegistryFile, operationId: string, ports: SendSettlementPorts = {}): SettlementSubject | null {
+  const row = retryAttemptOwner(file, operationId) ?? deliveryForOperation(file, operationId);
+  return row ? settlementSubjectForRow(row, file.conversations[resolveConversationAlias(file, row.conversationId)], file, ports) : null;
+}
+
+function failedSwitchDeadlineAt(acceptedAt: number, ports: Pick<SendSettlementPorts, "windowMs" | "absoluteDeadline">): number {
+  return Math.min(acceptedAt + (ports.windowMs ?? SEND_SETTLEMENT_WINDOW_MS), ports.absoluteDeadline ?? Infinity);
 }
 
 /** A terminal host row or an exact process identity proven dead. Missing
@@ -788,11 +826,12 @@ function pastSettlementDeadline(
 ): boolean {
   if (!subject.settleable) return false;
   if (recipientProvenDead(registry, file, subject.conversationId)) return true;
-  const boundary = settlementProgress(ports, subject.operationId);
   const now = (ports.now ?? Date.now)();
   if (ports.absoluteDeadline !== undefined && now >= ports.absoluteDeadline) return true;
-  if (boundary?.deadlinePolicy === "turn-boundary" && (parseTime(boundary.deadlineAt) ?? 0) > now) return false;
   const acceptedAt = parseTime(subject.acceptedAt);
+  if (subject.failedSwitch) return acceptedAt === null || now >= failedSwitchDeadlineAt(acceptedAt, ports);
+  const boundary = settlementProgress(ports, subject.operationId);
+  if (boundary?.deadlinePolicy === "turn-boundary" && (parseTime(boundary.deadlineAt) ?? 0) > now) return false;
   /* An acceptance time that cannot be parsed can never age, and a send nothing
      can ever end is the silence this issue is about. */
   if (acceptedAt === null) return true;
@@ -807,7 +846,7 @@ function pastSettlementDeadline(
     is running. Null for a subject that is not settleable. */
 export interface SettlementDeadline {
   deadlineAt: string;
-  policy: "settlement-window" | "in-turn-ceiling" | "turn-boundary";
+  policy: NonNullable<DeliveryProgressRecord["deadlinePolicy"]>;
 }
 
 function settlementDeadline(
@@ -815,18 +854,23 @@ function settlementDeadline(
   file: RegistryFile,
   subject: SettlementSubject,
   ports: SendSettlementPorts,
+  now = (ports.now ?? Date.now)(),
 ): SettlementDeadline | null {
   if (!subject.settleable) return null;
   const acceptedAt = parseTime(subject.acceptedAt);
   if (acceptedAt === null) return null;
+  const dead = recipientProvenDead(registry, file, subject.conversationId);
+  if (subject.failedSwitch) {
+    const deadline = failedSwitchDeadlineAt(acceptedAt, ports);
+    return { deadlineAt: new Date(dead ? Math.min(deadline, now) : deadline).toISOString(), policy: "failed-switch" };
+  }
   const inTurn = awaitingRecipientTurn(registry, file, subject.conversationId);
   const span = inTurn
     ? ports.inTurnCeilingMs ?? SEND_SETTLEMENT_IN_TURN_CEILING_MS
     : ports.windowMs ?? SEND_SETTLEMENT_WINDOW_MS;
   const boundary = settlementProgress(ports, subject.operationId);
   const boundaryDeadline = boundary?.deadlinePolicy === "turn-boundary" ? parseTime(boundary.deadlineAt) : null;
-  const ordinaryDeadline = recipientProvenDead(registry, file, subject.conversationId)
-    ? (ports.now ?? Date.now)() : Math.max(acceptedAt + span, boundaryDeadline ?? 0);
+  const ordinaryDeadline = dead ? now : Math.max(acceptedAt + span, boundaryDeadline ?? 0);
   const deadline = ports.absoluteDeadline === undefined ? ordinaryDeadline : Math.min(ordinaryDeadline, ports.absoluteDeadline);
   return { deadlineAt: new Date(deadline).toISOString(), policy: boundaryDeadline !== null && boundaryDeadline >= acceptedAt + span ? "turn-boundary" : inTurn ? "in-turn-ceiling" : "settlement-window" };
 }
@@ -890,7 +934,6 @@ export async function settleDueSends(
       await yieldToRuntime(); checkSelection();
       sliceStarted = performance.now(); sliceCount = 0;
     };
-    const now = (ports.now ?? Date.now)();
     const operations = new Set<string>();
     /* Open sends are never archived: only hot rows can be due (#2761). */
     for (const [, delivery] of hotRegistryRows(file, "heldDeliveries")) {
@@ -910,10 +953,13 @@ export async function settleDueSends(
     for (const operationId of operations) {
       await selectionTurn(); checkSelection();
       const current = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
-      const subject = settlementSubject(retryAttemptOwner(current, operationId), deliveryForOperation(current, operationId));
+      const subject = settlementSubject(current, operationId, ports);
       if (!subject) continue;
       result.examined += 1;
-      const deadline = settlementDeadline(registry, current, subject, ports);
+      // A dead recipient's deadline and this comparison use the same clock
+      // sample, even when the sweep has yielded since the row was selected.
+      const now = (ports.now ?? Date.now)();
+      const deadline = settlementDeadline(registry, current, subject, ports, now);
       ports.onDeadline?.(operationId, subject.conversationId, deadline);
       if (deadline && Date.parse(deadline.deadlineAt) > now) continue;
       if (!pastSettlementDeadline(registry, current, subject, ports)) continue;
@@ -961,7 +1007,7 @@ export async function settleDueSends(
 export function sendSettlementDue(operationId: string, ports: SendSettlementPorts = {}): boolean {
   const registry = ports.registry ?? agentRegistry();
   const file = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
-  const subject = settlementSubject(retryAttemptOwner(file, operationId), deliveryForOperation(file, operationId));
+  const subject = settlementSubject(file, operationId, ports);
   return subject !== null && pastSettlementDeadline(registry, file, subject, ports);
 }
 
@@ -975,11 +1021,16 @@ export function settlementDeadlineForRow(
   row: { delivery: HeldDelivery } | { owner: DeliveryOperationOwner },
   ports: Pick<SendSettlementPorts, "windowMs" | "inTurnCeilingMs"> = {},
 ): SettlementDeadline | null {
-  const subject = "owner" in row ? settlementSubject(row.owner, null) : settlementSubject(null, row.delivery);
-  if (!subject?.settleable) return null;
+  const source = "owner" in row ? row.owner : row.delivery;
+  const conversation = registry.conversation(source.conversationId);
+  const file = registry.deliverySnapshotForOperation(source.command.operationId);
+  const subject = settlementSubjectForRow(source, conversation, file);
+  if (!subject.settleable) return null;
   const acceptedAt = parseTime(subject.acceptedAt);
   if (acceptedAt === null) return null;
-  const conversation = registry.conversation(subject.conversationId);
+  if (subject.failedSwitch) {
+    return { deadlineAt: new Date(failedSwitchDeadlineAt(acceptedAt, ports)).toISOString(), policy: "failed-switch" };
+  }
   const generation = conversation?.generations.at(-1);
   const entry = conversation && generation
     ? registry.conversationDeliverySnapshot({ conversationId: conversation.id }).entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })]
@@ -996,7 +1047,7 @@ export function settlementDeadlineForRow(
 export function sendSettlementDeadline(operationId: string, ports: SendSettlementPorts = {}): SettlementDeadline | null {
   const registry = ports.registry ?? agentRegistry();
   const file = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
-  const subject = settlementSubject(retryAttemptOwner(file, operationId), deliveryForOperation(file, operationId));
+  const subject = settlementSubject(file, operationId, ports);
   return subject ? settlementDeadline(registry, file, subject, ports) : null;
 }
 
@@ -1272,14 +1323,16 @@ async function settleSendReceipt(
   if (verdict) return settleProjection(registry, operationId, projected, verdict, "delivery-journal", deliveryRouteOf(receipt), ports.assertActive);
 
   const file = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
-  const subject = settlementSubject(retryAttemptOwner(file, operationId), deliveryForOperation(file, operationId));
+  const subject = settlementSubject(file, operationId, ports);
   /* Still in flight: the journal's receipt already says how this send is
      reaching a running turn, recorded when its delivery began. */
   if (!subject) return { ...projected, ...routeFields(receipt) };
-  const observedTranscript = recipientTranscriptVersion(file, subject.conversationId);
-  const observedHost = structuredDeliveryHostForConversation(subject.conversationId, registry);
-  const observedRecipient = recipientObservation(file);
-  if (await recipientStillWorking(registry, file, subject, client, ports)) {
+  const observedRecipient = subject.failedSwitch ? null : {
+    publication: recipientObservation(file),
+    transcriptVersion: recipientTranscriptVersion(file, subject.conversationId),
+    host: structuredDeliveryHostForConversation(subject.conversationId, registry),
+  };
+  if (observedRecipient && await recipientStillWorking(registry, file, subject, client, ports)) {
     const current = sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId);
     return current ?? projected;
   }
@@ -1292,12 +1345,13 @@ async function settleSendReceipt(
   const canExpire = (): boolean => {
     ports.assertActive?.();
     const current = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
-    const currentSubject = settlementSubject(retryAttemptOwner(current, operationId), deliveryForOperation(current, operationId));
+    const currentSubject = settlementSubject(current, operationId, ports);
     const forced = ports.absoluteDeadline !== undefined && (ports.now ?? Date.now)() >= ports.absoluteDeadline;
-    if (!forced && !recipientProvenDead(registry, current, subject.conversationId)
-      && (recipientObservation(current) !== observedRecipient
-        || recipientTranscriptVersion(current, subject.conversationId) !== observedTranscript
-        || structuredDeliveryHostForConversation(subject.conversationId, registry) !== observedHost)) {
+    if (!forced && currentSubject && !recipientProvenDead(registry, current, subject.conversationId)
+      && (currentSubject.failedSwitch !== subject.failedSwitch
+        || (observedRecipient && (recipientObservation(current) !== observedRecipient.publication
+          || recipientTranscriptVersion(current, subject.conversationId) !== observedRecipient.transcriptVersion
+          || structuredDeliveryHostForConversation(subject.conversationId, registry) !== observedRecipient.host)))) {
       recipientChanged = true;
       return false;
     }
@@ -1313,17 +1367,15 @@ async function settleSendReceipt(
   };
   const reserved = deliveryForOperation(file, operationId);
   // A retry owns its settlement independently of the shared reservation.
-  if (reserved && !retryAttemptOwner(file, operationId) && reserved.command.operationId === operationId
-    && reserved.attempts === 0 && (reserved.state === "held" || reserved.state === "assigned")
+  if (!receipt && reserved && !retryAttemptOwner(file, operationId) && reserved.command.operationId === operationId
+    && pristineReservation(reserved)
     && pastSettlementDeadline(registry, file, subject, ports)) {
     const fenced = await registry.deliveryWrite({ label: "delivery.settle-pristine", operationId }, () => {
       if (!canExpire()) return false;
       const current = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
       const row = deliveryForOperation(current, operationId);
-      const currentSubject = settlementSubject(null, row);
       if (!row || retryAttemptOwner(current, operationId) || row.command.operationId !== operationId
-        || row.attempts !== 0 || (row.state !== "held" && row.state !== "assigned")
-        || !currentSubject || !pastSettlementDeadline(registry, current, currentSubject, ports)) return false;
+        || !pristineReservation(row)) return false;
       // A matching live-turn observation can defer ordinary expiry, but a kill
       // or proven death fences the selected reservation immediately.
       registry.recordDeliveryOutcome(row.id, "failed", SEND_LOST_REASON, "lost");
@@ -1336,7 +1388,7 @@ async function settleSendReceipt(
     if (fenced.acquired && fenced.value) return sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId);
   }
   const currentFile = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
-  const currentSubject = settlementSubject(retryAttemptOwner(currentFile, operationId), deliveryForOperation(currentFile, operationId));
+  const currentSubject = settlementSubject(currentFile, operationId, ports);
   const currentReceipt = sendReceiptFor(currentFile, operationId);
   if (currentReceipt && currentReceipt.state !== "in-flight") return currentReceipt;
   if (!currentSubject || !pastSettlementDeadline(registry, currentFile, currentSubject, ports)) return { ...projected, ...routeFields(receipt) };
@@ -1369,11 +1421,11 @@ async function settleSendReceipt(
      writes do not would make `queued` permanent exactly as an outage would. So
      it ends the same way an outage does, on the durable record the delivery
      queue reads before it actuates anything. */
-  const journalOperationId = journal.value.operationId;
+  const { operationId: journalOperationId, receipt: journalReceipt } = journal.value;
   ports.assertActive?.();
   if (!canExpire()) return recipientChanged ? reobserve() : sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId);
   const fenced = await readEvidenceWithin(
-    () => fenceOperation(client, journalOperationId, status),
+    () => fenceOperation(client, journalOperationId, journalReceipt),
     readMs,
     "the delivery journal would not accept the fence",
   );
