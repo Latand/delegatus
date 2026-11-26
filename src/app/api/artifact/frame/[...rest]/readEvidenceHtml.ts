@@ -1,8 +1,7 @@
 import type { FileHandle } from "node:fs/promises";
 
 /** Read untrusted HTML only while its actual bytes remain within the request budget. */
-export async function readEvidenceHtml(handle: FileHandle, maxBytes: number, signal: AbortSignal, timeBudgetMs: number): Promise<Buffer> {
-  const deadline = Date.now() + timeBudgetMs;
+export async function readEvidenceHtml(handle: FileHandle, maxBytes: number, signal: AbortSignal, deadline: number): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let total = 0;
   while (true) {

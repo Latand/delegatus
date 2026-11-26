@@ -5,7 +5,7 @@ import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 
 import { classifyArtifact } from "@/lib/artifact/classify";
-import { containEvidenceHtml, evidenceHtmlImageSources, transformEvidenceHtml } from "@/lib/artifact/evidenceHtml";
+import { evidenceHtmlImageSourcesWithinBudget, transformEvidenceHtmlWithinBudget } from "@/lib/artifact/evidenceHtml";
 import { frameCsp, frameMime, verifyFrameScope } from "@/lib/artifact/frameScope";
 import { admittedAs, evidenceFrameAdmission, lexicalAllowedRoots, realpathAdmitted, openAdmitted, realAllowedRoots, streamWindow, underRoot } from "@/lib/artifact/localFile";
 import { artifactEtag, artifactLimits, SNIFF_BYTES, sniffAgrees } from "@/lib/artifact/serve";
@@ -83,13 +83,12 @@ function segmentsOf(pathname: string): string[] | null {
   return segments;
 }
 
-async function inlineScopedImages(source: string, base: string, scope: string, maxBytes: number, host: string, signal: AbortSignal, timeBudgetMs: number): Promise<Map<string, string>> {
+async function inlineScopedImages(source: string, base: string, scope: string, maxBytes: number, host: string, signal: AbortSignal, deadline: number): Promise<Map<string, string>> {
   const baseUrl = new URL(base);
   const scopeRoot = `${baseUrl.origin}/api/artifact/frame/${scope}/`;
   const images = new Map<string, string>();
-  const deadline = Date.now() + timeBudgetMs;
   let total = 0;
-  for (const sourceUrl of evidenceHtmlImageSources(source).slice(0, 32)) {
+  for (const sourceUrl of (await evidenceHtmlImageSourcesWithinBudget(source, deadline, signal)).slice(0, 32)) {
     if (signal.aborted) throw new Error("client aborted");
     if (Date.now() >= deadline) throw new Error("artifact time budget exceeded");
     if (sourceUrl.startsWith("data:image/")) {
@@ -100,6 +99,10 @@ async function inlineScopedImages(source: string, base: string, scope: string, m
     let target: URL;
     try { target = new URL(sourceUrl, baseUrl); } catch { continue; }
     if (target.origin !== baseUrl.origin || !target.href.startsWith(scopeRoot)) continue;
+    // Decide from the path before dispatching the internal GET. An HTML image
+    // target would recursively enter this renderer and open another report.
+    const targetType = classifyArtifact(target.pathname);
+    if (targetType?.kind !== "image" || !/^image\/(?:png|jpeg|gif|webp|avif|bmp)$/.test(targetType.mime)) continue;
     const response = await GET(new NextRequest(target, { headers: {
       host,
       origin: "null",
@@ -124,6 +127,7 @@ async function inlineScopedImages(source: string, base: string, scope: string, m
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
+  const requestStartedAt = Date.now();
   const hostRejection = rejectForeignHost(req);
   if (hostRejection) return hostRejection;
 
@@ -205,6 +209,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       return refuse(404, "not a regular file");
     }
     const limits = artifactLimits();
+    const deadline = requestStartedAt + limits.timeBudgetMs;
     if (stat.size > limits.maxBytes) {
       await handle.close();
       return refuse(413, "file exceeds the configured byte bound");
@@ -227,7 +232,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     if (kind === "evidence" && /\.html?$/i.test(real)) {
       let source: Buffer;
       try {
-        source = await readEvidenceHtml(handle, limits.maxBytes, req.signal, limits.timeBudgetMs);
+        source = await readEvidenceHtml(handle, limits.maxBytes, req.signal, deadline);
       } catch (error) {
         const message = (error as Error).message;
         if (message === "artifact exceeds the configured byte bound") {
@@ -244,11 +249,11 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         }
         throw error;
       }
+      let images: Map<string, string> | undefined;
       if (ipv6Authority) {
-        let images: Map<string, string>;
         try {
           images = await inlineScopedImages(source.toString("utf8"), evidenceBase ?? `${cspOrigin}/api/artifact/frame/${scope}/`, scope,
-            limits.maxBytes, req.headers.get("host") ?? requestUrl.host, req.signal, limits.timeBudgetMs);
+            limits.maxBytes, req.headers.get("host") ?? requestUrl.host, req.signal, deadline);
         } catch (error) {
           const message = (error as Error).message;
           await handle.close();
@@ -256,14 +261,26 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           if (message === "artifact time budget exceeded") return refuse(408, message);
           throw error;
         }
-        body = transformEvidenceHtml(source.toString("utf8"), undefined, images);
-      } else {
-        body = containEvidenceHtml(source.toString("utf8"), evidenceBase);
+      }
+      try {
+        body = await transformEvidenceHtmlWithinBudget(source.toString("utf8"), ipv6Authority ? undefined : evidenceBase,
+          images, deadline, req.signal);
+      } catch (error) {
+        const message = (error as Error).message;
+        await handle.close();
+        if (message === "client aborted") return new NextResponse(null, { status: 499, headers: HEADERS_BASE });
+        if (message === "artifact time budget exceeded") return refuse(408, message);
+        throw error;
+      }
+      if (Date.now() >= deadline) {
+        await handle.close();
+        return refuse(408, "artifact time budget exceeded");
       }
       responseLength = Buffer.byteLength(body, "utf8");
     }
     const headers = new Headers({
       ...HEADERS_BASE,
+      ...(kind === "evidence" ? { "permissions-policy": "autoplay=(), camera=(), geolocation=(), microphone=(), payment=(), usb=()" } : {}),
       "content-security-policy": csp,
       ...corsFor(req),
       "content-type": responseType,

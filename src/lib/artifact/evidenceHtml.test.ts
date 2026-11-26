@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { containEvidenceHtml, transformEvidenceHtml } from "./evidenceHtml";
+import { containEvidenceHtml, evidenceHtmlImageSourcesWithinBudget, transformEvidenceHtml, transformEvidenceHtmlWithinBudget } from "./evidenceHtml";
 
 test("evidence HTML keeps presentation and local assets while removing navigation and script execution", () => {
   const source = `<!doctype html><html><head>
@@ -32,6 +32,26 @@ test("browser-style tree construction removes navigation recovered from malforme
     expect(document.querySelector("a[href], meta[http-equiv=refresh]")).toBeNull();
     expect(document.body.textContent).toContain("Visible report");
   } finally { window.happyDOM.abort(); }
+});
+
+test("declarative shadow templates and their navigation are removed before serialization", () => {
+  const result = containEvidenceHtml('<main>Visible report<template shadowrootmode="open"><a href="https://outside.invalid">Leave</a></template></main>');
+  expect(result).toContain("Visible report");
+  expect(result).not.toContain("template");
+  expect(result).not.toContain("outside.invalid");
+});
+
+test("HTML parsing worker enforces deadlines and returns ordinary transformed reports", async () => {
+  const controller = new AbortController();
+  await expect(transformEvidenceHtmlWithinBudget("<p>late</p>", undefined, undefined, Date.now(), controller.signal))
+    .rejects.toThrow("time budget");
+  const deadline = Date.now() + 5_000;
+  const [sources, html] = await Promise.all([
+    evidenceHtmlImageSourcesWithinBudget('<img src="chart.png">', deadline, controller.signal),
+    transformEvidenceHtmlWithinBudget("<h1>Normal report</h1>", undefined, undefined, deadline, controller.signal),
+  ]);
+  expect(sources).toEqual(["chart.png"]);
+  expect(html).toContain("Normal report");
 });
 
 test("serialization preserves doctype, optional head documents, CSS raw text and local assets", () => {

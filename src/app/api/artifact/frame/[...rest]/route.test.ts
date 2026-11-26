@@ -170,6 +170,7 @@ test("IPv6 evidence frames keep scoped assets on the verified serving authority"
   expect(page.status).toBe(200);
   expect(page.headers.get("content-security-policy")).toContain("img-src data:");
   expect(page.headers.get("content-security-policy")).not.toContain("localhost");
+  expect(page.headers.get("permissions-policy")).toContain("autoplay=()");
   const html = await page.text();
   expect(html).not.toContain("<base");
   expect(html).toContain('src="data:image/png;base64,');
@@ -178,6 +179,37 @@ test("IPv6 evidence frames keep scoped assets on the verified serving authority"
   }));
   expect(chart.status).toBe(200);
   expect(Buffer.from(await chart.arrayBuffer())).toEqual(KEEP_PNG);
+});
+
+test("IPv6 fallback skips HTML image references before opening their descriptors", async () => {
+  const dir = path.dirname(write("state/evidence/agents/ipv6-cycle/index.html", '<img src="other.html"><img src="chart.png"><h1>Local chart</h1>'));
+  fs.writeFileSync(path.join(dir, "other.html"), '<img src="other.html"><p>must not be opened</p>');
+  fs.writeFileSync(path.join(dir, "chart.png"), KEEP_PNG);
+  const root = path.join(home, "state/evidence");
+  const scope = mintFrameScope(dir, Date.now(), null, "evidence", null, root, root);
+  const url = new URL(`/api/artifact/frame/${scope}/index.html`, "http://[::1]:8898");
+  const response = await GET(new NextRequest(url, { headers: { ...FRAME_REQUEST_HEADERS, host: "[::1]:8898" } }));
+  expect(response.status).toBe(200);
+  const html = await response.text();
+  expect(html).toContain("Local chart");
+  expect(html).toContain("src=\"data:image/png;base64,");
+  expect(html).not.toContain("must not be opened");
+});
+
+test("evidence HTML parsing returns 408 after its response deadline", async () => {
+  const report = write("state/evidence/agents/deadline/index.html", `<table>${"<tr><td>bounded report</td></tr>".repeat(20_000)}</table>`);
+  const scope = mintFrameScope(path.dirname(report), Date.now(), null, "evidence", null,
+    path.join(home, "state/evidence"), path.join(home, "state/evidence"));
+  const prior = process.env.LLV_ARTIFACT_TIME_BUDGET_MS;
+  process.env.LLV_ARTIFACT_TIME_BUDGET_MS = "1";
+  try {
+    const response = await GET(frameRequest(`/api/artifact/frame/${scope}/index.html`));
+    expect(response.status).toBe(408);
+    expect(await response.text()).toContain("time budget exceeded");
+  } finally {
+    if (prior === undefined) delete process.env.LLV_ARTIFACT_TIME_BUDGET_MS;
+    else process.env.LLV_ARTIFACT_TIME_BUDGET_MS = prior;
+  }
 });
 
 test("an initially oversized evidence report is rejected before HTML parsing", async () => {
@@ -400,7 +432,7 @@ test("valid evidence grants verify before each signed field is independently tam
     [4, Buffer.from("project-b", "utf8").toString("base64url")],
     [5, Buffer.from(path.join(home, "other-evidence"), "utf8").toString("base64url")],
     [6, Buffer.from(path.join(home, "other-root"), "utf8").toString("base64url")],
-    [7, `${fields[7]!.slice(0, -2)}AA`],
+    [7, `${fields[7]!.slice(0, -1)}${fields[7]!.endsWith("A") ? "B" : "A"}`],
   ];
   for (const [index, value] of changes) {
     const altered = [...fields];
@@ -418,22 +450,22 @@ test("evidence HTML reads reject actual growth beyond the bound and honor cancel
   try {
     expect((await handle.stat()).size).toBe(4);
     fs.appendFileSync(report, "more");
-    await expect(readEvidenceHtml(handle, 6, new AbortController().signal, 5_000)).rejects.toThrow("byte bound");
+    await expect(readEvidenceHtml(handle, 6, new AbortController().signal, Date.now() + 5_000)).rejects.toThrow("byte bound");
   } finally { await handle.close(); }
 
   const initiallyLarge = write("state/evidence/agents/large/index.html", "12345678");
   const largeHandle = await fs.promises.open(initiallyLarge, "r");
   try {
-    await expect(readEvidenceHtml(largeHandle, 4, new AbortController().signal, 5_000)).rejects.toThrow("byte bound");
+    await expect(readEvidenceHtml(largeHandle, 4, new AbortController().signal, Date.now() + 5_000)).rejects.toThrow("byte bound");
   } finally { await largeHandle.close(); }
 
   const cancelled = new AbortController();
   cancelled.abort();
   const cancelledHandle = await fs.promises.open(report, "r");
-  try { await expect(readEvidenceHtml(cancelledHandle, 64, cancelled.signal, 5_000)).rejects.toThrow("client aborted"); }
+  try { await expect(readEvidenceHtml(cancelledHandle, 64, cancelled.signal, Date.now() + 5_000)).rejects.toThrow("client aborted"); }
   finally { await cancelledHandle.close(); }
   const deadlineHandle = await fs.promises.open(report, "r");
-  try { await expect(readEvidenceHtml(deadlineHandle, 64, new AbortController().signal, 0)).rejects.toThrow("time budget"); }
+  try { await expect(readEvidenceHtml(deadlineHandle, 64, new AbortController().signal, Date.now())).rejects.toThrow("time budget"); }
   finally { await deadlineHandle.close(); }
 });
 

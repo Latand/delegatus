@@ -7747,6 +7747,7 @@ describe("message document links", () => {
       </style>
       <main><h1>${heading}</h1><p>Root volume · 24 GiB of 40 GiB used</p>
       <img alt="Local usage chart" style="width:160px;height:48px" src="chart.png"><img aria-hidden="true" alt="" style="display:none" src="/outside.png">
+      <template shadowrootmode="open"><a href="https://outside.invalid/template">Template destination</a></template>
       <a href="https://outside.invalid/leave" target="_self" ping="https://outside.invalid/ping">Outside destination</a>
       <script>location.href = "https://outside.invalid/script"</script>
       <progress aria-label="Root volume used" max="40" value="24">60%</progress></main></html>`);
@@ -7831,6 +7832,7 @@ describe("message document links", () => {
           const reportFrame = pane.locator("iframe[data-preview-frame]");
           const title = reportFrame.contentFrame().getByRole("heading", { name: heading });
           await title.waitFor();
+          expect(await reportFrame.contentFrame().getByText("Template destination", { exact: true }).count()).toBe(0);
           const localImage = reportFrame.contentFrame().getByRole("img", { name: "Local usage chart" });
           await localImage.waitFor();
           await localImage.evaluate(image => (image as HTMLImageElement).decode());
@@ -7860,6 +7862,7 @@ describe("message document links", () => {
             await directTab.goto(new URL(lastFramePath, served.base).toString());
             await directTab.getByRole("heading", { name: heading }).waitFor();
             expect(await directTab.evaluate(() => window.origin)).toBe("null");
+            expect(await directTab.getByText("Template destination", { exact: true }).count()).toBe(0);
             await directTab.getByText("Outside destination", { exact: true }).click();
             expect(offScopeNavigations).toEqual([]);
             expect(await directTab.getByRole("heading", { name: heading }).count()).toBe(1);
