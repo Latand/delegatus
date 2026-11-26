@@ -21,14 +21,17 @@ the working directory.
 | Local transcript | The same chat's `session_meta.cwd` still pointed to A. |
 | Delegatus | The catalog still grouped the chat under A and had no project row for B. |
 
-A same-origin clone of A, or a linked worktree of A, resolves to A's canonical
-identity. Delegatus already groups it under A's project row, so there is no row
-for B to add, and creating one manually returns `DUPLICATE_PROJECT`. Both
-paths derive the identity from the repository's `origin` in the shared git
-configuration
+A same-origin clone of A, or a linked worktree of A whose repository has an
+`origin`, resolves to A's canonical identity. Delegatus already groups it under
+A's project row, so there is no row for B to add, and creating one manually
+returns `DUPLICATE_PROJECT`. Identity derives from the `origin` remote in the
+shared git configuration
 ([`projectIdentityFromRepositoryRoot()`](../../src/lib/projects/identity.ts),
 [manual creation](../../src/lib/projects/curation.ts)). This reproduction does
-not apply to those layouts.
+not apply to those layouts. A repository with no `origin` keys on its local
+path, so a linked worktree of it still groups under the parent in the scanner
+([`projectInfoFromCwd()`](../../src/lib/scanner/describe.ts)), but manual
+creation hashes the worktree's own path and does not report a duplicate.
 
 This was an observation of one local Desktop move. It does not establish event
 delivery to another client, update latency, or the behavior of remote projects.
@@ -38,8 +41,8 @@ delivery to another client, update latency, or the behavior of remote projects.
 The [transcript scanner](../../src/lib/scanner/describe.ts) reads cwd from
 the transcript header and resolves it through `projectInfoFromCwd()`. This
 preserves the parent repository for linked worktrees, including layouts it
-can recognize after deletion. Scanning the same cwd again still produces A.
-A change of Codex project affiliation alone leaves the grouping unchanged only
+can recognize after deletion. A change of Codex project affiliation alone
+leaves the grouping unchanged, so scanning the same cwd again produces A, only
 while the cwd's canonical identity stays stable. The same folder can change its
 key, for example when Git is initialised in it or an `origin` is added.
 Delegatus aliases verified same-folder successions and renames proven by the
@@ -58,7 +61,7 @@ with A in Delegatus.
 
 The [Codex method catalog](../design/codex-api-update/METHOD-CATALOG.md)
 already defers project operations to preserve this grouping. The
-[checked-in protocol schema](../../src/lib/accounts/protocol/0.170.0/experimental.json)
+[checked-in protocol schema](../../src/lib/accounts/protocol/0.172.0/experimental.json)
 describes paginated `project/list`, project roots, `Thread.projectId`, and
 `project/changed` and `thread/project/updated` notifications. Schema presence
 only establishes that those capabilities can be investigated. Verify version
@@ -91,7 +94,7 @@ Keep the relationship local to the owning installation.
 | Scenario | Evidence to collect |
 | --- | --- |
 | Supported and older clients | Capability negotiation, pagination, and actual event delivery when the move happens in a different client. Confirm unchanged behavior when the capability is unavailable. |
-| Empty project and restart | One project row per canonical project key across cold start, refresh, and restart, including when a manual row already exists. A permitted root whose identity matches an existing project (same-origin clone, linked worktree) shares that row. |
+| Empty project and restart | One project row per canonical project key across cold start, refresh, and restart, including when a manual row already exists. A permitted root whose identity matches an existing project (same-origin clone, linked worktree of a repository with an `origin`) shares that row. |
 | Existing chat moved from A to B | Same thread ID, preserved cwd and permissions, updated affiliation. Check repeated moves and a subsequent turn. |
 | Different paths and identities | Same repository across live and deleted worktrees, unrelated checkouts with the same name, fork remotes, and projects with several roots. |
 | Access changes | Hidden or revoked workspaces, different accounts, and remote projects cannot add unauthorized rows or change access, runtime routing, or artifact visibility. |
