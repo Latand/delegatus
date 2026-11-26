@@ -27,7 +27,7 @@ export const dynamic = "force-dynamic";
  * same-origin/Host gate IS the operator authority on this loopback service
  * (see `page.tsx`), and the allowed-root policy confines reads to the
  * recorded project folders, their checkouts, manual projects and stage scratch.
- * Evidence roots also admit HTML metadata for the sandboxed frame. Direct
+ * Managed or explicitly enabled evidence roots admit HTML metadata for the sandboxed frame. Direct
  * reads from evidence roots and the report picture store admit raster images.
  * The home directory itself is never an allowed root.
  *
@@ -86,7 +86,7 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<FailBody> | 
   if (!admission) return fail("access-denied", "path is outside the allowed roots");
   const evidenceHtml = admission === "evidence-html";
   const evidenceRoot = evidenceHtml
-    ? roots.evidence.filter(root => underRoot(abs, root)).sort((a, b) => b.length - a.length)[0]
+    ? roots.evidenceReports.filter(root => underRoot(abs, root)).sort((a, b) => b.length - a.length)[0]
     : undefined;
 
   const classified = classifyArtifact(abs);

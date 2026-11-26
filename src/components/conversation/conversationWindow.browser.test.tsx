@@ -7734,7 +7734,7 @@ describe("message document links", () => {
     fs.writeFileSync(localRaster, fixtureRasterPng());
     const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "evidence-html-preview");
     const heading = "Disk usage report";
-    fs.writeFileSync(report, `<!doctype html><html lang="en"><meta charset="utf-8">
+    const reportSource = `<!doctype html><html lang="en"><meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <meta http-equiv="refresh" content="0;url=https://outside.invalid/refresh">
       <title>${heading}</title>
@@ -7750,7 +7750,8 @@ describe("message document links", () => {
       <template shadowrootmode="open"><a href="https://outside.invalid/template">Template destination</a></template>
       <a href="https://outside.invalid/leave" target="_self" ping="https://outside.invalid/ping">Outside destination</a>
       <script>location.href = "https://outside.invalid/script"</script>
-      <progress aria-label="Root volume used" max="40" value="24">60%</progress></main></html>`);
+      <progress aria-label="Root volume used" max="40" value="24">60%</progress></main></html>`;
+    fs.writeFileSync(report, reportSource);
     fs.mkdirSync(out, { recursive: true });
     let metadataReads = 0;
     let frameReads = 0;
@@ -7894,6 +7895,11 @@ describe("message document links", () => {
         } finally { await context.close(); }
       }
       served.stop();
+      fs.writeFileSync(report, reportSource.replace("</main>", `
+        <picture><source media="(min-width: 1000px)" srcset="chart.png 1x, https://outside.invalid/picture.png 2x">
+          <img alt="Picture usage chart" width="160" height="48" src="/outside.png"></picture>
+        <img alt="Srcset usage chart" width="160" height="48" srcset="chart.png 1x, https://outside.invalid/srcset.png 2x">
+        </main>`));
       served = await serveEvidenceFixture(scratch, FIXTURE, responses, { hostname: "::1" });
       const alternateListenerRequests: string[] = [];
       alternateListener = Bun.serve({
@@ -7909,10 +7915,16 @@ describe("message document links", () => {
       const ipv6Responses: string[] = [];
       const ipv6Failures: string[] = [];
       const ipv6Messages: string[] = [];
+      const ipv6OffScope: string[] = [];
+      const recordIpv6OffScope = (request: { url(): string }) => {
+        const url = new URL(request.url());
+        if (url.hostname === "outside.invalid" || url.pathname === "/outside.png") ipv6OffScope.push(url.href);
+      };
       const { context: ipv6Context, page: ipv6Page, pageErrors: ipv6Errors } = await openFixture(browser,
         `${served.base}?${new URLSearchParams({ case: "document-links", lang: "en", cwd: scratch, parent: scratch, evidenceReport: report, reportLabel: "Disk usage report" })}`,
         { width: 1280, height: 900 }, "light", "en");
       ipv6Page.on("request", request => {
+        recordIpv6OffScope(request);
         const url = new URL(request.url());
         ipv6Requests.push(`${url.host} ${url.pathname.replace(/\/api\/artifact\/frame\/[^/]+/, "/api/artifact/frame/:scope")}`);
       });
@@ -7942,6 +7954,38 @@ describe("message document links", () => {
         expect(browserMessages.some(message => message.includes("chart.png") && message.includes("violates the following Content Security Policy"))).toBe(false);
         expect(framePolicies.at(-1)).toContain("img-src data:");
         expect(framePolicies.at(-1)).not.toContain("localhost");
+        const responsiveNames = ["Picture usage chart", "Srcset usage chart"];
+        for (const name of responsiveNames) {
+          const image = frame.contentFrame().getByRole("img", { name });
+          const raster = await image.evaluate(async node => {
+            const image = node as HTMLImageElement;
+            await image.decode();
+            return { width: image.naturalWidth, source: image.currentSrc };
+          });
+          expect(raster.width).toBe(64);
+          expect(raster.source).toMatch(/^data:image\/png;base64,/);
+        }
+        const direct = await ipv6Context.newPage();
+        direct.on("request", recordIpv6OffScope);
+        try {
+          const response = await direct.goto(new URL(lastFramePath, served.base).href);
+          expect(response?.status()).toBe(200);
+          for (const name of responsiveNames) {
+            const image = direct.getByRole("img", { name });
+            const raster = await image.evaluate(async node => {
+              const image = node as HTMLImageElement;
+              await image.decode();
+              return { width: image.naturalWidth, source: image.currentSrc };
+            });
+            expect(raster.width).toBe(64);
+            expect(raster.source).toMatch(/^data:image\/png;base64,/);
+          }
+          expect(await direct.evaluate(() => window.origin)).toBe("null");
+          await direct.screenshot({ path: path.join(out, "ipv6-direct.png") });
+        } finally { await direct.close(); }
+        await ipv6Page.screenshot({ path: path.join(out, "ipv6-preview.png") });
+        expect(ipv6OffScope).toEqual([]);
+        expect(offScopeServerRequests).toBe(0);
         expect(ipv6Requests.some(request => request.includes("localhost"))).toBe(false);
         expect(alternateListenerRequests).toEqual([]);
         expect(ipv6Errors).toEqual([]);

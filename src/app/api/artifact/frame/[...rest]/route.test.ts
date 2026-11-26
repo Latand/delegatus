@@ -212,15 +212,18 @@ test("evidence HTML parsing returns 408 after its response deadline", async () =
   }
 });
 
-test("the route settles across a process boundary while a file read remains held", async () => {
-  const report = write("state/evidence/agents/held-read/index.html", "<h1>Held read fixture</h1>");
+test("held HTML and IPv6 raster reads close with zero further reads after deadline or abort", async () => {
+  const report = write("state/evidence/agents/held-read/index.html", '<h1>Held read fixture</h1><img src="chart.png">');
+  fs.writeFileSync(path.join(path.dirname(report), "chart.png"), Buffer.concat([KEEP_PNG, Buffer.alloc(3 * 64 * 1024)]));
   const script = String.raw`
     import fs from "node:fs/promises";
+    import path from "node:path";
     import { NextRequest } from "next/server";
     import { mintFrameScope } from "./src/lib/artifact/frameScope.ts";
     import { GET } from "./src/app/api/artifact/frame/[...rest]/route.ts";
     const filename = process.env.LLV_HELD_REPORT;
     const state = process.env.LLV_STATE_DIR;
+    const raster = process.env.LLV_HELD_RASTER === "1";
     const probe = await fs.open(filename, "r");
     const prototype = Object.getPrototypeOf(probe);
     await probe.close();
@@ -228,12 +231,15 @@ test("the route settles across a process boundary while a file read remains held
     const originalClose = prototype.close;
     const reads = new WeakMap();
     let heldHandle;
+    let closed;
+    const closure = new Promise(resolve => { closed = resolve; });
     let release;
     const held = new Promise(resolve => { release = resolve; });
     prototype.read = function (...args) {
       const count = (reads.get(this) ?? 0) + 1;
       reads.set(this, count);
-      if (count !== 2) return originalRead.apply(this, args);
+      // Only the fixture raster has a 64 KiB first body chunk.
+      if (count !== 2 || (raster && args[2] !== 64 * 1024)) return originalRead.apply(this, args);
       heldHandle = this;
       process.stdout.write("HELD\n");
       return held.then(async () => {
@@ -244,7 +250,10 @@ test("the route settles across a process boundary while a file read remains held
     };
     prototype.close = async function (...args) {
       const result = await originalClose.apply(this, args);
-      if (this === heldHandle) process.stdout.write("CLOSED\n");
+      if (this === heldHandle) {
+        process.stdout.write("CLOSED\n");
+        closed();
+      }
       return result;
     };
     process.stdin.setEncoding("utf8");
@@ -253,22 +262,28 @@ test("the route settles across a process boundary while a file read remains held
       if (value.includes("ABORT")) controller.abort();
     });
     process.stdin.resume();
-    const root = state + "/evidence";
-    const scope = mintFrameScope(filename.slice(0, filename.lastIndexOf("/")), Date.now(), null, "evidence", null, root, root);
+    const root = path.join(state, "evidence");
+    const scope = mintFrameScope(path.dirname(filename), Date.now(), null, "evidence", null, root, root);
     const controller = new AbortController();
-    const request = new NextRequest("http://127.0.0.1:8898/api/artifact/frame/" + scope + "/index.html", {
-      headers: { host: "127.0.0.1:8898", "sec-fetch-site": "cross-site", "sec-fetch-dest": "iframe" }, signal: controller.signal,
+    const host = raster ? "[::1]:8898" : "127.0.0.1:8898";
+    const request = new NextRequest("http://" + host + "/api/artifact/frame/" + scope + "/index.html", {
+      headers: { host, "sec-fetch-site": "cross-site", "sec-fetch-dest": "iframe" }, signal: controller.signal,
     });
     const response = await GET(request);
     process.stdout.write("RESULT " + response.status + "\n");
-    await held;
-    await new Promise(resolve => setTimeout(resolve, 10));
-    process.exit(0);
+    await closure;
+    process.stdout.write("READS " + reads.get(heldHandle) + "\n");
+    process.stdin.pause();
   `;
-  const run = async (kind: "deadline" | "abort") => {
+  const run = async (kind: "deadline" | "abort", raster: boolean) => {
     const child = Bun.spawn([process.execPath, "-e", script], {
       cwd: process.cwd(), stdin: "pipe", stdout: "pipe", stderr: "pipe",
-      env: { ...process.env, LLV_HELD_REPORT: report, LLV_ARTIFACT_TIME_BUDGET_MS: kind === "deadline" ? "350" : "10000" },
+      env: {
+        ...process.env,
+        LLV_HELD_REPORT: report,
+        LLV_HELD_RASTER: raster ? "1" : "0",
+        LLV_ARTIFACT_TIME_BUDGET_MS: kind === "deadline" ? (raster ? "2000" : "350") : "10000",
+      },
     });
     const reader = child.stdout.getReader();
     const decoder = new TextDecoder();
@@ -281,10 +296,13 @@ test("the route settles across a process boundary while a file read remains held
           buffered = buffered.slice(newline + 1);
           return line;
         }
+        let timer: ReturnType<typeof setTimeout> | undefined;
         const next = await Promise.race([
           reader.read(),
-          Bun.sleep(5_000).then(() => { throw new Error("child probe did not respond within five seconds"); }),
-        ]);
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error("child probe did not respond within ten seconds")), 10_000);
+          }),
+        ]).finally(() => clearTimeout(timer));
         if (next.done) throw new Error(`child exited before a complete line: ${buffered}`);
         buffered += decoder.decode(next.value, { stream: true });
       }
@@ -300,15 +318,20 @@ test("the route settles across a process boundary while a file read remains held
       await child.stdin.flush();
       expect(await readLine()).toBe("RELEASED");
       expect(await readLine()).toBe("CLOSED");
+      expect(await readLine()).toBe("READS 2");
+      await child.stdin.end();
       expect(await child.exited).toBe(0);
     } finally {
-      child.kill();
+      if (child.exitCode === null) child.kill();
+      await child.exited;
       reader.releaseLock();
     }
   };
-  await run("deadline");
-  await run("abort");
-});
+  for (const raster of [false, true]) {
+    await run("deadline", raster);
+    await run("abort", raster);
+  }
+}, 60_000);
 
 test("an initially oversized evidence report is rejected before HTML parsing", async () => {
   const report = write("state/evidence/agents/oversized/index.html", "0123456789");

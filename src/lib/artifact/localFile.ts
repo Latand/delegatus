@@ -41,12 +41,19 @@ export function underRoot(candidate: string, root: string): boolean {
   return candidate === root || candidate.startsWith(root + path.sep);
 }
 
-/* Durable rendered evidence is outside every managed scratch root. The
-   historical OS temp location remains readable for existing report links. */
-export function evidenceRoots(): string[] {
+/* Durable rendered evidence is outside every managed scratch root. */
+function evidenceReportRoots(): string[] {
   const configured = process.env.LLV_EVIDENCE_ROOTS;
-  const roots = configured === undefined ? [statePath("evidence"), "/var/tmp"] : configured.split(path.delimiter);
+  const roots = configured === undefined ? [statePath("evidence")] : configured.split(path.delimiter);
   return roots.map((root) => root.trim()).filter((root) => path.isAbsolute(root)).map((root) => path.resolve(root));
+}
+
+/* The historical OS temp location remains readable for raster links. */
+export function evidenceRoots(): string[] {
+  const roots = evidenceReportRoots();
+  const legacy = "/var/tmp";
+  if (process.env.LLV_EVIDENCE_ROOTS === undefined && path.isAbsolute(legacy)) roots.push(path.resolve(legacy));
+  return roots;
 }
 
 /* The evidence roots and the report picture store both serve rasters. The
@@ -257,7 +264,7 @@ export function evidenceFrameAdmission(candidate: string, roots: AllowedRoots): 
   const html = isHtmlReport(candidate);
   if (!html && !isEvidenceImage(candidate)) return null;
   const purpose = html ? "evidence-html" : undefined;
-  if (!roots.evidence.some(root => underRoot(candidate, root)) || inFencedStore(candidate, roots.fenced)
+  if (!roots.evidenceReports.some(root => underRoot(candidate, root)) || inFencedStore(candidate, roots.fenced)
     || !hiddenPathAllowed(candidate, roots, [], purpose) || !hiddenPathAllowed(candidate, { ...roots, projects: [] }, [], purpose)
     || !reportMediaCopyAllowed(candidate)) return null;
   return html ? "evidence-html" : "evidence";
@@ -279,6 +286,8 @@ export interface AllowedRoots {
   projects: string[];
   /** Evidence roots and the raster-only report picture store. */
   evidence: string[];
+  /** Managed or explicitly enabled roots that can issue HTML frame grants. */
+  evidenceReports: string[];
   /** Fenced stores, which no root admits. */
   fenced: string[];
   /** Private tool/config areas, with narrowly owned output passages. */
@@ -290,7 +299,7 @@ export function lexicalAllowedRoots(): AllowedRoots {
   const candidates = projectRoots();
   const areas = privateAreas();
   const projects = candidates.filter(root => !underRoot(home, root) && privatePathAllowed(root, areas, "project-root"));
-  return { home, projects, evidence: rasterRoots(), fenced: fencedStores(), privateAreas: areas };
+  return { home, projects, evidence: rasterRoots(), evidenceReports: evidenceReportRoots(), fenced: fencedStores(), privateAreas: areas };
 }
 
 /** The same roots with symlinks resolved; a root that does not exist is dropped. */
@@ -308,15 +317,17 @@ export function realAllowedRootsSync(): AllowedRoots {
     }
   };
   const home = real(homeRoot()) ?? homeRoot();
-  const evidence = rasterRoots().map(real).filter((root): root is string => root !== null);
   /* A store that does not exist yet holds nothing to read; one reached through
      a link is fenced at the place the link leads to as well. */
   const stores = fencedStores();
   const fenced = [...new Set([...stores, ...stores.map(real).filter((store): store is string => store !== null)])];
   const lexical = lexicalAllowedRoots();
+  const evidenceByPath = new Map(lexical.evidence.map(root => [root, real(root)]));
+  const evidence = [...evidenceByPath.values()].filter((root): root is string => root !== null);
+  const evidenceReports = lexical.evidenceReports.map(root => evidenceByPath.get(root)).filter((root): root is string => root != null);
   const areas = lexical.privateAreas ?? [];
   const projects = lexical.projects.map(real).filter((root): root is string => root !== null && !underRoot(home, root) && privatePathAllowed(root, areas, "project-root"));
-  return { home, projects, evidence, fenced, privateAreas: areas };
+  return { home, projects, evidence, evidenceReports, fenced, privateAreas: areas };
 }
 
 /* macOS refuses an open with this flag (`ELOOP`) when any component of the
@@ -422,12 +433,6 @@ async function resolvesTo(handle: fsp.FileHandle, expected: string): Promise<boo
   }
 }
 
-/**
- * Streams `[start, end]` from the pinned descriptor, honouring the request's
- * AbortSignal (the preview closing cancels the fetch) and the configured time
- * budget. The descriptor is closed on completion, cancellation and error —
- * exactly once.
- */
 export function streamWindow(
   handle: fsp.FileHandle,
   start: number,
@@ -435,9 +440,25 @@ export function streamWindow(
   signal: AbortSignal,
   timeBudgetMs: number,
 ): ReadableStream<Uint8Array> {
+  return streamWindowUntil(handle, start, end, signal, Date.now() + timeBudgetMs);
+}
+
+/**
+ * Streams `[start, end]` from the pinned descriptor until the request is
+ * aborted or its absolute deadline passes. The descriptor is closed once,
+ * on completion, cancellation or error.
+ */
+export function streamWindowUntil(
+  handle: fsp.FileHandle,
+  start: number,
+  end: number,
+  signal: AbortSignal,
+  deadline: number,
+): ReadableStream<Uint8Array> {
   let position = start;
-  const deadline = Date.now() + timeBudgetMs;
   let done = false;
+  const boundaryError = () => signal.aborted ? new Error("client aborted")
+    : Date.now() >= deadline ? new Error("artifact time budget exceeded") : null;
   const finish = async () => {
     if (done) return;
     done = true;
@@ -445,9 +466,10 @@ export function streamWindow(
   };
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
-      if (signal.aborted || Date.now() > deadline) {
+      const expired = boundaryError();
+      if (expired) {
         await finish();
-        controller.error(new Error(signal.aborted ? "client aborted" : "artifact time budget exceeded"));
+        controller.error(expired);
         return;
       }
       const want = Math.min(STREAM_CHUNK, end - position + 1);
@@ -459,6 +481,8 @@ export function streamWindow(
       const buffer = Buffer.alloc(want);
       try {
         const { bytesRead } = await handle.read(buffer, 0, want, position);
+        const expired = boundaryError();
+        if (expired) throw expired;
         if (bytesRead <= 0) {
           /* The pinned inode ended early (truncated in place): end the body
              rather than hang — the client's validator round-trip reports it. */

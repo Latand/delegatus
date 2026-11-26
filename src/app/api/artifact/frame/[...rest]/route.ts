@@ -7,7 +7,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { classifyArtifact } from "@/lib/artifact/classify";
 import { evidenceHtmlImageSourcesWithinBudget, transformEvidenceHtmlWithinBudget } from "@/lib/artifact/evidenceHtml";
 import { frameCsp, frameMime, verifyFrameScope } from "@/lib/artifact/frameScope";
-import { admittedAs, evidenceFrameAdmission, lexicalAllowedRoots, realpathAdmitted, openAdmitted, realAllowedRoots, streamWindow, underRoot } from "@/lib/artifact/localFile";
+import { admittedAs, evidenceFrameAdmission, lexicalAllowedRoots, realpathAdmitted, openAdmitted, realAllowedRoots, streamWindowUntil, underRoot } from "@/lib/artifact/localFile";
 import { artifactEtag, artifactLimits, SNIFF_BYTES, sniffAgrees } from "@/lib/artifact/serve";
 import { rejectForeignHost } from "@/lib/sameOrigin";
 import { existingTeamStore } from "@/lib/team/store";
@@ -83,8 +83,6 @@ function segmentsOf(pathname: string): string[] | null {
   return segments;
 }
 
-type RequestBudget = { startedAt: number; deadline: number };
-
 function requestBoundaryError(signal: AbortSignal, deadline: number): Error | null {
   if (signal.aborted) return new Error("client aborted");
   if (Date.now() >= deadline) return new Error("artifact time budget exceeded");
@@ -126,8 +124,7 @@ function withinRequest<T>(operation: Promise<T>, signal: AbortSignal, deadline: 
   });
 }
 
-async function inlineScopedImages(source: string, base: string, scope: string, maxBytes: number, host: string, signal: AbortSignal, budget: RequestBudget): Promise<Map<string, string>> {
-  const { deadline } = budget;
+async function inlineScopedImages(source: string, base: string, scope: string, maxBytes: number, host: string, signal: AbortSignal, deadline: number): Promise<Map<string, string>> {
   const baseUrl = new URL(base);
   const scopeRoot = `${baseUrl.origin}/api/artifact/frame/${scope}/`;
   const images = new Map<string, string>();
@@ -135,10 +132,7 @@ async function inlineScopedImages(source: string, base: string, scope: string, m
   for (const sourceUrl of (await evidenceHtmlImageSourcesWithinBudget(source, deadline, signal)).slice(0, 32)) {
     if (signal.aborted) throw new Error("client aborted");
     if (Date.now() >= deadline) throw new Error("artifact time budget exceeded");
-    if (sourceUrl.startsWith("data:image/")) {
-      images.set(sourceUrl, sourceUrl);
-      continue;
-    }
+    if (sourceUrl.startsWith("data:image/")) continue;
     if (sourceUrl.includes("\\")) continue;
     let target: URL;
     try { target = new URL(sourceUrl, baseUrl); } catch { continue; }
@@ -152,7 +146,7 @@ async function inlineScopedImages(source: string, base: string, scope: string, m
       origin: "null",
       "sec-fetch-site": "cross-site",
       "sec-fetch-dest": "image",
-    }, signal }), budget);
+    }, signal }), deadline);
     const mime = response.headers.get("content-type")?.split(";", 1)[0] ?? "";
     const length = Number(response.headers.get("content-length"));
     if (!response.ok || !/^image\/(?:png|jpeg|gif|webp|avif|bmp)$/.test(mime)
@@ -160,9 +154,7 @@ async function inlineScopedImages(source: string, base: string, scope: string, m
       await response.body?.cancel().catch(() => {});
       continue;
     }
-    const bytes = new Uint8Array(await withinRequest(response.arrayBuffer(), signal, deadline, () => {
-      void response.body?.cancel().catch(() => {});
-    }));
+    const bytes = new Uint8Array(await withinRequest(response.arrayBuffer(), signal, deadline));
     if (signal.aborted) throw new Error("client aborted");
     if (Date.now() >= deadline) throw new Error("artifact time budget exceeded");
     if (bytes.length !== length || total + bytes.length > maxBytes) continue;
@@ -172,11 +164,8 @@ async function inlineScopedImages(source: string, base: string, scope: string, m
   return images;
 }
 
-async function getFrame(req: NextRequest, suppliedBudget?: RequestBudget): Promise<NextResponse> {
-  const requestStartedAt = suppliedBudget?.startedAt ?? Date.now();
+async function getFrame(req: NextRequest, deadline: number): Promise<NextResponse> {
   const limits = artifactLimits();
-  const budget = suppliedBudget ?? { startedAt: requestStartedAt, deadline: requestStartedAt + limits.timeBudgetMs };
-  const { deadline } = budget;
   const bounded = <T,>(operation: Promise<T>, onAbandoned?: () => void) => withinRequest(operation, req.signal, deadline, onAbandoned);
   const hostRejection = rejectForeignHost(req);
   if (hostRejection) return hostRejection;
@@ -205,7 +194,7 @@ async function getFrame(req: NextRequest, suppliedBudget?: RequestBudget): Promi
   const roots = lexicalAllowedRoots();
   let canonicalEvidenceRoots = roots;
   if (kind === "evidence") {
-    if (!grant.evidenceRoot || !grant.evidenceRootPath || !roots.evidence.includes(grant.evidenceRootPath)
+    if (!grant.evidenceRoot || !grant.evidenceRootPath || !roots.evidenceReports.includes(grant.evidenceRootPath)
       || !underRoot(directory, grant.evidenceRoot)) return refuse(403, "outside the admitted evidence root");
     try {
       if (await bounded(fs.realpath(grant.evidenceRootPath)) !== grant.evidenceRoot) return refuse(403, "evidence root changed");
@@ -214,7 +203,11 @@ async function getFrame(req: NextRequest, suppliedBudget?: RequestBudget): Promi
       if (message === "client aborted" || message === "artifact time budget exceeded") throw error;
       return refuse(403, "evidence root unavailable");
     }
-    canonicalEvidenceRoots = { ...roots, evidence: [...new Set([...roots.evidence, grant.evidenceRoot])] };
+    canonicalEvidenceRoots = {
+      ...roots,
+      evidence: [...roots.evidence, grant.evidenceRoot],
+      evidenceReports: [...roots.evidenceReports, grant.evidenceRoot],
+    };
   }
   const admission = kind === "evidence" ? evidenceFrameAdmission(abs, canonicalEvidenceRoots) : admittedAs(abs, roots);
   if (!underRoot(abs, directory) || !admission) return refuse(403, "outside the report directory");
@@ -226,8 +219,8 @@ async function getFrame(req: NextRequest, suppliedBudget?: RequestBudget): Promi
   try {
     real = await bounded(fs.realpath(abs));
     const resolvedRoots = await bounded(realAllowedRoots());
-    if (kind === "evidence" && grant.evidenceRoot && !resolvedRoots.evidence.includes(grant.evidenceRoot))
-      resolvedRoots.evidence = [...resolvedRoots.evidence, grant.evidenceRoot];
+    if (kind === "evidence" && (!grant.evidenceRoot || !resolvedRoots.evidenceReports.includes(grant.evidenceRoot)))
+      return refuse(403, "evidence root changed");
     if (!realpathAdmitted(admission, real, resolvedRoots)) return refuse(403, "outside the allowed roots");
   } catch (error) {
     const message = (error as Error).message;
@@ -332,7 +325,7 @@ async function getFrame(req: NextRequest, suppliedBudget?: RequestBudget): Promi
       if (ipv6Authority) {
         try {
           images = await inlineScopedImages(source.toString("utf8"), evidenceBase ?? `${cspOrigin}/api/artifact/frame/${scope}/`, scope,
-            limits.maxBytes, req.headers.get("host") ?? requestUrl.host, req.signal, budget);
+            limits.maxBytes, req.headers.get("host") ?? requestUrl.host, req.signal, deadline);
         } catch (error) {
           const message = (error as Error).message;
           await closeHandle();
@@ -374,7 +367,7 @@ async function getFrame(req: NextRequest, suppliedBudget?: RequestBudget): Promi
       await closeHandle();
       return new NextResponse(null, { status: 200, headers });
     }
-    return new NextResponse(streamWindow(handle, 0, stat.size - 1, req.signal, limits.timeBudgetMs), { status: 200, headers });
+    return new NextResponse(streamWindowUntil(handle, 0, stat.size - 1, req.signal, deadline), { status: 200, headers });
   } catch (error) {
     await closeHandle();
     throw error;
@@ -382,11 +375,9 @@ async function getFrame(req: NextRequest, suppliedBudget?: RequestBudget): Promi
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
-  const requestStartedAt = Date.now();
-  const limits = artifactLimits();
-  const budget = { startedAt: requestStartedAt, deadline: requestStartedAt + limits.timeBudgetMs };
+  const deadline = Date.now() + artifactLimits().timeBudgetMs;
   try {
-    return await getFrame(req, budget);
+    return await getFrame(req, deadline);
   } catch (error) {
     const message = (error as Error).message;
     if (message === "client aborted") return new NextResponse(null, { status: 499, headers: HEADERS_BASE });

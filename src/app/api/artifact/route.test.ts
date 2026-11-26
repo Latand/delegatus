@@ -6,6 +6,7 @@ import path from "node:path";
 
 import { NextRequest } from "next/server";
 import { KEEP_PNG, KEEP_TEXT, localFileKeepFixture, legacyReportPictureFixture } from "@/lib/artifact/localFile.fixture";
+import { admittedAs, lexicalAllowedRoots } from "@/lib/artifact/localFile";
 import { reportMediaRoot } from "@/lib/reportMedia/lookup";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-artifact-route-"));
@@ -369,6 +370,28 @@ test("evidence HTML metadata never exposes a direct body or download", async () 
   }
   process.env.LLV_ARTIFACT_MAX_BYTES = "8";
   expect((await GET(request({ path: abs, mode: "meta" }))).status).toBe(413);
+});
+
+test.skipIf(process.platform === "win32")("default legacy temp admits rasters and denies HTML metadata", async () => {
+  delete process.env.LLV_EVIDENCE_ROOTS;
+  const legacy = path.join("/var/tmp", path.basename(home), "report");
+  const denied = await GET(request({ path: `${legacy}.html`, mode: "meta" }));
+  expect(denied.status).toBe(403);
+  expect(await errorCode(denied)).toBe("access-denied");
+  expect(admittedAs(`${legacy}.png`, lexicalAllowedRoots())).toBe("evidence");
+
+  const explicit = fs.mkdtempSync(path.join(sandbox, "opted-in-evidence-"));
+  process.env.LLV_EVIDENCE_ROOTS = explicit;
+  const raster = path.join(explicit, "chart.png");
+  const report = path.join(explicit, "report.html");
+  fs.writeFileSync(raster, KEEP_PNG);
+  fs.writeFileSync(report, "<h1>Opted-in report</h1>");
+  const image = await GET(request({ path: raster }));
+  expect(image.status).toBe(200);
+  expect(Buffer.from(await image.arrayBuffer())).toEqual(KEEP_PNG);
+  const metadata = await GET(request({ path: report, mode: "meta" }));
+  expect(metadata.status).toBe(200);
+  expect(await metadata.json()).toMatchObject({ frameOnly: true });
 });
 
 test("evidence metadata refuses escapes, hidden reports, the picture store and other formats", async () => {

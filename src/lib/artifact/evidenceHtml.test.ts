@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { containEvidenceHtml, evidenceHtmlImageSourcesWithinBudget, transformEvidenceHtml, transformEvidenceHtmlWithinBudget } from "./evidenceHtml";
+import { containEvidenceHtml, evidenceHtmlImageSources, evidenceHtmlImageSourcesWithinBudget, transformEvidenceHtml, transformEvidenceHtmlWithinBudget } from "./evidenceHtml";
 
 test("evidence HTML keeps presentation and local assets while removing navigation and script execution", () => {
   const source = `<!doctype html><html><head>
@@ -90,5 +90,21 @@ test("IPv6 fallback inlines only admitted local chart bytes", () => {
     const document = new window.DOMParser().parseFromString(result, "text/html");
     expect(document.querySelectorAll("img")[0]?.getAttribute("src")).toBe("data:image/png;base64,AA==");
     expect(document.querySelectorAll("img")[1]?.hasAttribute("src")).toBe(false);
+  } finally { window.happyDOM.abort(); }
+});
+
+test("IPv6 chooses admitted picture and srcset candidates when src cannot supply a raster", () => {
+  const data = "data:image/png;base64,AA==";
+  const source = `<picture><source srcset="//outside.invalid/leak.png 1x, local,chart.png 2x"><img></picture>
+    <img src="missing.png" srcset="${data} 1x, last.png 2x">
+    <img srcset="local,chart.png, last.png 2x"><img srcset="//outside.invalid/only.png 1x">`;
+  expect(evidenceHtmlImageSources(source)).toEqual(["//outside.invalid/leak.png", "local,chart.png", "missing.png", data, "last.png", "//outside.invalid/only.png"]);
+  const inline = "data:image/png;base64,BB==";
+  const window = new Window();
+  try {
+    const document = new window.DOMParser().parseFromString(transformEvidenceHtml(source, undefined,
+      new Map([["local,chart.png", inline]])), "text/html");
+    expect([...document.querySelectorAll("img")].map(image => image.getAttribute("src"))).toEqual([inline, data, inline, null]);
+    expect(document.querySelector("[srcset]")).toBeNull();
   } finally { window.happyDOM.abort(); }
 });
