@@ -1046,7 +1046,10 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
       const result = (ports.inspect ?? inspectTree)(accessible(directory), { git, threshold: now() - quietMs,
         mounts: (ports.mountPoints ? ports.mountPoints(directory) : mountPointsUnder(accessible(directory))), ignoreRootCtime: afterQuarantine });
       recentWritesDue = result.newestMs + quietMs;
-      return (result.hold === "git-checkout" || result.hold === "evidence" ? "ignored-files" : result.hold) ?? (now() - result.newestMs < quietMs ? "recent-writes" : null);
+      // This walk asks for no socket hold; one would mean a possible listener.
+      const hold = result.hold === "git-checkout" || result.hold === "evidence" ? "ignored-files"
+        : result.hold === "socket" ? "in-use" : result.hold;
+      return hold ?? (now() - result.newestMs < quietMs ? "recent-writes" : null);
     } catch { return "unreadable-tree"; }
   };
   const intentsDir = statePath("worktree-sweep-removals");
