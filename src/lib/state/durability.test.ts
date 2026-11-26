@@ -602,6 +602,30 @@ test("activation checks a retained-size database off-thread and awaits its verdi
   } finally { launch.mockRestore(); }
 }, 60_000);
 
+test.if(process.platform === "linux" && fs.existsSync("/usr/bin/nice") && os.getPriority() < 19)(
+  "the activation worker inherits Viewer priority and the backup worker yields CPU", async () => {
+    const directory = sandbox();
+    const observation = path.join(directory, "worker-priority");
+    const workerPath = path.join(directory, "priority-worker.ts");
+    fs.writeFileSync(workerPath, `import { writeFileSync } from "node:fs";
+      import { getPriority } from "node:os";
+      writeFileSync(${JSON.stringify(observation)}, String(getPriority()));
+      await import(${JSON.stringify(path.resolve("src/lib/stateBackup.worker.ts"))});
+    `);
+    const helper = await import("@/lib/helperLease");
+    const spawn = helper.spawnLeasedHelper;
+    const launch = spyOn(helper, "spawnLeasedHelper").mockImplementation((name, spec, ...rest) =>
+      spawn(name, { ...spec, args: [...spec.args.slice(0, -1), workerPath] }, ...rest));
+    try {
+      const viewerPriority = os.getPriority();
+      await checkStateDatabasesBeforeStores(directory);
+      expect(Number(fs.readFileSync(observation, "utf8"))).toBe(viewerPriority);
+      await runBackupPassInWorker(directory, new Map());
+      expect(Number(fs.readFileSync(observation, "utf8"))).toBe(Math.min(viewerPriority + 10, 19));
+    } finally { launch.mockRestore(); }
+  },
+);
+
 test("activation leaves a busy healthy database intact while the Viewer timers progress", async () => {
   const directory = sandbox();
   const database = stateDatabase(directory);

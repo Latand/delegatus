@@ -1227,7 +1227,9 @@ async function runDurabilityWorker(
   const launch = options.launch ?? stateBackupWorkerLaunch();
   const { endLeasedHelper, leasedHelperInput, spawnLeasedHelper } = await import("@/lib/helperLease");
   options.signal?.throwIfAborted();
-  const useNice = fs.existsSync("/usr/bin/nice");
+  // Readiness waits for the activation verdict, so that worker inherits the
+  // Viewer's scheduling priority. Background backups can yield CPU.
+  const useNice = request.operation !== "activation" && fs.existsSync("/usr/bin/nice");
   /* Under a lease: a pass that outlives its Viewer would keep the service's
      cgroup populated after it (src/lib/helperLease.ts). */
   const child = spawnLeasedHelper("state-backup", {
