@@ -193,7 +193,7 @@ interface ControllerState {
   detachRetiredActiveHost: ((key: SessionKey) => Promise<boolean>) | null;
   /* Optional: a controller published by a bundle realm built before #2515
      shares this object and has no such hook. */
-  settleHostlessSessions?: ((conversationId?: string) => Promise<number>) | null;
+  settleHostlessSessions?: ((conversationId?: string, idleLaunchId?: string) => Promise<number>) | null;
   updateStartupDeferral?: ((conversationId: string, deferred: boolean) => void) | null;
   allowStartupRecovery?: (() => void) | null;
   completeActive: ((adopted: readonly StructuredDeliveryHost[], progress?: (phase: StructuredHostStartupPhase) => void, assertActive?: () => void, deferredConversationIds?: ReadonlySet<string>, prepared?: PreparedStartupPublication) => Promise<void>) | null;
@@ -818,13 +818,16 @@ async function publishHostState(
   }
   assertWriter();
   event.expectedSessionRevision = observedSession?.revision ?? null;
-  let lostReply = false;
+  let appendNeedsReconciliation = false;
   try {
     assertWriter();
     await client.appendSessionFenced(event as RuntimeEventInput & { expectedSessionRevision: number | null });
   } catch (error) {
-    if (!isRuntimeHostTransportFailure(error) || !client.readSession || !writerClaim || !launch.ownsWriter()) throw error;
-    lostReply = true;
+    const revisionFenceRefusal = error instanceof Error
+      && error.message.includes("the session row changed after this event's writer read it");
+    if ((!isRuntimeHostTransportFailure(error) && !revisionFenceRefusal)
+      || !client.readSession || !writerClaim || !launch.ownsWriter()) throw error;
+    appendNeedsReconciliation = true;
   }
   if (client.readSession && writerClaim) {
     /* The producer receipt proves this exact append. The session read proves
@@ -834,7 +837,7 @@ async function publishHostState(
     let session: RuntimeSession | null;
     try {
       [receipt, session] = await Promise.all([
-        lostReply ? client.producerCursor(producerKind, launchPrefix) : 1,
+        appendNeedsReconciliation ? client.producerCursor(producerKind, launchPrefix) : 1,
         client.readSession({ conversationId }),
       ]);
     } catch (error) {
@@ -1987,18 +1990,16 @@ export async function bindStructuredDeliveryQueue(
      sweep retries through the same socket, with no cached capability verdict. */
   const settledRows = new Map<string, { endedAt: string; sweep: number }>();
   let settleSweep = 0;
-  const settleHostlessSessions = async (onlyConversationId?: string): Promise<number> => {
+  const settleHostlessSessions = async (onlyConversationId?: string, idleLaunchId?: string): Promise<number> => {
     if (superseded() || !client.appendSessionFenced) return 0;
     /* Selection only: every row is read again by key below. A whole snapshot
        here was one 0.3 s slice per sweep on retained history. */
     const registrySnapshot = await registry.prepareReadOnlySnapshot(AbortSignal.timeout(30_000), { recoveryIndexes: false });
     if (superseded()) return 0;
     const hostless = hostlessConversations(registrySnapshot);
-    if (onlyConversationId) {
-      for (const id of hostless.keys()) if (id !== onlyConversationId) hostless.delete(id);
-    }
     for (const id of settledRows.keys()) if (!hostless.has(id)) settledRows.delete(id);
-    const candidates = [...hostless].filter(([, row]) => !registrations.has(row.key));
+    const candidates = [...hostless].filter(([id, row]) => (!onlyConversationId || id === onlyConversationId)
+      && !registrations.has(row.key));
     const unread = candidates
       .filter(([id, row]) => settledRows.get(id)?.endedAt !== row.endedAt)
       .sort((left, right) => right[1].endedAt.localeCompare(left[1].endedAt))
@@ -2030,8 +2031,11 @@ export async function bindStructuredDeliveryQueue(
       catch { break; }
       const current = hostlessConversationEvidence(registry.conversationRetentionSnapshot(conversationId), conversationId);
       if (!current || current.key !== row.key || current.endedAt !== row.endedAt || registrations.has(row.key)) continue;
-      if (session && (sessionClaimsOpenTurn(session)
-        || (session.host === "hosted" && sessionKeyId(session.sessionKey) === row.key))) {
+      const failedLaunch = idleLaunchId ? registry.spawnReceipt(idleLaunchId) : null;
+      const launchOwnsIdleProjection = !!failedLaunch && failedLaunch.state === "failed"
+        && failedLaunch.conversationId === conversationId && failedLaunch.key
+        && session?.host === "hosted" && sessionKeyId(session.sessionKey) === row.key;
+      if (session && (sessionClaimsOpenTurn(session) || launchOwnsIdleProjection)) {
         /* A write the journal refused or never received settles nothing, as
            a failed read does. */
         try { await publishCurrentFallback(conversationId, session, session.revision); }
@@ -2901,8 +2905,8 @@ export function structuredDeliveryHeldHosts(): ReadonlyMap<string, EngineHost> {
  * what the controller does on its own timer. Zero when this process publishes
  * no delivery controller, since only its owner writes projections.
  */
-export async function settleHostlessSessionProjections(conversationId?: string): Promise<number> {
-  return await state.settleHostlessSessions?.(conversationId) ?? 0;
+export async function settleHostlessSessionProjections(conversationId?: string, idleLaunchId?: string): Promise<number> {
+  return await state.settleHostlessSessions?.(conversationId, idleLaunchId) ?? 0;
 }
 
 export function structuredDeliveryHostForConversation(conversationId: string, registry?: AgentRegistry): EngineHost | null {

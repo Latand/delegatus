@@ -7862,7 +7862,8 @@ function publicationLatch() {
 describe.each(["claude", "codex"] as const)("%s staged host publication", (engine) => {
   test.each(["lost append reply", "blocked file revision", "revoked during reconciliation", "writer replaced during reconciliation",
     "lost proof before retry", "proof unavailable through expiry", "budget expired during proof",
-    "delayed append with successor projection", "deadline expires during prompt admission"] as const)(
+    "delayed append with successor projection", "late append after absent receipt",
+    "deadline expires during prompt admission"] as const)(
     "settles the original launch after %s", async (fault) => {
       const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ack-"));
       const sessionId = ["00000000", "0000", "4000", "8000", "000000000021"].join("-");
@@ -7886,6 +7887,7 @@ describe.each(["claude", "codex"] as const)("%s staged host publication", (engin
       const invalidation = publicationLatch();
       const delayedAppend = publicationLatch();
       const allowDelayedAppend = publicationLatch();
+      const lateAppendCommitted = publicationLatch();
       const deadlineAdmission = publicationLatch();
       const allowDeadlineAdmission = publicationLatch();
       let expireDuringAdmission = false;
@@ -7897,7 +7899,9 @@ describe.each(["claude", "codex"] as const)("%s staged host publication", (engin
       let fileWaits = 0;
       const replacementOwner = "replacement-writer-fixture";
       let replaced = false;
-      let loseProof = fault === "lost proof before retry" || fault === "proof unavailable through expiry"
+      let retrySessionReads = 0;
+      let lateAppendHeld = false;
+      let loseProof = fault === "lost proof before retry" || fault === "late append after absent receipt" || fault === "proof unavailable through expiry"
         || fault === "budget expired during proof" || fault === "deadline expires during prompt admission";
       let recoveryTime = 0;
       let expireOnRead = 0;
@@ -7906,7 +7910,12 @@ describe.each(["claude", "codex"] as const)("%s staged host publication", (engin
       }
       const server = serveRuntimeHost(socket, {
         async handle(request, options) {
-          if (fault === "delayed append with successor projection" && request.method === "append-session-fenced") {
+          if ((fault === "delayed append with successor projection" || fault === "late append after absent receipt")
+            && request.method === "append-session-fenced"
+            && (request.params?.event as { payload?: { host?: string; turn?: string } } | undefined)?.payload?.host === "hosted"
+            && (request.params?.event as { payload?: { host?: string; turn?: string } } | undefined)?.payload?.turn === "idle"
+            && (fault !== "late append after absent receipt" || (initialAppends === 0 && !lateAppendHeld))) {
+            if (fault === "late append after absent receipt") lateAppendHeld = true;
             delayedAppend.resolve();
             await allowDelayedAppend.promise;
           }
@@ -7922,12 +7931,18 @@ describe.each(["claude", "codex"] as const)("%s staged host publication", (engin
             initialAppends += 1;
             if (initialAppends === 1) {
               committed = journal.readSession({ conversationId })?.host === "hosted";
+              if (fault === "late append after absent receipt") lateAppendCommitted.resolve();
               if (fault !== "blocked file revision") {
                 await loseReply(options?.signal);
               }
             }
           }
-          if (committed && loseProof && request.method === "session-read") await loseReply(options?.signal);
+          if (fault === "late append after absent receipt" && request.method === "session-read"
+            && ++retrySessionReads === 3) {
+            allowDelayedAppend.resolve();
+            await lateAppendCommitted.promise;
+          }
+          if (committed && loseProof && fault !== "late append after absent receipt" && request.method === "session-read") await loseReply(options?.signal);
           if (expireOnRead && initialAppends > 1 && request.method === "session-read") recoveryTime = expireOnRead;
           if (committed && fault === "revoked during reconciliation" && request.method === "session-read") authorized = false;
           if (committed && !replaced && fault === "writer replaced during reconciliation" && request.method === "session-read") {
@@ -8016,6 +8031,19 @@ describe.each(["claude", "codex"] as const)("%s staged host publication", (engin
           expect(journal.readSession({ conversationId })?.writerClaim).toStartWith(replacementOwner);
           expect(host.sent).toHaveLength(0);
           expect(host.releaseCount).toBe(0);
+        } else if (fault === "late append after absent receipt") {
+          await expect(spawning).resolves.toMatchObject({ state: "path-pending", initialMessage: "queued" });
+          expect(journal.readSession({ conversationId })).toMatchObject({ host: "registering" });
+          expect(journal.operationResult(`spawn_message_${launchId}`)).toBeNull();
+          const recovery = stagedLaunchRecovery(registry.spawnReceipt(launchId))!;
+          recoveryTime = recovery.nextTryAt;
+          await recoverStagedStructuredLaunch(launchId, registry, client, { now: () => recoveryTime });
+          await recoverStagedStructuredLaunch(launchId, registry, client, { now: () => recoveryTime + 60_000 });
+          expect(committed).toBeTrue();
+          expect(initialAppends).toBe(2);
+          expect(registry.spawnReceipt(launchId)).toMatchObject({ state: "completed" });
+          expect(journal.operationResult(`spawn_message_${launchId}`)?.receipt.status).toBe("delivered");
+          expect(host.sent.map((item) => item.id)).toEqual([`spawn_message_${launchId}`]);
         } else if (loseProof || fault === "deadline expires during prompt admission") {
           await expect(spawning).resolves.toMatchObject({ state: "path-pending", initialMessage: "queued" });
           expect(committed).toBeTrue();
@@ -8046,7 +8074,7 @@ describe.each(["claude", "codex"] as const)("%s staged host publication", (engin
             expect(journal.operationResult(launchId)?.receipt).toMatchObject({ status: "failed", reason: expect.stringContaining("publication deadline expired") });
             expect(journal.operationResult(`spawn_message_${launchId}`)).toBeNull();
             expect(host.sent).toHaveLength(0);
-            await settleHostlessSessionProjections();
+            await settleHostlessSessionProjections(conversationId, launchId);
             expect(journal.readSession({ conversationId })?.host).not.toBe("hosted");
           } else {
             await recoverStagedStructuredLaunch(launchId, registry, client, { now: () => recoveryTime });
@@ -8065,7 +8093,7 @@ describe.each(["claude", "codex"] as const)("%s staged host publication", (engin
             expect(journal.operationResult(launchId)?.receipt.status).toBe("failed");
             expect(journal.operationResult(`spawn_message_${launchId}`)).toBeNull();
             expect(host.sent).toHaveLength(0);
-            await settleHostlessSessionProjections();
+            await settleHostlessSessionProjections(conversationId, launchId);
             expect(journal.readSession({ conversationId })).toMatchObject({ writerClaim: null });
             expect(journal.readSession({ conversationId })?.host).not.toBe("hosted");
             expect(initialAppends).toBe(fault === "proof unavailable through expiry" ? 1 : 2);
@@ -8078,7 +8106,7 @@ describe.each(["claude", "codex"] as const)("%s staged host publication", (engin
           if (fault === "blocked file revision") expect(fileWaits).toBeGreaterThan(0);
         }
         expect(committed).toBeTrue();
-        if (fault !== "lost proof before retry" && fault !== "budget expired during proof") {
+        if (fault !== "lost proof before retry" && fault !== "late append after absent receipt" && fault !== "budget expired during proof") {
           expect(initialAppends).toBe(fault === "deadline expires during prompt admission" ? 2 : 1);
         }
       } finally {

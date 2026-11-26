@@ -730,7 +730,7 @@ async function failStructuredLaunchAndReap(
             const currentEntry = startupHostSnapshot(registry, receipt.key).entries[sessionKeyId(receipt.key)];
             if (latest?.state === "failed" && latest.conversationId === receipt.conversationId
               && currentEntry?.structuredHostOperationId !== launchId) {
-              await settleHostlessSessionProjections(receipt.conversationId);
+              await settleHostlessSessionProjections(receipt.conversationId, launchId);
             }
           } catch (error) {
             spawnDiagnosticErrorFor(receipt.clientAttemptId, "[spawn] terminal launch projection release failed", {
@@ -814,7 +814,7 @@ async function failStructuredLaunchAndReap(
       && failure.receipt.error?.startsWith("staged launch publication deadline expired")) {
       const latest = registry.spawnReceipt(launchId);
       if (latest?.state === "failed" && latest.conversationId === failure.receipt.conversationId) {
-        await settleHostlessSessionProjections(latest.conversationId);
+        await settleHostlessSessionProjections(latest.conversationId, launchId);
       }
     }
   }
@@ -3330,7 +3330,13 @@ export async function recoverStagedStructuredLaunch(
             curatorAuthorize();
             if (!canPublishOrDispatch()) throw new Error("staged launch lost ownership before its first prompt");
           },
-        }, { client: () => client, registry: () => registry, enabled: () => true });
+        }, { client: () => client, registry: () => registry, enabled: () => true,
+          authorizeDispatch: () => {
+            options.assertActive?.();
+            curatorAuthorize();
+            if (!canPublishOrDispatch()) throw stagedLaunchDeadlineError();
+          },
+        });
         if (!result?.ok) {
           const reason = result?.error ?? "original first-message admission failed";
           if (reason === "Role-memory privacy changed; retrying before dispatch") throw new RoleMemoryChanged();
