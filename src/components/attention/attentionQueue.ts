@@ -85,9 +85,12 @@ export function buildNeedsYouQueue(
  * kill or prose ask stays only in the same case, a project with no seat to
  * route it to (`routing.ts`). An orchestrator's own questions are its reports
  * and its forms; a question in the operator's own session, a stuck delivery
- * and a failed launch stay on their cards' state lines.
+ * and a failed launch stay on their cards' state lines. An answered form whose
+ * delivery needs attention waits on nobody: it stays as its record, where
+ * Retry lives, and leaves the count (needs-you-restructure.md §3).
  */
 export function needsYouHolds(entry: MobileAttentionEntry): boolean {
+  if (entry.kind === "prototype") return !entry.notice.undelivered;
   if (entry.kind !== "conversation") return true;
   const { reason, file } = entry.item;
   return !reason.report && SEAT_CONVERSATION_KINDS.has(reason.kind) && delegatedConversation(file);

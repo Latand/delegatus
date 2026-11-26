@@ -21768,6 +21768,10 @@ describe("attention auto resolve", () => {
       await page.waitForTimeout(400);
       await page.screenshot({ path: file });
     };
+    /* The header's number, read before the panel opens: a docked panel takes
+       the button out of the bar, since the panel head already says it. */
+    const chipCount = (page: Page) => page.evaluate(() =>
+      Number(document.querySelector("[data-attention-island] [data-attention-count] .tabular-nums")?.textContent ?? "") || null);
     const openList = async (page: Page, phone: boolean) => {
       if (phone) {
         await page.locator('[data-mobile2-open="attention"]').click();
@@ -21791,13 +21795,14 @@ describe("attention auto resolve", () => {
         let opened = await open("&state=before", SIZES[0], "light", lang);
         let before: Awaited<ReturnType<typeof rowsReading>>;
         try {
+          const count = await chipCount(opened.page);
           await openList(opened.page, false);
-          before = await rowsReading(opened.page, false);
+          before = { ...await rowsReading(opened.page, false), count };
           readings[`${lang}/before`] = before;
           /* «Needs you» holds forms and the waits no seat answers (docs/design/legatus/build-plan.md,
-             slice 1): the seats' report questions, the retired seats' asks and the owed
-             message stay on their cards, so 10 of the panel's old 17 count before. */
-          check(`${lang}/before`, before.count === 10, `the control counts ${before.count} before, expected 10`);
+             slice 1): the seats' three report questions, the four retired seats' asks and
+             the owed message stay on their cards, so 9 of the panel's old 17 count before. */
+          check(`${lang}/before`, before.count === 9, `the control counts ${before.count} before, expected 9`);
           await shot(opened.page, `${lang}/1440x900-light-before`);
         } finally { await opened.context.close(); }
 
@@ -21808,8 +21813,9 @@ describe("attention auto resolve", () => {
             try {
               const page = opened.page;
               const ids = await page.evaluate(() => (window as unknown as { __needsYouAutoResolve?: Record<string, string> }).__needsYouAutoResolve ?? {});
+              const count = opened.phone ? null : await chipCount(page);
               await openList(page, opened.phone);
-              const after = await rowsReading(page, opened.phone);
+              const after = { ...await rowsReading(page, opened.phone), count };
               readings[frame] = { ids, ...after };
               const rowIds = after.rows.map((row) => row.id);
               /* After: the escalated form, and tg-bot's two lanes, which no seat answers. */

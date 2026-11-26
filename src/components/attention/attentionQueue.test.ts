@@ -256,3 +256,30 @@ test("a stage's memory kill and a worker's prose ask in a seatless project still
     "conversation:atlas-killed", "conversation:atlas-asks", "update:auto-update:drain-2",
   ]);
 });
+
+test("an answered form whose delivery needs attention leaves «Needs you» and stays on the whole queue; a waiting form of the same task stays", () => {
+  const decided = (id: string) => ({
+    id, title: `Round ${id}`, createdAt: asked(1_800), variants: [{ number: 1, name: "Keep" }],
+    decision: { chosen: [1], comment: "", at: asked(1_700), delivery: { state: "failed", attempts: 5, exhaustedAt: asked(1_600), conversationId: "conversation_seat" } },
+  });
+  const waiting = (id: string) => ({ id, title: `Round ${id}`, createdAt: asked(600), variants: [{ number: 1, name: "Keep" }] });
+  const task = (id: string, rounds: unknown[]) => ({
+    id, project: SEATLESS, status: "inbox", placement: "unplaced", text: `Task ${id}`, assignments: [], createdAt: "", updatedAt: "", prototypeReviews: rounds,
+  }) as unknown as BoardTask;
+  /* One task answered and stuck, with a newer round that waits; one task
+     whose only round is answered and stuck; one seat answer that is stuck. */
+  const tasks = [task("t-both", [decided("pr_stuck_1"), waiting("pr_open_1")]), task("t-stuck", [decided("pr_stuck_2")])];
+  const seatStuck: PrototypeReviewNotice = {
+    id: "prototype:pr_seat_stuck", project: SEATED, taskId: null, reviewId: "pr_seat_stuck", title: "Seat question", undelivered: true, createdAt: asked(500),
+    target: { kind: "seat-decision", project: SEATED, reviewId: "pr_seat_stuck" },
+  };
+  const whole = buildNeedsYouQueue([], [], NOW, [], undefined, tasks, [seatStuck]);
+  expect(whole.map(label)).toEqual([
+    "prototype:prototype-delivery:pr_stuck_1", "prototype:prototype:pr_open_1", "prototype:prototype-delivery:pr_stuck_2", "prototype:prototype:pr_seat_stuck",
+  ]);
+  const queue = whole.filter(needsYouHolds);
+  expect(queue.map(label)).toEqual(["prototype:prototype:pr_open_1"]);
+  expect(needsYouCounts(queue)).toEqual(new Map([[SEATLESS, 1]]));
+  /* The repro: a task holding only its stuck answer counts nothing. */
+  expect(buildNeedsYouQueue([], [], NOW, [], undefined, [tasks[1]!]).filter(needsYouHolds)).toEqual([]);
+});

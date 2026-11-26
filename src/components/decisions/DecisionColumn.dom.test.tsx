@@ -76,7 +76,7 @@ async function render(node: React.ReactNode) {
 }
 const click = async (element: Element | null) => { expect(element).not.toBeNull(); await act(async () => (element as HTMLElement).click()); };
 
-test("the Decisions tab counts the same waiting forms and undelivered cards as the panel", async () => {
+test("the Decisions tab counts the waiting forms and keeps an undelivered answer as its record", async () => {
   const notice: PrototypeReviewNotice = { id: `prototype:${SEAT}`, project: "project-a", taskId: null, reviewId: SEAT,
     title: "Deploy tonight?", createdAt: "2026-10-11T14:42:00.000Z", target: { kind: "seat-decision", project: "project-a", reviewId: SEAT } };
   function Counts() {

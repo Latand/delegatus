@@ -24,7 +24,8 @@
  *   &scenario=forms       docs/design/legatus/build-plan.md, slice 1: «Needs you»
  *   &forms=N              holds N waiting decision forms (9 by default: four
  *                         task rounds and five of the seats' own), 631 finished
- *                         items wait in «Готово», and every other wait has an
+ *                         items wait in «Готово», two answered forms keep
+ *                         failing to deliver, and every other wait has an
  *                         owner: the seats answer their workers and lanes
  */
 import { createRoot } from "react-dom/client";
@@ -449,6 +450,18 @@ if (FORMS !== null) {
         prototypeReview: { latestReviewId: reviewId, waitingReviewId: reviewId, rounds: round, createdAt, title, ...(template.questions ? { asks: "questions" } : {}) } });
     }
   }
+  /* Two answers the operator already gave whose delivery keeps failing: a
+     seat's question and a task's only round. They stay as their records in
+     the Decisions column, where Retry lives, and count in no state. */
+  const stuckAt = iso(3 * 3_600);
+  const seatTitle = say("Перенести реліз на четвер?", "Move the release to Thursday?");
+  seatDecisions.push({ id: "prototype:pr_stuck_seat", project: D, taskId: null, reviewId: "pr_stuck_seat", title: seatTitle, createdAt: iso(4 * 3_600),
+    undelivered: true, asks: "questions", source: { conversationId: idOf(seats[D]!) }, target: { kind: "seat-decision", project: D, reviewId: "pr_stuck_seat" } });
+  const taskTitle = say("Тема листа-нагадування: два варіанти", "Reminder email subject: two variants");
+  task(S, "t-stuck", "assigned", taskTitle, { icon: "layout-template",
+    prototypeReview: { latestReviewId: "pr_stuck_task", waitingReviewId: null, rounds: 1, createdAt: iso(4 * 3_600), title: taskTitle,
+      undelivered: [{ reviewId: "pr_stuck_task", title: taskTitle, at: stuckAt }],
+      decision: { chosen: [{ number: 1, name: say("Коротка", "Short") }], comment: "", at: stuckAt, delivery: "failed", phase: "attention" } } });
 }
 
 // A lane parked before any attempt: the same record the engine and MCP read.
