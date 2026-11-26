@@ -97,6 +97,7 @@ test("evidence frame serves HTML and local rasters with the report sandbox", asy
   const folder = "state/evidence/agents/fixture";
   const html = '<h1>Fixture disk report</h1><img src="chart.png">';
   const report = write(`${folder}/index.html`, html);
+  write(`${folder}/script-only.html`, '<script>location.href="https://outside.invalid"</script>');
   const directory = path.dirname(report);
   fs.writeFileSync(path.join(directory, "chart.png"), KEEP_PNG);
   write(`${folder}/style.css`, "h1 { color: teal }");
@@ -127,6 +128,10 @@ test("evidence frame serves HTML and local rasters with the report sandbox", asy
   expect(deliveredHtml).toContain(html.slice(0, 32));
   expect(deliveredHtml).not.toContain("https://outside.invalid");
   expect(deliveredHtml).not.toContain("location.href");
+  const scriptOnly = await asset("script-only.html");
+  expect(scriptOnly.status).toBe(200);
+  expect(await scriptOnly.text()).toBe("");
+  expect(scriptOnly.headers.get("content-length")).toBe("0");
   const chart = await asset("chart.png");
   expect(chart.status).toBe(200);
   expect(Buffer.from(await chart.arrayBuffer())).toEqual(KEEP_PNG);

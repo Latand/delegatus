@@ -185,11 +185,11 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       return refuse(403, "this report link has expired; reopen the preview");
     }
     const responseType = frameMime(path.extname(real).slice(1), classified.mime);
-    let body: Uint8Array | null = null;
+    let body: string | null = null;
     let responseLength = stat.size;
     if (kind === "evidence" && /\.html?$/i.test(real)) {
-      body = Buffer.from(containEvidenceHtml((await handle.readFile()).toString("utf8"), evidenceBase), "utf8");
-      responseLength = body.byteLength;
+      body = containEvidenceHtml((await handle.readFile()).toString("utf8"), evidenceBase);
+      responseLength = Buffer.byteLength(body, "utf8");
     }
     const headers = new Headers({
       ...HEADERS_BASE,
@@ -199,7 +199,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       "content-length": String(responseLength),
       etag: artifactEtag(stat),
     });
-    if (body) {
+    if (body !== null) {
       await handle.close();
       return new NextResponse(body, { status: 200, headers });
     }
