@@ -83,9 +83,16 @@ export function isolationCorpus(files: FileEntry[], openProject: string, seat: F
   idle.host = "unhosted";
   const subagent = background.at(-1)!;
   subagent.kind = "subagent";
+  subagent.root = "claude-projects";
+  subagent.engine = subagent.fmt = "claude";
+  const child = sessions.find(row => row.artifactPath === subagent.path)!;
+  child.hostKind = child.host = "unhosted";
+  child.sessionKey = { ...child.sessionKey, engine: "claude" };
+  foreignSession.hostKind = "claude-broker";
+  foreignSession.sessionKey = { ...foreignSession.sessionKey, engine: "claude" };
   subagent.parent = foreignSession.artifactPath;
   subagent.conversationId = undefined;
-  files.push({ ...sibling, path: sibling.path + ".previous", mtime: sibling.mtime - 86_400 });
+  files.push({ ...sibling, path: sibling.path + ".previous", migratedTo: sibling.path, generation: 0, mtime: sibling.mtime - 86_400 });
   if (sessions.length !== 1710 || byProject.get(openProject) !== 1500
     || files.some(file => file.conversationId === foreignSession.conversationId)) throw Error("invalid isolation corpus");
   return { sessions, projectSessions: byProject.get(openProject)!, otherSessions: byProject.get(other)!, hiddenPaths: background.slice(0, 353).map(file => file.path),
@@ -95,11 +102,25 @@ export function isolationCorpus(files: FileEntry[], openProject: string, seat: F
 
 export function installIsolationStream(corpus: ReturnType<typeof isolationCorpus>, files: FileEntry[],
   bus: Pick<RuntimeBus, "getState">, emit: (envelope: RuntimeEnvelope) => void, boardSeed: () => unknown) {
+  // Phone navigation can change board preferences before the field receives focus.
+  // Capture the source fixture at admission, while every viewport has the same board.
+  const manifest = JSON.stringify([corpus.sessions,
+    files.map(f => [f.project,f.conversationId,f.path,f.engine,f.kind,f.parent,f.mtime,f.size,f.migratedTo]), boardSeed()]);
+  const fixtureDigest = crypto.subtle.digest("SHA-256", new TextEncoder().encode(manifest))
+    .then(buffer => Array.from(new Uint8Array(buffer), n => n.toString(16).padStart(2,"0")).join(""));
   let emitted = 0;
-  const reads = { catalog: 0, board: 0, snapshots: 0 };
+  const reads = { catalog: 0, board: 0, snapshots: 0, presence: 0 };
+  let initialBody = "", revision = 1, routed = false;
   let admittedRows = 0;
   const API = {
     reads,
+    saveCatalog(body: string) { initialBody ||= body; },
+    catalogSeed() {
+      if (!initialBody) throw Error("no full catalog to transfer to the route");
+      return { body:initialBody, targetPath:files[corpus.foreignFile]!.path };
+    },
+    routeCatalog() { routed = true; },
+    routedRevision: () => routed ? revision : null,
     admitCatalog(rows: readonly FileEntry[]) {
       if (!admittedRows) {
         const admitted = new Set(rows.map(f => f.conversationId));
@@ -108,11 +129,7 @@ export function installIsolationStream(corpus: ReturnType<typeof isolationCorpus
       }
       admittedRows = rows.length;
     },
-    async seedDigest() {
-      const manifest = [corpus.sessions, files.map(f => [f.project,f.conversationId,f.path,f.engine,f.kind,f.parent,f.mtime,f.size]), boardSeed()];
-      const buffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(manifest)));
-      return Array.from(new Uint8Array(buffer), n => n.toString(16).padStart(2,"0")).join("");
-    },
+    seedDigest: () => fixtureDigest,
     census: () => ({ sessions: Object.keys(bus.getState().store.sessions).length,
       connection: bus.getState().connection, openId: corpus.openId, projectSessions: corpus.projectSessions, otherSessions: corpus.otherSessions,
       files: files.length, admittedRows, reads: { ...reads }, emitted }),
@@ -137,6 +154,7 @@ export function installIsolationStream(corpus: ReturnType<typeof isolationCorpus
       const id = mix === "miss" ? corpus.missingId : ids[round % ids.length]!;
       if (mix === "catalog") {
         const file = files[corpus.foreignFile]!;
+        revision++;
         files[corpus.foreignFile] = { ...file, size: file.size + 1, mtime: file.mtime + 1 };
         emit({ schemaVersion: 1, eventId: "fixture-" + seq, seq, kind: "files.revision",
           scope: { type: "session", id }, payload: { filesRevision: store.filesRevision + 1 } });
