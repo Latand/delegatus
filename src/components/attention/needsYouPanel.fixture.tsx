@@ -21,6 +21,11 @@
  *                         and a stage's own decision in a project with no seat
  *   &state=before         that scenario as it stood before Delegatus cleared
  *                         and routed it (after, by default)
+ *   &scenario=forms       docs/design/legatus/build-plan.md, slice 1: «Needs you»
+ *   &forms=N              holds N waiting decision forms (9 by default: four
+ *                         task rounds and five of the seats' own), 631 finished
+ *                         items wait in «Готово», and every other wait has an
+ *                         owner: the seats answer their workers and lanes
  */
 import { createRoot } from "react-dom/client";
 
@@ -31,6 +36,7 @@ import { Viewer } from "@/components/Viewer";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import type { DismissalSubjectRequest } from "@/lib/attention/dismissalTypes";
 import type { DoneItemV1 } from "@/lib/done/types";
+import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
 import { attentionSystemClears } from "@/lib/attention/reconcile";
 import { conversationRouteKey, type AttentionEscalationMark } from "@/lib/attention/routeTypes";
 import { stampAttentionRoutes, waitingRoundIds } from "@/lib/attention/routing";
@@ -72,7 +78,8 @@ function conversation(project: string, title: string, over: Record<string, unkno
   return path;
 }
 const working = (ago: number) => ({ activity: "live", proc: "running", pid: 5_000 + seq, mtime: now - 20, lastTurn: { startedAt: (now - ago) * 1_000, endedAt: null }, lastAgentWorkAt: (now - 20) * 1_000 });
-const role = (roleId: string) => ({ durableLineage: { kind: "spawn", role: roleId, memberships: [] } });
+/* A worker a seat or a lane started carries its delegation depth; a seat is a root. */
+const role = (roleId: string) => ({ durableLineage: { kind: "spawn", role: roleId, ...(roleId === "orchestrator" ? {} : { depth: 1 }), memberships: [] } });
 
 const pipelines: Pipeline[] = [];
 const kanbanRole = (roleId: string) => ({ roleId, engine: "claude", access: roleId === "reviewer" ? "read-only" : "read-write", promptScaffold: null });
@@ -290,7 +297,8 @@ if (AUTO) {
   AUTO_IDS.retired = retired.join(",");
   /* A session the operator started, whose prose ask they have since answered
      in the conversation: its card keeps the reason, cleared, with Undo. */
-  const replied = conversation(D, say("Звіт про продажі за вересень", "September sales report"), { ...role("builder") });
+  /* The operator's own session: a root, no delegation depth. */
+  const replied = conversation(D, say("Звіт про продажі за вересень", "September sales report"), { durableLineage: { kind: "spawn", role: "builder", memberships: [] } });
   AUTO_IDS.replied = asked(replied, "ask:analyst-september", say("Рахувати повернення в цьому звіті чи окремо?", "Count returns in this report or separately?"), 50 * MIN).conversationId!;
   task(D, "t-september", "assigned", say("Звіт про продажі за вересень", "September sales report"), { assignments: [assign(replied)], icon: "chart-column" });
   /* A deployer the seat spawned asks the operator what its seat can decide. */
@@ -374,6 +382,71 @@ if (params.get("scenario") === "launch-clears") {
     delete entry.spawn;
     for (const task of tasks as unknown as BoardTask[]) for (const assignment of task.assignments) {
       if (assignment.conversationId === entry.conversationId) { assignment.path = entry.path; assignment.state = "linked"; }
+    }
+  }
+}
+
+/* ── ?scenario=forms (docs/design/legatus/build-plan.md, slice 1) ─────────
+   «Needs you» counts the decision forms that wait. The board stays as busy as
+   it is; every other wait has an owner: delegatus and shop-web have seats,
+   which `/api/files` routes their workers' and lanes' waits to, and tg-bot's
+   lane is back at work. */
+const FORMS = params.get("scenario") === "forms" ? Math.max(0, Math.floor(Number(params.get("forms") ?? "9")) || 0) : null;
+const seatDecisions: PrototypeReviewNotice[] = [];
+if (FORMS !== null) {
+  const digest = pipelines.find((row) => row.id === "lane-digest")!;
+  digest.state = "running";
+  digest.cursor = { stageId: "implement", state: "running", input: null, activatedBy: null };
+  /* A worker the delegatus seat started asks; its seat answers it first. */
+  const seatWorker = conversation(D, say("Повтори вебхуків з jitter", "Webhook retries with jitter"), {
+    durableLineage: { kind: "spawn", role: "builder", depth: 1, parentConversationId: idOf(seatDelegatus), reviewsConversationId: null, memberships: [] },
+    activity: "idle", mtime: now - 6 * MIN,
+    pendingQuestion: { kind: "question", toolUseId: "toolu-retry-1", transcriptPath: "", pid: null, askedAt: iso(6 * MIN),
+      questions: [{ question: say("Скільки спроб до відмови: 5 чи 8?", "How many attempts before giving up: 5 or 8?"), header: say("Спроби", "Attempts"), multiSelect: false, options: [] }] },
+  });
+  task(D, "t-retry", "assigned", say("Повтори вебхуків з jitter", "Webhook retries with jitter"), { assignments: [assign(seatWorker)], icon: "refresh-cw" });
+  const seatIds = new Set(Object.values(seats).map(idOf));
+  stampAttentionRoutes(files, pipelines, now, {
+    seatFor: (project) => (seats[project] ? idOf(seats[project]!) : null),
+    canonicalProject: (project) => project,
+    isSeatConversation: (id) => seatIds.has(id),
+    escalation: () => null,
+    formWaiting: () => false,
+  });
+  /* The forms: a task's round lands on its card; a seat's own question has no task. */
+  const TEMPLATES: Array<{ project: string; seat: boolean; questions?: boolean; ago: number; uk: string; en: string }> = [
+    { project: D, seat: false, ago: 11 * 86_400, uk: "Чип «Потрібні ви»: два чи три варіанти", en: "The «Needs you» chip: two or three variants" },
+    { project: D, seat: true, questions: true, ago: 12 * 86_400, uk: "Слати нічний дайджест і у вихідні?", en: "Send the nightly digest at weekends too?" },
+    { project: S, seat: false, questions: true, ago: 10.5 * 86_400, uk: "Пошук по каталогу: питання перед роботою", en: "Catalogue search: questions before work" },
+    { project: D, seat: true, ago: 13 * 86_400, uk: "Що зливаємо першим: ліміт задач чи перемикання розмов?", en: "Which merges first: the task limit or conversation switching?" },
+    { project: S, seat: true, ago: 11.5 * 86_400, uk: "Підняти ліміт вкладень до 100 МБ чи лишити 25?", en: "Raise the attachment limit to 100 MB or keep 25?" },
+    { project: B, seat: false, ago: 14 * 86_400, uk: "Щоденний дайджест: макет повідомлення", en: "Daily digest: message layout" },
+    { project: D, seat: true, questions: true, ago: 2 * 3_600, uk: "Запасний акаунт до скидання ліміту основного?", en: "Use the backup account until the main one's limit resets?" },
+    { project: D, seat: false, ago: 40 * MIN, uk: "Експорт звітів у CSV і PDF: одна кнопка чи пресети", en: "Report export to CSV and PDF: one button or presets" },
+    { project: S, seat: true, ago: 12 * MIN, uk: "Яким провайдером розстрочки користуватися?", en: "Which instalment provider should we use?" },
+    { project: D, seat: false, questions: true, ago: 3 * 86_400, uk: "Голосові повідомлення в композері: тривалість і ліміти запису", en: "Voice messages in the composer: recording length and limits" },
+    { project: B, seat: false, ago: 5 * 3_600, uk: "Нагадування в боті: о котрій слати вранці", en: "Bot reminders: what time to send in the morning" },
+    { project: S, seat: true, ago: 26 * MIN, uk: "Повернення коштів: автоматично до 500 грн чи все вручну?", en: "Refunds: automatic up to 500 UAH, or all by hand?" },
+    { project: D, seat: true, ago: 7 * 3_600, uk: "Закривати старі лейни після злиття автоматично?", en: "Close old lanes automatically after a merge?" },
+    { project: S, seat: false, ago: 2 * 86_400, uk: "Картка товару: фото зліва чи зверху на телефоні", en: "Product card: photo on the left or on top on the phone" },
+    { project: D, seat: false, ago: 9 * 3_600, uk: "Фавікон з емблемою Delegatus: світлий чи темний фон", en: "Favicon with the Delegatus emblem: light or dark background" },
+    { project: B, seat: false, questions: true, ago: 30 * 3_600, uk: "Команда /status: що показувати користувачу без прав адміністратора", en: "The /status command: what a user without admin rights sees" },
+    { project: D, seat: true, ago: 50 * MIN, uk: "Залишити старий вебхук Telegram до понеділка?", en: "Keep the old Telegram webhook until Monday?" },
+    { project: S, seat: true, questions: true, ago: 4 * 3_600, uk: "Знижка на перше замовлення: 5 % чи доставка безкоштовно?", en: "First-order discount: 5 % or free delivery?" },
+  ];
+  for (let index = 0; index < FORMS; index += 1) {
+    const template = TEMPLATES[index % TEMPLATES.length]!;
+    const round = index >= TEMPLATES.length ? Math.floor(index / TEMPLATES.length) + 1 : 1;
+    const title = round > 1 ? say(`${template.uk} · раунд ${round}`, `${template.en} · round ${round}`) : say(template.uk, template.en);
+    const reviewId = `pr_form_${index + 1}`;
+    const createdAt = iso(template.ago - index * 7);
+    if (template.seat) {
+      seatDecisions.push({ id: `prototype:${reviewId}`, project: template.project, taskId: null, reviewId, title, createdAt,
+        ...(template.questions ? { asks: "questions" as const } : {}), source: { conversationId: idOf(seats[template.project]!) },
+        target: { kind: "seat-decision", project: template.project, reviewId } });
+    } else {
+      task(template.project, `t-form-${index + 1}`, "assigned", title, { icon: "layout-template",
+        prototypeReview: { latestReviewId: reviewId, waitingReviewId: reviewId, rounds: round, createdAt, title, ...(template.questions ? { asks: "questions" } : {}) } });
     }
   }
 }
@@ -473,6 +546,20 @@ if (params.has("doneframes") && doneItems[0]) {
   const src = state === "error" ? "/api/image?done=evicted&media=missing" : params.get("done-frame-src")!;
   doneItems.splice(0,doneItems.length,{...item,frame:{src,caption:"Saved result",...(state === "missing" ? {unavailable:true} : {}),...(state === "retained" ? {before:src} : {})}});
 }
+/* The forms scenario's «Готово»: 631 finished items nobody accepted, the
+   count the operator saw on 2026-11-26. None of them counts in «Needs you». */
+if (FORMS !== null && !DONE) {
+  const kinds = [
+    { kind: "task", look: "closed", uk: "Задачу закрито", en: "Task closed" },
+    { kind: "pr", look: "technical", uk: "Технічне виправлення злито", en: "Technical fix merged" },
+    { kind: "pipeline", look: "closed", uk: "Лейн завершено", en: "Lane finished" },
+  ] as const;
+  for (let index = 0; index < 631; index += 1) {
+    const kind = kinds[index % kinds.length]!;
+    doneItems.push(done(`${kind.kind}:fixture-finished-${index + 1}`, { kind: kind.kind, look: kind.look, project: [D, S, B][index % 3]!, at: doneAt(600 + index * 800),
+      title: say(`${kind.uk} №${index + 1}`, `${kind.en} #${index + 1}`) }));
+  }
+}
 (window as unknown as { __doneFixture?: { count: number } }).__doneFixture = { count: doneItems.length };
 
 let board = {
@@ -490,6 +577,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({
       files, projectCatalog: Object.values(KEYS).map((project) => ({ project, conversations: files.filter((entry) => entry.project === project).length, smt: now - 20 })),
       projectDisplayNames: NAMES, flows: [], pipelines, workflows: [], tasks, workLinks: { pipelines: {}, tasks: {} }, systemHealth: {},
+      ...(seatDecisions.length ? { seatDecisions } : {}),
     });
   }
   if (url.pathname === "/api/tasks" && method === "GET") return json({ tasks });
@@ -509,7 +597,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const dismissed = dismiss(subjects, body.undo === true);
     return json({ ok: true, dismissed, alreadyClear: [], changed: [], at: new Date().toISOString(), by: { kind: "operator" }, undo: body.undo === true });
   }
-  if (DONE && url.pathname === "/api/attention/done") {
+  if ((DONE || FORMS !== null) && url.pathname === "/api/attention/done") {
     if (method === "GET") return json({ ok: true, items: doneItems.filter((item) => !item.acknowledgedAt), revision: 1 });
     const body = JSON.parse(String(init?.body)) as { keys: string[]; undo?: boolean; surface?: "desktop" | "phone" };
     const changed = doneItems.filter((item) => body.keys.includes(item.key) && Boolean(item.acknowledgedAt) === (body.undo === true));

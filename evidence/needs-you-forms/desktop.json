@@ -1,0 +1,3727 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "fixture": "src/components/attention/needsYouPanel.fixture.tsx?scenario=forms",
+  "failures": [],
+  "readings": [
+    {
+      "frame": "normal-1440-uk-light",
+      "state": "normal",
+      "forms": 9,
+      "width": 1440,
+      "lang": "uk",
+      "scheme": "light",
+      "button": {
+        "label": "Потрібні ви",
+        "number": "9",
+        "aria": "Потрібні ви · 9",
+        "zero": false,
+        "dot": true,
+        "labelShown": true,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(9) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "docked",
+        "title": "Потрібні ви · 9",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            5,
+            false
+          ],
+          [
+            "shop-web",
+            3,
+            true
+          ],
+          [
+            "tg-bot",
+            1,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 5,
+        "firstWhole": true,
+        "lastWhole": true,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "normal-1440-uk-dark",
+      "state": "normal",
+      "forms": 9,
+      "width": 1440,
+      "lang": "uk",
+      "scheme": "dark",
+      "button": {
+        "label": "Потрібні ви",
+        "number": "9",
+        "aria": "Потрібні ви · 9",
+        "zero": false,
+        "dot": true,
+        "labelShown": true,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(9) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "docked",
+        "title": "Потрібні ви · 9",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            5,
+            false
+          ],
+          [
+            "shop-web",
+            3,
+            true
+          ],
+          [
+            "tg-bot",
+            1,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 5,
+        "firstWhole": true,
+        "lastWhole": true,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "normal-1440-en-light",
+      "state": "normal",
+      "forms": 9,
+      "width": 1440,
+      "lang": "en",
+      "scheme": "light",
+      "button": {
+        "label": "Needs you",
+        "number": "9",
+        "aria": "Needs you · 9",
+        "zero": false,
+        "dot": true,
+        "labelShown": true,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(9) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "docked",
+        "title": "Needs you · 9",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            5,
+            false
+          ],
+          [
+            "shop-web",
+            3,
+            true
+          ],
+          [
+            "tg-bot",
+            1,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 5,
+        "firstWhole": true,
+        "lastWhole": true,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "normal-1440-en-dark",
+      "state": "normal",
+      "forms": 9,
+      "width": 1440,
+      "lang": "en",
+      "scheme": "dark",
+      "button": {
+        "label": "Needs you",
+        "number": "9",
+        "aria": "Needs you · 9",
+        "zero": false,
+        "dot": true,
+        "labelShown": true,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(9) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "docked",
+        "title": "Needs you · 9",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            5,
+            false
+          ],
+          [
+            "shop-web",
+            3,
+            true
+          ],
+          [
+            "tg-bot",
+            1,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 5,
+        "firstWhole": true,
+        "lastWhole": true,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "normal-1220-uk-light",
+      "state": "normal",
+      "forms": 9,
+      "width": 1220,
+      "lang": "uk",
+      "scheme": "light",
+      "button": {
+        "label": "Потрібні ви",
+        "number": "9",
+        "aria": "Потрібні ви · 9",
+        "zero": false,
+        "dot": true,
+        "labelShown": true,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(9) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Потрібні ви · 9",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            5,
+            false
+          ],
+          [
+            "shop-web",
+            3,
+            true
+          ],
+          [
+            "tg-bot",
+            1,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 5,
+        "firstWhole": true,
+        "lastWhole": true,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "normal-1220-uk-dark",
+      "state": "normal",
+      "forms": 9,
+      "width": 1220,
+      "lang": "uk",
+      "scheme": "dark",
+      "button": {
+        "label": "Потрібні ви",
+        "number": "9",
+        "aria": "Потрібні ви · 9",
+        "zero": false,
+        "dot": true,
+        "labelShown": true,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(9) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Потрібні ви · 9",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            5,
+            false
+          ],
+          [
+            "shop-web",
+            3,
+            true
+          ],
+          [
+            "tg-bot",
+            1,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 5,
+        "firstWhole": true,
+        "lastWhole": true,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "normal-1220-en-light",
+      "state": "normal",
+      "forms": 9,
+      "width": 1220,
+      "lang": "en",
+      "scheme": "light",
+      "button": {
+        "label": "Needs you",
+        "number": "9",
+        "aria": "Needs you · 9",
+        "zero": false,
+        "dot": true,
+        "labelShown": true,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(9) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Needs you · 9",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            5,
+            false
+          ],
+          [
+            "shop-web",
+            3,
+            true
+          ],
+          [
+            "tg-bot",
+            1,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 5,
+        "firstWhole": true,
+        "lastWhole": true,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "normal-1220-en-dark",
+      "state": "normal",
+      "forms": 9,
+      "width": 1220,
+      "lang": "en",
+      "scheme": "dark",
+      "button": {
+        "label": "Needs you",
+        "number": "9",
+        "aria": "Needs you · 9",
+        "zero": false,
+        "dot": true,
+        "labelShown": true,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(9) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Needs you · 9",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            5,
+            false
+          ],
+          [
+            "shop-web",
+            3,
+            true
+          ],
+          [
+            "tg-bot",
+            1,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 5,
+        "firstWhole": true,
+        "lastWhole": true,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "normal-1000-uk-light",
+      "state": "normal",
+      "forms": 9,
+      "width": 1000,
+      "lang": "uk",
+      "scheme": "light",
+      "button": {
+        "label": "Потрібні ви",
+        "number": "9",
+        "aria": "Потрібні ви · 9",
+        "zero": false,
+        "dot": true,
+        "labelShown": true,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(9) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Потрібні ви · 9",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            5,
+            false
+          ],
+          [
+            "shop-web",
+            3,
+            true
+          ],
+          [
+            "tg-bot",
+            1,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 5,
+        "firstWhole": true,
+        "lastWhole": true,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "normal-1000-uk-dark",
+      "state": "normal",
+      "forms": 9,
+      "width": 1000,
+      "lang": "uk",
+      "scheme": "dark",
+      "button": {
+        "label": "Потрібні ви",
+        "number": "9",
+        "aria": "Потрібні ви · 9",
+        "zero": false,
+        "dot": true,
+        "labelShown": true,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(9) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Потрібні ви · 9",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            5,
+            false
+          ],
+          [
+            "shop-web",
+            3,
+            true
+          ],
+          [
+            "tg-bot",
+            1,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 5,
+        "firstWhole": true,
+        "lastWhole": true,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "normal-1000-en-light",
+      "state": "normal",
+      "forms": 9,
+      "width": 1000,
+      "lang": "en",
+      "scheme": "light",
+      "button": {
+        "label": "Needs you",
+        "number": "9",
+        "aria": "Needs you · 9",
+        "zero": false,
+        "dot": true,
+        "labelShown": true,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(9) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Needs you · 9",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            5,
+            false
+          ],
+          [
+            "shop-web",
+            3,
+            true
+          ],
+          [
+            "tg-bot",
+            1,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 5,
+        "firstWhole": true,
+        "lastWhole": true,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "normal-1000-en-dark",
+      "state": "normal",
+      "forms": 9,
+      "width": 1000,
+      "lang": "en",
+      "scheme": "dark",
+      "button": {
+        "label": "Needs you",
+        "number": "9",
+        "aria": "Needs you · 9",
+        "zero": false,
+        "dot": true,
+        "labelShown": true,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(9) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Needs you · 9",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            5,
+            false
+          ],
+          [
+            "shop-web",
+            3,
+            true
+          ],
+          [
+            "tg-bot",
+            1,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 5,
+        "firstWhole": true,
+        "lastWhole": true,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "normal-884-uk-light",
+      "state": "normal",
+      "forms": 9,
+      "width": 884,
+      "lang": "uk",
+      "scheme": "light",
+      "button": {
+        "label": "Потрібні ви",
+        "number": "9",
+        "aria": "Потрібні ви · 9",
+        "zero": false,
+        "dot": true,
+        "labelShown": false,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(9) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Потрібні ви · 9",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            5,
+            false
+          ],
+          [
+            "shop-web",
+            3,
+            true
+          ],
+          [
+            "tg-bot",
+            1,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 5,
+        "firstWhole": true,
+        "lastWhole": true,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "normal-884-uk-dark",
+      "state": "normal",
+      "forms": 9,
+      "width": 884,
+      "lang": "uk",
+      "scheme": "dark",
+      "button": {
+        "label": "Потрібні ви",
+        "number": "9",
+        "aria": "Потрібні ви · 9",
+        "zero": false,
+        "dot": true,
+        "labelShown": false,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(9) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Потрібні ви · 9",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            5,
+            false
+          ],
+          [
+            "shop-web",
+            3,
+            true
+          ],
+          [
+            "tg-bot",
+            1,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 5,
+        "firstWhole": true,
+        "lastWhole": true,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "normal-884-en-light",
+      "state": "normal",
+      "forms": 9,
+      "width": 884,
+      "lang": "en",
+      "scheme": "light",
+      "button": {
+        "label": "Needs you",
+        "number": "9",
+        "aria": "Needs you · 9",
+        "zero": false,
+        "dot": true,
+        "labelShown": false,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(9) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Needs you · 9",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            5,
+            false
+          ],
+          [
+            "shop-web",
+            3,
+            true
+          ],
+          [
+            "tg-bot",
+            1,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 5,
+        "firstWhole": true,
+        "lastWhole": true,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "normal-884-en-dark",
+      "state": "normal",
+      "forms": 9,
+      "width": 884,
+      "lang": "en",
+      "scheme": "dark",
+      "button": {
+        "label": "Needs you",
+        "number": "9",
+        "aria": "Needs you · 9",
+        "zero": false,
+        "dot": true,
+        "labelShown": false,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(9) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Needs you · 9",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            5,
+            false
+          ],
+          [
+            "shop-web",
+            3,
+            true
+          ],
+          [
+            "tg-bot",
+            1,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 5,
+        "firstWhole": true,
+        "lastWhole": true,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "normal-768-uk-light",
+      "state": "normal",
+      "forms": 9,
+      "width": 768,
+      "lang": "uk",
+      "scheme": "light",
+      "button": {
+        "label": "Потрібні ви",
+        "number": "9",
+        "aria": "Потрібні ви · 9",
+        "zero": false,
+        "dot": true,
+        "labelShown": false,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(9) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Потрібні ви · 9",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            5,
+            false
+          ],
+          [
+            "shop-web",
+            3,
+            true
+          ],
+          [
+            "tg-bot",
+            1,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 5,
+        "firstWhole": true,
+        "lastWhole": true,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "normal-768-uk-dark",
+      "state": "normal",
+      "forms": 9,
+      "width": 768,
+      "lang": "uk",
+      "scheme": "dark",
+      "button": {
+        "label": "Потрібні ви",
+        "number": "9",
+        "aria": "Потрібні ви · 9",
+        "zero": false,
+        "dot": true,
+        "labelShown": false,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(9) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Потрібні ви · 9",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            5,
+            false
+          ],
+          [
+            "shop-web",
+            3,
+            true
+          ],
+          [
+            "tg-bot",
+            1,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 5,
+        "firstWhole": true,
+        "lastWhole": true,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "normal-768-en-light",
+      "state": "normal",
+      "forms": 9,
+      "width": 768,
+      "lang": "en",
+      "scheme": "light",
+      "button": {
+        "label": "Needs you",
+        "number": "9",
+        "aria": "Needs you · 9",
+        "zero": false,
+        "dot": true,
+        "labelShown": false,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(9) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Needs you · 9",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            5,
+            false
+          ],
+          [
+            "shop-web",
+            3,
+            true
+          ],
+          [
+            "tg-bot",
+            1,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 5,
+        "firstWhole": true,
+        "lastWhole": true,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "normal-768-en-dark",
+      "state": "normal",
+      "forms": 9,
+      "width": 768,
+      "lang": "en",
+      "scheme": "dark",
+      "button": {
+        "label": "Needs you",
+        "number": "9",
+        "aria": "Needs you · 9",
+        "zero": false,
+        "dot": true,
+        "labelShown": false,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(9) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Needs you · 9",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            5,
+            false
+          ],
+          [
+            "shop-web",
+            3,
+            true
+          ],
+          [
+            "tg-bot",
+            1,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 5,
+        "firstWhole": true,
+        "lastWhole": true,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "normal-664-uk-light",
+      "state": "normal",
+      "forms": 9,
+      "width": 664,
+      "lang": "uk",
+      "scheme": "light",
+      "button": {
+        "label": "Потрібні ви",
+        "number": "9",
+        "aria": "Потрібні ви · 9",
+        "zero": false,
+        "dot": true,
+        "labelShown": false,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(9) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Потрібні ви · 9",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            5,
+            false
+          ],
+          [
+            "shop-web",
+            3,
+            true
+          ],
+          [
+            "tg-bot",
+            1,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 5,
+        "firstWhole": true,
+        "lastWhole": true,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "normal-664-uk-dark",
+      "state": "normal",
+      "forms": 9,
+      "width": 664,
+      "lang": "uk",
+      "scheme": "dark",
+      "button": {
+        "label": "Потрібні ви",
+        "number": "9",
+        "aria": "Потрібні ви · 9",
+        "zero": false,
+        "dot": true,
+        "labelShown": false,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(9) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Потрібні ви · 9",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            5,
+            false
+          ],
+          [
+            "shop-web",
+            3,
+            true
+          ],
+          [
+            "tg-bot",
+            1,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 5,
+        "firstWhole": true,
+        "lastWhole": true,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "normal-664-en-light",
+      "state": "normal",
+      "forms": 9,
+      "width": 664,
+      "lang": "en",
+      "scheme": "light",
+      "button": {
+        "label": "Needs you",
+        "number": "9",
+        "aria": "Needs you · 9",
+        "zero": false,
+        "dot": true,
+        "labelShown": false,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(9) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Needs you · 9",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            5,
+            false
+          ],
+          [
+            "shop-web",
+            3,
+            true
+          ],
+          [
+            "tg-bot",
+            1,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 5,
+        "firstWhole": true,
+        "lastWhole": true,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "normal-664-en-dark",
+      "state": "normal",
+      "forms": 9,
+      "width": 664,
+      "lang": "en",
+      "scheme": "dark",
+      "button": {
+        "label": "Needs you",
+        "number": "9",
+        "aria": "Needs you · 9",
+        "zero": false,
+        "dot": true,
+        "labelShown": false,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(9) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Needs you · 9",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            5,
+            false
+          ],
+          [
+            "shop-web",
+            3,
+            true
+          ],
+          [
+            "tg-bot",
+            1,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 5,
+        "firstWhole": true,
+        "lastWhole": true,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "empty-1440-uk-light",
+      "state": "empty",
+      "forms": 0,
+      "width": 1440,
+      "lang": "uk",
+      "scheme": "light",
+      "button": {
+        "label": "Потрібні ви",
+        "number": null,
+        "aria": "Потрібні ви",
+        "zero": true,
+        "dot": false,
+        "labelShown": true,
+        "mutedInk": true,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "docked",
+        "title": "Потрібні ви",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [],
+        "kinds": [],
+        "rows": 0,
+        "firstWhole": null,
+        "lastWhole": null,
+        "dismiss": 0,
+        "done": 0,
+        "empty": "Ніщо не чекає на вас.",
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "empty-1440-uk-dark",
+      "state": "empty",
+      "forms": 0,
+      "width": 1440,
+      "lang": "uk",
+      "scheme": "dark",
+      "button": {
+        "label": "Потрібні ви",
+        "number": null,
+        "aria": "Потрібні ви",
+        "zero": true,
+        "dot": false,
+        "labelShown": true,
+        "mutedInk": true,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "docked",
+        "title": "Потрібні ви",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [],
+        "kinds": [],
+        "rows": 0,
+        "firstWhole": null,
+        "lastWhole": null,
+        "dismiss": 0,
+        "done": 0,
+        "empty": "Ніщо не чекає на вас.",
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "empty-1440-en-light",
+      "state": "empty",
+      "forms": 0,
+      "width": 1440,
+      "lang": "en",
+      "scheme": "light",
+      "button": {
+        "label": "Needs you",
+        "number": null,
+        "aria": "Needs you",
+        "zero": true,
+        "dot": false,
+        "labelShown": true,
+        "mutedInk": true,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "docked",
+        "title": "Needs you",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [],
+        "kinds": [],
+        "rows": 0,
+        "firstWhole": null,
+        "lastWhole": null,
+        "dismiss": 0,
+        "done": 0,
+        "empty": "Nothing is waiting for you.",
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "empty-1440-en-dark",
+      "state": "empty",
+      "forms": 0,
+      "width": 1440,
+      "lang": "en",
+      "scheme": "dark",
+      "button": {
+        "label": "Needs you",
+        "number": null,
+        "aria": "Needs you",
+        "zero": true,
+        "dot": false,
+        "labelShown": true,
+        "mutedInk": true,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "docked",
+        "title": "Needs you",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [],
+        "kinds": [],
+        "rows": 0,
+        "firstWhole": null,
+        "lastWhole": null,
+        "dismiss": 0,
+        "done": 0,
+        "empty": "Nothing is waiting for you.",
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "empty-1220-uk-light",
+      "state": "empty",
+      "forms": 0,
+      "width": 1220,
+      "lang": "uk",
+      "scheme": "light",
+      "button": {
+        "label": "Потрібні ви",
+        "number": null,
+        "aria": "Потрібні ви",
+        "zero": true,
+        "dot": false,
+        "labelShown": true,
+        "mutedInk": true,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Потрібні ви",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [],
+        "kinds": [],
+        "rows": 0,
+        "firstWhole": null,
+        "lastWhole": null,
+        "dismiss": 0,
+        "done": 0,
+        "empty": "Ніщо не чекає на вас.",
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "empty-1220-uk-dark",
+      "state": "empty",
+      "forms": 0,
+      "width": 1220,
+      "lang": "uk",
+      "scheme": "dark",
+      "button": {
+        "label": "Потрібні ви",
+        "number": null,
+        "aria": "Потрібні ви",
+        "zero": true,
+        "dot": false,
+        "labelShown": true,
+        "mutedInk": true,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Потрібні ви",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [],
+        "kinds": [],
+        "rows": 0,
+        "firstWhole": null,
+        "lastWhole": null,
+        "dismiss": 0,
+        "done": 0,
+        "empty": "Ніщо не чекає на вас.",
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "empty-1220-en-light",
+      "state": "empty",
+      "forms": 0,
+      "width": 1220,
+      "lang": "en",
+      "scheme": "light",
+      "button": {
+        "label": "Needs you",
+        "number": null,
+        "aria": "Needs you",
+        "zero": true,
+        "dot": false,
+        "labelShown": true,
+        "mutedInk": true,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Needs you",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [],
+        "kinds": [],
+        "rows": 0,
+        "firstWhole": null,
+        "lastWhole": null,
+        "dismiss": 0,
+        "done": 0,
+        "empty": "Nothing is waiting for you.",
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "empty-1220-en-dark",
+      "state": "empty",
+      "forms": 0,
+      "width": 1220,
+      "lang": "en",
+      "scheme": "dark",
+      "button": {
+        "label": "Needs you",
+        "number": null,
+        "aria": "Needs you",
+        "zero": true,
+        "dot": false,
+        "labelShown": true,
+        "mutedInk": true,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Needs you",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [],
+        "kinds": [],
+        "rows": 0,
+        "firstWhole": null,
+        "lastWhole": null,
+        "dismiss": 0,
+        "done": 0,
+        "empty": "Nothing is waiting for you.",
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "empty-1000-uk-light",
+      "state": "empty",
+      "forms": 0,
+      "width": 1000,
+      "lang": "uk",
+      "scheme": "light",
+      "button": {
+        "label": "Потрібні ви",
+        "number": null,
+        "aria": "Потрібні ви",
+        "zero": true,
+        "dot": false,
+        "labelShown": true,
+        "mutedInk": true,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Потрібні ви",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [],
+        "kinds": [],
+        "rows": 0,
+        "firstWhole": null,
+        "lastWhole": null,
+        "dismiss": 0,
+        "done": 0,
+        "empty": "Ніщо не чекає на вас.",
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "empty-1000-uk-dark",
+      "state": "empty",
+      "forms": 0,
+      "width": 1000,
+      "lang": "uk",
+      "scheme": "dark",
+      "button": {
+        "label": "Потрібні ви",
+        "number": null,
+        "aria": "Потрібні ви",
+        "zero": true,
+        "dot": false,
+        "labelShown": true,
+        "mutedInk": true,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Потрібні ви",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [],
+        "kinds": [],
+        "rows": 0,
+        "firstWhole": null,
+        "lastWhole": null,
+        "dismiss": 0,
+        "done": 0,
+        "empty": "Ніщо не чекає на вас.",
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "empty-1000-en-light",
+      "state": "empty",
+      "forms": 0,
+      "width": 1000,
+      "lang": "en",
+      "scheme": "light",
+      "button": {
+        "label": "Needs you",
+        "number": null,
+        "aria": "Needs you",
+        "zero": true,
+        "dot": false,
+        "labelShown": true,
+        "mutedInk": true,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Needs you",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [],
+        "kinds": [],
+        "rows": 0,
+        "firstWhole": null,
+        "lastWhole": null,
+        "dismiss": 0,
+        "done": 0,
+        "empty": "Nothing is waiting for you.",
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "empty-1000-en-dark",
+      "state": "empty",
+      "forms": 0,
+      "width": 1000,
+      "lang": "en",
+      "scheme": "dark",
+      "button": {
+        "label": "Needs you",
+        "number": null,
+        "aria": "Needs you",
+        "zero": true,
+        "dot": false,
+        "labelShown": true,
+        "mutedInk": true,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Needs you",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [],
+        "kinds": [],
+        "rows": 0,
+        "firstWhole": null,
+        "lastWhole": null,
+        "dismiss": 0,
+        "done": 0,
+        "empty": "Nothing is waiting for you.",
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "empty-884-uk-light",
+      "state": "empty",
+      "forms": 0,
+      "width": 884,
+      "lang": "uk",
+      "scheme": "light",
+      "button": {
+        "label": "Потрібні ви",
+        "number": null,
+        "aria": "Потрібні ви",
+        "zero": true,
+        "dot": false,
+        "labelShown": true,
+        "mutedInk": true,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Потрібні ви",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [],
+        "kinds": [],
+        "rows": 0,
+        "firstWhole": null,
+        "lastWhole": null,
+        "dismiss": 0,
+        "done": 0,
+        "empty": "Ніщо не чекає на вас.",
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "empty-884-uk-dark",
+      "state": "empty",
+      "forms": 0,
+      "width": 884,
+      "lang": "uk",
+      "scheme": "dark",
+      "button": {
+        "label": "Потрібні ви",
+        "number": null,
+        "aria": "Потрібні ви",
+        "zero": true,
+        "dot": false,
+        "labelShown": true,
+        "mutedInk": true,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Потрібні ви",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [],
+        "kinds": [],
+        "rows": 0,
+        "firstWhole": null,
+        "lastWhole": null,
+        "dismiss": 0,
+        "done": 0,
+        "empty": "Ніщо не чекає на вас.",
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "empty-884-en-light",
+      "state": "empty",
+      "forms": 0,
+      "width": 884,
+      "lang": "en",
+      "scheme": "light",
+      "button": {
+        "label": "Needs you",
+        "number": null,
+        "aria": "Needs you",
+        "zero": true,
+        "dot": false,
+        "labelShown": true,
+        "mutedInk": true,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Needs you",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [],
+        "kinds": [],
+        "rows": 0,
+        "firstWhole": null,
+        "lastWhole": null,
+        "dismiss": 0,
+        "done": 0,
+        "empty": "Nothing is waiting for you.",
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "empty-884-en-dark",
+      "state": "empty",
+      "forms": 0,
+      "width": 884,
+      "lang": "en",
+      "scheme": "dark",
+      "button": {
+        "label": "Needs you",
+        "number": null,
+        "aria": "Needs you",
+        "zero": true,
+        "dot": false,
+        "labelShown": true,
+        "mutedInk": true,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Needs you",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [],
+        "kinds": [],
+        "rows": 0,
+        "firstWhole": null,
+        "lastWhole": null,
+        "dismiss": 0,
+        "done": 0,
+        "empty": "Nothing is waiting for you.",
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "empty-768-uk-light",
+      "state": "empty",
+      "forms": 0,
+      "width": 768,
+      "lang": "uk",
+      "scheme": "light",
+      "button": {
+        "label": "Потрібні ви",
+        "number": null,
+        "aria": "Потрібні ви",
+        "zero": true,
+        "dot": false,
+        "labelShown": true,
+        "mutedInk": true,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Потрібні ви",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [],
+        "kinds": [],
+        "rows": 0,
+        "firstWhole": null,
+        "lastWhole": null,
+        "dismiss": 0,
+        "done": 0,
+        "empty": "Ніщо не чекає на вас.",
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "empty-768-uk-dark",
+      "state": "empty",
+      "forms": 0,
+      "width": 768,
+      "lang": "uk",
+      "scheme": "dark",
+      "button": {
+        "label": "Потрібні ви",
+        "number": null,
+        "aria": "Потрібні ви",
+        "zero": true,
+        "dot": false,
+        "labelShown": true,
+        "mutedInk": true,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Потрібні ви",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [],
+        "kinds": [],
+        "rows": 0,
+        "firstWhole": null,
+        "lastWhole": null,
+        "dismiss": 0,
+        "done": 0,
+        "empty": "Ніщо не чекає на вас.",
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "empty-768-en-light",
+      "state": "empty",
+      "forms": 0,
+      "width": 768,
+      "lang": "en",
+      "scheme": "light",
+      "button": {
+        "label": "Needs you",
+        "number": null,
+        "aria": "Needs you",
+        "zero": true,
+        "dot": false,
+        "labelShown": true,
+        "mutedInk": true,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Needs you",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [],
+        "kinds": [],
+        "rows": 0,
+        "firstWhole": null,
+        "lastWhole": null,
+        "dismiss": 0,
+        "done": 0,
+        "empty": "Nothing is waiting for you.",
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "empty-768-en-dark",
+      "state": "empty",
+      "forms": 0,
+      "width": 768,
+      "lang": "en",
+      "scheme": "dark",
+      "button": {
+        "label": "Needs you",
+        "number": null,
+        "aria": "Needs you",
+        "zero": true,
+        "dot": false,
+        "labelShown": true,
+        "mutedInk": true,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Needs you",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [],
+        "kinds": [],
+        "rows": 0,
+        "firstWhole": null,
+        "lastWhole": null,
+        "dismiss": 0,
+        "done": 0,
+        "empty": "Nothing is waiting for you.",
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "empty-664-uk-light",
+      "state": "empty",
+      "forms": 0,
+      "width": 664,
+      "lang": "uk",
+      "scheme": "light",
+      "button": {
+        "label": "Потрібні ви",
+        "number": null,
+        "aria": "Потрібні ви",
+        "zero": true,
+        "dot": false,
+        "labelShown": true,
+        "mutedInk": true,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Потрібні ви",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [],
+        "kinds": [],
+        "rows": 0,
+        "firstWhole": null,
+        "lastWhole": null,
+        "dismiss": 0,
+        "done": 0,
+        "empty": "Ніщо не чекає на вас.",
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "empty-664-uk-dark",
+      "state": "empty",
+      "forms": 0,
+      "width": 664,
+      "lang": "uk",
+      "scheme": "dark",
+      "button": {
+        "label": "Потрібні ви",
+        "number": null,
+        "aria": "Потрібні ви",
+        "zero": true,
+        "dot": false,
+        "labelShown": true,
+        "mutedInk": true,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Потрібні ви",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [],
+        "kinds": [],
+        "rows": 0,
+        "firstWhole": null,
+        "lastWhole": null,
+        "dismiss": 0,
+        "done": 0,
+        "empty": "Ніщо не чекає на вас.",
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "empty-664-en-light",
+      "state": "empty",
+      "forms": 0,
+      "width": 664,
+      "lang": "en",
+      "scheme": "light",
+      "button": {
+        "label": "Needs you",
+        "number": null,
+        "aria": "Needs you",
+        "zero": true,
+        "dot": false,
+        "labelShown": true,
+        "mutedInk": true,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Needs you",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [],
+        "kinds": [],
+        "rows": 0,
+        "firstWhole": null,
+        "lastWhole": null,
+        "dismiss": 0,
+        "done": 0,
+        "empty": "Nothing is waiting for you.",
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "empty-664-en-dark",
+      "state": "empty",
+      "forms": 0,
+      "width": 664,
+      "lang": "en",
+      "scheme": "dark",
+      "button": {
+        "label": "Needs you",
+        "number": null,
+        "aria": "Needs you",
+        "zero": true,
+        "dot": false,
+        "labelShown": true,
+        "mutedInk": true,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Needs you",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [],
+        "kinds": [],
+        "rows": 0,
+        "firstWhole": null,
+        "lastWhole": null,
+        "dismiss": 0,
+        "done": 0,
+        "empty": "Nothing is waiting for you.",
+        "scrolls": false,
+        "overflow": false
+      },
+      "end": null
+    },
+    {
+      "frame": "busy-1440-uk-light",
+      "state": "busy",
+      "forms": 27,
+      "width": 1440,
+      "lang": "uk",
+      "scheme": "light",
+      "button": {
+        "label": "Потрібні ви",
+        "number": "27",
+        "aria": "Потрібні ви · 27",
+        "zero": false,
+        "dot": true,
+        "labelShown": true,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(27) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "docked",
+        "title": "Потрібні ви · 27",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            14,
+            false
+          ],
+          [
+            "shop-web",
+            9,
+            true
+          ],
+          [
+            "tg-bot",
+            4,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 14,
+        "firstWhole": true,
+        "lastWhole": false,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": true,
+        "overflow": false
+      },
+      "end": {
+        "lastWhole": true
+      }
+    },
+    {
+      "frame": "busy-1440-uk-dark",
+      "state": "busy",
+      "forms": 27,
+      "width": 1440,
+      "lang": "uk",
+      "scheme": "dark",
+      "button": {
+        "label": "Потрібні ви",
+        "number": "27",
+        "aria": "Потрібні ви · 27",
+        "zero": false,
+        "dot": true,
+        "labelShown": true,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(27) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "docked",
+        "title": "Потрібні ви · 27",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            14,
+            false
+          ],
+          [
+            "shop-web",
+            9,
+            true
+          ],
+          [
+            "tg-bot",
+            4,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 14,
+        "firstWhole": true,
+        "lastWhole": false,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": true,
+        "overflow": false
+      },
+      "end": {
+        "lastWhole": true
+      }
+    },
+    {
+      "frame": "busy-1440-en-light",
+      "state": "busy",
+      "forms": 27,
+      "width": 1440,
+      "lang": "en",
+      "scheme": "light",
+      "button": {
+        "label": "Needs you",
+        "number": "27",
+        "aria": "Needs you · 27",
+        "zero": false,
+        "dot": true,
+        "labelShown": true,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(27) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "docked",
+        "title": "Needs you · 27",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            14,
+            false
+          ],
+          [
+            "shop-web",
+            9,
+            true
+          ],
+          [
+            "tg-bot",
+            4,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 14,
+        "firstWhole": true,
+        "lastWhole": false,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": true,
+        "overflow": false
+      },
+      "end": {
+        "lastWhole": true
+      }
+    },
+    {
+      "frame": "busy-1440-en-dark",
+      "state": "busy",
+      "forms": 27,
+      "width": 1440,
+      "lang": "en",
+      "scheme": "dark",
+      "button": {
+        "label": "Needs you",
+        "number": "27",
+        "aria": "Needs you · 27",
+        "zero": false,
+        "dot": true,
+        "labelShown": true,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(27) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "docked",
+        "title": "Needs you · 27",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            14,
+            false
+          ],
+          [
+            "shop-web",
+            9,
+            true
+          ],
+          [
+            "tg-bot",
+            4,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 14,
+        "firstWhole": true,
+        "lastWhole": false,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": true,
+        "overflow": false
+      },
+      "end": {
+        "lastWhole": true
+      }
+    },
+    {
+      "frame": "busy-1220-uk-light",
+      "state": "busy",
+      "forms": 27,
+      "width": 1220,
+      "lang": "uk",
+      "scheme": "light",
+      "button": {
+        "label": "Потрібні ви",
+        "number": "27",
+        "aria": "Потрібні ви · 27",
+        "zero": false,
+        "dot": true,
+        "labelShown": true,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(27) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Потрібні ви · 27",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            14,
+            false
+          ],
+          [
+            "shop-web",
+            9,
+            true
+          ],
+          [
+            "tg-bot",
+            4,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 14,
+        "firstWhole": true,
+        "lastWhole": false,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": true,
+        "overflow": false
+      },
+      "end": {
+        "lastWhole": true
+      }
+    },
+    {
+      "frame": "busy-1220-uk-dark",
+      "state": "busy",
+      "forms": 27,
+      "width": 1220,
+      "lang": "uk",
+      "scheme": "dark",
+      "button": {
+        "label": "Потрібні ви",
+        "number": "27",
+        "aria": "Потрібні ви · 27",
+        "zero": false,
+        "dot": true,
+        "labelShown": true,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(27) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Потрібні ви · 27",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            14,
+            false
+          ],
+          [
+            "shop-web",
+            9,
+            true
+          ],
+          [
+            "tg-bot",
+            4,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 14,
+        "firstWhole": true,
+        "lastWhole": false,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": true,
+        "overflow": false
+      },
+      "end": {
+        "lastWhole": true
+      }
+    },
+    {
+      "frame": "busy-1220-en-light",
+      "state": "busy",
+      "forms": 27,
+      "width": 1220,
+      "lang": "en",
+      "scheme": "light",
+      "button": {
+        "label": "Needs you",
+        "number": "27",
+        "aria": "Needs you · 27",
+        "zero": false,
+        "dot": true,
+        "labelShown": true,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(27) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Needs you · 27",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            14,
+            false
+          ],
+          [
+            "shop-web",
+            9,
+            true
+          ],
+          [
+            "tg-bot",
+            4,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 14,
+        "firstWhole": true,
+        "lastWhole": false,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": true,
+        "overflow": false
+      },
+      "end": {
+        "lastWhole": true
+      }
+    },
+    {
+      "frame": "busy-1220-en-dark",
+      "state": "busy",
+      "forms": 27,
+      "width": 1220,
+      "lang": "en",
+      "scheme": "dark",
+      "button": {
+        "label": "Needs you",
+        "number": "27",
+        "aria": "Needs you · 27",
+        "zero": false,
+        "dot": true,
+        "labelShown": true,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(27) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Needs you · 27",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            14,
+            false
+          ],
+          [
+            "shop-web",
+            9,
+            true
+          ],
+          [
+            "tg-bot",
+            4,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 14,
+        "firstWhole": true,
+        "lastWhole": false,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": true,
+        "overflow": false
+      },
+      "end": {
+        "lastWhole": true
+      }
+    },
+    {
+      "frame": "busy-1000-uk-light",
+      "state": "busy",
+      "forms": 27,
+      "width": 1000,
+      "lang": "uk",
+      "scheme": "light",
+      "button": {
+        "label": "Потрібні ви",
+        "number": "27",
+        "aria": "Потрібні ви · 27",
+        "zero": false,
+        "dot": true,
+        "labelShown": true,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(27) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Потрібні ви · 27",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            14,
+            false
+          ],
+          [
+            "shop-web",
+            9,
+            true
+          ],
+          [
+            "tg-bot",
+            4,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 14,
+        "firstWhole": true,
+        "lastWhole": false,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": true,
+        "overflow": false
+      },
+      "end": {
+        "lastWhole": true
+      }
+    },
+    {
+      "frame": "busy-1000-uk-dark",
+      "state": "busy",
+      "forms": 27,
+      "width": 1000,
+      "lang": "uk",
+      "scheme": "dark",
+      "button": {
+        "label": "Потрібні ви",
+        "number": "27",
+        "aria": "Потрібні ви · 27",
+        "zero": false,
+        "dot": true,
+        "labelShown": true,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(27) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Потрібні ви · 27",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            14,
+            false
+          ],
+          [
+            "shop-web",
+            9,
+            true
+          ],
+          [
+            "tg-bot",
+            4,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 14,
+        "firstWhole": true,
+        "lastWhole": false,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": true,
+        "overflow": false
+      },
+      "end": {
+        "lastWhole": true
+      }
+    },
+    {
+      "frame": "busy-1000-en-light",
+      "state": "busy",
+      "forms": 27,
+      "width": 1000,
+      "lang": "en",
+      "scheme": "light",
+      "button": {
+        "label": "Needs you",
+        "number": "27",
+        "aria": "Needs you · 27",
+        "zero": false,
+        "dot": true,
+        "labelShown": true,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(27) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Needs you · 27",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            14,
+            false
+          ],
+          [
+            "shop-web",
+            9,
+            true
+          ],
+          [
+            "tg-bot",
+            4,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 14,
+        "firstWhole": true,
+        "lastWhole": false,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": true,
+        "overflow": false
+      },
+      "end": {
+        "lastWhole": true
+      }
+    },
+    {
+      "frame": "busy-1000-en-dark",
+      "state": "busy",
+      "forms": 27,
+      "width": 1000,
+      "lang": "en",
+      "scheme": "dark",
+      "button": {
+        "label": "Needs you",
+        "number": "27",
+        "aria": "Needs you · 27",
+        "zero": false,
+        "dot": true,
+        "labelShown": true,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(27) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Needs you · 27",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            14,
+            false
+          ],
+          [
+            "shop-web",
+            9,
+            true
+          ],
+          [
+            "tg-bot",
+            4,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 14,
+        "firstWhole": true,
+        "lastWhole": false,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": true,
+        "overflow": false
+      },
+      "end": {
+        "lastWhole": true
+      }
+    },
+    {
+      "frame": "busy-884-uk-light",
+      "state": "busy",
+      "forms": 27,
+      "width": 884,
+      "lang": "uk",
+      "scheme": "light",
+      "button": {
+        "label": "Потрібні ви",
+        "number": "27",
+        "aria": "Потрібні ви · 27",
+        "zero": false,
+        "dot": true,
+        "labelShown": false,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(27) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Потрібні ви · 27",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            14,
+            false
+          ],
+          [
+            "shop-web",
+            9,
+            true
+          ],
+          [
+            "tg-bot",
+            4,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 14,
+        "firstWhole": true,
+        "lastWhole": false,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": true,
+        "overflow": false
+      },
+      "end": {
+        "lastWhole": true
+      }
+    },
+    {
+      "frame": "busy-884-uk-dark",
+      "state": "busy",
+      "forms": 27,
+      "width": 884,
+      "lang": "uk",
+      "scheme": "dark",
+      "button": {
+        "label": "Потрібні ви",
+        "number": "27",
+        "aria": "Потрібні ви · 27",
+        "zero": false,
+        "dot": true,
+        "labelShown": false,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(27) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Потрібні ви · 27",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            14,
+            false
+          ],
+          [
+            "shop-web",
+            9,
+            true
+          ],
+          [
+            "tg-bot",
+            4,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 14,
+        "firstWhole": true,
+        "lastWhole": false,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": true,
+        "overflow": false
+      },
+      "end": {
+        "lastWhole": true
+      }
+    },
+    {
+      "frame": "busy-884-en-light",
+      "state": "busy",
+      "forms": 27,
+      "width": 884,
+      "lang": "en",
+      "scheme": "light",
+      "button": {
+        "label": "Needs you",
+        "number": "27",
+        "aria": "Needs you · 27",
+        "zero": false,
+        "dot": true,
+        "labelShown": false,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(27) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Needs you · 27",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            14,
+            false
+          ],
+          [
+            "shop-web",
+            9,
+            true
+          ],
+          [
+            "tg-bot",
+            4,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 14,
+        "firstWhole": true,
+        "lastWhole": false,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": true,
+        "overflow": false
+      },
+      "end": {
+        "lastWhole": true
+      }
+    },
+    {
+      "frame": "busy-884-en-dark",
+      "state": "busy",
+      "forms": 27,
+      "width": 884,
+      "lang": "en",
+      "scheme": "dark",
+      "button": {
+        "label": "Needs you",
+        "number": "27",
+        "aria": "Needs you · 27",
+        "zero": false,
+        "dot": true,
+        "labelShown": false,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(27) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Needs you · 27",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            14,
+            false
+          ],
+          [
+            "shop-web",
+            9,
+            true
+          ],
+          [
+            "tg-bot",
+            4,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 14,
+        "firstWhole": true,
+        "lastWhole": false,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": true,
+        "overflow": false
+      },
+      "end": {
+        "lastWhole": true
+      }
+    },
+    {
+      "frame": "busy-768-uk-light",
+      "state": "busy",
+      "forms": 27,
+      "width": 768,
+      "lang": "uk",
+      "scheme": "light",
+      "button": {
+        "label": "Потрібні ви",
+        "number": "27",
+        "aria": "Потрібні ви · 27",
+        "zero": false,
+        "dot": true,
+        "labelShown": false,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(27) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Потрібні ви · 27",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            14,
+            false
+          ],
+          [
+            "shop-web",
+            9,
+            true
+          ],
+          [
+            "tg-bot",
+            4,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 14,
+        "firstWhole": true,
+        "lastWhole": false,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": true,
+        "overflow": false
+      },
+      "end": {
+        "lastWhole": true
+      }
+    },
+    {
+      "frame": "busy-768-uk-dark",
+      "state": "busy",
+      "forms": 27,
+      "width": 768,
+      "lang": "uk",
+      "scheme": "dark",
+      "button": {
+        "label": "Потрібні ви",
+        "number": "27",
+        "aria": "Потрібні ви · 27",
+        "zero": false,
+        "dot": true,
+        "labelShown": false,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(27) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Потрібні ви · 27",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            14,
+            false
+          ],
+          [
+            "shop-web",
+            9,
+            true
+          ],
+          [
+            "tg-bot",
+            4,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 14,
+        "firstWhole": true,
+        "lastWhole": false,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": true,
+        "overflow": false
+      },
+      "end": {
+        "lastWhole": true
+      }
+    },
+    {
+      "frame": "busy-768-en-light",
+      "state": "busy",
+      "forms": 27,
+      "width": 768,
+      "lang": "en",
+      "scheme": "light",
+      "button": {
+        "label": "Needs you",
+        "number": "27",
+        "aria": "Needs you · 27",
+        "zero": false,
+        "dot": true,
+        "labelShown": false,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(27) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Needs you · 27",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            14,
+            false
+          ],
+          [
+            "shop-web",
+            9,
+            true
+          ],
+          [
+            "tg-bot",
+            4,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 14,
+        "firstWhole": true,
+        "lastWhole": false,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": true,
+        "overflow": false
+      },
+      "end": {
+        "lastWhole": true
+      }
+    },
+    {
+      "frame": "busy-768-en-dark",
+      "state": "busy",
+      "forms": 27,
+      "width": 768,
+      "lang": "en",
+      "scheme": "dark",
+      "button": {
+        "label": "Needs you",
+        "number": "27",
+        "aria": "Needs you · 27",
+        "zero": false,
+        "dot": true,
+        "labelShown": false,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(27) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Needs you · 27",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            14,
+            false
+          ],
+          [
+            "shop-web",
+            9,
+            true
+          ],
+          [
+            "tg-bot",
+            4,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 14,
+        "firstWhole": true,
+        "lastWhole": false,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": true,
+        "overflow": false
+      },
+      "end": {
+        "lastWhole": true
+      }
+    },
+    {
+      "frame": "busy-664-uk-light",
+      "state": "busy",
+      "forms": 27,
+      "width": 664,
+      "lang": "uk",
+      "scheme": "light",
+      "button": {
+        "label": "Потрібні ви",
+        "number": "27",
+        "aria": "Потрібні ви · 27",
+        "zero": false,
+        "dot": true,
+        "labelShown": false,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(27) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Потрібні ви · 27",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            14,
+            false
+          ],
+          [
+            "shop-web",
+            9,
+            true
+          ],
+          [
+            "tg-bot",
+            4,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 14,
+        "firstWhole": true,
+        "lastWhole": false,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": true,
+        "overflow": false
+      },
+      "end": {
+        "lastWhole": true
+      }
+    },
+    {
+      "frame": "busy-664-uk-dark",
+      "state": "busy",
+      "forms": 27,
+      "width": 664,
+      "lang": "uk",
+      "scheme": "dark",
+      "button": {
+        "label": "Потрібні ви",
+        "number": "27",
+        "aria": "Потрібні ви · 27",
+        "zero": false,
+        "dot": true,
+        "labelShown": false,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(27) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Потрібні ви · 27",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            14,
+            false
+          ],
+          [
+            "shop-web",
+            9,
+            true
+          ],
+          [
+            "tg-bot",
+            4,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 14,
+        "firstWhole": true,
+        "lastWhole": false,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": true,
+        "overflow": false
+      },
+      "end": {
+        "lastWhole": true
+      }
+    },
+    {
+      "frame": "busy-664-en-light",
+      "state": "busy",
+      "forms": 27,
+      "width": 664,
+      "lang": "en",
+      "scheme": "light",
+      "button": {
+        "label": "Needs you",
+        "number": "27",
+        "aria": "Needs you · 27",
+        "zero": false,
+        "dot": true,
+        "labelShown": false,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(27) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Needs you · 27",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            14,
+            false
+          ],
+          [
+            "shop-web",
+            9,
+            true
+          ],
+          [
+            "tg-bot",
+            4,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 14,
+        "firstWhole": true,
+        "lastWhole": false,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": true,
+        "overflow": false
+      },
+      "end": {
+        "lastWhole": true
+      }
+    },
+    {
+      "frame": "busy-664-en-dark",
+      "state": "busy",
+      "forms": 27,
+      "width": 664,
+      "lang": "en",
+      "scheme": "dark",
+      "button": {
+        "label": "Needs you",
+        "number": "27",
+        "aria": "Needs you · 27",
+        "zero": false,
+        "dot": true,
+        "labelShown": false,
+        "mutedInk": false,
+        "whole": true,
+        "own": true,
+        "foreign": 0,
+        "tabTitle": "(27) Delegatus",
+        "overflow": false
+      },
+      "panel": {
+        "placement": "overlay",
+        "title": "Needs you · 27",
+        "titleWhole": true,
+        "panelInViewport": true,
+        "sections": [
+          [
+            "delegatus",
+            14,
+            false
+          ],
+          [
+            "shop-web",
+            9,
+            true
+          ],
+          [
+            "tg-bot",
+            4,
+            true
+          ]
+        ],
+        "kinds": [
+          "prototype"
+        ],
+        "rows": 14,
+        "firstWhole": true,
+        "lastWhole": false,
+        "dismiss": 0,
+        "done": 0,
+        "empty": null,
+        "scrolls": true,
+        "overflow": false
+      },
+      "end": {
+        "lastWhole": true
+      }
+    }
+  ]
+}

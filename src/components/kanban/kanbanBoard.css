@@ -167,7 +167,8 @@
    before the chip, the groups' gaps or the panel group give anything up. */
 [data-project-bar][data-fit~="labels"] [data-testid="dash-search"] { min-width: 96px; }
 :is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="labels"] [data-orchestrator-toggle] { padding-left: 8px; padding-right: 8px; }
-:is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="chip"] [data-attention-chip-label] { display: none; }
+/* The needs-you control folds to its dot and number; at zero it has no number, so its word stays. */
+:is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="chip"] [data-attention-island]:not([data-attention-zero]) [data-attention-chip-label] { display: none; }
 /* Tight, the groups stand 8 px apart, and the spacer goes with its two gaps. The board's search
    fills what the spacer would hold; the leaf bar's find slot does not (at its last step it is a
    32 px icon), so there the trail is pushed to the right edge instead, as at every other step. */

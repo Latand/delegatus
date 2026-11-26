@@ -8183,17 +8183,6 @@ describe("agent memory isolation", () => {
     } finally { await browser.close(); server.stop(); }
   }, 90000);
 });
-/*
- * «Готово» in the phone's «Чекають на вас» sheet (docs/design/done-section.md
- * §4.3, §5) at 390 in Ukrainian, over the needs-you fixture with `&done=1`,
- * read against variant 2's phone frames: the list pinned at the top of the
- * sheet above its scroller (scrolling the decisions leaves it in place; it
- * folds to its head), newest first, with the thumbnail and the square check, the frame's
- * pair in the existing viewer, technical fixes accepted one by one with the
- * group head counting what is left, then «Бачив усе» with the badge back to
- * the decisions. Then the same list pinned above the orchestrator's report
- * log screen in uk and en, folded to its head.
- */
 describe("done frames retained in state", () => {
   browserTest("phone frames survive lane removal and missing frames have a label", async () => {
     const { captureDoneFrames } = await import("@/components/kanban/issue1695BrowserHarness");
@@ -8203,184 +8192,21 @@ describe("done frames retained in state", () => {
   },120_000);
 });
 
-describe("«Готово» in the phone sheet", () => {
-  browserTest("the sheet opens on «Готово»: square checks, groups, the viewer and the badge at 390 in uk; the report log pins it too", async () => {
+/*
+ * «Готово» above the phone's report log screen (docs/design/done-section.md
+ * §4.3, §5), over the needs-you fixture with `&done=1`, in uk and en: pinned
+ * above the entries, folded to its head. Since slice 1 of
+ * docs/design/legatus/build-plan.md the ⚠ sheet draws no «Готово» and the
+ * badge counts no finished work: an acceptance here leaves the badge as it was.
+ */
+describe("«Готово» above the phone's report log", () => {
+  browserTest("the report log screen pins «Готово» in uk and en; accepting finished work leaves the ⚠ badge as it was", async () => {
     const out = path.resolve(".artifacts/done-section/phone");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out, "src/components/attention/needsYouPanel.fixture.tsx");
     const browser = await launchChromium();
-    const readings: Record<string, unknown>[] = [];
     try {
-      for (const scheme of ["dark", "light"] as const) {
-        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: scheme, reducedMotion: "reduce" });
-        try {
-          await context.addInitScript(() => localStorage.setItem("llv_lang", "uk"));
-          const page = await context.newPage();
-          const errors: string[] = [];
-          page.on("pageerror", (error) => errors.push(error.message));
-          await page.goto(`${server.base}?lang=uk&done=1`);
-          const badge = page.locator("[data-mobile2-attention-count]");
-          await page.waitForFunction(() => Number(document.querySelector("[data-mobile2-attention-count]")?.getAttribute("data-mobile2-attention-count") ?? 0) > 18, undefined, { timeout: 15_000 });
-          const doneCount = await page.evaluate(() => (window as unknown as { __doneFixture: { count: number } }).__doneFixture.count);
-          const badgeCount = async () => Number(await badge.getAttribute("data-mobile2-attention-count"));
-          await page.locator('[data-mobile2-open="attention"]').click();
-          const sheet = page.locator('[data-mobile2-sheet="attention"]');
-          const section = sheet.locator('[data-done-section="phone"]');
-          await section.waitFor({ timeout: 15_000 });
-          /* The badge counts the board's decisions and the slice's «Готово»: the
-             shop-web task is another board's, so this board shows one fewer. */
-          const shown = await section.locator("[data-done-count]").innerText();
-          const decisions = await sheet.locator("[data-needs-you-row]").count();
-          expect(Number(shown)).toBe(doneCount - 1);
-          expect(await badgeCount()).toBe(decisions + doneCount - 1);
-          expect(await sheet.locator("h2").first().innerText()).toBe(`Чекають на вас · ${decisions + doneCount - 1}`);
-          expect(await section.locator("[data-done-accept-all]").innerText()).toBe("Бачив усе");
-          /* Pinned first: the decisions follow it. */
-          expect(await section.evaluate((element) => Boolean(element.compareDocumentPosition(document.querySelector("[data-mobile2-attention-list]")!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
-          const order = await section.locator("[data-done-row], [data-done-group]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-done-row") ?? `group:${row.getAttribute("data-done-group")}`));
-          expect(order).toEqual(["group:closed", "deploy:fixture-deploy", "group:technical", "report:fixture-publication", "limit:codex:acct-b:session:1", "pr:example/delegatus#2691", "report:fixture-incident"]);
-          /* Pinned above the sheet's one scroller: the decisions scroll under
-             it, its rows scroll in their own band, and the decisions keep room. */
-          const body = sheet.locator("[data-mobile2-sheet-body]");
-          const pin = () => sheet.evaluate((element) => {
-            const done = element.querySelector('[data-done-section="phone"]')!;
-            const scroller = element.querySelector("[data-mobile2-sheet-body]")!;
-            const band = done.querySelector("[data-done-list]");
-            return {
-              pinned: !scroller.contains(done) && Boolean(done.compareDocumentPosition(scroller) & Node.DOCUMENT_POSITION_FOLLOWING),
-              top: done.getBoundingClientRect().top,
-              sectionHeight: Math.round(done.getBoundingClientRect().height),
-              bandHeight: band ? Math.round(band.getBoundingClientRect().height) : 0,
-              bandScrolls: band ? band.scrollHeight > band.clientHeight : false,
-              bodyHeight: Math.round(scroller.getBoundingClientRect().height),
-              bodyScrolls: scroller.scrollHeight > scroller.clientHeight,
-              sheetHeight: Math.round(element.getBoundingClientRect().height),
-            };
-          });
-          const pinned = await pin();
-          expect(pinned.pinned).toBe(true);
-          expect(pinned.bandScrolls).toBe(true);
-          expect(pinned.bodyScrolls).toBe(true);
-          expect(pinned.sectionHeight).toBeLessThanOrEqual(Math.ceil(844 * 0.4) + 1);
-          expect(pinned.bodyHeight).toBeGreaterThanOrEqual(150);
-          await body.evaluate((element) => { element.scrollTop = element.scrollHeight; });
-          expect(await body.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
-          expect((await pin()).top).toBe(pinned.top);
-          await page.screenshot({ path: path.join(out, `${scheme}-1-sheet-scrolled.png`) });
-          await body.evaluate((element) => { element.scrollTop = 0; });
-          const check = section.locator('[data-done-accept="pr:example/delegatus#2691"]');
-          const box = (await check.boundingBox())!;
-          expect(box.width).toBeGreaterThanOrEqual(44);
-          expect(box.height).toBeGreaterThanOrEqual(44);
-          expect(await check.innerText()).toBe("");
-          const geometry = await section.evaluate((element) => ({
-            right: Math.max(...[...element.querySelectorAll<HTMLElement>("*")].map((node) => node.getBoundingClientRect().right)),
-            overflow: document.documentElement.scrollWidth > innerWidth,
-          }));
-          expect(geometry.right).toBeLessThanOrEqual(390);
-          expect(geometry.overflow).toBe(false);
-          const read = () => section.evaluate((element) => {
-            const text = (node: Element | null) => (node as HTMLElement | null)?.innerText.trim() ?? "";
-            const rows = [...element.querySelectorAll<HTMLElement>("[data-done-row]")].map((row) => {
-              const check = row.querySelector<HTMLElement>("[data-done-accept]")!.getBoundingClientRect();
-              const sentence = row.querySelector<HTMLElement>("[data-done-sentence]")!.getBoundingClientRect();
-              const meta = row.querySelector<HTMLElement>("[data-done-meta]")!.getBoundingClientRect();
-              return { key: row.getAttribute("data-done-row"), checkRight: Math.round(element.getBoundingClientRect().right - check.right), ownLine: check.top >= Math.max(sentence.bottom, meta.bottom) - 1 };
-            });
-            const lines = [...element.querySelectorAll<HTMLElement>("[data-done-group-line]")].map((node) => ({ text: text(node), count: Number(node.closest("[data-done-group]")!.getAttribute("data-done-group-count")) }));
-            const receipts = [...element.querySelectorAll<HTMLElement>("[data-done-receipt-text]")].map((node) => {
-              const mark = node.lastElementChild!.getBoundingClientRect();
-              return { text: node.textContent!.replace(/\u00a0/g, " ").trim(), markClipped: mark.right > node.getBoundingClientRect().right + 0.5 || mark.width < 1 };
-            });
-            const heads = [...element.querySelectorAll<HTMLElement>("[data-done-group-title]")].map((node) => {
-              const range = document.createRange();
-              range.selectNodeContents(node);
-              const tops = [...new Set([...range.getClientRects()].map((rect) => Math.round(rect.top)))];
-              return { text: text(node), lines: tops.length };
-            });
-            return { rows, lines, receipts, heads, hash: /\b[0-9a-f]{7,40}\b/.test(text(element)) };
-          });
-          const morning = await read();
-          expect(morning.rows.every((row) => !row.ownLine), "no row keeps a line for its check").toBe(true);
-          expect(morning.hash, "no commit hash in «Готово»").toBe(false);
-          for (const { text, count } of morning.lines) {
-            /* Short topics, no cut word, lower case after the first, and «і ще N» for the rest. */
-            expect(text).not.toContain("…");
-            const [listed, rest] = text.split(" і ще ");
-            const topics = listed!.split(", ");
-            expect(topics.slice(1).every((topic) => !/^[А-ЯІЇЄҐ]/.test(topic)), text).toBe(true);
-            expect(Number(rest ?? 0), text).toBe(count - topics.length);
-          }
-          expect(morning.heads.every((head) => head.lines === 1), JSON.stringify(morning.heads)).toBe(true);
-          await section.evaluate((element) => element.scrollIntoView({ block: "start" }));
-          await page.screenshot({ path: path.join(out, `${scheme}-1-sheet.png`) });
-          /* Folded to its head the section gives the decisions the sheet, and
-             «Бачив усе» stays on the head; unfolded, the rows come back. */
-          await section.locator("[data-done-fold]").click();
-          expect(await section.locator("[data-done-list]").count()).toBe(0);
-          const folded = await pin();
-          expect(folded.sectionHeight).toBeLessThanOrEqual(48);
-          expect(folded.bodyHeight).toBeGreaterThan(pinned.bodyHeight);
-          expect(await section.locator("[data-done-accept-all]").isVisible()).toBe(true);
-          await page.screenshot({ path: path.join(out, `${scheme}-1-sheet-folded.png`) });
-          await section.locator("[data-done-fold]").click();
-          await section.locator("[data-done-list]").waitFor();
-
-          await section.locator('[data-done-thumb="pr:example/delegatus#2691"]').click();
-          const viewer = page.locator('[role="dialog"][aria-modal="true"]').filter({ has: page.locator("[data-lightbox-compare]") });
-          await viewer.waitFor();
-          await page.screenshot({ path: path.join(out, `${scheme}-2-frame.png`) });
-          await viewer.locator('[data-lightbox-compare-side="before"]').click();
-          await page.screenshot({ path: path.join(out, `${scheme}-2-frame-before.png`) });
-          await page.keyboard.press("Escape");
-          await viewer.waitFor({ state: "detached" });
-          await section.waitFor();
-
-          await check.click();
-          await section.locator('[data-done-receipt="pr:example/delegatus#2691"]').waitFor();
-          expect(await badgeCount()).toBe(decisions + doneCount - 2);
-          await section.locator('[data-done-group-toggle="technical"]').click();
-          expect(await section.locator('[data-done-group="technical"] [data-done-group-line]').count()).toBe(0);
-          await section.locator('[data-done-group="technical"]').evaluate((element) => element.scrollIntoView({ block: "start" }));
-          await page.screenshot({ path: path.join(out, `${scheme}-3-expanded.png`) });
-          const checks = section.locator('[data-done-group="technical"] [data-done-member-check]');
-          for (let index = 0; index < 4; index += 1) await checks.nth(index).click();
-          /* The phone moves a partial count onto the line under the name. */
-          await page.waitForFunction(() => document.querySelector('[data-done-group="technical"] [data-done-group-line]')?.textContent === "6 з 10 · 4 прийнято");
-          let after = await read();
-          for (const receipt of after.receipts) {
-            expect(receipt.text).toMatch(/прийнято$/);
-            expect(receipt.markClipped, receipt.text).toBe(false);
-          }
-          expect(after.heads.every((head) => head.lines === 1), JSON.stringify(after.heads)).toBe(true);
-          expect(after.receipts.map((receipt) => receipt.text)).toContain("Лендінг #2691 · прийнято");
-          await section.evaluate((element) => element.scrollIntoView({ block: "start" }));
-          await page.screenshot({ path: path.join(out, `${scheme}-4-partial.png`) });
-
-          await section.locator('[data-done-accept-group="technical"]').click();
-          await section.locator('[data-done-group-receipt="technical"]').waitFor();
-          expect(await badgeCount()).toBe(decisions + doneCount - 12);
-          await section.locator('[data-done-group-toggle="closed"]').click();
-          after = await read();
-          for (const receipt of after.receipts) {
-            expect(receipt.text).toMatch(/прийнято$/);
-            expect(receipt.markClipped, receipt.text).toBe(false);
-          }
-          expect(after.receipts.map((receipt) => receipt.text)).toContain("Технічні виправлення: 10 прийнято");
-          await section.evaluate((element) => element.scrollIntoView({ block: "start" }));
-          await page.screenshot({ path: path.join(out, `${scheme}-5-group-accepted.png`) });
-
-          await section.locator("[data-done-accept-all]").click();
-          await section.locator("[data-done-all-accepted]").waitFor();
-          expect(await badgeCount()).toBe(decisions);
-          await section.evaluate((element) => element.scrollIntoView({ block: "end" }));
-          await page.screenshot({ path: path.join(out, `${scheme}-6-all-accepted.png`) });
-          expect(errors).toEqual([]);
-          readings.push({ scheme, decisions, done: doneCount - 1, order, pin: { pinned: pinned.pinned, sheetHeight: pinned.sheetHeight, sectionHeight: pinned.sectionHeight, bandHeight: pinned.bandHeight, bodyHeight: pinned.bodyHeight, foldedSectionHeight: folded.sectionHeight, foldedBodyHeight: folded.bodyHeight }, check: { width: box.width, height: box.height }, ...geometry, rows: morning.rows, groupLines: morning.lines, heads: morning.heads, receipts: after.receipts.map((receipt) => receipt.text) });
-        } finally { await context.close(); }
-      }
-
-      /* The same list pinned above the report log screen, this board's slice. */
+      /* The list pinned above the report log screen, this board's slice. */
       const reports: Record<string, unknown>[] = [];
       for (const lang of ["uk", "en"] as const) {
         for (const scheme of ["dark", "light"] as const) {
@@ -8391,6 +8217,9 @@ describe("«Готово» in the phone sheet", () => {
             const errors: string[] = [];
             page.on("pageerror", (error) => errors.push(error.message));
             await page.goto(`${server.base}?lang=${lang}&done=1`);
+            const badge = () => page.evaluate(() => Number(document.querySelector("[data-mobile2-attention-count]")?.getAttribute("data-mobile2-attention-count") ?? 0));
+            await page.waitForFunction(() => document.querySelector("[data-mobile2-attention-count]") !== null, undefined, { timeout: 20_000 });
+            const before = await badge();
             await page.locator("[data-mobile2-seat-open]").waitFor({ timeout: 20_000 });
             await page.locator("[data-mobile2-seat-open]").click();
             await page.locator('[data-mobile2-open="reports"]').waitFor({ timeout: 10_000 });
@@ -8429,13 +8258,20 @@ describe("«Готово» in the phone sheet", () => {
             const foldedHeight = Math.round((await section.boundingBox())!.height);
             expect(foldedHeight).toBeLessThanOrEqual(48);
             await page.screenshot({ path: path.join(out, `reports-${key}-2-folded.png`) });
+            /* Accepted here; the ⚠ badge never counted it, so it holds. */
+            await section.locator("[data-done-fold]").click();
+            await section.locator('[data-done-accept="deploy:fixture-deploy"]').click();
+            await section.locator('[data-done-receipt="deploy:fixture-deploy"]').waitFor();
+            expect(await badge()).toBe(before);
+            expect(await page.locator("[data-mobile2-sheet='attention'] [data-done-section]").count()).toBe(0);
+            await page.screenshot({ path: path.join(out, `reports-${key}-3-accepted.png`) });
             expect(errors).toEqual([]);
-            reports.push({ lang, scheme, ...layout, foldedHeight });
+            reports.push({ lang, scheme, ...layout, foldedHeight, badgeBefore: before, badgeAfter: before });
           } finally { await context.close(); }
         }
       }
       fs.mkdirSync("evidence/done-section", { recursive: true });
-      fs.writeFileSync("evidence/done-section/phone.json", JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", viewport: { width: 390, height: 844 }, lang: "uk", readings, reports }, null, 2) + "\n");
+      fs.writeFileSync("evidence/done-section/phone.json", JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", viewport: { width: 390, height: 844 }, reports }, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
   }, 420_000);
 });
@@ -8615,16 +8451,148 @@ describe("attention cues stay off the main thread beside the composer", () => {
 });
 
 /*
- * The phone's «Чекають на вас» sheet has two detents (MobileSheet `expandable`):
+ * «Needs you» counts the forms that wait (docs/design/legatus/build-plan.md,
+ * slice 1) on the phone, over the needs-you fixture's `scenario=forms` on the
+ * Overview, where the ⚠ badge counts every project: 631 unaccepted finished
+ * items, seats that answer their workers' and lanes' waits, and N forms.
+ * Normal is 9, empty is 0 (the badge is not drawn), busy is 27. At 560, 390
+ * and one width between, in uk and en, light and dark: the badge, its name,
+ * and the sheet with form rows only, no «Dismiss» and no «Готово», scrolled to
+ * its last row. Frames go to LLV_EVIDENCE_DIR (else .artifacts); readings are
+ * committed under evidence/needs-you-forms/.
+ */
+describe("«Needs you» on the phone counts the forms that wait", () => {
+  browserTest("the ⚠ badge and its sheet hold only waiting forms at 560–390 in uk and en, light and dark", async () => {
+    const out = path.join(process.env.LLV_EVIDENCE_DIR?.trim() || path.resolve(".artifacts"), "needs-you-forms", "phone");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(out, "bundle-root"), "src/components/attention/needsYouPanel.fixture.tsx");
+    const browser = await launchChromium();
+    const STATES = [["normal", 9], ["empty", 0], ["busy", 27]] as const;
+    const WIDTHS = [560, 475, 390] as const;
+    const readings: Record<string, unknown>[] = [];
+    const failures: string[] = [];
+    try {
+      for (const [state, forms] of STATES) for (const width of WIDTHS) for (const lang of ["uk", "en"] as const) for (const scheme of ["light", "dark"] as const) {
+        const t = (key: string, params?: Record<string, string | number>) => translate(lang, key as never, params);
+        const frame = `${state}-${width}-${lang}-${scheme}`;
+        const check = (ok: boolean, what: string) => { if (!ok) failures.push(`${frame}: ${what}`); };
+        const context = await browser.newContext({ viewport: { width, height: 844 }, isMobile: true, hasTouch: true, colorScheme: scheme, reducedMotion: "reduce" });
+        try {
+          await context.addInitScript((language) => localStorage.setItem("llv_lang", language), lang);
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          await page.goto(`${server.base}?lang=${lang}&scenario=forms&forms=${forms}&overview=1`);
+          await page.locator("[data-mobile2-bar]").waitFor({ timeout: 20_000 });
+          if (forms) await page.waitForFunction((n) => document.querySelector("[data-mobile2-attention-count]")?.getAttribute("data-mobile2-attention-count") === String(n), forms, { timeout: 20_000 });
+          else await page.waitForFunction(() => document.body.hasAttribute("data-needs-you-fixture-ready") && document.querySelectorAll("[data-mobile2-screen]").length > 0, undefined, { timeout: 20_000 });
+          await page.waitForTimeout(400);
+          const bar = await page.evaluate(() => {
+            const bar = document.querySelector<HTMLElement>("[data-mobile2-bar]")!;
+            const barBox = bar.getBoundingClientRect();
+            const button = document.querySelector<HTMLElement>('[data-mobile2-open="attention"]');
+            const pill = button?.querySelector<HTMLElement>("span") ?? null;
+            const range = document.createRange();
+            if (pill) range.selectNodeContents(pill);
+            const ink = pill ? range.getBoundingClientRect() : null;
+            const title = bar.querySelector<HTMLElement>("[data-mobile2-title]");
+            const titleBox = title?.getBoundingClientRect() ?? null;
+            const buttonBox = button?.getBoundingClientRect() ?? null;
+            return {
+              drawn: Boolean(button),
+              count: button?.getAttribute("data-mobile2-attention-count") ?? null,
+              text: pill?.textContent ?? null,
+              aria: button?.getAttribute("aria-label") ?? null,
+              whole: Boolean(ink && ink.left >= barBox.left - 0.5 && ink.right <= barBox.right + 0.5 && ink.left >= 0 && ink.right <= innerWidth && ink.top >= barBox.top - 0.5 && ink.bottom <= barBox.bottom + 0.5),
+              apart: Boolean(!buttonBox || !titleBox || titleBox.right <= buttonBox.left + 0.5),
+              target: buttonBox ? { width: Math.round(buttonBox.width), height: Math.round(buttonBox.height) } : null,
+              overflow: document.documentElement.scrollWidth > innerWidth,
+            };
+          });
+          check(bar.drawn === forms > 0, `the badge is drawn ${bar.drawn}`);
+          check(!bar.overflow, "the page scrolls sideways");
+          let sheet: Record<string, unknown> | null = null;
+          if (forms) {
+            check(bar.count === String(forms) && bar.text === String(forms), `the badge reads ${bar.text}`);
+            check(bar.aria === t("mobile2.bar.attention", { count: forms }), `the badge is named «${bar.aria}»`);
+            check(bar.whole && bar.apart, "the badge is whole and clear of the title");
+            check((bar.target?.height ?? 0) >= 44 && (bar.target?.width ?? 0) >= 44, `the badge target is ${JSON.stringify(bar.target)}`);
+            await page.screenshot({ path: path.join(out, `${frame}-bar.png`) });
+            await page.locator('[data-mobile2-open="attention"]').click();
+            const element = page.locator('[data-mobile2-sheet="attention"]');
+            await element.waitFor({ timeout: 10_000 });
+            await page.locator("[data-attention-prototype]").first().waitFor({ timeout: 10_000 });
+            await page.waitForTimeout(400);
+            const readSheet = () => element.evaluate((root) => {
+              const head = root.querySelector<HTMLElement>("h2")!;
+              const body = root.querySelector<HTMLElement>("[data-mobile2-sheet-body]")!;
+              const bodyBox = body.getBoundingClientRect();
+              const ink = (node: Element) => { const range = document.createRange(); range.selectNodeContents(node); return range.getBoundingClientRect(); };
+              const headInk = ink(head);
+              const rows = [...root.querySelectorAll<HTMLElement>("[data-attention-prototype]")];
+              const visible = rows.filter((row) => { const box = row.getBoundingClientRect(); return box.bottom > bodyBox.top && box.top < bodyBox.bottom; });
+              /* A row is whole when its box sits inside the scroller: a long title ends in its own ellipsis. */
+              const whole = (row: HTMLElement | undefined) => { if (!row) return null; const box = row.getBoundingClientRect(); return box.top >= bodyBox.top - 0.5 && box.bottom <= bodyBox.bottom + 0.5 && box.left >= 0 && box.right <= innerWidth; };
+              return {
+                title: head.textContent,
+                titleWhole: headInk.left >= 0 && headInk.right <= innerWidth && headInk.right <= root.getBoundingClientRect().right,
+                rows: rows.length,
+                /* Every row carries this mark; a form's row holds the form's button. */
+                otherRows: [...root.querySelectorAll("[data-needs-you-row]")].filter((row) => !row.querySelector("[data-attention-prototype]") && !row.hasAttribute("data-attention-prototype")).length,
+                sections: [...root.querySelectorAll("[data-needs-you-section]")].map((section) => [section.getAttribute("data-needs-you-section"), Number(section.querySelector("[data-needs-you-section-count]")?.textContent ?? "0")]),
+                dismiss: root.querySelectorAll("[data-needs-you-dismiss], [data-needs-you-dismiss-all], [data-needs-you-dismiss-section]").length,
+                placeholders: root.querySelectorAll("[data-mobile2-attention-list] .invisible").length,
+                done: root.querySelectorAll("[data-done-section]").length,
+                firstWhole: whole(visible[0]),
+                lastWhole: whole(rows.at(-1)),
+                scrolls: body.scrollHeight > body.clientHeight + 1,
+                right: Math.max(...[...root.querySelectorAll<HTMLElement>("*")].map((node) => node.getBoundingClientRect().right)),
+              };
+            });
+            const opened = await readSheet();
+            check(opened.title === t("attention.panelTitle", { count: forms }), `the sheet head reads «${opened.title}»`);
+            check(opened.titleWhole, "the sheet head is whole");
+            check(opened.rows === forms && opened.otherRows === 0, `the sheet lists ${opened.rows} forms and ${opened.otherRows} other rows`);
+            check(opened.dismiss === 0 && opened.placeholders === 0 && opened.done === 0, "no «Dismiss», no unseen «Dismiss» and no «Готово»");
+            check(opened.firstWhole !== false, "the first row is whole");
+            check(opened.right <= width + 0.5, `the sheet reaches ${opened.right}`);
+            await page.screenshot({ path: path.join(out, `${frame}-sheet.png`) });
+            let end: unknown = null;
+            if (opened.scrolls) {
+              await element.locator("[data-mobile2-sheet-body]").evaluate((body) => { body.scrollTop = body.scrollHeight; });
+              await page.waitForTimeout(200);
+              const scrolled = await readSheet();
+              check(scrolled.lastWhole === true, "the last row is cut at the sheet's end");
+              end = { lastWhole: scrolled.lastWhole };
+              await page.screenshot({ path: path.join(out, `${frame}-sheet-end.png`) });
+            }
+            sheet = { ...opened, end };
+          } else {
+            await page.screenshot({ path: path.join(out, `${frame}-bar.png`) });
+          }
+          check(errors.length === 0, `page errors ${JSON.stringify(errors)}`);
+          readings.push({ frame, state, forms, width, lang, scheme, bar, sheet });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/needs-you-forms", { recursive: true });
+      fs.writeFileSync("evidence/needs-you-forms/phone.json", JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", fixture: "src/components/attention/needsYouPanel.fixture.tsx?scenario=forms&overview=1", failures, readings }, null, 2) + "\n");
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 900_000);
+});
+
+/*
+ * The phone's «Needs you» sheet has two detents (MobileSheet `expandable`):
  * it opens where it always did, the handle pulls it up to nearly the full
  * screen under the top bar, its list scrolls there, and a drag down folds it
  * back. At 390 and the iPhone-class 440, dark and light, in uk and en, over the
- * needs-you fixture with «Готово» (a tall list), without it, and in the short
- * case with the decisions dismissed down to one row (a sheet well under 88 %).
+ * needs-you fixture with 27 waiting forms (a tall list; «Готово» no longer
+ * sits in this sheet), without them, and in the short case with the rows
+ * dismissed down to one (a sheet well under 88 %).
  * The handle is a named button: Tab reaches it, Enter and Space switch the
  * detent, and it is 44 px high above the header.
  */
-describe("the «Чекають на вас» sheet pulls up to nearly full height", () => {
+describe("the «Needs you» sheet pulls up to nearly full height", () => {
   browserTest("collapsed and expanded at 390 and 440: drag, flick, scroll, fold back, close", async () => {
     const out = path.resolve(".artifacts/needs-you-detents");
     fs.mkdirSync(out, { recursive: true });
@@ -8654,9 +8622,9 @@ describe("the «Чекають на вас» sheet pulls up to nearly full heigh
           const errors: string[] = [];
           page.on("pageerror", (error) => errors.push(error.message));
           const cdp = await context.newCDPSession(page);
-          await page.goto(`${server.base}?lang=${lang}${done ? "&done=1" : ""}`);
+          await page.goto(`${server.base}?lang=${lang}${done ? "&scenario=forms&forms=27" : ""}`);
           await page.waitForSelector('[data-mobile2-open="attention"]', { timeout: 15_000 });
-          if (done) await page.waitForFunction(() => Number(document.querySelector("[data-mobile2-attention-count]")?.getAttribute("data-mobile2-attention-count") ?? 0) > 18, undefined, { timeout: 15_000 });
+          if (done) await page.waitForFunction(() => Number(document.querySelector("[data-mobile2-attention-count]")?.getAttribute("data-mobile2-attention-count") ?? 0) > 10, undefined, { timeout: 15_000 });
           await page.locator('[data-mobile2-open="attention"]').click();
           const sheet = page.locator('[data-mobile2-sheet="attention"]');
           await sheet.waitFor({ timeout: 15_000 });

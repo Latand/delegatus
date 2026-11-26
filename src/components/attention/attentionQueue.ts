@@ -1,5 +1,6 @@
 import { finishedWorkIndex } from "@/lib/attention/finishedWork";
 import { withFinishedAttention } from "@/lib/attention/finishedAttention";
+import { delegatedConversation, SEAT_CONVERSATION_KINDS } from "@/lib/attention/routing";
 import type { MobileBoardPipelineRow } from "@/components/mobile/mobileBoardModel";
 import { overviewPipelineRows } from "@/components/mobile/overviewPhone";
 import type { AutoView } from "@/lib/selfUpdate/auto";
@@ -73,6 +74,23 @@ export function buildNeedsYouQueue(
   for (const notice of prototypeReviewNotices(tasks, seatDecisions)) queue.push({ kind: "prototype", id: notice.id, notice });
   if (decision) queue.push({ kind: "update", id: `auto-update:${decision.id}`, decision });
   return queue;
+}
+
+/**
+ * Whether «Needs you» holds an entry (docs/design/legatus/build-plan.md,
+ * slice 1): the button counts the decision forms that wait for the operator,
+ * plus what nobody else answers yet. Every form and the update decision stay.
+ * A parked lane stays: one whose project has a seat already carries the seat's
+ * route and is not on the queue. A worker's question, plan, permission, memory
+ * kill or prose ask stays only in the same case, a project with no seat to
+ * route it to (`routing.ts`). An orchestrator's own questions are its reports
+ * and its forms; a question in the operator's own session, a stuck delivery
+ * and a failed launch stay on their cards' state lines.
+ */
+export function needsYouHolds(entry: MobileAttentionEntry): boolean {
+  if (entry.kind !== "conversation") return true;
+  const { reason, file } = entry.item;
+  return !reason.report && SEAT_CONVERSATION_KINDS.has(reason.kind) && delegatedConversation(file);
 }
 
 /** The board key a lane is focused by: the card that holds the pipeline, the

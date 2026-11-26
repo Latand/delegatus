@@ -144,7 +144,8 @@ export function DecisionList({ project, active = true, focus, touch = false, ini
   );
 }
 
-/** «Рішення N» and «Звіти»: the column's two tabs. */
+/** «Потрібні ви N» and «Звіти»: the column's two tabs. The first tab carries
+    the header button's own name (docs/design/legatus/build-plan.md, slice 1). */
 export function DecisionTabs({ tab, onTab, count, touch = false }: { tab: DecisionTab; onTab: (tab: DecisionTab) => void; count: number; touch?: boolean }) {
   const { t } = useLocale();
   const button = (id: DecisionTab, label: string, badge?: number) => (
@@ -187,7 +188,7 @@ export function DecisionColumn({ project, tab, onTab, focus }: {
 }
 
 /** One line under the seat's header while decisions wait and the column is
-    out of sight: «N чекають рішення ›», opening them. */
+    out of sight: «Потрібні ви · N ›», opening them. */
 export function DecisionStripLine({ count, onOpen, touch = false }: { count: number; onOpen: () => void; touch?: boolean }) {
   const { t } = useLocale();
   if (!count) return null;

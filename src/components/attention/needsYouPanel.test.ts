@@ -8,7 +8,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 
 import { buildProjectSummaries, railProjectOrder } from "../projectModel";
-import { buildNeedsYouQueue } from "./attentionQueue";
+import { buildNeedsYouQueue, needsYouHolds } from "./attentionQueue";
 import { needsYouCounts, needsYouDismissal, needsYouEntryRole, needsYouEntrySince, needsYouSections, needsYouSubject } from "./needsYouPanel";
 
 /*
@@ -132,6 +132,18 @@ test("the rail's ⏸ reads the panel's grouping: one number per project, a dismi
      a seat with two questions. */
   const legacy = Object.fromEntries(buildProjectSummaries(FILES, NOW, [], [], PIPELINES, {}).map((summary) => [summary.project, summary.attentionCount]));
   expect(legacy).not.toEqual(summaries);
+});
+
+test("over «Needs you» the rail's ⏸ counts the forms and the waits no seat answers: the operator's own prompts and the seat's report questions count nowhere", () => {
+  /* docs/design/legatus/build-plan.md, slice 1: the three screen prompts sit
+     in the operator's own sessions, the builder was launched by the operator
+     (no delegation), and alpha's seat asks in its report log. A worker a lane
+     started in beta, with no seat routing it, still counts. */
+  const worker = file("/beta-stage", "beta", { ...waiting(800), durableLineage: { kind: "spawn", role: "builder", depth: 1, parentConversationId: null, reviewsConversationId: null, memberships: [] } } as unknown as Partial<FileEntry>);
+  const counts = needsYouCounts(buildNeedsYouQueue([...FILES, worker], PIPELINES, NOW, []).filter(needsYouHolds));
+  expect(Object.fromEntries(counts)).toEqual({ alpha: 1, beta: 1 });
+  const summaries = Object.fromEntries(buildProjectSummaries([...FILES, worker], NOW, [], [], PIPELINES, {}, counts).map((summary) => [summary.project, summary.attentionCount]));
+  expect(summaries).toEqual({ gamma: 0, alpha: 1, beta: 1 });
 });
 
 test("an agent that asked the operator in prose («Asks you») is a row of its project: its spawn role, its reason, counted once", () => {
