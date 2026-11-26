@@ -92,6 +92,7 @@ import { WorkspacePage } from "@/components/team/WorkspacePage";
 import { FIXTURE_WORKSPACE_IDS, workspacesFixture } from "@/components/team/workspacesEvidence.fixture";
 import { WORKSPACE_STORAGE_KEY } from "@/components/team/workspacesClient";
 import { pushSoundCaption } from "@/lib/audio/captions";
+import { secretTarget } from "@/lib/secretRequests/view";
 import { readObstacles } from "@/components/soundCaptionPlacement";
 
 /*
@@ -3905,6 +3906,9 @@ if (DECISIONS === "secrets") {
     { ...common, id: `sr_${"2".repeat(32)}`, createdAt: Date.parse(iso(20)), destinationRevision: "b".repeat(64),
       destination: { kind: "env", path: "/workspace/atlas/integrations/report-service/.env", key: "REPORT_SERVICE_TOKEN", effect: "env-add", git: "ignored" } },
   ];
+  window.addEventListener("fixture-secret-closed", (event) => {
+    secretRequests = secretRequests.filter(({ id }) => id !== (event as CustomEvent<string>).detail);
+  });
   window.addEventListener("fixture-secret-destination-changed", () => {
     const previous = secretRequests[1]!;
     secretRequests[1] = { ...previous, destinationRevision: "c".repeat(64), destination: { ...previous.destination,
@@ -4806,7 +4810,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       ? { files: [orchestrator, ...directFiles], flows: [], pipelines: [], tasks: [], conversationAliases: { "old-direct-subject": "direct-subject" },
         projectCatalog: [{ project: PROJECT, conversations: directFiles.length + 1, smt: now }] } : {};
     const body = JSON.stringify({ ...scoped, ...retiredBoard, ...((DECISIONS || REPORT_PREVIEW || FIRST_RUN_FORM) && seatDecisionNotices().length ? { seatDecisions: seatDecisionNotices() } : {}),
-      ...(DECISIONS === "secrets" ? { secretRequestNotices: secretRequests.map(({ id, project, createdAt, expiresAt }) => ({ id, project, createdAt, expiresAt })) } : {}), workflows: [], systemHealth: { ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) }, ...(workLinks ? { workLinks } : {}) });
+      ...(DECISIONS === "secrets" ? { secretRequestNotices: secretRequests.map(({ id, project, createdAt, expiresAt, destination }) => ({ id, project, createdAt, expiresAt, target: secretTarget(destination.path, destination.key) })) } : {}), workflows: [], systemHealth: { ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) }, ...(workLinks ? { workLinks } : {}) });
     if (COLD_BOARD) {
       const headers = new Headers(init?.headers);
       const required = headers.get("x-llv-files-generation");

@@ -340,7 +340,7 @@ test("the built Decisions and board routes withhold request details and never ca
   expect(JSON.parse(pending.body)).toMatchObject({ secretRequests: [{ id: request.id, destination: { path: destination } }] });
   const board = "/api/files?view=summary";
   const displayed = await readPayload(board, { headers: owner });
-  expect(JSON.parse(displayed.body).secretRequestNotices).toEqual([{ id: request.id, project, createdAt: request.createdAt, expiresAt: request.expiresAt }]);
+  expect(JSON.parse(displayed.body).secretRequestNotices).toEqual([{ id: request.id, project, createdAt: request.createdAt, expiresAt: request.expiresAt, target: "entry" }]);
   const bootstrap = path.join(sandbox, "state", "board-summary-bootstrap.bin");
   if (fs.existsSync(bootstrap)) expect(fs.readFileSync(bootstrap).includes(request.id)).toBe(false);
   const publicBoard = await readPayload(board, { headers: { "if-none-match": displayed.response.headers.get("etag")! } });

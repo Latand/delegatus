@@ -797,6 +797,14 @@ export async function captureSecretRequestCards(browser: Browser, out: string, p
               let clipped = 0;
               for (let text = walker.nextNode(); text; text = walker.nextNode()) {
                 if (!text.textContent?.trim()) continue;
+                /* A line cut short on purpose ends in an ellipsis inside its own box. */
+                const owner = text.parentElement!;
+                const style = getComputedStyle(owner);
+                if (style.textOverflow === "ellipsis" && style.overflowX === "hidden") {
+                  const own = owner.getBoundingClientRect();
+                  if (own.left < box.left - 1 || own.right > box.right + 1) clipped++;
+                  continue;
+                }
                 const range = document.createRange();
                 range.selectNode(text);
                 for (const line of range.getClientRects()) {
@@ -865,6 +873,204 @@ export async function captureSecretRequestCards(browser: Browser, out: string, p
       }
     }
     fs.writeFileSync(path.join(out, `${phone ? "phone" : "desktop"}-geometry.json`), JSON.stringify(readings, null, 2) + "\n");
+    expect(failures, failures.join("\n")).toEqual([]);
+    return readings.length;
+  } finally {
+    server.stop();
+    fs.rmSync(bundle, { recursive: true, force: true });
+  }
+}
+
+/** The secret request's outcomes and its Needs-you entry, drawn through the same fixture as the cards above:
+ *  the ordinary decision beside the request, the saved, declined and expired answers, and the entry in the
+ *  Needs-you panel (desktop) or sheet (phone) with the link that opens the request. Each frame is measured
+ *  from text ranges inside the list's own box. */
+export async function captureSecretRequestOutcomes(browser: Browser, out: string, phone: boolean) {
+  fs.mkdirSync(out, { recursive: true });
+  const bundle = fs.mkdtempSync(path.join(process.cwd(), ".secret-request-outcomes-"));
+  const server = await serveEvidenceFixture(bundle);
+  const failures: string[] = [];
+  const readings: unknown[] = [];
+  const first = `sr_${"1".repeat(32)}`;
+  const second = `sr_${"2".repeat(32)}`;
+  const value = "demo-value-only";
+  const sizes = phone ? [{ width: 390, height: 844 }] : [{ width: 1000, height: 700 }, { width: 1440, height: 900 }];
+  try {
+    for (const size of sizes) for (const language of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+      const tag = `${size.width}-${language}-${scheme}`;
+      const fixture = `${server.base}?decisions=secrets&lang=${language}`;
+      const open = async () => {
+        const opened = await openFixture(browser, fixture, size, scheme, language, "reduce", phone, 1, new Date("2026-11-26T18:00:00Z"));
+        const { page } = opened;
+        if (phone) await page.locator("[data-mobile2-seat-open]").click();
+        else {
+          const seat = page.locator("[data-kanban-seat]");
+          await seat.waitFor();
+          for (let index = 0; index < 3 && await page.locator("[data-attention-toast-dismiss]").count(); index++) {
+            await page.locator("[data-attention-toast-dismiss]").first().click();
+          }
+          if (await seat.getAttribute("data-collapsed") === "1") await seat.locator("[data-seat-collapse]").click();
+          await page.locator('[data-decision-strip="3"], [data-decision-tab-count="3"]').first().waitFor();
+          if (!await page.locator('[data-decision-strip="3"]').isVisible()) await page.locator('[data-report-log-toggle="open"]').click();
+        }
+        return opened;
+      };
+      const scopeOf = (page: Page) => page.locator(phone ? '[data-mobile2-sheet="decisions"]' : '[data-decision-column="decisions"]');
+      const showDecisions = async (page: Page) => {
+        await page.locator('[data-decision-strip="3"]').click();
+        await scopeOf(page).locator("[data-secret-request]").waitFor();
+      };
+      /* Whole text lines of `selector` inside the list's own box: no line cut by its top or bottom edge. */
+      const whole = (page: Page, selector: string) => page.evaluate((query) => {
+        const list = document.querySelector("[data-decision-list]")!.getBoundingClientRect();
+        const node = document.querySelector(query);
+        if (!node) return { found: false, whole: false, lines: 0 };
+        const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+        let lines = 0;
+        let whole = true;
+        for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+          if (!text.textContent?.trim()) continue;
+          const range = document.createRange();
+          range.selectNode(text);
+          for (const line of range.getClientRects()) {
+            lines++;
+            if (line.top < list.top - 0.5 || line.bottom > list.bottom + 0.5) whole = false;
+          }
+        }
+        return { found: true, whole, lines };
+      }, selector);
+      const wait = async (page: Page) => page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      const answerWith = async (page: Page, kind: "value" | "decline", status: number, code?: string) => {
+        await page.route(`**/api/secret-requests/*/${kind}`, async route => {
+          const id = new URL(route.request().url()).pathname.split("/")[3]!;
+          const remaining = await page.evaluate(async (closed) => {
+            window.dispatchEvent(new CustomEvent("fixture-secret-closed", { detail: closed }));
+            return (await (await fetch("/api/projects/decisions?project=atlas")).json()).secretRequests;
+          }, id);
+          await route.fulfill({ status, json: { ...(code ? { code } : {}), secretRequests: remaining } });
+        });
+      };
+      const outcome = async (name: string, kind: "value" | "decline", status: number, text: string, code?: string) => {
+        const { context, page, pageErrors } = await open();
+        const frame = (suffix: string) => page.screenshot({ path: path.join(out, `${tag}-${name}${suffix}.png`) });
+        try {
+          await showDecisions(page);
+          const scope = scopeOf(page);
+          await answerWith(page, kind, status, code);
+          if (kind === "value") {
+            await scope.locator(`[data-secret-request="${first}"] input`).fill(value);
+            await scope.locator("[data-secret-save]").click();
+          } else await scope.locator("[data-secret-decline]").click();
+          await scope.locator("[data-decision-feedback]").waitFor();
+          await scope.locator(`[data-secret-request="${second}"]`).waitFor();
+          await wait(page);
+          expect((await scope.locator("[data-decision-feedback]").textContent())?.trim()).toBe(text);
+          const status_ = await whole(page, "[data-decision-feedback]");
+          const title = await whole(page, "[data-secret-title]");
+          readings.push({ tag, state: name, status: status_, title });
+          expect(status_, JSON.stringify({ tag, name, status_ })).toMatchObject({ found: true, whole: true });
+          expect(title, JSON.stringify({ tag, name, title })).toMatchObject({ found: true, whole: true });
+          expect(pageErrors).toEqual([]);
+          await frame("");
+        } catch (error) {
+          await frame("-failed").catch(() => {});
+          failures.push(`${tag} ${name}: ${error instanceof Error ? error.message : String(error)}`);
+        } finally { await context.close(); }
+      };
+      const target = (id: string) => id === first ? "report-token.txt" : "REPORT_SERVICE_TOKEN → .env";
+      const t = (key: Parameters<typeof translate>[1], values?: Record<string, string>) => translate(language, key, values);
+      const nbsp = (text: string) => text.replace(" → ", "\u00a0→\u00a0");
+      await outcome("c02-saved", "value", 200, t("secretRequest.saved", { target: nbsp(target(first)) }));
+      await outcome("c03-expired", "value", 409, t("secretRequest.closed.secret_expired", { target: nbsp(target(first)) }), "secret_expired");
+      await outcome("c06-declined", "decline", 200, t("secretRequest.declined", { target: nbsp(target(first)) }));
+
+      /* The ordinary decision beside the request: one open-card treatment. */
+      {
+        const { context, page } = await open();
+        try {
+          await showDecisions(page);
+          const scope = scopeOf(page);
+          const secretStyle = await scope.locator("[data-secret-request]").evaluate(node => ({
+            border: getComputedStyle(node).borderTopColor, head: getComputedStyle(node.querySelector("header")!).backgroundColor,
+            time: Boolean(node.querySelector("header time")) }));
+          const title = scope.locator("[data-secret-title]");
+          const env = scope.locator(`[data-decision-row="${second}"]`);
+          await env.click();
+          await scope.locator(`[data-secret-request="${second}"]`).waitFor();
+          const together = await scope.locator("[data-secret-title]").evaluate(node => {
+            const text = node.firstChild!;
+            const range = document.createRange();
+            range.setStart(text, text.textContent!.indexOf("REPORT_SERVICE_TOKEN"));
+            range.setEnd(text, text.textContent!.indexOf("→") + 1);
+            return new Set([...range.getClientRects()].map(line => Math.round(line.top))).size;
+          });
+          expect(together, `${tag}: "KEY →" shares one line`).toBe(1);
+          expect(await title.textContent()).toContain(t("secretRequest.titleFor", { target: nbsp(target(second)) }));
+          const requester = (await scope.locator("[data-secret-request] dl dd").first().textContent()) ?? "";
+          expect(requester, `${tag}: requester line`).not.toMatch(/codex|configure|\bintegration\b/);
+          const ordinary = scope.locator("[data-decision-row]:not([data-decision-row^='sr_'])").first();
+          await ordinary.click();
+          await scope.locator('[data-decision-card="open"]').waitFor();
+          const decisionStyle = await scope.locator('[data-decision-card="open"]').evaluate(node => ({
+            border: getComputedStyle(node).borderTopColor, head: getComputedStyle(node.querySelector("header")!).backgroundColor,
+            time: Boolean(node.querySelector("header time")) }));
+          expect(secretStyle.border).toBe(decisionStyle.border);
+          expect(secretStyle.head).toBe(decisionStyle.head);
+          expect([secretStyle.time, decisionStyle.time]).toEqual([true, true]);
+          await wait(page);
+          await page.screenshot({ path: path.join(out, `${tag}-c01-ordinary-decision.png`) });
+          await scope.locator(`[data-decision-row="${second}"]`).click();
+          await scope.locator(`[data-secret-request="${second}"]`).waitFor();
+          await wait(page);
+          /* By default the card says one line of reason over the field, Save and Decline; the rest is folded. */
+          const card = scope.locator(`[data-secret-request="${second}"]`);
+          expect(await card.locator("[data-secret-details]").evaluate(node => (node as HTMLDetailsElement).open)).toBe(false);
+          expect(await card.locator("[data-secret-hint]").count()).toBe(0);
+          expect(await card.locator("[data-secret-reason]").evaluate(node => node.getClientRects().length)).toBe(1);
+          await page.screenshot({ path: path.join(out, `${tag}-c01b-open-secret-request.png`) });
+          await card.locator("input").fill("short$");
+          await card.locator('[data-secret-hint="env"]').waitFor();
+          await wait(page);
+          await page.screenshot({ path: path.join(out, `${tag}-c01c-invalid-value.png`) });
+          await card.locator("input").fill("");
+          await card.locator("[data-secret-details] summary").click();
+          await card.locator("[data-secret-destination]").waitFor({ state: "visible" });
+          await card.locator("[data-secret-details]").scrollIntoViewIfNeeded();
+          await wait(page);
+          await page.screenshot({ path: path.join(out, `${tag}-c01d-details-open.png`) });
+        } catch (error) {
+          await page.screenshot({ path: path.join(out, `${tag}-c01-failed.png`) }).catch(() => {});
+          failures.push(`${tag} c01: ${error instanceof Error ? error.message : String(error)}`);
+        } finally { await context.close(); }
+      }
+
+      /* The Needs-you entry, and the link from it to the request. */
+      {
+        const { context, page } = await open();
+        try {
+          await page.locator(phone ? '[data-mobile2-open="attention"]' : "[data-attention-count]").first().click();
+          const rows = page.locator(phone ? '[data-mobile2-row="secret-request"]' : "[data-attention-secret]");
+          await rows.first().waitFor();
+          expect(await rows.count()).toBe(2);
+          const texts = await rows.evaluateAll(nodes => nodes.map(node => node.textContent ?? ""));
+          const age = await rows.evaluateAll(nodes => nodes.map(node => Boolean(node.querySelector("[data-attention-age]"))));
+          expect(new Set(texts).size, `${tag}: two requests read differently: ${JSON.stringify(texts)}`).toBe(2);
+          expect(age).toEqual([true, true]);
+          for (const row of [first, second]) expect(texts.some(text => text.includes(target(row).split(" ")[0]!))).toBe(true);
+          await rows.first().scrollIntoViewIfNeeded();
+          await wait(page);
+          await page.screenshot({ path: path.join(out, `${tag}-${phone ? "c04" : "c07"}-needs-you.png`) });
+          await rows.first().click();
+          await page.locator("[data-secret-request]").first().waitFor();
+          await wait(page);
+          await page.screenshot({ path: path.join(out, `${tag}-c05-opened-from-needs-you.png`) });
+        } catch (error) {
+          await page.screenshot({ path: path.join(out, `${tag}-c04-failed.png`) }).catch(() => {});
+          failures.push(`${tag} needs-you: ${error instanceof Error ? error.message : String(error)}`);
+        } finally { await context.close(); }
+      }
+    }
+    fs.writeFileSync(path.join(out, `${phone ? "phone" : "desktop"}-outcomes.json`), JSON.stringify(readings, null, 2) + "\n");
     expect(failures, failures.join("\n")).toEqual([]);
     return readings.length;
   } finally {

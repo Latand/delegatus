@@ -85,7 +85,7 @@ test("uncontrolled entry validates and clears the field before the save answers"
   expect(input.getAttribute("autocapitalize")).toBe("none");
   expect(input.getAttribute("spellcheck")).toBe("false");
   expect(host.querySelectorAll("[data-secret-request] form input")).toHaveLength(1);
-  expect(host.querySelectorAll("[data-secret-request] form button")).toHaveLength(2);
+  expect(host.querySelectorAll("[data-secret-request] form button")).toHaveLength(3);
   expect(host.querySelector("blockquote a")).toBeNull();
   expect(host.textContent).toContain("Project seat");
   expect(host.textContent).toContain("/workspace/service/.env");
@@ -108,7 +108,7 @@ test("uncontrolled entry validates and clears the field before the save answers"
   requests = [];
   await act(async () => release(answer([])));
   expect(host.querySelector("[data-secret-request]")).toBeNull();
-  expect(host.textContent).toContain("Saved to .env.");
+  expect(host.textContent).toContain("Secret · FIXTURE\u00a0→\u00a0.env saved.");
   expect(Object.keys(localStorage)).toEqual(stored);
 });
 
@@ -139,7 +139,64 @@ test("a refused save brings the new destination into view and decline posts no v
   expect(host.textContent).toContain("Replaces FIXTURE");
   await click(host.querySelector("[data-secret-decline]"));
   expect(host.querySelector("input")).toBeNull();
-  expect(host.textContent).toContain("Secret request declined.");
+  expect(host.textContent).toContain("Secret · FIXTURE\u00a0→\u00a0.env declined.");
+});
+
+test("a request that closed meanwhile is named in the status line", async () => {
+  for (const [code, words] of [["secret_expired", "has expired."], ["secret_not_pending", "has already closed."]] as const) {
+    let requests = [request];
+    globalThis.fetch = (async (url: string) => {
+      if (url.endsWith("/value")) {
+        requests = [];
+        return Response.json({ code, secretRequests: requests }, { status: 409 });
+      }
+      return answer(requests);
+    }) as typeof fetch;
+    const host = await render();
+    await type(host.querySelector<HTMLInputElement>("input")!, "test-only");
+    await click(host.querySelector("[data-secret-save]"));
+    expect(host.querySelector("[data-secret-request]")).toBeNull();
+    expect(host.querySelector("[data-decision-feedback]")?.textContent).toBe(`Secret · FIXTURE\u00a0→\u00a0.env ${words}`);
+    await act(async () => root?.unmount());
+    root = undefined;
+    dom.document.body.innerHTML = "";
+  }
+});
+
+test("the card shows one line of reason and folds the rest; a format hint appears only for an invalid value", async () => {
+  const long = { ...request, purpose: "First line of the reason.\nSecond line with more detail." };
+  globalThis.fetch = (async () => answer([long])) as typeof fetch;
+  const host = await render();
+  const card = host.querySelector("[data-secret-request]")!;
+  expect(card.querySelector("[data-secret-title]")?.textContent).toBe("Secret · FIXTURE\u00a0→\u00a0.env");
+  expect(card.querySelector("[data-secret-reason]")?.textContent).toBe("First line of the reason.");
+  const details = card.querySelector<HTMLDetailsElement>("[data-secret-details]")!;
+  expect(details.open).toBe(false);
+  expect(details.textContent).toContain("/workspace/service/.env");
+  expect(details.textContent).toContain("Second line with more detail.");
+  expect(card.querySelector("[data-secret-private]")?.getAttribute("title")).toBe("The value stays out of chat, logs and Telegram.");
+  const input = card.querySelector<HTMLInputElement>("input")!;
+  expect(card.querySelector("[data-secret-hint]")).toBeNull();
+  await type(input, "abc");
+  expect(card.querySelector("[data-secret-hint]")?.textContent).toBe("Enter at least 5 characters.");
+  expect(input.getAttribute("aria-invalid")).toBe("true");
+  await type(input, "abcdef$");
+  expect(card.querySelector("[data-secret-hint]")?.textContent).toBe("Remove single quotes, backslashes and dollar signs.");
+  await type(input, "abc def");
+  expect(card.querySelector("[data-secret-hint]")?.textContent).toBe("Use Latin letters, digits and symbols, without spaces.");
+  await type(input, "abcdefgh");
+  expect(card.querySelector("[data-secret-hint]")).toBeNull();
+  await type(input, "");
+  expect(card.querySelector("[data-secret-hint]")).toBeNull();
+});
+
+test("the request shows its requester and role without internal identifiers", async () => {
+  const stage: SecretRequestView = { ...request, requester: { title: "Configure integration", engine: "codex", model: "model-x", role: "agent", stage: { id: "configure", pipelineId: "lane-1" }, seatTitle: "Project seat" } };
+  globalThis.fetch = (async () => answer([stage])) as typeof fetch;
+  const host = await render();
+  const who = host.querySelector("[data-secret-request] dd")!.textContent;
+  expect(who).toBe("Configure integration · Pipeline stage · via Project seat");
+  expect(host.querySelector("[data-secret-request] header time")).not.toBeNull();
 });
 
 test("the member projection omits the card, including after a change of authority", async () => {

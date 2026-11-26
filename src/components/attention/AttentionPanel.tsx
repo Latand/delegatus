@@ -1,8 +1,6 @@
 "use client";
 
-import { SecretRequestAttentionRow } from "@/components/decisions/SecretRequestCard";
-
-import { ChevronDown, ChevronRight, MessageCircleQuestionMark, GalleryHorizontalEnd, PanelRight, PictureInPicture2, TriangleAlert, Undo2, X } from "lucide-react";
+import { ChevronDown, ChevronRight, KeyRound, MessageCircleQuestionMark, GalleryHorizontalEnd, PanelRight, PictureInPicture2, TriangleAlert, Undo2, X } from "lucide-react";
 import { useCallback, useState, type ReactNode } from "react";
 
 import { projectTitle } from "@/lib/displayNames";
@@ -305,7 +303,7 @@ function NeedsYouRow({ entry, pipelines, focused, onOpen, onDismiss }: {
   const { t } = useLocale();
   if (entry.kind === "update") return <AutoDrainDecision key={entry.decision.id} decision={entry.decision} />;
   if (entry.kind === "prototype") return <PrototypeRow entry={entry} onOpen={onOpen} />;
-  if (entry.kind === "secret-request") return <SecretRequestAttentionRow notice={entry.notice} onOpen={onOpen} />;
+  if (entry.kind === "secret-request") return <SecretRow entry={entry} onOpen={onOpen} />;
   const role = needsYouEntryRole(entry, pipelines);
   const since = needsYouEntrySince(entry);
   const { title, line, question, options, recommended } = needsYouRowText(t, entry);
@@ -353,6 +351,31 @@ function NeedsYouRow({ entry, pipelines, focused, onOpen, onDismiss }: {
         </button>
       </div>
       {permission ? <PermissionActions file={permission} /> : null}
+    </div>
+  );
+}
+
+/** A secret request waits in Decisions: one line with its kind, what it
+    writes to and its age. The entry there takes it off the list, so it has
+    no «Dismiss». */
+function SecretRow({ entry, onOpen }: { entry: Extract<MobileAttentionEntry, { kind: "secret-request" }>; onOpen: () => void }) {
+  const { t } = useLocale();
+  const since = needsYouEntrySince(entry);
+  const { title, label } = needsYouRowText(t, entry);
+  return (
+    <div className="rounded-[8px]" data-needs-you-row={entry.id} data-needs-you-kind={entry.kind} data-needs-you-since={since ?? undefined}>
+      <button
+        type="button"
+        className="flex min-h-9 w-full min-w-0 items-center gap-1.5 rounded-[8px] px-2.5 py-1.5 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        data-attention-secret={entry.id}
+        aria-label={t("decisions.expandAria", { title: t("secretRequest.titleFor", { target: title }) })}
+        onClick={onOpen}
+      >
+        <KeyRound className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden />
+        <span className="shrink-0 text-[10.5px] font-semibold text-accent">{label}</span>
+        <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-primary" data-needs-you-title-line="">{title}</span>
+        {since !== null ? <span data-attention-age className="shrink-0 text-[10.5px] text-muted">{fmtAge(since)}</span> : null}
+      </button>
     </div>
   );
 }

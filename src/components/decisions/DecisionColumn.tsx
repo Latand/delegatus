@@ -67,6 +67,10 @@ export function DecisionList({ project, active = true, focus, touch = false, ini
   /* The control a press on a row or a header hands the keyboard focus to. */
   const follow = useRef<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  /* The status line stands above the list, so a list left scrolled down hides it. */
+  useEffect(() => {
+    if (feedback) listRef.current?.scrollTo?.({ top: 0 });
+  }, [feedback]);
   const [width, setWidth] = useState(0);
   useEffect(() => {
     const node = listRef.current;
@@ -113,9 +117,10 @@ export function DecisionList({ project, active = true, focus, touch = false, ini
   }, [expandedId]);
   useEffect(() => {
     const list = listRef.current;
-    const cardContainer = list?.querySelector("[data-secret-request]")?.parentElement;
+    const cardContainer = list?.querySelector<HTMLElement>("[data-secret-request]");
     if (!list || !cardContainer) return;
     const fit = () => {
+      if (list.querySelector("[data-decision-feedback]")) return;
       const viewport = list.getBoundingClientRect();
       const card = cardContainer.getBoundingClientRect();
       if (card.bottom > viewport.bottom && card.top > viewport.top + 6) list.scrollTop += card.top - viewport.top - 6;
@@ -142,7 +147,7 @@ export function DecisionList({ project, active = true, focus, touch = false, ini
       if ("secret" in row) {
         const { secret } = row;
         return row.id === expanded?.id
-          ? <SecretRequestCard key={row.id} request={secret} narrow={narrow} onCollapse={() => collapse(row.id)}
+          ? <SecretRequestCard key={row.id} request={secret} onCollapse={() => collapse(row.id)}
             onUpdate={(answer, status) => { read.updateSecrets(secret, answer); if (status) setFeedback(status); }} />
           : <FoldedDecisionRow key={row.id} id={row.id} title={secretRequestTitle(t, secret)} mark={KeyRound} wrap onOpen={() => open(row.id)} />;
       }
@@ -175,7 +180,7 @@ export function DecisionList({ project, active = true, focus, touch = false, ini
       data-decision-expanded={expandedId ?? ""}
       className={`flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overscroll-y-contain ${touch ? "px-3 pb-4 pt-3" : "p-3"}`}
     >
-      {feedback ? <p role={feedback.error ? "alert" : "status"} className={`m-0 px-1 py-1 text-ui ${feedback.error ? "text-danger" : "text-primary"}`}>{feedback.text}</p> : null}
+      {feedback ? <p role={feedback.error ? "alert" : "status"} data-decision-feedback="" className={`m-0 px-1 py-1 text-ui ${feedback.error ? "text-danger" : "text-primary"}`}>{feedback.text}</p> : null}
       {body}
     </div>
   );

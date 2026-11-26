@@ -2,7 +2,7 @@ import { projectAliasResolver } from "@/lib/projects/aliases";
 import { loadTasksByIds } from "@/lib/tasks/store";
 import { secretRequestRecords } from "./store";
 import { secretError, type SecretRequestRecord } from "./types";
-import type { SecretRequestNotice, SecretRequestView } from "./view";
+import { secretTarget, type SecretRequestNotice, type SecretRequestView } from "./view";
 import { readSecretRequest } from "./write";
 
 const activeBySnapshot = new WeakMap<readonly SecretRequestRecord[], readonly SecretRequestRecord[]>();
@@ -17,11 +17,16 @@ function active(rows: readonly SecretRequestRecord[], now: number) {
   return open.filter(row => row.state === "writing" || row.expiresAt > now);
 }
 
-function notice(row: SecretRequestRecord, project: string): SecretRequestNotice {
+function identity(row: SecretRequestRecord, project: string) {
   return { id: row.id, project, createdAt: row.createdAt, expiresAt: row.expiresAt };
 }
 
-/** The board needs only the project, count and link target. */
+function notice(row: SecretRequestRecord, project: string): SecretRequestNotice {
+  const { destination } = row;
+  return { ...identity(row, project), target: secretTarget(destination.path, destination.kind === "env" ? destination.key : undefined) };
+}
+
+/** The board needs only the project, count, link target and the name of what it writes to. */
 export async function secretRequestNotices(now = Date.now()): Promise<SecretRequestNotice[]> {
   const rows = await secretRequestRecords();
   const open = active(rows, now);
@@ -57,7 +62,7 @@ export async function operatorSecretRequests(project: string, now = Date.now()):
         ? { id: candidate.id, at: candidate.enteredAt } : last;
     }, undefined);
     return [{
-      ...notice(row, key), state: row.state, purpose: row.purpose, format: row.format, minLength: row.minLength,
+      ...identity(row, key), state: row.state, purpose: row.purpose, format: row.format, minLength: row.minLength,
       requester: {
         title: requester.title, role: requester.role, engine: requester.engine,
         ...(requester.model ? { model: requester.model } : {}),

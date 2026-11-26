@@ -13,9 +13,11 @@ export interface SecretRequestNotice {
   project: string;
   createdAt: number;
   expiresAt: number;
+  /** What the request writes to, as the operator reads it: the file name, and for a dotenv file the variable. */
+  target: string;
 }
 
-export interface SecretRequestView extends SecretRequestNotice {
+export interface SecretRequestView extends Omit<SecretRequestNotice, "target"> {
   state: "pending" | "writing";
   requester: {
     title: string | null; role: string; engine: string; model?: string;
@@ -38,4 +40,10 @@ export interface SecretActionAnswer {
 
 export function secretFilename(filename: string): string {
   return filename.slice(filename.lastIndexOf("/") + 1);
+}
+
+/** «file» or «KEY → file», which a line break never splits. */
+export function secretTarget(path: string, key?: string): string {
+  const filename = secretFilename(path);
+  return key ? `${key}\u00a0→\u00a0${filename}` : filename;
 }

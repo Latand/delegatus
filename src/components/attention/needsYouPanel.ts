@@ -192,7 +192,7 @@ export interface NeedsYouRowText extends Omit<OperatorAsk, "sentence"> {
 export function needsYouRowText(t: TFunction, entry: MobileAttentionEntry): NeedsYouRowText {
   const { sentence, ...ask } = needsYouEntryAsk(t, entry);
   if (entry.kind === "prototype") return { title: entry.notice.title, line: entry.notice.undelivered ? t("proto.notice.undelivered") : sentence, label: t("proto.notice.open"), ...ask };
-  if (entry.kind === "secret-request") return { title: t("secretRequest.title"), line: sentence, label: t("decisions.tab"), ...ask };
+  if (entry.kind === "secret-request") return { title: entry.notice.target, line: sentence, label: t("secretRequest.kind"), ...ask };
   if (entry.kind === "update") return { title: t("selfUpdate.auto.decision.title"), line: sentence, label: t("selfUpdate.auto.decision.title"), ...ask };
   return entry.kind === "conversation"
     ? { title: entry.item.reason.report?.body || cleanTitle(entry.item.file.title, 90), line: sentence, label: reasonLine(t, entry.item.reason), ...ask }
