@@ -380,6 +380,7 @@ test("gate harness selections limit nested workers while ordinary head and basel
   expect(comparisonFileWorkers([...nested, regular[0]!], 8)).toBe(3);
   expect(comparisonFileWorkers([...nested, ...regular], 8)).toBe(8);
   expect(comparisonFileWorkers([...nested, ...regular], 3)).toBe(3);
+  expect(comparisonFileWorkers(regular, 8, true)).toBe(1);
   expect(comparisonFileWorkers([...nested, ...regular], 8, true)).toBe(1);
   expect(comparisonFileWorkers([...nested, ...regular], 1)).toBe(1);
 });
