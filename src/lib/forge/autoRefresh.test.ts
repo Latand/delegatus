@@ -10,12 +10,14 @@ import type { BaseUpdatePush, BaseUpdateRequest } from "./baseUpdate";
 import { createHash } from "node:crypto";
 import type { MergeOnReviewSetting } from "@/lib/projects/settings";
 import { COMMIT_ACCOUNT_REFUSAL } from "@/lib/git/forgeCommitAccount";
+import { seedForgeCommitAccount } from "@/test-helpers/forgeCommitAccount";
 
 /* The merge runner (#2187 §4.3-§4.4) against a fake `gh` and clock: invented
    repositories, heads and checks, no network. The stores resolve their state
    directory at import, so a sandbox is pinned before the first store read. */
 const sandbox = process.env.REFRESH_LIFECYCLE_STATE ?? fs.mkdtempSync(path.join(os.tmpdir(), "llv-auto-refresh-"));
 fs.mkdirSync(sandbox, { recursive: true });
+seedForgeCommitAccount(sandbox);
 const previousStateDir = process.env.LLV_STATE_DIR;
 process.env.LLV_STATE_DIR = sandbox;
 
