@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +6,7 @@ import { closeAgentRegistryForTests } from "@/lib/agent/registry";
 import { statePath } from "@/lib/configDir";
 import { pipelineIdentity, savePipelines } from "@/lib/pipelines/store";
 import { scanProcesses, type ProcessScan, type ScannedProcess } from "@/lib/tempSweep";
+import { AttemptTempBudgetDeferred } from "./attemptTempDiagnostics";
 import { AttemptTempStore } from "./attemptTempRetention";
 import { sweepMonotonicNow, withAttemptTempDeadline } from "./attemptTempDeadline";
 import { removeTreeWithinAttemptBudget } from "./attemptTempRemoval";
@@ -78,6 +79,11 @@ const journalRows = (day = "2031-03-10") => {
   return fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line) as Record<string, unknown>) : [];
 };
 const names = (w: World) => fs.readdirSync(w.scratch).sort();
+/** A monotonic clock the test moves: it stands still until a port advances it. */
+function manualClock() {
+  let at = 1_000;
+  return { monotonic: () => at, advance: (ms: number) => { at += ms; } };
+}
 
 test("an expired unregistered root with no live reference is deleted and journaled with its measured allocation", async () => {
   const w = world();
@@ -159,17 +165,116 @@ test.skipIf(process.platform !== "linux")("a real process whose cwd is inside a 
 test("a spent time budget stops a pass part-way and the next pass resumes", async () => {
   const w = world();
   for (let index = 0; index < 120; index++) make(w, `llv-stage-T${String(index).padStart(5, "0")}`, { bytes: 512 });
-  const slow: UnregisteredScratchPorts["remove"] = async (directory) => { await new Promise(resolve => setTimeout(resolve, 5)); fs.rmSync(directory, { recursive: true }); };
-  const first = (await withAttemptTempDeadline(sweepMonotonicNow() + 1000 + 150,
-    () => runUnregisteredScratchPass(w.store, ports({ remove: slow, availableBytes: () => 30e9 }))))!;
-  expect(first.deferred).not.toBeNull();
-  expect(first.removed).toBeGreaterThan(0);
-  expect(first.removed).toBeLessThan(120);
-  expect(first.elapsedMs).toBeLessThan(2_000);
+  // Low free space allows 35 s: each removal costs 400 ms on the pass's clock, so the 88th spends it.
+  const slow = (clock: ReturnType<typeof manualClock>): UnregisteredScratchPorts["remove"] => async (directory) => { clock.advance(400); fs.rmSync(directory, { recursive: true }); };
+  const firstClock = manualClock();
+  const first = (await runUnregisteredScratchPass(w.store, ports({ remove: slow(firstClock), monotonic: firstClock.monotonic, availableBytes: () => 30e9 })))!;
+  expect(first.removed).toBe(Math.ceil(UNREGISTERED_PRESSURE_LIMITS.budgetMs / 400));
+  expect(first.elapsedMs).toBe(first.removed * 400);
+  expect(first.deferred).toContain("time budget");
   expect(fs.readdirSync(w.scratch).length).toBe(120 - first.removed);
-  const rest = (await runUnregisteredScratchPass(w.store, ports({ remove: slow, availableBytes: () => 30e9, now: () => NOW + MINUTE })))!;
+  const secondClock = manualClock();
+  const rest = (await runUnregisteredScratchPass(w.store, ports({ remove: slow(secondClock), monotonic: secondClock.monotonic, availableBytes: () => 30e9, now: () => NOW + MINUTE })))!;
   expect(rest.deferred).toBeNull();
+  expect(rest.removed).toBe(120 - first.removed);
   expect(fs.readdirSync(w.scratch)).toEqual([]);
+});
+
+test("a container that mounts an ancestor of the state directory holds nothing; a mount of a root or of a subtree keeps that root", async () => {
+  const w = world();
+  const { containers: _observer, ...real } = ports();
+  const mounted = (...sources: string[]) => ({ ...real, containerMounts: async () => sources });
+  const ancestors = [w.root, path.dirname(w.root), "/"];
+  const first = make(w, "llv-stage-ANCEST");
+  const viaAncestor = (await runUnregisteredScratchPass(w.store, mounted(...ancestors, w.scratch)))!;
+  expect(viaAncestor).toMatchObject({ removed: 1, errors: 0 });
+  expect(fs.existsSync(first)).toBeFalse();
+
+  const whole = make(w, "llv-stage-MOUNTD"), sub = make(w, "llv-stage-SUBMNT"), sibling = make(w, "llv-stage-ALONE1");
+  const kept = (await runUnregisteredScratchPass(w.store, { ...mounted(whole, path.join(sub, "cache")), now: () => NOW + MINUTE }))!;
+  expect(kept).toMatchObject({ removed: 1, examined: 3 });
+  expect(fs.existsSync(whole)).toBeTrue();
+  expect(fs.existsSync(sub)).toBeTrue();
+  expect(fs.existsSync(sibling)).toBeFalse();
+  expect(kept.kept.reference_container_reference_observer_hold).toBe(2);
+  // An inventory that could not be read whole proves nothing: both stay.
+  const unknown = (await runUnregisteredScratchPass(w.store, { ...real, containerMounts: async () => null, now: () => NOW + 12 * MINUTE }))!;
+  expect(unknown).toMatchObject({ removed: 0, examined: 2 });
+  expect(names(w)).toEqual(["llv-stage-MOUNTD", "llv-stage-SUBMNT"]);
+});
+
+/** Two checkouts with a live process in each, and a reader that fails the second one's directory listing on request. */
+function consumers(w: World) {
+  const made = ["alpha", "beta"].map((name, index) => {
+    const checkout = path.join(w.root, `checkout-${name}`), cwd = path.join(checkout, "work");
+    fs.mkdirSync(path.join(checkout, ".git"), { recursive: true }); fs.mkdirSync(cwd);
+    return { checkout, cwd, process: { ...holder([cwd]), pid: process.pid + index } };
+  });
+  return { made, scan: { ownNamespace: "fixture", processes: made.map(consumer => consumer.process) } as ProcessScan };
+}
+
+test("a checkout whose link read cannot finish in a tick is finished on the next; reads that completed are not repeated", async () => {
+  const w = world();
+  const { made, scan } = consumers(w);
+  const roots = [make(w, "llv-stage-LINKS1"), make(w, "llv-stage-LINKS2")];
+  const { containers: _observer, ...real } = ports();
+  const readdirApi = fs.promises as unknown as { readdir: (target: fs.PathLike, options: { withFileTypes: true }) => Promise<fs.Dirent[]> };
+  const readdir = readdirApi.readdir.bind(readdirApi);
+  const listed: string[] = [];
+  let slow = true;
+  const observed = spyOn(readdirApi, "readdir").mockImplementation(async (target, options) => {
+    if (String(target).startsWith(made[1]!.checkout)) { listed.push(String(target)); if (slow) throw new AttemptTempBudgetDeferred("checkout link inventory exceeded its time budget"); }
+    else if (String(target).startsWith(made[0]!.checkout)) listed.push(String(target));
+    return readdir(target, options);
+  });
+  const checkoutReads = new Map();
+  try {
+    const run = (at: number) => runUnregisteredScratchPass(w.store, { ...real, containerMounts: async () => [], scan: () => scan, checkoutReads, now: () => NOW + at })
+      .then(report => report!);
+    const first = await run(0);
+    // The inventory is incomplete: no root can be proven, none is touched, and the pass says why.
+    expect(first).toMatchObject({ removed: 0, examined: 1, errors: 0 });
+    expect(first.deferred).toContain("1 of 2 checkouts still unread");
+    for (const root of roots) expect(fs.existsSync(root)).toBeTrue();
+    const alphaReads = listed.filter(target => target.startsWith(made[0]!.checkout)).length;
+    expect(alphaReads).toBeGreaterThan(0);
+    slow = false;
+    const second = await run(MINUTE);
+    expect(second).toMatchObject({ removed: 2, errors: 0 });
+    for (const root of roots) expect(fs.existsSync(root)).toBeFalse();
+    // The first checkout's read of the first tick served the second.
+    expect(listed.filter(target => target.startsWith(made[0]!.checkout)).length).toBe(alphaReads);
+  } finally { observed.mockRestore(); }
+});
+
+test("a checkout link into a root still keeps that root once the inventory is complete", async () => {
+  const w = world();
+  const { made, scan } = consumers(w);
+  const linked = make(w, "llv-stage-LINKED"), free = make(w, "llv-stage-NOLINK");
+  fs.symlinkSync(path.join(linked, "cache"), path.join(made[0]!.cwd, "cache-link"), "dir");
+  const { containers: _observer, ...real } = ports();
+  const report = (await runUnregisteredScratchPass(w.store, { ...real, containerMounts: async () => [], scan: () => scan }))!;
+  expect(report).toMatchObject({ removed: 1, examined: 2, errors: 0 });
+  expect(fs.existsSync(linked)).toBeTrue();
+  expect(fs.existsSync(free)).toBeFalse();
+  expect(report.kept.reference_checkout_link_reference).toBe(1);
+});
+
+test("a retained checkout read is trusted for ten minutes and read again after, so a later link into a root is seen", async () => {
+  const w = world();
+  const { made, scan } = consumers(w);
+  const { containers: _observer, ...real } = ports();
+  const checkoutReads = new Map();
+  const run = (at: number) => runUnregisteredScratchPass(w.store, { ...real, containerMounts: async () => [], scan: () => scan, checkoutReads, now: () => NOW + at }).then(report => report!);
+  make(w, "llv-stage-FIRST1");
+  expect(await run(0)).toMatchObject({ removed: 1, errors: 0 });
+  const later = make(w, "llv-stage-LATER1");
+  fs.symlinkSync(path.join(later, "cache"), path.join(made[1]!.cwd, "late-link"), "dir");
+  // Inside the ten minutes the first tick's reads stand; once they are older the link is read and holds the root.
+  const afterAge = await run(11 * MINUTE);
+  expect(afterAge).toMatchObject({ removed: 0, errors: 0 });
+  expect(afterAge.kept.reference_checkout_link_reference).toBe(1);
+  expect(fs.existsSync(later)).toBeTrue();
 });
 
 test("a process cwd on procfs does not hold an unrelated root, while its open file in another root still does", async () => {
@@ -297,32 +402,34 @@ test("roots the ledger owns stay with the ledger, while a root adopted without a
 test("the ordinary pass removes a bounded number of roots, the low-space pass many, oldest first", async () => {
   const w = world();
   // Index 0 is the oldest: its tree was last written 30 h + 59 min ago, the last one 30 h ago.
-  const fast: UnregisteredScratchPorts["remove"] = async (directory) => { fs.rmSync(directory, { recursive: true }); };
+  const clock = manualClock();
+  const fast: UnregisteredScratchPorts["remove"] = async (directory) => { clock.advance(5); fs.rmSync(directory, { recursive: true }); };
   const roots = Array.from({ length: 200 }, (_, index) => make(w, `llv-stage-R${String(index).padStart(5, "0")}`, { age: 30 * HOUR + (199 - index) * MINUTE }));
   expect(UNREGISTERED_ORDINARY_LIMITS.remove).toBe(16);
-  const ordinary = (await runUnregisteredScratchPass(w.store, ports({ remove: fast })))!;
+  const ordinary = (await runUnregisteredScratchPass(w.store, ports({ remove: fast, monotonic: clock.monotonic })))!;
   expect(ordinary).toMatchObject({ removed: 16, trigger: null, limits: UNREGISTERED_ORDINARY_LIMITS });
   expect(roots.slice(0, 16).every(directory => !fs.existsSync(directory))).toBeTrue();
   expect(fs.existsSync(roots[16]!)).toBeTrue();
   expect(ordinary.deferred).toContain("per-pass bound");
-  const pressure = (await runUnregisteredScratchPass(w.store, ports({ now: () => NOW + MINUTE, availableBytes: () => UNREGISTERED_LOW_FREE_BYTES - 1, remove: fast })))!;
+  const pressure = (await runUnregisteredScratchPass(w.store, ports({ now: () => NOW + MINUTE, availableBytes: () => UNREGISTERED_LOW_FREE_BYTES - 1, remove: fast, monotonic: clock.monotonic })))!;
   expect(pressure).toMatchObject({ removed: UNREGISTERED_PRESSURE_LIMITS.remove, trigger: "free-space", limits: UNREGISTERED_PRESSURE_LIMITS });
   expect(roots.slice(0, 16 + 128).every(directory => !fs.existsSync(directory))).toBeTrue();
   expect(fs.existsSync(roots[16 + 128]!)).toBeTrue();
-  expect(pressure.elapsedMs).toBeLessThan(UNREGISTERED_PRESSURE_LIMITS.budgetMs);
+  expect(pressure.elapsedMs).toBe(UNREGISTERED_PRESSURE_LIMITS.remove * 5);
 });
 
 test("a thousand expired roots are all removed across low-space passes within their bounds", async () => {
   const w = world();
   for (let index = 0; index < 1000; index++) make(w, `llv-stage-M${String(index).padStart(5, "0")}`, { age: 25 * HOUR + index * MINUTE, bytes: 512 });
-  const fast: UnregisteredScratchPorts["remove"] = async (directory) => { fs.rmSync(directory, { recursive: true }); };
+  const clock = manualClock();
+  const fast: UnregisteredScratchPorts["remove"] = async (directory) => { clock.advance(5); fs.rmSync(directory, { recursive: true }); };
   const passes: number[] = [];
   for (let pass = 0; pass < 40 && fs.readdirSync(w.scratch).length; pass++) {
-    const report = (await runUnregisteredScratchPass(w.store, ports({ now: () => NOW + pass * MINUTE, availableBytes: () => 30e9, remove: fast })))!;
+    const report = (await runUnregisteredScratchPass(w.store, ports({ now: () => NOW + pass * MINUTE, availableBytes: () => 30e9, remove: fast, monotonic: clock.monotonic })))!;
     expect(report.trigger).toBe("free-space");
     expect(report.examined).toBeLessThanOrEqual(UNREGISTERED_PRESSURE_LIMITS.examine);
     expect(report.removed).toBeLessThanOrEqual(UNREGISTERED_PRESSURE_LIMITS.remove);
-    expect(report.elapsedMs).toBeLessThan(UNREGISTERED_PRESSURE_LIMITS.budgetMs);
+    expect(report.elapsedMs).toBe(report.removed * 5);
     expect(report.errors).toBe(0);
     passes.push(report.removed);
   }
@@ -464,7 +571,7 @@ test("the production tick runs the pass first, reports unregistered totals and t
   });
   const young = make(w, "llv-stage-YOUNG1");
   setTimes(young, real - HOUR);
-  const env = { NODE_ENV: "test", LLV_TEMP_SWEEP: "on" };
+  const env: NodeJS.ProcessEnv = { NODE_ENV: "test", LLV_TEMP_SWEEP: "on" };
   const report = (await runAttemptTempSweep({ scan: () => empty, references: async () => true, availableBytes: () => 40e9 }, env))!;
   expect(report.unregistered).toMatchObject({ removed: 3, trigger: "free-space", errors: 0, found: 4, scratch: "present" });
   for (const directory of roots) expect(fs.existsSync(directory)).toBeFalse();

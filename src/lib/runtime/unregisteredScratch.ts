@@ -11,8 +11,8 @@ import { stateDatabaseBusy } from "@/lib/state/lockWait";
 import { mountPointsUnder, type ProcessScan } from "@/lib/tempSweep";
 import { attemptTempRemaining, checkAttemptTempDeadline, sweepMonotonicNow, withAttemptTempDeadline, ATTEMPT_TEMP_REPLY_MARGIN_MS } from "./attemptTempDeadline";
 import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTempDiagnostics";
-import { attemptProcessReferencesClear, attemptReferencesClear, attemptTreeHold, ledgerLinkedEvidence, measureAttemptAllocation,
-  RepositoryLinkInventory, type RetainedCheckoutReads } from "./attemptTempFilesystem";
+import { attemptProcessReferencesClear, attemptReferencesClear, attemptTreeHold, containerSubtreeClear, ledgerLinkedEvidence, measureAttemptAllocation,
+  readContainerMountSources, RepositoryLinkInventory, warmCheckoutInventory, type RetainedCheckoutReads } from "./attemptTempFilesystem";
 import { removeTreeWithinAttemptBudget } from "./attemptTempRemoval";
 import { attemptTempRootWindow, type AttemptTempStore } from "./attemptTempRetention";
 import { openLaneUseCheck } from "./attemptScratchLanes";
@@ -56,8 +56,12 @@ export type UnregisteredScratchPorts = {
   /** The same reference observer the ledger sweep uses. */
   references?: (original: string, current: string, scan: ProcessScan) => Promise<boolean>;
   containers?: (roots: readonly string[]) => Promise<boolean>;
+  /** Mount sources of the running containers, `null` when unreadable; read once per pass. */
+  containerMounts?: () => Promise<string[] | null>;
   availableBytes?: (scratch: string) => number;
   now?: () => number;
+  /** Milliseconds on a monotonic clock, for the pass's time budget. */
+  monotonic?: () => number;
   checkoutReads?: RetainedCheckoutReads;
   journal?: OrdinaryJournal;
   /** Directories an open lane or live conversation uses; read once per pass. */
@@ -99,7 +103,7 @@ function describeHold(code: string): string {
 /** Newest modification time and allocated blocks of one tree, in one bounded,
  * symlink-safe walk that stops as soon as anything is newer than `cutoff`.
  * Hardlinked files count once. It reads timestamps; it grants nothing. */
-async function walkTree(root: string, stat: fs.Stats, cutoff: number, deadline: number) {
+async function walkTree(root: string, stat: fs.Stats, cutoff: number, deadline: number, clock: () => number) {
   const seen = new Set<string>();
   let newestMs = stat.mtimeMs, bytes = stat.blocks * 512, entries = 0, unreadable = false;
   if (newestMs > cutoff) return { state: "young" as const, newestMs, bytes, entries };
@@ -113,7 +117,7 @@ async function walkTree(root: string, stat: fs.Stats, cutoff: number, deadline: 
       if (entries % 2048 === 0) {
         await new Promise<void>(resolve => setImmediate(resolve));
         checkAttemptTempDeadline();
-        if (sweepMonotonicNow() >= deadline) return { state: "unproven" as const, newestMs, bytes, entries };
+        if (clock() >= deadline) return { state: "unproven" as const, newestMs, bytes, entries };
       }
       const file = path.join(directory, name);
       let entry: fs.Stats;
@@ -178,7 +182,9 @@ export async function sweepUnregisteredScratch(store: AttemptTempStore, ports: U
 
 async function passOverScratch(store: AttemptTempStore, ledger: UnregisteredScratchLedger, ports: UnregisteredScratchPorts) {
   const now = ports.now ?? Date.now;
-  const started = now(), startedMono = sweepMonotonicNow();
+  /** The pass's own measure of time spent; a test advances it. */
+  const monotonic = ports.monotonic ?? sweepMonotonicNow;
+  const started = now(), startedMono = monotonic();
   const scratch = statePath("scratch");
   const protectedTrees = [statePath("evidence"), statePath("backups")].map(tree => path.resolve(tree));
   const inProtected = (target: string) => protectedTrees.some(tree => target === tree || target.startsWith(tree + path.sep));
@@ -208,7 +214,7 @@ async function passOverScratch(store: AttemptTempStore, ledger: UnregisteredScra
     return bytes;
   };
   const finish = () => {
-    report.elapsedMs = Math.max(0, Math.round(sweepMonotonicNow() - startedMono));
+    report.elapsedMs = Math.max(0, Math.round(monotonic() - startedMono));
     try {
       const summary: UnregisteredPassSummary = { at: started, trigger: report.trigger, mode: ports.mode, freeBytes: report.freeBytes, lossBytes: report.lossBytes,
         found: report.found, examined: report.examined, removed: dry ? report.wouldRemove : report.removed, removedBytes: dry ? report.wouldRemoveBytes : report.removedBytes,
@@ -245,8 +251,8 @@ async function passOverScratch(store: AttemptTempStore, ledger: UnregisteredScra
       ledger.recordSample({ at: started, freeBytes: report.freeBytes }, UNREGISTERED_LOSS_WINDOW_MS);
     } catch (error) { report.spaceError = attemptTempFailureDetail(error); }
     const limits = report.limits = report.trigger ? UNREGISTERED_PRESSURE_LIMITS : UNREGISTERED_ORDINARY_LIMITS;
-    const deadline = sweepMonotonicNow() + attemptTempRemaining(limits.budgetMs);
-    const remainingMs = () => deadline - sweepMonotonicNow();
+    const deadline = monotonic() + attemptTempRemaining(limits.budgetMs);
+    const remainingMs = () => deadline - monotonic();
     const freeBefore = report.spaceError ? null : report.freeBytes;
     if (!dry) report.journal = path.relative(statePath(), ordinaryJournalFile(new Date(started).toISOString().slice(0, 10)));
 
@@ -274,7 +280,7 @@ async function passOverScratch(store: AttemptTempStore, ledger: UnregisteredScra
     if (!dry) ledger.retainSkips(new Set([...roots, ...leftovers].map(entry => entry.name)));
     const waiting = ledger.waiting(started);
     const inventory = new RepositoryLinkInventory({ now, budgetMs: Math.min(30_000, Math.max(1, remainingMs())), retained: ports.checkoutReads,
-      validationReuseMs: ports.checkoutReads ? 5_000 : 0 });
+      validationReuseMs: ports.checkoutReads ? 5_000 : 0, trustFreshReads: true });
     // One read of every lane, taken only when a root reaches that proof.
     let laneCheck: ((directory: string) => boolean) | undefined;
     const lanes = (directory: string) => (laneCheck ??= ports.lanes ? ports.lanes() : openLaneUseCheck())(directory);
@@ -291,9 +297,26 @@ async function passOverScratch(store: AttemptTempStore, ledger: UnregisteredScra
         catch { /* A kept root changes nothing on disk; its row in the ledger still reports it. */ }
     };
 
+    // The process scan reads every process once. Roots share one for the proof
+    // and the scan before a removal is renewed when it is older than a second,
+    // so a pass costs a scan per removal window, not two per root.
+    let scanned: { at: number; scan: ProcessScan } | null = null;
+    const scanWithin = (maxAgeMs: number) => {
+      if (!scanned || monotonic() - scanned.at > maxAgeMs) scanned = { at: monotonic(), scan: ports.scan([scratch]) };
+      return scanned.scan;
+    };
+    // The container inventory is read once per pass. Only a container that
+    // mounts a root or a subtree of it holds the root; a mount of an ancestor
+    // such as the whole home directory does not.
+    let mounts: Promise<string[] | null> | undefined;
+    const containers = ports.containers ?? (async (roots: readonly string[]) => containerSubtreeClear(roots, await (mounts ??= (ports.containerMounts ?? readContainerMountSources)())));
+    // Every live checkout's link inventory is read before the first root, so a
+    // checkout that needs more than one tick is finished across ticks.
+    let warmed: Promise<{ checkouts: number; incomplete: number }> | undefined;
+
     const unreferenced = (directory: string, scan: ProcessScan, hold: { code: string }) => ports.references
       ? ports.references(directory, directory, scan)
-      : attemptReferencesClear(directory, directory, scan, ports.containers, inventory, code => { hold.code = code; });
+      : attemptReferencesClear(directory, directory, scan, containers, inventory, code => { hold.code = code; });
 
     /** Removal of a root already proven expired, or of a tombstone left by an
      * interrupted removal. Returns whether the tree is gone; otherwise it
@@ -347,7 +370,7 @@ async function passOverScratch(store: AttemptTempStore, ledger: UnregisteredScra
         || process.getuid && stat.uid !== process.getuid() || stat.dev !== parent.dev) {
         keep(entry, "path_not_admitted", "the tombstone is not the directory its name records", 0); continue;
       }
-      if (!attemptProcessReferencesClear(entry.directory, entry.directory, ports.scan([entry.directory]))) { keep(entry, "live_reference", describeHold("live_reference"), 0); continue; }
+      if (!attemptProcessReferencesClear(entry.directory, entry.directory, scanWithin(1_000))) { keep(entry, "live_reference", describeHold("live_reference"), 0); continue; }
       if (mountPointsUnder(entry.directory).length) { keep(entry, "mount_boundary", describeHold("mount_boundary"), 0); continue; }
       let bytes = 0;
       try { bytes = (await measureAttemptAllocation(entry.directory, { budgetMs: Math.min(remainingMs(), limits.rootMs) })).bytes; } catch { bytes = 0; }
@@ -380,7 +403,7 @@ async function passOverScratch(store: AttemptTempStore, ledger: UnregisteredScra
       const window = Math.min(limits.rootMs, Math.max(1, remainingMs()));
       const cutoff = started - UNREGISTERED_SCRATCH_EXPIRY_MS;
       const walk = await withAttemptTempDeadline(sweepMonotonicNow() + window + ATTEMPT_TEMP_REPLY_MARGIN_MS,
-        () => walkTree(directory, stat, cutoff, sweepMonotonicNow() + window));
+        () => walkTree(directory, stat, cutoff, monotonic() + window, monotonic));
       if (walk.state === "young") return miss("young", 0, `modified ${new Date(walk.newestMs).toISOString()}, inside the 24 h window`, walk.newestMs + UNREGISTERED_SCRATCH_EXPIRY_MS + 1);
       if (walk.state === "mount") return miss("mount_boundary", walk.bytes);
       if (walk.state === "unproven") return miss("activity_unproven", walk.bytes);
@@ -390,11 +413,21 @@ async function passOverScratch(store: AttemptTempStore, ledger: UnregisteredScra
       if (mountPointsUnder(directory).length) return miss("mount_boundary", walk.bytes);
       try { if (ledgerLinkedEvidence(directory).length) return miss("linked_evidence", walk.bytes); }
       catch (error) { return miss("evidence_unreadable", walk.bytes, `${describeHold("evidence_unreadable")}: ${attemptTempFailureDetail(error)}`); }
-      const scan = ports.scan([directory]);
+      const scan = scanWithin(10_000);
       let clear: boolean;
-      try { clear = await unreferenced(directory, scan, hold); }
-      catch (error) {
-        if (error instanceof AttemptTempBudgetDeferred) return { kind: "stop", reason: attemptTempFailureDetail(error) };
+      try {
+        if (!ports.references) {
+          const warm = await (warmed ??= warmCheckoutInventory(scan, inventory));
+          if (warm.incomplete) return { kind: "stop", reason: `checkout link inventory is incomplete (${warm.incomplete} of ${warm.checkouts} checkouts still unread); the reads that finished are kept for the next pass` };
+        }
+        clear = await unreferenced(directory, scan, hold);
+      } catch (error) {
+        // One checkout that changed while it was read defers this root only;
+        // the pass goes on while its time lasts.
+        if (error instanceof AttemptTempBudgetDeferred) {
+          if (attemptTempRemaining() <= 0 || remainingMs() <= 0) return { kind: "stop", reason: attemptTempFailureDetail(error) };
+          return miss("inventory_deferred", walk.bytes, `a checkout's link inventory was not finished: ${attemptTempFailureDetail(error)}`, started + MINUTE);
+        }
         const code = (error as NodeJS.ErrnoException).code;
         if (code === "ENOENT" || code === "EACCES" || code === "EPERM") return miss("checkout_unreadable", walk.bytes, `a process's checkout could not be read: ${attemptTempFailureDetail(error)}`);
         throw error;
@@ -431,7 +464,7 @@ async function passOverScratch(store: AttemptTempStore, ledger: UnregisteredScra
       // the same admission, and a fresh process scan.
       const recheck = fs.lstatSync(entry.directory, { throwIfNoEntry: false });
       if (!recheck?.isDirectory() || recheck.isSymbolicLink() || `${recheck.dev}:${recheck.ino}` !== verdict.identity || !admitted(entry.directory)
-        || fs.existsSync(path.join(entry.directory, ".delegatus-keep")) || !attemptProcessReferencesClear(entry.directory, entry.directory, ports.scan([entry.directory]))) {
+        || fs.existsSync(path.join(entry.directory, ".delegatus-keep")) || !attemptProcessReferencesClear(entry.directory, entry.directory, scanWithin(1_000))) {
         keep(entry, "changed_before_removal", describeHold("changed_before_removal"), verdict.bytes); continue;
       }
       ledger.beginRemoval(verdict.identity, entry.name, started);

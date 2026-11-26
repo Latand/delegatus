@@ -642,6 +642,17 @@ lock:
   `.delegatus-keep` marker, nested Git checkout, linked report picture, recorded
   custody, mount or open lane holds it. The last proofs are repeated
   synchronously before the rename.
+- **On a busy host the proof stays within the tick.** The pass takes one
+  process scan, renewed after a second before a removal, rather than two per
+  root. It reads the container inventory once; a container whose mount is an
+  ancestor of the root (the Viewer's own container, a whole home directory)
+  holds nothing by itself, while a mount of the root or of a subtree holds it
+  and an unreadable inventory holds every root. Before the first root it reads
+  the link inventory of every checkout a live process works in, several
+  directories at once, and keeps each finished read for the next tick. If a
+  checkout is still unread when the budget ends, no root can be proven: the
+  pass touches nothing and reports how many checkouts remain, and the next
+  tick continues from the reads that finished.
 - **Kept and counted, with the reason and a time to look again:** every other
   case, including an unreadable or unproven tree. A kept root waits for its own
   deadline (`young` waits until its 24 hours end, a live reference ten minutes,
