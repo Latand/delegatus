@@ -1,12 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import type { SeatTickCard } from "@/lib/monitor/types";
 import {
-  MEMORY_SWEEP_MIN_INTERVAL_MS, TMPFS_MAGIC, memoryPressureLine, memoryPressureNoticeText, memoryPressureSignals,
+  MEMORY_SWEEP_MIN_INTERVAL_MS, TMPFS_MAGIC, currentMemoryPressure, memoryPressureLine, memoryPressureNoticeText, memoryPressureSignals,
   memoryThresholds, observeMemoryPressure, observeMemoryPressureReport, parseMeminfo, readMemoryPressureReport,
-  readMemoryReading, reconcileMemoryPressure, tmpCandidates, type MemoryPressure, type MemoryPressureActions, type MemoryReading,
+  readMemoryReading, reconcileMemoryPressure, type MemoryPressure, type MemoryPressureActions, type MemoryReading,
 } from "./memoryPressure";
 
 const GIB = 1024 ** 3;
@@ -40,22 +41,19 @@ test("meminfo gives RAM in use as total minus available and swap as total minus 
   expect(parseMeminfo("MemTotal: 1 kB\n")).toBeNull();
 });
 
-test("the /tmp reading names a tmpfs by its statfs magic and falls through an unreadable view", () => {
+test("the local reading names the machine's /tmp by its statfs magic and never reports a container's /tmp", () => {
   const text = meminfo(8 * 1024 * 1024, 4 * 1024 * 1024, 0, 0);
   const seen: string[] = [];
-  const statfs = (directory: string) => {
-    seen.push(directory);
-    if (directory === "/proc/1/root/tmp") throw Object.assign(new Error("denied"), { code: "EACCES" });
-    return { type: TMPFS_MAGIC, blocks: 1000, bfree: 250, bsize: 4096 };
-  };
-  const tmp = readMemoryReading({ meminfo: () => text, statfs, candidates: tmpCandidates({ LLV_DOCKER_NSENTER_SHIMS: "1" }) })!.tmp;
-  expect(seen).toEqual(["/proc/1/root/tmp", "/tmp"]);
-  expect(tmp).toEqual({ usedBytes: 750 * 4096, totalBytes: 1000 * 4096, tmpfs: true, view: "own" });
-
-  const disk = readMemoryReading({ meminfo: () => text, statfs: () => ({ type: 0xef53, blocks: 10, bfree: 5, bsize: 4096 }), candidates: tmpCandidates({}) })!.tmp;
-  expect(disk?.tmpfs).toBe(false);
-  expect(readMemoryReading({ meminfo: () => text, statfs: () => { throw new Error("gone"); }, candidates: tmpCandidates({}) })!.tmp).toBeNull();
-  expect(readMemoryReading({ meminfo: () => { throw new Error("no proc"); } })).toBeNull();
+  const statfs = (type: number) => (directory: string) => { seen.push(directory); return { type, blocks: 1000, bfree: 250, bsize: 4096 }; };
+  expect(readMemoryReading({ env: {}, meminfo: () => text, statfs: statfs(TMPFS_MAGIC) })!.tmp)
+    .toEqual({ usedBytes: 750 * 4096, totalBytes: 1000 * 4096, tmpfs: true, view: "own" });
+  expect(readMemoryReading({ env: {}, meminfo: () => text, statfs: statfs(0xef53) })!.tmp?.tmpfs).toBeFalse();
+  seen.length = 0;
+  expect(readMemoryReading({ env: { LLV_DOCKER_NSENTER_SHIMS: "1" }, meminfo: () => text, statfs: statfs(TMPFS_MAGIC) })!.tmp).toBeNull();
+  expect(seen).toEqual([]);
+  expect(readMemoryReading({ env: {}, meminfo: () => text, statfs: () => { throw new Error("gone"); } })!.tmp).toBeNull();
+  expect(readMemoryReading({ env: {}, meminfo: () => { throw new Error("no proc"); } })).toBeNull();
+  expect(readMemoryReading({ env: {}, meminfo: () => "MemTotal: 1 kB\n" })).toBeNull();
 });
 
 test("thresholds default to half the swap and 4 GB of tmpfs, and accept only sane overrides", () => {
@@ -87,15 +85,90 @@ test("swap above half or a tmpfs /tmp above 4 GB opens one episode, and only wel
   expect(observeMemoryPressure(reading(20, 0), recovered, at(4), thresholds).episode).toBe(at(4));
 });
 
-test("the persisted report continues an episode across observers and ignores a damaged file", () => {
+/** A Viewer restart: a new process reading the same report file. */
+function observedByANewProcess(file: string, value: MemoryReading, at: string): MemoryPressure {
+  const source = `import { observeMemoryPressureReport } from ${JSON.stringify(path.join(import.meta.dir, "memoryPressure.ts"))};
+    console.log(JSON.stringify(observeMemoryPressureReport(${JSON.stringify(value)}, ${JSON.stringify(at)}, {}, ${JSON.stringify(file)})));`;
+  const child = spawnSync(process.execPath, ["-e", source], { encoding: "utf8", timeout: 30_000 });
+  expect(child.status).toBe(0);
+  return JSON.parse(child.stdout.trim().split("\n").at(-1)!);
+}
+
+test("the report is written when the episode or its reasons change, and a restarted Viewer continues from it", () => {
   const file = path.join(scratch(), "memory-pressure-report.json");
-  const first = observeMemoryPressureReport(reading(20, 0), "2026-11-26T10:00:00Z", {}, file);
-  const second = observeMemoryPressureReport(reading(15, 0), "2026-11-26T10:01:00Z", {}, file);
-  expect(second.episode).toBe(first.episode);
-  expect(readMemoryPressureReport(file)?.at).toBe("2026-11-26T10:01:00Z");
+  // A calm machine writes nothing.
+  expect(observeMemoryPressureReport(reading(1, 0), "2026-11-26T09:59:00Z", {}, file).episode).toBeNull();
+  expect(fs.existsSync(file)).toBeFalse();
+  const opened = observeMemoryPressureReport(reading(20, 0), "2026-11-26T10:00:00Z", {}, file);
+  expect(readMemoryPressureReport(file)?.at).toBe("2026-11-26T10:00:00Z");
+  // The same episode and reasons: the file keeps the reading it was written with.
+  expect(observeMemoryPressureReport(reading(15, 0), "2026-11-26T10:01:00Z", {}, file).episode).toBe(opened.episode);
+  expect(readMemoryPressureReport(file)?.at).toBe("2026-11-26T10:00:00Z");
+  expect(observedByANewProcess(file, reading(15, 0), "2026-11-26T10:02:00Z").episode).toBe(opened.episode);
+  expect(observeMemoryPressureReport(reading(20, 5e9), "2026-11-26T10:03:00Z", {}, file).reasons).toEqual(["swap", "tmp"]);
+  expect(readMemoryPressureReport(file)).toMatchObject({ at: "2026-11-26T10:03:00Z", reasons: ["swap", "tmp"] });
+  expect(observeMemoryPressureReport(reading(1, 0), "2026-11-26T10:04:00Z", {}, file).episode).toBeNull();
+  expect(readMemoryPressureReport(file)).toMatchObject({ at: "2026-11-26T10:04:00Z", episode: null });
+  expect(observedByANewProcess(file, reading(15, 0), "2026-11-26T10:05:00Z").episode).toBeNull();
+  // A damaged file starts a new episode and is replaced.
   fs.writeFileSync(file, "{\"at\":1}");
   expect(readMemoryPressureReport(file)).toBeNull();
-  expect(observeMemoryPressureReport(reading(20, 0), "2026-11-26T10:02:00Z", {}, file).episode).toBe("2026-11-26T10:02:00Z");
+  expect(observeMemoryPressureReport(reading(20, 0), "2026-11-26T10:06:00Z", {}, file).episode).toBe("2026-11-26T10:06:00Z");
+  expect(readMemoryPressureReport(file)?.at).toBe("2026-11-26T10:06:00Z");
+});
+
+test("a write the disk refuses keeps the episode in memory and is retried", () => {
+  const file = path.join(scratch(), "memory-pressure-report.json");
+  const refused = spyOn(fs, "writeFileSync").mockImplementation(() => { throw Object.assign(new Error("full"), { code: "ENOSPC" }); });
+  const warned = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    expect(observeMemoryPressureReport(reading(20, 0), "2026-11-26T10:00:00Z", {}, file).episode).toBe("2026-11-26T10:00:00Z");
+    expect(observeMemoryPressureReport(reading(15, 0), "2026-11-26T10:01:00Z", {}, file).episode).toBe("2026-11-26T10:00:00Z");
+    expect(warned).toHaveBeenCalled();
+  } finally { refused.mockRestore(); warned.mockRestore(); }
+  expect(fs.existsSync(file)).toBeFalse();
+  observeMemoryPressureReport(reading(15, 0), "2026-11-26T10:02:00Z", {}, file);
+  expect(readMemoryPressureReport(file)?.episode).toBe("2026-11-26T10:00:00Z");
+});
+
+test("a /tmp that cannot be read keeps its open warning", () => {
+  const at = "2026-11-26T10:00:00Z";
+  const hot = observeMemoryPressure(reading(1, 5e9), null, at, thresholds);
+  const blind = observeMemoryPressure({ ...reading(1, 0), tmp: null }, hot, "2026-11-26T10:01:00Z", thresholds);
+  expect(blind).toMatchObject({ episode: at, reasons: ["tmp"] });
+  expect(observeMemoryPressure(reading(1, 0), blind, "2026-11-26T10:02:00Z", thresholds).episode).toBeNull();
+  // An unreadable /tmp opens nothing by itself.
+  expect(observeMemoryPressure({ ...reading(1, 0), tmp: null }, null, at, thresholds).episode).toBeNull();
+});
+
+test("readers show the watch's fresh observation, then read for themselves", () => {
+  const file = path.join(scratch(), "memory-pressure-report.json");
+  const start = Date.parse("2026-11-26T10:00:00Z");
+  const observed = observeMemoryPressureReport(reading(1, 2e9), new Date(start).toISOString(), {}, file);
+  let reads = 0;
+  const own = () => { reads++; return { ...reading(1, 0), tmp: null }; };
+  expect(currentMemoryPressure(start + 119_000, {}, own, file)).toEqual(observed);
+  expect(reads).toBe(0);
+  expect(currentMemoryPressure(start + 121_000, {}, own, file)).toMatchObject({ tmp: null, at: new Date(start + 121_000).toISOString() });
+  expect(reads).toBe(1);
+  expect(currentMemoryPressure(start + 121_000, {}, () => null, file)).toBeNull();
+});
+
+test("a calm tick takes no lock and calls no fsync", async () => {
+  const directory = scratch();
+  const report = path.join(directory, "memory-pressure-report.json"), actions = path.join(directory, "memory-pressure-actions.json");
+  const synced = spyOn(fs, "fsyncSync");
+  const ports = recorder({ active: () => { throw new Error("a calm tick reached the transaction"); } });
+  try {
+    for (let tick = 0; tick < 5; tick++) {
+      await reconcileMemoryPressure(observeMemoryPressureReport(reading(1, 0), new Date(Date.parse("2026-11-26T10:00:00Z") + tick * 30_000).toISOString(), {}, report), ports, actions);
+    }
+    expect(synced).not.toHaveBeenCalled();
+    expect(fs.readdirSync(directory)).toEqual([]);
+    // The counter sees the durable write an opening episode makes.
+    observeMemoryPressureReport(reading(20, 0), "2026-11-26T10:03:00Z", {}, report);
+    expect(synced).toHaveBeenCalled();
+  } finally { synced.mockRestore(); }
 });
 
 test("the machine line, the seat item and the notice carry the readings and the episode", () => {

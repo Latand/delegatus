@@ -67,6 +67,12 @@ for await (const line of lines) {
       process.stdout.write(JSON.stringify({ report }) + "\n");
       continue;
     }
+    if (request.kind === "memory") {
+      const { readHostMemoryReading } = await import("./state/hostTmpUsage");
+      const report = await readHostMemoryReading();
+      process.stdout.write(JSON.stringify({ report }) + "\n");
+      continue;
+    }
     if (request.kind !== "worktrees") throw new Error("invalid sweep request kind");
     if (!cache) {
       cache = new WorktreeSweepCache(statePath("worktree-sweep-cache.json"));

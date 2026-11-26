@@ -15,6 +15,10 @@ import type { SeatTickCard } from "@/lib/monitor/types";
  * more than 4 GB, the operator is warned the way low disk space warns
  * (a seat card, a manager report and a seat-tick item, once per episode), and
  * the temp sweep with its stray pass runs at once, at most every 15 minutes.
+ *
+ * The `/tmp` that counts is the machine's. Inside the Docker image the
+ * process's own `/tmp` is the container's, so only the watch's helper, which
+ * reaches the host view (`hostTmpUsage.ts`), reports it there.
  */
 
 /** `f_type` of a tmpfs, from statfs(2). */
@@ -26,10 +30,11 @@ export const DEFAULT_TMPFS_WARN_GB = 4;
 const RECOVERY_FACTOR = 0.9;
 /** The immediate temp sweep a pressure episode asks for runs at most this often. */
 export const MEMORY_SWEEP_MIN_INTERVAL_MS = 15 * 60_000;
-/** A persisted reading older than this is read again rather than shown. */
+/** An observation older than this is read again rather than shown. */
 const REPORT_FRESH_MS = 2 * 60_000;
 
 export type MemoryUsage = { usedBytes: number; totalBytes: number };
+/** The machine's `/tmp`: `own` where this process shares it, `host` where it was read through a host view. */
 export type TmpUsage = MemoryUsage & { tmpfs: boolean; view: "host" | "own" };
 export type MemoryReading = { ram: MemoryUsage; swap: MemoryUsage; tmp: TmpUsage | null };
 export type MemoryPressureReason = "swap" | "tmp";
@@ -67,33 +72,29 @@ export function parseMeminfo(text: string): Pick<MemoryReading, "ram" | "swap"> 
   };
 }
 
-type StatFs = { type: number; blocks: number; bfree: number; bsize: number };
+export type StatFs = { type: number; blocks: number; bfree: number; bsize: number };
 
-/** Inside the Docker image `/tmp` is the container's own; the agents fill the
-    host's, which PID 1's root shows. */
-export function tmpCandidates(env: Readonly<Record<string, string | undefined>> = process.env): { path: string; view: TmpUsage["view"] }[] {
-  return env.LLV_DOCKER_NSENTER_SHIMS === "1"
-    ? [{ path: "/proc/1/root/tmp", view: "host" }, { path: "/tmp", view: "own" }]
-    : [{ path: "/tmp", view: "own" }];
+export function tmpUsage(stat: StatFs, view: TmpUsage["view"]): TmpUsage {
+  return { usedBytes: Math.max(0, stat.blocks - stat.bfree) * stat.bsize, totalBytes: stat.blocks * stat.bsize,
+    tmpfs: stat.type === TMPFS_MAGIC, view };
 }
 
+/** What this process can read by itself, without waiting on anything. Inside
+    the Docker image its `/tmp` is the container's, which is never reported as
+    the machine's: the reading carries no `/tmp` there. */
 export function readMemoryReading(ports: {
+  env?: Readonly<Record<string, string | undefined>>;
   meminfo?: () => string;
   statfs?: (directory: string) => StatFs;
-  candidates?: { path: string; view: TmpUsage["view"] }[];
 } = {}): MemoryReading | null {
   let parsed: ReturnType<typeof parseMeminfo>;
   try { parsed = parseMeminfo((ports.meminfo ?? (() => fs.readFileSync("/proc/meminfo", "utf8")))()); }
   catch { return null; }
   if (!parsed) return null;
   let tmp: TmpUsage | null = null;
-  for (const candidate of ports.candidates ?? tmpCandidates()) {
-    try {
-      const stat = (ports.statfs ?? (directory => fs.statfsSync(directory)))(candidate.path);
-      tmp = { usedBytes: Math.max(0, stat.blocks - stat.bfree) * stat.bsize, totalBytes: stat.blocks * stat.bsize,
-        tmpfs: stat.type === TMPFS_MAGIC, view: candidate.view };
-      break;
-    } catch { /* The next view, or no /tmp reading. */ }
+  if ((ports.env ?? process.env).LLV_DOCKER_NSENTER_SHIMS !== "1") {
+    try { tmp = tmpUsage((ports.statfs ?? (directory => fs.statfsSync(directory)))("/tmp"), "own"); }
+    catch { /* No /tmp reading. */ }
   }
   return { ...parsed, tmp };
 }
@@ -115,6 +116,8 @@ export function memoryPressureReasons(reading: MemoryReading, thresholds: Memory
 
 export function observeMemoryPressure(reading: MemoryReading, prior: MemoryPressure | null, at: string, thresholds: MemoryThresholds): MemoryPressure {
   const reasons = memoryPressureReasons(reading, thresholds, !!prior?.episode);
+  // A `/tmp` that cannot be read proves nothing about its recovery.
+  if (!reading.tmp && prior?.episode && prior.reasons.includes("tmp")) reasons.push("tmp");
   return { ...reading, at, reasons, episode: reasons.length ? prior?.episode ?? at : null, ...thresholds };
 }
 
@@ -134,22 +137,45 @@ export function readMemoryPressureReport(file = REPORT_FILE()): MemoryPressure |
   } catch { return null; }
 }
 
-/** One observation continuing the persisted episode, written back. A write
-    that fails (a full disk) still returns the observation. */
+type Held = { pressure: MemoryPressure; unwritten: boolean };
+const shared = globalThis as typeof globalThis & { __delegatusMemoryPressure?: Map<string, Held> };
+/** The watch's latest observation, by report file, for every reader in this process. */
+const held = () => shared.__delegatusMemoryPressure ??= new Map<string, Held>();
+
+const episodeKey = (pressure: MemoryPressure | null) => pressure?.episode ? `${pressure.episode} ${pressure.reasons.join(",")}` : "";
+
+/** One observation continuing the episode. The file is written, durably, only
+    when the episode or its reasons change, so a calm machine's 30 s beat
+    writes nothing; the readings themselves stay in memory. A write that fails
+    (a full disk) keeps the observation and is retried on the next one. */
 export function observeMemoryPressureReport(reading: MemoryReading, at: string, env: Readonly<Record<string, string | undefined>> = process.env, file = REPORT_FILE()): MemoryPressure {
-  const pressure = observeMemoryPressure(reading, readMemoryPressureReport(file), at, memoryThresholds(env));
-  try { writeJsonDurably(file, pressure); }
-  catch (error) { console.warn("[memory pressure] report not written", error instanceof Error ? error.message : String(error)); }
+  const persisted = readMemoryPressureReport(file);
+  const last = held().get(file);
+  const pressure = observeMemoryPressure(reading, last?.unwritten ? last.pressure : persisted, at, memoryThresholds(env));
+  let unwritten = false;
+  if (episodeKey(pressure) !== episodeKey(persisted)) {
+    try { writeJsonDurably(file, pressure); }
+    catch (error) {
+      unwritten = true;
+      console.warn("[memory pressure] report not written", error instanceof Error ? error.message : String(error));
+    }
+  }
+  held().set(file, { pressure, unwritten });
   return pressure;
 }
 
-/** What a reader shows: the watch's persisted observation while it is fresh,
-    else a reading taken now (never written, so it cannot fork an episode). */
-export function currentMemoryPressure(now = Date.now(), env: Readonly<Record<string, string | undefined>> = process.env, read = () => readMemoryReading()): MemoryPressure | null {
-  const persisted = readMemoryPressureReport();
-  if (persisted && now - Date.parse(persisted.at) < REPORT_FRESH_MS) return persisted;
+/** What a reader shows: the watch's observation while it is fresh, else a
+    reading this process takes now (never written, so it cannot fork an
+    episode), continuing the last known episode. */
+export function currentMemoryPressure(now = Date.now(), env: Readonly<Record<string, string | undefined>> = process.env,
+  read = () => readMemoryReading({ env }), file = REPORT_FILE()): MemoryPressure | null {
+  const fresh = (pressure: MemoryPressure | null | undefined) => !!pressure && now - Date.parse(pressure.at) < REPORT_FRESH_MS;
+  const observed = held().get(file)?.pressure;
+  if (fresh(observed)) return observed!;
+  const persisted = readMemoryPressureReport(file);
+  if (fresh(persisted)) return persisted;
   const reading = read();
-  return reading ? observeMemoryPressure(reading, persisted, new Date(now).toISOString(), memoryThresholds(env)) : persisted;
+  return reading ? observeMemoryPressure(reading, observed ?? persisted, new Date(now).toISOString(), memoryThresholds(env)) : persisted;
 }
 
 function gib(bytes: number): string { return `${(bytes / 1024 ** 3).toFixed(1)} GiB`; }
@@ -192,16 +218,22 @@ export type MemoryPressureActions = {
   sweep: () => void;
 };
 
+function readActionsState(file: string): ActionsState {
+  try {
+    const stored = JSON.parse(fs.readFileSync(file, "utf8")) as ActionsState | null;
+    if (stored && typeof stored.lastSweepAt === "number") return { lastSweepAt: stored.lastSweepAt, notice: stored.notice ?? null };
+  } catch { /* First observation. */ }
+  return { lastSweepAt: 0, notice: null };
+}
+
 /** Durable receipts keep overlapping readers and a restarted Viewer from
-    repeating the sweep inside its interval, the card or the report. */
+    repeating the sweep inside its interval, the card or the report. A calm
+    observation with no notice open takes no lock and writes nothing. */
 export async function reconcileMemoryPressure(pressure: MemoryPressure, ports: MemoryPressureActions, file = ACTIONS_FILE()): Promise<void> {
+  if (!pressure.episode && !readActionsState(file).notice) return;
   await withFileTransactionAsync(file, "memory pressure notices", async () => {
     if (!ports.active()) return;
-    let state: ActionsState = { lastSweepAt: 0, notice: null };
-    try {
-      const stored = JSON.parse(fs.readFileSync(file, "utf8")) as ActionsState | null;
-      if (stored && typeof stored.lastSweepAt === "number") state = { lastSweepAt: stored.lastSweepAt, notice: stored.notice ?? null };
-    } catch { /* First observation. */ }
+    const state = readActionsState(file);
     const persist = () => writeJsonDurably(file, state);
     const prior = state.notice;
     if (prior && prior.episode !== pressure.episode) {
