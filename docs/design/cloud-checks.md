@@ -73,6 +73,14 @@ resolution or install in this preparation step. The command then invokes:
 bun scripts/local-gate.ts pre-push --admitted
 ```
 
+Completed per-file publication checkpoints are reusable by local retries on the
+same machine when the candidate tree, comparison base, and check inputs match.
+Each Cloud attempt creates its candidate checkout under a unique temporary
+workspace and removes that workspace during cleanup. A later Cloud attempt
+starts cold and reruns its selected files; it cannot claim checkpoints from the
+previous hosted workspace. Its receipt still binds the exact head, tree, base,
+and check inputs, so changed candidates receive independent verdicts.
+
 Checks get isolated HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR before the
 runner starts. Hook skipping, SSH dispatch and recursive Cloud dispatch are disabled. Cloud
 uses the same repository planner and execution code as local fallback. The

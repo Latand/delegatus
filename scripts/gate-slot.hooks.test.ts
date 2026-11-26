@@ -42,8 +42,12 @@ test("older publication stubs preserve the tracked files of the checkout used as
     git("diff", "--no-ext-diff", "--exit-code", "HEAD");
 
     expect(() => f.writablePath(tracked)).toThrow("target must be inside the fixture's temporary root");
+    expect(() => f.writablePath(path.relative(f.dir, tracked))).toThrow("target must be inside the fixture's temporary root");
     fs.symlinkSync(path.dirname(tracked), f.writablePath("linked-scripts"), "dir");
     expect(() => f.writablePath("linked-scripts/new.ts")).toThrow(/symbolic link/);
+    fs.symlinkSync(path.join(checkout, "missing.ts"), f.writablePath("dangling.ts"));
+    expect(() => f.writablePath("dangling.ts")).toThrow(/symbolic link/);
+    expect(fs.existsSync(path.join(checkout, "missing.ts"))).toBeFalse();
     fs.linkSync(tracked, f.writablePath("linked-file.ts"));
     expect(() => f.writablePath("linked-file.ts")).toThrow(/hard-linked file/);
   } finally {

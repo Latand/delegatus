@@ -2,10 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { agentRegistry } from "@/lib/agent/registry";
 import { statePath } from "@/lib/configDir";
-import { loadPipelinesForList, pipelineRecordReader } from "@/lib/pipelines/store";
-import { pipelineActivitySettled } from "@/lib/pipelines/types";
+import { pipelineRecordReader } from "@/lib/pipelines/store";
 import { projectAliasResolver } from "@/lib/projects/aliases";
-import { liveOrWaitingConversationCwds } from "@/lib/pipelines/worktreeSweep";
+import { openLaneUseCheck } from "@/lib/runtime/attemptScratchLanes";
 import { assertRetentionTestPath, retentionUnderTest } from "@/lib/retentionTestSafety";
 import { AttemptTempStore, sweepAttemptTemps, type AttemptTempOwner, type AttemptTempSweepOptions } from "@/lib/runtime/attemptTempRetention";
 import { attemptTempAuthority } from "@/lib/runtime/attemptTempProduction";
@@ -45,14 +44,7 @@ function scratchRoot(directory: string): boolean {
   return fs.realpathSync(parent) === parent && !fs.existsSync(path.join(parent, ".delegatus-keep"));
 }
 
-function openLaneUses(directory: string): boolean {
-  const overlaps = (other: string | null) => !!other && (
-    other === directory || other.startsWith(directory + path.sep) || directory.startsWith(other + path.sep)
-  );
-  return loadPipelinesForList().some(lane => (lane.state !== "closed" && lane.state !== "completed" || !pipelineActivitySettled(lane))
-    && (overlaps(lane.worktreeDir) || overlaps(lane.repoDir)))
-    || liveOrWaitingConversationCwds(agentRegistry().worktreeProtectionSnapshot()).some(overlaps);
-}
+function openLaneUses(directory: string): boolean { return openLaneUseCheck()(directory); }
 
 function scratchOwnerMatches(owner: AttemptTempOwner, project: string): boolean {
   try {

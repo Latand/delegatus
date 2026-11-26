@@ -217,9 +217,13 @@ test("a backlog of ended rows is worked through in bounded sweeps, newest first"
   await bindStructuredDeliveryQueue([], { registry, client, hostlessSettleIntervalMs: 0 });
   expect(await settleHostlessSessionProjections()).toBe(64);
   expect(keyedReads).toHaveLength(64);
+  /* A keyed cleanup between sweeps must not discard the other 69 rows from
+     discovery or move them out of the periodic rotation. */
+  const alreadySettled = appended[0]!.conversationId;
+  expect(await settleHostlessSessionProjections(alreadySettled)).toBe(0);
   /* The six left over go first; the rest of the batch reads again the rows read longest ago. */
   expect(await settleHostlessSessionProjections()).toBe(6);
-  expect(keyedReads).toHaveLength(128);
+  expect(keyedReads).toHaveLength(129);
   expect(new Set(keyedReads)).toEqual(new Set(backlog.map((fixture) => fixture.id)));
   expect(new Set(appended.map((event) => event.conversationId))).toEqual(new Set(backlog.map((fixture) => fixture.id)));
   /* Every later sweep stays inside the batch and takes the rows in turn. */

@@ -68,9 +68,29 @@ import { prepareProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profile
    opened before the next case starts, and sizes the deadline for a loaded
    machine. Launch through `chromium` from the harness so the case owns them. */
 const browserTest = browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1");
+/** The share a "used / total" reading names, in percent. */
+const usedShare = (value: string): number | null => {
+  const ratio = /^([\d.,]+) (GiB|MiB) \/ ([\d.,]+) (GiB|MiB)$/.exec(value.trim());
+  if (!ratio) return null;
+  const gib = (amount: string, unit: string) => Number(amount.replace(",", ".")) / (unit === "MiB" ? 1024 : 1);
+  return (100 * gib(ratio[1]!, ratio[2]!)) / gib(ratio[3]!, ratio[4]!);
+};
 const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) };
 /** Where a memory-profile block keeps its frames: under MEMORY_PROFILE_OUT when set, otherwise under .artifacts. */
 const memoryOut = (name: string) => process.env.MEMORY_PROFILE_OUT ? path.resolve(process.env.MEMORY_PROFILE_OUT, name) : path.resolve(".artifacts", name);
+
+describe("public provisioning step", () => {
+  browserTest("provisioning step and age fit the desktop board", async () => {
+    const { captureProvisioningStepGeometry, ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const server = await chromium.launchServer({ ...LAUNCH, env: sockets.env });
+    const browser = await chromium.connect(server.wsEndpoint());
+    try {
+      expect(server.process().pid).toBeGreaterThan(0);
+      expect(await captureProvisioningStepGeometry(browser, path.join(process.env.LLV_EVIDENCE_DIR!, "provision-board"), [768, 1440])).toBe(32);
+    } finally { await browser.close(); await server.close(); sockets.close(); }
+  }, 120_000);
+});
 
 describe("accepted queued creation continuity", () => {
   browserTest("real create, missing catalogs, reload and terminal readback at desktop widths", async () => {
@@ -2783,6 +2803,58 @@ describe("where a stage ran", () => {
           const running = await page.locator('.gsheet .pane[data-stage="implement"] [data-stage-place-line]').getAttribute("data-stage-place");
           if (running !== "cloud") failures.push(`${key} pane cloud: ${running}`);
           await page.screenshot({ path: path.join(out, `${key}-pane.png`) });
+          if (pageErrors.length) failures.push(`${key} page errors: ${pageErrors.join("; ")}`);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); sockets.close(); }
+    expect(failures).toEqual([]);
+  }, 300_000);
+});
+
+describe("a stage the controller moved off Codex says who moved it and why", () => {
+  /* After two Codex cybersecurity refusals the controller moves the stage to
+     Claude Opus by itself. The lane's graph-edit line names the controller in
+     the interface language and states the refusal as visible text. */
+  browserTest("the card's graph-edit line names the controller and the refusal with no hover, in both languages and themes", async () => {
+    const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "codex-refusal-move");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env }).catch(error => {
+      server.stop(); sockets.close(); throw error;
+    });
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 1000]) {
+        const key = `${lang}-${theme}-${width}`;
+        const who = translate(lang, "kanban.graph.editedByController");
+        const cause = translate(lang, "kanban.graph.edit.cause.codex-cybersecurity-refusal");
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=codex-refusal-move`, { width, height: 1000 }, theme, lang, "reduce", false);
+        try {
+          const line = page.locator(`${card("t-codex-refusal")} .graph-edit`);
+          await line.waitFor({ timeout: 10_000 });
+          await line.scrollIntoViewIfNeeded();
+          const read = await line.evaluate((element) => {
+            const holder = element.closest(".card")!.getBoundingClientRect();
+            const range = document.createRange();
+            range.selectNodeContents(element);
+            const text = range.getBoundingClientRect();
+            return {
+              text: (element as HTMLElement).innerText, cause: (element as HTMLElement).dataset.graphEditCause ?? null,
+              inside: text.left >= holder.left - 0.5 && text.right <= holder.right + 0.5 && text.bottom <= holder.bottom + 0.5 && text.bottom <= innerHeight && text.right <= innerWidth,
+              /* Nothing of the line is cut off: no ellipsis, no clipped overflow. */
+              whole: element.scrollWidth <= element.clientWidth + 0.5 && element.scrollHeight <= element.clientHeight + 0.5,
+            };
+          });
+          if (!read.text.includes(who)) failures.push(`${key} actor: «${read.text}»`);
+          if (!read.text.includes(cause)) failures.push(`${key} cause: «${read.text}»`);
+          if (read.text.includes("pipeline-controller")) failures.push(`${key} raw actor id: «${read.text}»`);
+          if (read.cause !== "codex-cybersecurity-refusal") failures.push(`${key} cause attribute ${read.cause}`);
+          if (!read.inside) failures.push(`${key} the line leaves its card`);
+          if (!read.whole) failures.push(`${key} the line is cut off`);
+          await page.screenshot({ path: path.join(out, `${key}-card.png`) });
+          await line.screenshot({ path: path.join(out, `${key}-line.png`) });
           if (pageErrors.length) failures.push(`${key} page errors: ${pageErrors.join("; ")}`);
         } finally { await context.close(); }
       }
@@ -34835,7 +34907,9 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
             if (meter.bar === null) continue;
             const percent = /(\d+(?:[.,]\d+)?)\s*%/.exec(meter.value);
             const amount = /(\d+(?:[.,]\d+)?)\s*GiB/.exec(meter.value);
-            const named = percent ? Number(percent[1]!.replace(",", ".")) : amount && TOTAL_GIB[meter.label] ? (100 * Number(amount[1]!.replace(",", "."))) / TOTAL_GIB[meter.label]! : null;
+            /* The memory lines name used of total ("23 GiB / 32 GiB"). */
+            const named = percent ? Number(percent[1]!.replace(",", ".")) : usedShare(meter.value)
+              ?? (amount && TOTAL_GIB[meter.label] ? (100 * Number(amount[1]!.replace(",", "."))) / TOTAL_GIB[meter.label]! : null);
             if (named === null) fail(`the line "${meter.label}" has a bar and no reading to compare it with: "${meter.value}"`);
             else if (Math.abs(named - meter.bar) > 2) fail(`"${meter.label} ${meter.value}" stands beside a bar drawn at ${meter.bar}%`);
           }
@@ -35091,6 +35165,94 @@ describe("disk warning destinations", () => {
       fs.writeFileSync(record, JSON.stringify(readings, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
   }, 180_000);
+});
+
+/* RAM and swap stand once each, on their meters, as used of the total; /tmp
+   adds one line and a memory pressure episode its warning. */
+describe("memory pressure on the System block", () => {
+  browserTest("RAM, swap and /tmp stand once each and fit, calm and warning, at every density in both languages and themes", async () => {
+    const out = path.resolve(process.env.LLV_MEMORY_PRESSURE_PNG_DIR ?? ".artifacts/memory-pressure");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(fs.mkdtempSync(path.join(process.env.TMPDIR ?? os.tmpdir(), "llv-memory-")));
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+    const readings: unknown[] = [];
+    try {
+      for (const density of ["line", "detail", "full"] as const)
+        for (const state of ["calm", "swap", "tmp"] as const)
+          for (const lang of ["en", "uk"] as const)
+            for (const scheme of ["light", "dark"] as const) {
+              const size = density === "full" ? { width: 390, height: 844 } : { width: 1280, height: 800 };
+              const frame = `${density}-${state}-${lang}-${scheme}`;
+              const { context, page, pageErrors } = await openFixture(browser,
+                `${server.base}?disk-density=${density}&memory=${state}`, size, scheme, lang, "reduce", density === "full");
+              try {
+                await page.waitForSelector("[data-memory-pressure]");
+                const block = page.locator("[data-resources-footer]");
+                const reading = await block.evaluate((footer) => {
+                  /* The ink of every text node, held against the window and every box that clips it. */
+                  const cut: string[] = [];
+                  const walker = document.createTreeWalker(footer, NodeFilter.SHOW_TEXT);
+                  while (walker.nextNode()) {
+                    const node = walker.currentNode;
+                    if (!node.textContent?.trim()) continue;
+                    const range = document.createRange(); range.selectNodeContents(node);
+                    for (const rect of range.getClientRects()) {
+                      if (!rect.width || !rect.height) continue;
+                      if (rect.left < 0 || rect.right > innerWidth || rect.top < 0 || rect.bottom > innerHeight) cut.push(node.textContent);
+                      for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+                        const style = getComputedStyle(parent);
+                        if (!/(auto|scroll|hidden|clip)/.test(style.overflow + style.overflowX + style.overflowY)) continue;
+                        const box = parent.getBoundingClientRect();
+                        if (rect.left < box.left - 1 || rect.right > box.right + 1 || rect.top < box.top - 1.5 || rect.bottom > box.bottom + 1.5) cut.push(node.textContent);
+                      }
+                    }
+                  }
+                  const box = footer.getBoundingClientRect();
+                  return {
+                    text: (footer as HTMLElement).innerText.replace(/\s+/g, " ").trim(),
+                    width: box.width, height: box.height, cut,
+                    overflows: footer.scrollWidth > footer.clientWidth + 1 || document.documentElement.scrollWidth > innerWidth,
+                    meters: [...footer.querySelectorAll<HTMLElement>("[data-meter-line]")].map((line) => {
+                      const track = line.querySelector<HTMLElement>("[data-meter-bar]");
+                      const fill = track?.firstElementChild as HTMLElement | null;
+                      return { label: line.querySelector("[data-meter-label]")?.textContent ?? "", value: line.querySelector("[data-meter-value]")?.textContent ?? "",
+                        bar: track && fill ? (100 * fill.getBoundingClientRect().width) / track.getBoundingClientRect().width : null };
+                    }),
+                    statuses: footer.querySelectorAll('[role="status"]').length,
+                  };
+                });
+                const times = (part: string) => reading.text.split(part).length - 1;
+                const swapUsed = state === "swap" ? "6.0 GiB" : "1.0 GiB";
+                const tmpUsed = state === "tmp" ? "5.5 GiB" : "1.2 GiB";
+                const ofTotal = (used: string, total: string) => density === "full"
+                  ? translate(lang, "resources.usedOfTotalInWords", { used, total }) : translate(lang, "resources.usedOfTotal", { used, total });
+                for (const fact of [ofTotal("23 GiB", "32 GiB"), ofTotal(swapUsed, "8.0 GiB"), translate(lang, "resources.usedOfTotal", { used: tmpUsed, total: "16 GiB" })])
+                  expect({ frame, fact, times: times(fact) }).toEqual({ frame, fact, times: 1 });
+                /* One RAM name, one swap name and one /tmp name outside the warning sentence. */
+                expect({ frame, ram: times(translate(lang, "resources.ram")) }).toEqual({ frame, ram: 1 });
+                expect(reading.text).not.toContain(translate(lang, "resources.free", { amount: "9.0 GiB" }));
+                expect({ frame, cut: reading.cut, overflows: reading.overflows }).toEqual({ frame, cut: [], overflows: false });
+                const warning = translate(lang, "resources.memoryHigh");
+                expect({ frame, warned: reading.text.includes(warning), statuses: reading.statuses }).toEqual({ frame, warned: state !== "calm", statuses: state === "calm" ? 0 : 1 });
+                if (state === "swap") expect(reading.text).toContain(translate(lang, "resources.memorySwapHigh", { percent: "50" }));
+                if (state === "tmp") expect(reading.text).toContain(translate(lang, "resources.memoryTmpHigh", { amount: "4 GB" }));
+                if (density !== "full") {
+                  expect(reading.meters.map((meter) => meter.label)).toEqual([translate(lang, "resources.ram"), translate(lang, "resources.swap"), "/tmp"]);
+                  for (const meter of reading.meters) expect(Math.abs(meter.bar! - usedShare(meter.value)!)).toBeLessThanOrEqual(3);
+                }
+                expect(pageErrors).toEqual([]);
+                await block.screenshot({ path: path.join(out, `${frame}.png`) });
+                readings.push({ frame, ...reading });
+              } finally { await context.close(); }
+            }
+      expect(readings).toHaveLength(36);
+      const record = path.resolve("evidence/memory-pressure/system-block.json");
+      fs.mkdirSync(path.dirname(record), { recursive: true });
+      fs.writeFileSync(record, JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); sockets.close(); server.stop(); }
+  }, 300_000);
 });
 
 /* A worker slot wait reads as a free worker, and a resource hold carries its
@@ -45822,6 +45984,14 @@ describe("first-run guide: variant 1 on the real components", () => {
     { token: "orchestrator-one-press", label: { en: "Orchestrator · one press, both engines", uk: "Оркестратор · одне натискання, обидва рушії" } },
     { token: "orchestrator-claude-only", label: { en: "Orchestrator · Claude only", uk: "Оркестратор · лише Claude" } },
     { token: "orchestrator-codex-only", label: { en: "Orchestrator · Codex only", uk: "Оркестратор · лише Codex" } },
+    /* Onboarding v2, slice 1 (docs/design/onboarding-v2.md §12.2). A first visit opens the guide by itself with the install
+       notice not yet dismissed: the notice is the guide's own line, the footer's buttons are whole and Continue takes the
+       press (A9). With no engine the Orchestrator step names what is missing and claims no runtime (A5). */
+    { token: "first-visit", label: { en: "First visit · the install notice inside the guide", uk: "Перший візит · сповіщення про встановлення всередині майстра" } },
+    { token: "first-visit-orchestrator", label: { en: "First visit · Continue pressed twice: no engine, no project", uk: "Перший візит · «Продовжити» двічі: немає рушія, немає проєкту" } },
+    { token: "first-visit-dismissed", label: { en: "First visit · Got it pressed in the guide", uk: "Перший візит · натиснуто «Зрозуміло» в майстрі" } },
+    { token: "first-visit-closed", label: { en: "First visit · the guide closed, the notice at the foot of the window", uk: "Перший візит · майстер закрито, сповіщення внизу вікна" } },
+    { token: "orchestrator-no-engine", label: { en: "Orchestrator · project chosen, both engines signed out", uk: "Оркестратор · проєкт вибрано, обидва рушії без входу" } },
     { token: "later-memory-before", label: { en: "Later · Memory, no orchestrator yet", uk: "Пізніше · Пам’ять, оркестратора ще немає" } },
     { token: "later-memory-after", label: { en: "Later · Memory, orchestrator exists", uk: "Пізніше · Пам’ять, оркестратор є" } },
     { token: "later-telegram-later", label: { en: "Later · Telegram, no bot connected", uk: "Пізніше · Telegram, бота не підключено" }, bot: "none" },
@@ -45833,15 +46003,19 @@ describe("first-run guide: variant 1 on the real components", () => {
     { token: "settings-memory-before", label: { en: "Settings · Delegatus memory, no orchestrator", uk: "Налаштування · пам’ять Delegatus, без оркестратора" } },
     { token: "settings-memory-after", label: { en: "Settings · Delegatus memory, orchestrator exists", uk: "Налаштування · пам’ять Delegatus, оркестратор є" } },
   ];
-  /* The named widths in both languages and themes; 645 and 900 stand between them, in English and Ukrainian, light. */
-  const WIDTHS: Array<{ width: number; themes: Array<"light" | "dark"> }> = [
+  /* The states of onboarding v2, slice 1. */
+  const SLICE_1 = (token: string) => token.startsWith("first-visit") || token === "orchestrator-no-engine";
+  /* The named widths in both languages and themes; 645 and 900 stand between them, in English and Ukrainian, light.
+     860 is the first width of the guide's desktop layout, drawn for the slice 1 states. */
+  const WIDTHS: Array<{ width: number; themes: Array<"light" | "dark">; tokens?: (token: string) => boolean }> = [
     { width: 1440, themes: ["light", "dark"] },
     { width: 390, themes: ["light", "dark"] },
     { width: 900, themes: ["light"] },
     { width: 645, themes: ["light"] },
+    { width: 860, themes: ["light"], tokens: SLICE_1 },
   ];
   /* Names, product words and code a Ukrainian line may keep in Latin letters. */
-  const LATIN = /^(?:Claude|Code|Codex|Copilot|GitHub|Delegatus|Telegram|Opus|GPT-6\.1-Sol|Sol|README|CLI|CSV|API|Max|Pro|atlas|atlas-api|src\/billing|curl|fsSL|https|bash|sh|install\.sh|claude\.ai|chatgpt\.com|codex|Account|A|B|Report|Bot|Team|Reports|OpenCode|Go|Messages|repo|uk|en|low|medium|high|xhigh|BotFather|team-reports)$/;
+  const LATIN = /^(?:Claude|Code|Codex|Copilot|GitHub|Delegatus|Telegram|Opus|GPT-6\.1-Sol|Sol|README|CLI|CSV|API|Max|Pro|atlas|atlas-api|src\/billing|curl|fsSL|https|bash|sh|install\.sh|claude\.ai|chatgpt\.com|codex|Account|A|B|Report|Bot|Team|Reports|OpenCode|Go|Messages|repo|uk|en|low|medium|high|xhigh|BotFather|team-reports|id|delegatus\.org)$/;
 
   /* What one frame reads of the lines that define it, in the page. */
   const MEASURE = (args: { defining: string[] }) => {
@@ -46065,6 +46239,39 @@ describe("first-run guide: variant 1 on the real components", () => {
     return found;
   };
 
+  /* The install notice against the guide's footer: where each is, every word of a footer button measured from its
+     text range against the notice's box, and what a press in the middle of those words would land on. */
+  const NOTICE_AND_FOOTER = () => {
+    const dialog = document.querySelector("[data-onboarding-dialog]");
+    const line = dialog?.querySelector("[data-telemetry-guide-notice]") ?? null;
+    const footer = dialog?.querySelector("footer") ?? null;
+    const box = line?.getBoundingClientRect() ?? null;
+    const fixed = [...document.querySelectorAll("[data-telemetry-notice]")].map((node) => node.getBoundingClientRect());
+    const over = (rect: DOMRect, other: DOMRect) => Math.min(rect.right, other.right) - Math.max(rect.left, other.left) > 0.5 && Math.min(rect.bottom, other.bottom) - Math.max(rect.top, other.top) > 0.5;
+    const buttons = [...(footer?.querySelectorAll<HTMLElement>("button") ?? [])].filter((button) => button.getClientRects().length).map((button) => {
+      const range = document.createRange();
+      range.selectNodeContents(button);
+      const words = [...range.getClientRects()].filter((rect) => rect.width > 0.5 && rect.height > 0.5);
+      return {
+        text: button.textContent?.trim() ?? "",
+        words: words.length,
+        underNotice: words.some((rect) => [...(box ? [box] : []), ...fixed].some((notice) => over(rect, notice))),
+        outside: words.some((rect) => rect.left < -0.5 || rect.top < -0.5 || rect.right > innerWidth + 0.5 || rect.bottom > innerHeight + 0.5),
+        taken: words.some((rect) => { const hit = document.elementFromPoint((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2); return !hit || !button.contains(hit); }),
+      };
+    });
+    return {
+      lines: document.querySelectorAll("[data-telemetry-guide-notice]").length,
+      inGuide: Boolean(line),
+      fixed: fixed.length,
+      words: line?.querySelector("p")?.textContent ?? "",
+      actions: [...(line?.querySelectorAll("button") ?? [])].map((button) => button.textContent?.trim() ?? ""),
+      /* The line ends where the footer starts, inside the dialog. */
+      gap: box && footer ? Math.round((footer.getBoundingClientRect().top - box.bottom) * 10) / 10 : null,
+      buttons,
+    };
+  };
+
   /* The defining lines of each state, by selector: the ones the frame is about. */
   const DEFINING = (token: string, phone: boolean): string[] => {
     if (token === "engines-both") return ['[data-onboarding-current="engines"] h2 + p', '[data-onboarding-engine="claude"] [data-onboarding-engine-header]', '[data-onboarding-engine="codex"] [data-onboarding-engine-header]'];
@@ -46075,6 +46282,11 @@ describe("first-run guide: variant 1 on the real components", () => {
     if (token === "orchestrator-one-press") return ["[data-onboarding-orchestrator-runs-on]", "[data-onboarding-orchestrator-create]"];
     if (token === "orchestrator-claude-only") return ["[data-onboarding-orchestrator-runs-on]", "[data-onboarding-orchestrator-roles]", "[data-onboarding-orchestrator-create]"];
     if (token === "orchestrator-codex-only") return ["[data-onboarding-orchestrator-runs-on]", "[data-onboarding-orchestrator-advice]", "[data-onboarding-orchestrator-roles]", "[data-onboarding-orchestrator-create]"];
+    if (token === "first-visit") return ["[data-telemetry-guide-notice]", "[data-onboarding-primary]", '[data-onboarding-current="engines"] h2'];
+    if (token === "first-visit-orchestrator") return ["[data-onboarding-orchestrator-no-engine]", '[data-onboarding-orchestrator-go="engines"]', "[data-telemetry-guide-notice]", "[data-onboarding-primary]", "[data-onboarding-orchestrator-no-project]", '[data-onboarding-orchestrator-go="project"]'];
+    if (token === "first-visit-dismissed") return ["[data-onboarding-primary]", '[data-onboarding-current="engines"] h2'];
+    if (token === "first-visit-closed") return ["[data-telemetry-notice] p", "[data-telemetry-notice]"];
+    if (token === "orchestrator-no-engine") return ["[data-onboarding-orchestrator-no-engine]", '[data-onboarding-orchestrator-go="engines"]', "[data-onboarding-primary]"];
     if (token === "later-memory-before") return ["[data-memory-source-line]", "[data-onboarding-memory-go]"];
     if (token === "later-memory-after") return ["[data-memory-source-line]"];
     if (token === "later-telegram-later") return ["[data-onboarding-telegram]", "[data-onboarding-primary]"];
@@ -46098,10 +46310,11 @@ describe("first-run guide: variant 1 on the real components", () => {
     const readings: Record<string, unknown>[] = [];
     const failures: string[] = [];
     const notes: string[] = [];
+    const { telemetryNotice } = await import("../../../bin/telemetry-notice.mjs");
     try {
-      for (const { width, themes } of WIDTHS) for (const theme of themes) for (const lang of width === 1440 || width === 390 ? ["en", "uk"] as Lang[] : ["en", "uk"] as Lang[]) for (const spec of SPECS) {
+      for (const { width, themes, tokens } of WIDTHS) for (const theme of themes) for (const lang of width === 1440 || width === 390 ? ["en", "uk"] as Lang[] : ["en", "uk"] as Lang[]) for (const spec of SPECS) {
         const name = `${spec.token}-${lang}-${theme}-${width}`;
-        if (!wanted(name)) continue;
+        if (!wanted(name) || (tokens && !tokens(spec.token))) continue;
         /* The greeting alone is a frame only where the column cannot stand beside the chat; the board is the phone's. */
         if (spec.narrowOnly && width >= 1170) continue;
         if (spec.phoneOnly && width >= 640) continue;
@@ -46112,6 +46325,8 @@ describe("first-run guide: variant 1 on the real components", () => {
         /* Where an orchestrator exists the board behind the dialog carries it; before one, the fresh install. */
         const seated = spec.token === "later-memory-after" || spec.token === "settings-memory-after";
         const scenario = form || seated ? "orchestrator-first-walk" : "orchestrator-first&guide=installer";
+        const firstVisit = spec.token.startsWith("first-visit");
+        const noEngine = spec.token === "first-visit-orchestrator" || spec.token === "orchestrator-no-engine";
         const url = `${served.base}?scenario=${scenario}&firstrun=${spec.token}${spec.bot ? `&bot=${spec.bot}` : ""}#p=atlas`;
         const { context, page, pageErrors } = await openFixture(browser, url, { width, height: phone ? 844 : 900 }, theme, lang, "reduce", phone, 1, new Date("2026-11-11T10:00:00Z"));
         const at = name;
@@ -46129,14 +46344,33 @@ describe("first-run guide: variant 1 on the real components", () => {
           };
           let shell = false;
           if (!form && !settings) {
-            await page.evaluate(() => window.dispatchEvent(new CustomEvent("llv:open-onboarding", { detail: { mode: "guide", step: "engines" } })));
+            /* A first visit opens the guide on the step the guide itself chooses; every other state is opened on Engines. */
+            await page.evaluate((step) => window.dispatchEvent(new CustomEvent("llv:open-onboarding", { detail: { mode: "guide", step } })), firstVisit ? null : "engines");
             await page.waitForSelector("[data-onboarding-dialog]");
             await page.waitForFunction(() => document.querySelector("[data-onboarding-engine=claude]")?.getAttribute("data-engine-state") !== "loading");
-            if (spec.token.startsWith("orchestrator-")) {
+            if (firstVisit) {
+              await page.waitForSelector("[data-onboarding-dialog] [data-telemetry-guide-notice]", { timeout: 30_000 });
+              if (spec.token === "first-visit-orchestrator") {
+                /* The newcomer's own walk, by real presses: the notice no longer takes them. */
+                for (const step of ["project", "orchestrator"]) {
+                  await page.locator("[data-onboarding-primary]").click({ timeout: 5_000 });
+                  await page.waitForSelector(`[data-onboarding-current="${step}"]`, { timeout: 5_000 });
+                }
+                await page.waitForSelector("[data-onboarding-orchestrator-no-engine]", { timeout: 30_000 });
+              } else if (spec.token === "first-visit-dismissed") {
+                await page.locator("[data-telemetry-guide-notice] button").last().click({ timeout: 5_000 });
+                await page.waitForSelector("[data-telemetry-guide-notice]", { state: "detached", timeout: 5_000 });
+              } else if (spec.token === "first-visit-closed") {
+                await page.locator(`[data-onboarding-dialog] button[aria-label="${translate(lang, "onboarding.close")}"]`).click({ timeout: 5_000 });
+                await page.waitForSelector("[data-onboarding-dialog]", { state: "detached", timeout: 5_000 });
+                await page.waitForSelector("[data-telemetry-notice]", { timeout: 5_000 });
+              }
+            } else if (spec.token.startsWith("orchestrator-")) {
               await chooseProject();
               await goStep("orchestrator");
               await page.waitForSelector("[data-onboarding-orchestrator-create]:not([disabled]), [data-onboarding-orchestrator-signin], [data-onboarding-orchestrator-go]", { timeout: 30_000 });
-              if (spec.token !== "orchestrator-one-press") await page.waitForSelector("[data-onboarding-orchestrator-roles]", { timeout: 30_000 });
+              if (spec.token === "orchestrator-no-engine") await page.waitForSelector("[data-onboarding-orchestrator-no-engine]", { timeout: 30_000 });
+              else if (spec.token !== "orchestrator-one-press") await page.waitForSelector("[data-onboarding-orchestrator-roles]", { timeout: 30_000 });
             } else if (spec.token.startsWith("later-memory")) {
               await goStep("memory");
               await page.waitForFunction(() => { const row = document.querySelector("[data-memory-source-state]"); return row && row.getAttribute("data-memory-source-state") !== "loading"; });
@@ -46183,6 +46417,57 @@ describe("first-run guide: variant 1 on the real components", () => {
           for (const selector of first.missing) failures.push(`${name}: ${selector} is missing`);
           /* Below 860 px the Orchestrator step's facts are whole on the first screen. */
           if (spec.token.startsWith("orchestrator-") && width < 860) for (const selector of first.offFirstScreen) failures.push(`${name}: ${selector} is not whole on the first screen`);
+          /* Slice 1: the notice, the footer's button, and each missing prerequisite with its way are on the first screen at every width. */
+          if (SLICE_1(spec.token)) for (const selector of first.offFirstScreen) failures.push(`${name}: ${selector} is not whole on the first screen`);
+          let slice1: Record<string, unknown> | null = null;
+          if (SLICE_1(spec.token)) {
+            const notice = await page.evaluate(NOTICE_AND_FOOTER);
+            slice1 = { notice };
+            const inGuide = spec.token === "first-visit" || spec.token === "first-visit-orchestrator";
+            const both = [translate(lang, "settings.section.privacy"), translate(lang, "telemetry.dismiss")];
+            if (inGuide) {
+              if (notice.lines !== 1 || !notice.inGuide) failures.push(`${name}: ${notice.lines} notice lines, inside the guide: ${notice.inGuide}`);
+              if (notice.fixed) failures.push(`${name}: the fixed notice is drawn while the guide is open`);
+              if (notice.words.replaceAll("\u00a0", " ") !== telemetryNotice[lang]) failures.push(`${name}: the notice reads «${notice.words}»`);
+              if (notice.actions.join("|") !== both.join("|")) failures.push(`${name}: the notice's actions are ${notice.actions.join(" | ")}`);
+              if (notice.gap === null || Math.abs(notice.gap) > 0.5) failures.push(`${name}: the notice ends ${notice.gap}px from the footer`);
+            } else if (spec.token === "first-visit-closed") {
+              if (notice.lines || notice.fixed !== 1) failures.push(`${name}: after closing, ${notice.lines} lines in a guide and ${notice.fixed} fixed notices`);
+              const fixedActions = await page.locator("[data-telemetry-notice] button").allInnerTexts();
+              if (fixedActions.map((text) => text.trim()).join("|") !== both.join("|")) failures.push(`${name}: the fixed notice's actions are ${fixedActions.join(" | ")}`);
+            } else if (notice.lines || notice.fixed) failures.push(`${name}: ${notice.lines + notice.fixed} notices where none is owed`);
+            if (spec.token !== "first-visit-closed") {
+              if (!notice.buttons.length) failures.push(`${name}: the guide's footer has no button`);
+              for (const button of notice.buttons) {
+                if (!button.words) failures.push(`${name}: footer button «${button.text}» draws no words`);
+                if (button.underNotice) failures.push(`${name}: footer button «${button.text}» lies under the notice`);
+                if (button.outside) failures.push(`${name}: footer button «${button.text}» leaves the window`);
+                if (button.taken) failures.push(`${name}: a press on footer button «${button.text}» lands on something else`);
+              }
+            }
+            if (noEngine) {
+              const claims = await page.evaluate(() => ({
+                runsOn: document.querySelectorAll("[data-onboarding-orchestrator-runs-on]").length,
+                plan: document.querySelectorAll("[data-onboarding-orchestrator-plan], [data-onboarding-cost]").length,
+                named: document.querySelector("[data-onboarding-orchestrator-no-engine]")?.textContent ?? "",
+                project: document.querySelector("[data-onboarding-orchestrator-no-project]")?.textContent ?? null,
+                changes: [...document.querySelectorAll("[data-onboarding-orchestrator-change]")].map((button) => button.getAttribute("data-onboarding-orchestrator-change") ?? ""),
+                ways: [...document.querySelectorAll("[data-onboarding-orchestrator-go]")].map((button) => `${button.getAttribute("data-onboarding-orchestrator-go")}:${button.textContent?.trim()}`),
+                step: document.querySelector("[data-onboarding-orchestrator]")?.textContent ?? "",
+              }));
+              slice1.claims = { named: claims.named, project: claims.project, changes: claims.changes, ways: claims.ways };
+              if (claims.runsOn || claims.plan || /Opus|Sol/.test(claims.step)) failures.push(`${name}: the step still claims a runtime or a plan with no engine`);
+              if (claims.named !== translate(lang, "onboarding.orchestrator.noEngine")) failures.push(`${name}: the Runs on row reads «${claims.named}»`);
+              if (claims.step.split(translate(lang, "onboarding.orchestrator.noEngine")).length !== 2) failures.push(`${name}: the missing engine is not said exactly once`);
+              /* Each missing prerequisite is said once, in its own row, with the one action that leads to its step; a row with nothing chosen offers no Change. */
+              const noProject = spec.token === "first-visit-orchestrator";
+              const ways = [...(noProject ? [`project:${translate(lang, "onboarding.orchestrator.goProject")}`] : []), `engines:${translate(lang, "onboarding.orchestrator.goEngines")}`];
+              if (claims.ways.join("|") !== ways.join("|")) failures.push(`${name}: the ways out are ${claims.ways.join(" | ")}`);
+              const saidProject = claims.step.split(translate(lang, "onboarding.orchestrator.noProject")).length - 1;
+              if (noProject ? claims.project !== translate(lang, "onboarding.orchestrator.noProject") || saidProject !== 1 : claims.project !== null || saidProject !== 0) failures.push(`${name}: the Project row reads «${claims.project}», the missing project said ${saidProject} times`);
+              if (claims.changes.join("|") !== (noProject ? "" : "project")) failures.push(`${name}: Change is offered on ${claims.changes.join(" | ") || "no row"}`);
+            }
+          }
           if (!form && !settings) {
             const firstScreen = await page.evaluate(FIRST_SCREEN);
             if (firstScreen.filled.length > 1 || (spec.token === "telegram-numbered" && firstScreen.filled.length !== 1)) failures.push(`${name}: ${firstScreen.filled.length} filled buttons on the first screen: ${firstScreen.filled.join(" | ")}`);
@@ -46228,7 +46513,7 @@ describe("first-run guide: variant 1 on the real components", () => {
             if (rechecks > 1) failures.push(`${name}: ${rechecks} Check again buttons`);
           }
           await page.screenshot({ path: file() });
-          const reading: Record<string, unknown> = { frame: name, width, lang, theme, token: spec.token, label: spec.label[lang], defining, offFirstScreen: first.offFirstScreen };
+          const reading: Record<string, unknown> = { frame: name, width, lang, theme, token: spec.token, label: spec.label[lang], defining, offFirstScreen: first.offFirstScreen, ...(slice1 ?? {}) };
           for (const selector of defining) {
             if (first.missing.includes(selector)) continue;
             if (first.offFirstScreen.includes(selector)) {
@@ -46250,12 +46535,35 @@ describe("first-run guide: variant 1 on the real components", () => {
             reading[selector] = { texts: inspected.texts };
           }
           if (lang === "uk") {
-            const ends = await page.evaluate(LINE_ENDS, form ? "main, body" : settings ? "[role=dialog]" : "[data-onboarding-dialog]");
+            const ends = await page.evaluate(LINE_ENDS, form ? "main, body" : settings ? "[role=dialog]" : spec.token === "first-visit-closed" ? "[data-telemetry-notice]" : "[data-onboarding-dialog]");
             if (ends.length) failures.push(`${name}: lines end on a one-letter word: ${ends.join(" | ")}`);
           }
           const surfaceCheck = await page.evaluate(OVERLAPS, defining[0]!);
           if (surfaceCheck.overlaps.length) failures.push(`${name}: text overlaps: ${surfaceCheck.overlaps.join(" | ")}`);
           if (surfaceCheck.sideways > 1) failures.push(`${name}: scrolls sideways by ${surfaceCheck.sideways}px`);
+          /* The audit's press on Continue was refused: the notice took it. Here it lands, with the notice still shown. */
+          if (spec.token === "first-visit") {
+            await page.locator("[data-onboarding-primary]").click({ timeout: 5_000 });
+            await page.waitForSelector('[data-onboarding-current="project"]', { timeout: 5_000 });
+            const after = await page.evaluate(NOTICE_AND_FOOTER);
+            reading.afterContinue = after;
+            if (!after.inGuide || after.fixed) failures.push(`${name}: after Continue the notice is not the guide's line`);
+            for (const button of after.buttons) if (button.underNotice || button.outside || button.taken) failures.push(`${name}: after Continue, footer button «${button.text}» is not whole and pressable`);
+            await page.screenshot({ path: file("-pressed-continue") });
+          }
+          /* Each row's own action leads to its step: Project first, then back by Continue, then Engines. */
+          if (spec.token === "first-visit-orchestrator") {
+            await page.locator('[data-onboarding-orchestrator-go="project"]').click({ timeout: 5_000 });
+            await page.waitForSelector('[data-onboarding-current="project"]', { timeout: 5_000 });
+            await page.screenshot({ path: file("-pressed-go-project") });
+            await page.locator("[data-onboarding-primary]").click({ timeout: 5_000 });
+            await page.waitForSelector("[data-onboarding-orchestrator-no-engine]", { timeout: 30_000 });
+          }
+          if (noEngine) {
+            await page.locator('[data-onboarding-orchestrator-go="engines"]').click({ timeout: 5_000 });
+            await page.waitForSelector('[data-onboarding-current="engines"]', { timeout: 5_000 });
+            await page.screenshot({ path: file("-pressed-go-engines") });
+          }
           if (pageErrors.length) failures.push(`${name}: page errors: ${pageErrors.join(" | ")}`);
           readings.push({ ...reading, overlaps: surfaceCheck.overlaps, sideways: surfaceCheck.sideways, pageErrors });
         } catch (error) {
@@ -49150,4 +49458,11 @@ describe("a closed conversation leaves the address", () => {
     if (!process.env.LLV_CLOSED_ADDRESS_ONLY) fs.writeFileSync(path.join(EVIDENCE, `rendered-${way}.json`), `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", fixture: "issue1695Evidence.fixture.tsx?scenario=loose", readings, failures }, null, 2)}\n`);
     expect(failures).toEqual([]);
   }, 1_500_000);
+});
+
+describe("ChatGPT plan settings", () => {
+  browserTest("ChatGPT plan settings render the Keys and Voice states in both languages and themes", async () => {
+    const { captureChatGPTPlanFrames } = await import("@/components/kanban/issue1695BrowserHarness");
+    await captureChatGPTPlanFrames(false);
+  }, 300_000);
 });

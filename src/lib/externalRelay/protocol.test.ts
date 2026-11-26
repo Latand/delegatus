@@ -41,6 +41,54 @@ test("request limits and additive fields", () => {
   ).toBe(false);
 });
 
+test("sticker rows retain optional details within the service limits", () => {
+  const row = sampleRequest.input.conversation[0];
+  const sticker = { ...row, text: "", kind: "sticker", sticker_emoji: "⭐️", sticker_format: "tgs" } as const;
+  const parse = (message: unknown) => requestSchema.safeParse({
+    ...sampleRequest, input: { ...sampleRequest.input, conversation: [message] },
+  });
+  for (const sticker_format of ["webp", "tgs", "webm"] as const) {
+    const message = { ...sticker, sticker_format };
+    expect(parse(message).data?.input.conversation).toEqual([message]);
+  }
+  const described = { ...sticker, sticker_emoji: "😀".repeat(128), media_description: "😀".repeat(4000) };
+  expect(parse(described).data?.input.conversation).toEqual([described]);
+  for (const invalid of [{ sticker_emoji: "😀".repeat(129) }, { media_description: "😀".repeat(4001) }, { sticker_format: "gif" }])
+    expect(parse({ ...sticker, ...invalid }).success).toBe(false);
+  expect(parse(row).data?.input.conversation).toStrictEqual([row]);
+  const future = parse({ ...row, kind: "future" });
+  expect(future.success).toBe(true);
+  expect(future.data?.input.conversation[0]?.kind).toBeUndefined();
+  expect(JSON.stringify(future.data?.input.conversation)).toBe(JSON.stringify(parse(row).data?.input.conversation));
+});
+
+test("reply metadata is optional and each malformed field is discarded independently", () => {
+  const row = sampleRequest.input.conversation[0];
+  const parse = (message: unknown) => requestSchema.parse({
+    ...sampleRequest, input: { ...sampleRequest.input, conversation: [message] },
+  }).input.conversation[0]!;
+  const longest = "😀".repeat(12000);
+  const quote = { text: longest, position: 0 };
+  expect(parse({ ...row, quote, external_reply_context: longest })).toStrictEqual({ ...row, quote, external_reply_context: longest });
+  const withoutPosition = { ...row, quote: { text: "Q" }, external_reply_context: "" };
+  expect(parse(withoutPosition)).toStrictEqual(withoutPosition);
+  const firstAboveSafeInteger = { ...row, quote: { text: "Q", position: 9007199254740992 } };
+  expect(parse(firstAboveSafeInteger)).toStrictEqual(firstAboveSafeInteger);
+  expect(parse(row)).toStrictEqual(row);
+
+  for (const invalid of [null, "quote", {}, { text: 1 }, { text: "" }, { text: longest + "!" },
+    { text: "Q", position: -1 }, { text: "Q", position: 0.5 }, { text: "Q", position: "0" }]) {
+    const { quote: parsedQuote, ...message } = parse({ ...row, quote: invalid, external_reply_context: longest });
+    expect(parsedQuote).toBeUndefined();
+    expect(message).toStrictEqual({ ...row, external_reply_context: longest });
+  }
+  for (const invalid of [null, 1, {}, longest + "!"]) {
+    const { external_reply_context, ...message } = parse({ ...row, quote, external_reply_context: invalid });
+    expect(external_reply_context).toBeUndefined();
+    expect(message).toStrictEqual({ ...row, quote });
+  }
+});
+
 test("F4 descriptor features survive parsing and owner I10 schemas survive unchanged", () => {
   const descriptor = { protocol: "delegatus-relay", versions: [1], name: "Test", description: "Test",
     api_base: "https://relay.example/v1", kinds: ["answer"], liveness: sampleRequest.liveness,

@@ -149,6 +149,16 @@ export const MEMBER_REQUIRED_CODE = "member_required";
 
 /* ---- the seam ------------------------------------------------------------- */
 
+/** The first thing that keeps a browser from confirming an owner-only Telegram
+    action, in the order it is checked. `"unverified"` is a refusal that names no
+    step: no live member session, or a store that could not be read. */
+export const OWNER_TELEGRAM_GAPS = ["team", "owner", "pairing", "telegram_link", "telegram_account", "telegram_session"] as const;
+export type OwnerTelegramGap = (typeof OWNER_TELEGRAM_GAPS)[number];
+
+export function isOwnerTelegramGap(value: unknown): value is OwnerTelegramGap {
+  return typeof value === "string" && (OWNER_TELEGRAM_GAPS as readonly string[]).includes(value);
+}
+
 type RequestHeaders = { headers: Headers; cookies: { get(name: string): { value: string } | undefined } };
 
 export interface SubjectAuthorshipView {
@@ -175,6 +185,8 @@ export interface TeamModule {
   teamActor(req: RequestHeaders): TeamActor;
   /** A live Telegram sign-in matching the independently paired owner. */
   authenticatedOwner(req: RequestHeaders, telegramUserId: string | undefined): boolean;
+  /** Why `authenticatedOwner` refuses: the first missing step, or null when it admits. */
+  ownerTelegramGap(req: RequestHeaders, telegramUserId: string | undefined): OwnerTelegramGap | "unverified" | null;
   /** Whether the access key must be kept from this caller: on a team install, anyone but the owner, agents and Viewer services. */
   accessKeyWithheld(req: RequestHeaders): boolean;
   /** The 401 a human write gets in team mode without a session, or null. */
@@ -211,6 +223,7 @@ export const nullTeam: TeamModule = {
   teamMode: () => "solo",
   teamActor: () => ({ kind: "operator" }),
   authenticatedOwner: () => false,
+  ownerTelegramGap: () => "team",
   accessKeyWithheld: () => false,
   refuseAnonymous: () => null,
   recordTeamEvent: () => {},

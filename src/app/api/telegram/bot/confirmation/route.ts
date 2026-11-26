@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { authenticatedOwner } from "@/lib/team";
+import { ownerTelegramGap } from "@/lib/team";
 import { ownerReviewDestination } from "@/lib/externalRelay/telegramPublication";
 import { companionOperator } from "@/lib/voiceCompanion/http";
 import { readBoundedJson } from "@/lib/keys/access";
@@ -15,13 +15,17 @@ function failure(error: unknown) {
   return response;
 }
 
-/** Reuses the established browser perimeter and independently paired owner verifier. */
+/** Reuses the established browser perimeter and independently paired owner verifier.
+    A refusal names the first missing step (`missing`) so the page can say what to do;
+    the perimeter has already turned away anyone who is not a signed-in member of this install. */
 function owner(req: NextRequest): NextResponse | null {
   const rejection = companionOperator(req);
   if (rejection) return rejection;
   let paired: string | undefined;
   try { paired = ownerReviewDestination().chatId; } catch { /* unpaired refuses */ }
-  return authenticatedOwner(req, paired) ? null : NextResponse.json({ code: "OPERATOR_REQUIRED" }, { status: 401, headers: NO_STORE });
+  const gap = ownerTelegramGap(req, paired);
+  if (gap === null) return null;
+  return NextResponse.json({ code: "OPERATOR_REQUIRED", ...(gap === "unverified" ? {} : { missing: gap }) }, { status: 401, headers: NO_STORE });
 }
 export async function GET(req: NextRequest) {
   const rejected = owner(req); if (rejected) return rejected;

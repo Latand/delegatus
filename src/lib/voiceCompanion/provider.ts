@@ -1,5 +1,5 @@
 import type { Locale } from "./contract";
-import { liveSessionConfiguration, type BackendRequest } from "./sessionConfig";
+import { liveSessionConfiguration, type BackendRequest, type planBackendRequest } from "./sessionConfig";
 import type { VoiceToolSnapshot } from "@/lib/voiceTools/snapshot";
 
 export type LiveCommand = Record<string, unknown> & { type: string };
@@ -27,9 +27,39 @@ export interface LiveProvider {
   hangup(id: string, key: string): Promise<void>;
   /** One backend response, paid for by the caller before it is asked. */
   respond(key: string, request: BackendRequest, signal: AbortSignal): Promise<unknown>;
+  respondOnPlan?(request: ReturnType<typeof planBackendRequest>, signal: AbortSignal, owner: () => boolean): Promise<unknown>;
 }
 export const jsonObject = (value: unknown): Record<string, unknown> | null =>
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+
+async function readStreamedResponse(response: Response): Promise<unknown> {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("PROVIDER_ERROR");
+  const decoder = new TextDecoder();
+  let pending = "", data: string[] = [], size = 0;
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > 4 * 1024 * 1024) throw new Error("PROVIDER_ERROR");
+      pending += decoder.decode(value, { stream: true });
+      const lines = pending.split("\n"); pending = lines.pop()!;
+      for (const raw of lines) {
+        const line = raw.replace(/\r$/, "");
+        if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
+        if (line !== "" || !data.length) continue;
+        const event = jsonObject(JSON.parse(data.join("\n"))); data = [];
+        if (event?.type === "response.completed" && jsonObject(event.response)) return event.response;
+        if (event?.type === "response.failed" || event?.type === "error") throw new Error("PROVIDER_ERROR");
+      }
+    }
+    throw new Error("PROVIDER_ERROR");
+  } finally {
+    void reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+}
 
 /** Fixed official endpoints. Never logs upstream errors, configuration, SDP,
  * credentials or provider snapshots. No automatic paid mint retries. */
@@ -47,13 +77,17 @@ export class OpenAILiveProvider implements LiveProvider {
       if (!response.ok && response.status !== 404 && response.status !== 410) throw new Error("PROVIDER_ERROR");
     } catch { throw new Error("PROVIDER_ERROR"); }
   }
+  async respondOnPlan(request: ReturnType<typeof planBackendRequest>, signal: AbortSignal, owner: () => boolean): Promise<unknown> {
+    const { chatgptPlan } = await import("@/lib/chatgptPlan/session");
+    return chatgptPlan().respond(request, signal, owner);
+  }
   async respond(key: string, request: BackendRequest, signal: AbortSignal): Promise<unknown> {
     try {
       const response = await this.http("https://api.openai.com/v1/responses", { method: "POST", redirect: "error",
         headers: { authorization: `Bearer ${key}`, "content-type": "application/json" }, body: JSON.stringify(request),
         signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]) });
       if (!response.ok) throw new Error("PROVIDER_ERROR");
-      return await response.json();
+      return request.stream === true ? await readStreamedResponse(response) : await response.json();
     } catch { throw new Error("PROVIDER_ERROR"); }
   }
   async create(key: string, locale: Locale, sdp: string, projectName?: string, _project?: string, memory?: string, tools?: VoiceToolSnapshot, clock?: string) {

@@ -381,6 +381,9 @@ test.each([
         const expected = path.join(access.scratchDirectory!, "tmp");
         expect(path.dirname(access.scratchDirectory!)).toBe(directory);
         expect(captured.options?.env?.TMPDIR).toBe(expected);
+        /* Tools that read TMP or TEMP instead of TMPDIR land in the same scratch. */
+        expect(captured.options?.env?.TMP).toBe(expected);
+        expect(captured.options?.env?.TEMP).toBe(expected);
         expect(captured.options?.env?.LLV_EVIDENCE_DIR).toBe(access.env.LLV_EVIDENCE_DIR);
         expect(expected).not.toBe(sourceEnv.TMPDIR);
         const child = Bun.spawnSync([process.execPath, "-e",
@@ -653,6 +656,15 @@ test.each([
       const denied = args[args.indexOf("--disallowedTools") + 1];
       expect(denied.includes("Edit,Write,NotebookEdit")).toBe(sandbox === null);
       expect(captured.options?.env).toMatchObject({ LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource });
+      /* A host re-hosted at startup gets its own on-disk attempt scratch as
+         TMPDIR, TMP and TEMP, like the launch it replaces. */
+      const temporary = captured.options?.env?.TMPDIR ?? "";
+      expect(path.basename(temporary)).toBe("tmp");
+      expect(path.dirname(path.dirname(temporary))).toBe(path.join(directory, "state", "scratch"));
+      expect(path.basename(path.dirname(temporary))).toMatch(sandbox === "restricted" || sandbox === null ? /^llv-read-only-stage-/ : /^llv-stage-/);
+      expect(fs.statSync(temporary).isDirectory()).toBeTrue();
+      expect(captured.options?.env?.TMP).toBe(temporary);
+      expect(captured.options?.env?.TEMP).toBe(temporary);
       expect(captured.options?.env?.LLV_STATE_DIR).toBe(path.join(
         captured.options?.env?.XDG_CONFIG_HOME ?? "", "agent-log-viewer", "state",
       ));

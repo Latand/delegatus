@@ -12,7 +12,7 @@ import { writeJsonDurably } from "@/lib/state/durableJson";
 import { withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { attemptTempConfigParent } from "@/lib/runtime/attemptTempPaths";
 import { agentConfigSandboxRoot } from "@/lib/runtime/agentConfigSandbox";
-import { systemBootEpoch } from "@/lib/processIdentity";
+import { cachedSystemBootEpoch, systemBootEpoch } from "@/lib/processIdentity";
 import { enterStageHost, includeIdleHostViews, openHostTempRoots, stageHostNamespace, tempViewAvailable } from "@/lib/state/hostTempViews";
 
 /**
@@ -285,8 +285,12 @@ export async function readDiskPressureInHelper(ports: {
   // MCP may run in the host namespace while the Viewer runs in Docker. Its
   // narrower volume view cannot close the Viewer's episode or repeat its
   // consumer walks. Every resources read gets the authoritative report.
-  if (ports.readOnly ?? process.env.LLV_STATE_OWNER === "mcp")
-    return readReport(file) ?? observeDiskPressure([], null, new Date(now()).toISOString());
+  if (ports.readOnly ?? process.env.LLV_STATE_OWNER === "mcp") {
+    // An empty report has no episode to fence. A cold Darwin response can
+    // serve it while resource discovery reads the boot identity.
+    const kernelBoot = process.platform === "darwin" ? cachedSystemBootEpoch() : undefined;
+    return readReport(file) ?? observeDiskPressure([], null, new Date(now()).toISOString(), kernelBoot);
+  }
   let cached = readers.get(directory);
   if (!cached) {
     const prior = readReport(file);

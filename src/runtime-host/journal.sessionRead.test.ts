@@ -155,7 +155,7 @@ test("an event bound to a session revision is recorded only while the row still 
   const journal = new RuntimeJournal(path.join(root, "fence.sqlite"));
   const host = new RuntimeHost(journal);
   const scope = runtimeScope("session", "conversation_fenced");
-  const status = (payload: Record<string, unknown>, expectedSessionRevision?: number) => ({ scope, kind: "session-status",
+  const status = (payload: Record<string, unknown>, expectedSessionRevision?: number | null) => ({ scope, kind: "session-status",
     payload: { hostKind: "codex-app-server", ...payload }, ...(expectedSessionRevision === undefined ? {} : { expectedSessionRevision }) });
   try {
     journal.append(status({ host: "hosted", turn: "running", activeTurnId: "turn-one" }));
@@ -197,10 +197,19 @@ test("an event bound to a session revision is recorded only while the row still 
     expect(await host.handle({ id: "current", method: "append-session-fenced", params: { event: status({ host: "dead", turn: "unknown", activeTurnId: null }, current.revision) } }))
       .toMatchObject({ ok: true });
     expect(journal.readSession({ conversationId: "conversation_fenced" })).toMatchObject({ host: "dead", turn: "unknown", activeTurnId: null });
+    /* The null fence admits a first projection only while the session remains absent. */
+    expect(await host.handle({ id: "absent", method: "append-session-fenced", params: {
+      event: { ...status({ host: "hosted", turn: "idle", activeTurnId: null }, null), scope: runtimeScope("session", "conversation_absent") },
+    } })).toMatchObject({ ok: true });
+    const absentRevision = journal.readSession({ conversationId: "conversation_absent" })!.revision;
+    expect(await host.handle({ id: "stale-absent", method: "append-session-fenced", params: {
+      event: { ...status({ host: "dead", turn: "unknown", activeTurnId: null }, null), scope: runtimeScope("session", "conversation_absent") },
+    } })).toMatchObject({ ok: false });
+    expect(journal.readSession({ conversationId: "conversation_absent" })?.revision).toBe(absentRevision);
     /* A row that does not exist, and a scope that holds no session row, have no revision to match. */
-    expect(() => journal.append({ ...status({ host: "dead" }, 1), scope: runtimeScope("session", "conversation_absent") })).toThrow();
+    expect(() => journal.append({ ...status({ host: "dead" }, 1), scope: runtimeScope("session", "conversation_missing") })).toThrow();
     expect(() => journal.append({ scope: runtimeScope("system", "fence"), kind: "session-status", payload: {}, expectedSessionRevision: 1 })).toThrow();
-    expect(journal.readSession({ conversationId: "conversation_absent" })).toBeNull();
+    expect(journal.readSession({ conversationId: "conversation_missing" })).toBeNull();
   } finally { journal.close(); }
 });
 
