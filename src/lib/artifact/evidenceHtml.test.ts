@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { containEvidenceHtml } from "./evidenceHtml";
+import { Window } from "happy-dom";
+import { containEvidenceHtml, transformEvidenceHtml } from "./evidenceHtml";
 
 test("evidence HTML keeps presentation and local assets while removing navigation and script execution", () => {
   const source = `<!doctype html><html><head>
@@ -22,13 +23,52 @@ test("evidence HTML keeps presentation and local assets while removing navigatio
   }
 });
 
-test("quoted greater-than signs do not terminate an HTML tag during containment", () => {
-  expect(containEvidenceHtml('<a title="x > y" href="https://outside.invalid">report</a>'))
-    .toBe('<a title="x > y" >report</a>');
+test("browser-style tree construction removes navigation recovered from malformed markup", () => {
+  const result = containEvidenceHtml('<!doctype html><a href="https://outside.invalid" <p>Visible report</p><meta http-equiv="re&#x66;resh" content="0;url=https://outside.invalid">');
+  const window = new Window();
+  try {
+    const document = new window.DOMParser().parseFromString(result, "text/html");
+    expect(document.doctype?.name).toBe("html");
+    expect(document.querySelector("a[href], meta[http-equiv=refresh]")).toBeNull();
+    expect(document.body.textContent).toContain("Visible report");
+  } finally { window.happyDOM.abort(); }
 });
 
-test("an optional scoped base is inserted after untrusted base elements are removed", () => {
-  const result = containEvidenceHtml('<html><head><base href="https://outside.invalid"></head><body><img src="chart.png"></body></html>', "http://localhost:8898/api/artifact/frame/signed/");
-  expect(result).toContain('<head><base href="http://localhost:8898/api/artifact/frame/signed/">');
-  expect(result).not.toContain("outside.invalid");
+test("serialization preserves doctype, optional head documents, CSS raw text and local assets", () => {
+  for (const source of [
+    '<!doctype html><html><head><style>.x::before { content: "<body>" }</style></head><body><img src="chart.png"></body></html>',
+    '<!doctype html><h1>Report without an explicit head</h1><img src="chart.png">',
+  ]) {
+    const result = containEvidenceHtml(source);
+    const window = new Window();
+    try {
+      const document = new window.DOMParser().parseFromString(result, "text/html");
+      expect(document.doctype?.name).toBe("html");
+      expect(document.body.textContent).toContain(source.includes("Report without") ? "Report without an explicit head" : "");
+      expect(document.querySelector("img")?.getAttribute("src")).toBe("chart.png");
+      if (source.includes("content:")) expect(document.querySelector("style")?.textContent).toContain('content: "<body>"');
+    } finally { window.happyDOM.abort(); }
+  }
+});
+
+test("a generated base is inserted into the parsed head using the verified authority", () => {
+  const result = containEvidenceHtml('<!-- <head>sample marker</head> --><!doctype html><img src="chart.png">', "http://[::1]:8898/api/artifact/frame/grant/");
+  const window = new Window();
+  try {
+    const document = new window.DOMParser().parseFromString(result, "text/html");
+    expect(document.doctype?.name).toBe("html");
+    expect(document.head.querySelector("base")?.getAttribute("href")).toBe("http://[::1]:8898/api/artifact/frame/grant/");
+    expect(document.body.querySelector("img")?.getAttribute("src")).toBe("chart.png");
+  } finally { window.happyDOM.abort(); }
+});
+
+test("IPv6 fallback inlines only admitted local chart bytes", () => {
+  const result = transformEvidenceHtml('<img src="chart.png"><img src="//outside.invalid/leak.png">', undefined,
+    new Map([["chart.png", "data:image/png;base64,AA=="]]));
+  const window = new Window();
+  try {
+    const document = new window.DOMParser().parseFromString(result, "text/html");
+    expect(document.querySelectorAll("img")[0]?.getAttribute("src")).toBe("data:image/png;base64,AA==");
+    expect(document.querySelectorAll("img")[1]?.hasAttribute("src")).toBe(false);
+  } finally { window.happyDOM.abort(); }
 });

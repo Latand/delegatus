@@ -389,6 +389,20 @@ test("evidence metadata refuses escapes, hidden reports, the picture store and o
   }
 });
 
+test("a same-directory evidence HTML alias opens and a missing report returns not found", async () => {
+  const report = write("state/evidence/agents/aliases/report.html", "<h1>Alias report</h1>");
+  const alias = path.join(path.dirname(report), "latest.html");
+  fs.symlinkSync(report, alias);
+  const admitted = await GET(request({ path: alias, mode: "meta" }));
+  expect(admitted.status).toBe(200);
+  const metadata = await admitted.json() as { frame?: string };
+  expect(metadata.frame).toMatch(/\/report\.html$/);
+
+  const missing = await GET(request({ path: path.join(path.dirname(report), "missing.html"), mode: "meta" }));
+  expect(missing.status).toBe(404);
+  expect(await errorCode(missing)).toBe("not-found");
+});
+
 test("evidence HTML grants stay inside the admitting root and report directory", async () => {
   const firstRoot = fs.mkdtempSync(path.join(sandbox, "evidence-root-a-"));
   const secondRoot = fs.mkdtempSync(path.join(sandbox, "evidence-root-b-"));

@@ -21,6 +21,7 @@ async function GET(...args: Parameters<typeof serve>) {
   const response = await serve(...args); responses.push(response); return response;
 }
 const { GET: GET_ARTIFACT } = await import("../../route");
+const { readEvidenceHtml } = await import("./route");
 
 const savedHome = process.env.HOME;
 const savedState = process.env.LLV_STATE_DIR;
@@ -118,7 +119,7 @@ test("evidence frame serves HTML and local rasters with the report sandbox", asy
   const csp = page.headers.get("content-security-policy")!;
   expect(csp).toContain(`sandbox ${EVIDENCE_FRAME_SANDBOX}`);
   expect(csp).toContain(`/api/artifact/frame/${new URL(frame, "http://127.0.0.1").pathname.split("/")[4]}/`);
-  expect(csp).toContain("base-uri 'none'");
+  expect(csp).toContain("base-uri http://127.0.0.1:8898/api/artifact/frame/");
   expect(csp).toContain("form-action 'none'");
   expect(csp).toContain("script-src 'none'");
   expect(csp).toContain("frame-src 'none'");
@@ -130,8 +131,7 @@ test("evidence frame serves HTML and local rasters with the report sandbox", asy
   expect(deliveredHtml).not.toContain("location.href");
   const scriptOnly = await asset("script-only.html");
   expect(scriptOnly.status).toBe(200);
-  expect(await scriptOnly.text()).toBe("");
-  expect(scriptOnly.headers.get("content-length")).toBe("0");
+  expect(await scriptOnly.text()).not.toContain("location.href");
   const chart = await asset("chart.png");
   expect(chart.status).toBe(200);
   expect(Buffer.from(await chart.arrayBuffer())).toEqual(KEEP_PNG);
@@ -153,6 +153,44 @@ test("evidence frame serves HTML and local rasters with the report sandbox", asy
   fs.symlinkSync(path.dirname(sibling), directory, "dir");
   expect((await asset("index.html")).status).toBe(403);
   expect((await asset("chart.png")).status).toBe(403);
+});
+
+test("IPv6 evidence frames keep scoped assets on the verified serving authority", async () => {
+  const report = write("state/evidence/agents/ipv6/index.html", '<!doctype html><img src="chart.png"><h1>IPv6 report</h1>');
+  fs.writeFileSync(path.join(path.dirname(report), "chart.png"), KEEP_PNG);
+  const metaUrl = new URL("http://[::1]:8898/api/artifact");
+  metaUrl.searchParams.set("path", report);
+  metaUrl.searchParams.set("mode", "meta");
+  const meta = await GET_ARTIFACT(new NextRequest(metaUrl, { headers: { host: "[::1]:8898" } }));
+  expect(meta.status).toBe(200);
+  const { frame } = await meta.json() as { frame: string };
+  const url = new URL(frame, "http://[::1]:8898");
+  const page = await GET(new NextRequest(url, { headers: { ...FRAME_REQUEST_HEADERS, host: "[::1]:8898" } }));
+  expect(page.status).toBe(200);
+  expect(page.headers.get("content-security-policy")).toContain("img-src data:");
+  expect(page.headers.get("content-security-policy")).not.toContain("localhost");
+  const html = await page.text();
+  expect(html).not.toContain("<base");
+  expect(html).toContain('src="data:image/png;base64,');
+  const chart = await GET(new NextRequest(new URL(frame.replace("index.html", "chart.png"), url), {
+    headers: { ...FRAME_REQUEST_HEADERS, host: "[::1]:8898" },
+  }));
+  expect(chart.status).toBe(200);
+  expect(Buffer.from(await chart.arrayBuffer())).toEqual(KEEP_PNG);
+});
+
+test("an initially oversized evidence report is rejected before HTML parsing", async () => {
+  const report = write("state/evidence/agents/oversized/index.html", "0123456789");
+  const scope = mintFrameScope(path.dirname(report), Date.now(), null, "evidence", null,
+    path.join(home, "state/evidence"), path.join(home, "state/evidence"));
+  const prior = process.env.LLV_ARTIFACT_MAX_BYTES;
+  process.env.LLV_ARTIFACT_MAX_BYTES = "4";
+  try {
+    expect((await GET(frameRequest(`/api/artifact/frame/${scope}/index.html`))).status).toBe(413);
+  } finally {
+    if (prior === undefined) delete process.env.LLV_ARTIFACT_MAX_BYTES;
+    else process.env.LLV_ARTIFACT_MAX_BYTES = prior;
+  }
 });
 
 test("workspace authorization checks the project owning each evidence target", async () => {
@@ -345,21 +383,57 @@ test("a symlink inside the report that points out of it is refused", async () =>
   expect(res.status).toBe(403);
 });
 
-test("forged, altered and expired scopes are refused", async () => {
-  const dir = reportDir();
-  const scope = mintFrameScope(dir);
-  const [encodedDir, expiry, sessionId, kind, project, signature] = scope.split(".");
-  const other = Buffer.from(path.join(home, "checkout"), "utf8").toString("base64url");
-  for (const bad of [
-    "forged",
-    `${other}.${expiry}.${sessionId}.${kind}.${project}.${signature}`,
-    `${encodedDir}.${(Date.now() + 10 * FRAME_SCOPE_TTL_MS).toString(36)}.${sessionId}.${kind}.${project}.${signature}`,
-    `${encodedDir}.${expiry}.${sessionId}.${kind}.${project}.${signature!.slice(0, -2)}AA`,
-    mintFrameScope(dir, Date.now() - 2 * FRAME_SCOPE_TTL_MS),
-  ]) {
-    const res = await GET(frameRequest(`/api/artifact/frame/${bad}/index.html`));
+test("valid evidence grants verify before each signed field is independently tampered", async () => {
+  const dir = path.join(home, "state/evidence/agents/signatures");
+  write("state/evidence/agents/signatures/index.html", "<p>signature control</p>");
+  const root = path.join(home, "state/evidence");
+  const scope = mintFrameScope(dir, Date.now(), null, "evidence", "project-a", root, root);
+  const fields = scope.split(".");
+  expect(fields).toHaveLength(8);
+  expect((await GET(frameRequest(`/api/artifact/frame/${scope}/index.html`))).status).toBe(200);
+  const changes: Array<[number, string]> = [
+    [0, Buffer.from(path.join(home, "checkout"), "utf8").toString("base64url")],
+    [1, (Date.now() + 10 * FRAME_SCOPE_TTL_MS).toString(36)],
+    [2, "different-session"],
+    [3, "project"],
+    [4, Buffer.from("project-b", "utf8").toString("base64url")],
+    [5, Buffer.from(path.join(home, "other-evidence"), "utf8").toString("base64url")],
+    [6, Buffer.from(path.join(home, "other-root"), "utf8").toString("base64url")],
+    [7, `${fields[7]!.slice(0, -2)}AA`],
+  ];
+  for (const [index, value] of changes) {
+    const altered = [...fields];
+    altered[index] = value;
+    expect(altered).toHaveLength(8);
+    const res = await GET(frameRequest(`/api/artifact/frame/${altered.join(".")}/index.html`));
     expect(res.status).toBe(403);
   }
+  expect((await GET(frameRequest(`/api/artifact/frame/${mintFrameScope(dir, Date.now() - 2 * FRAME_SCOPE_TTL_MS)}/index.html`))).status).toBe(403);
+});
+
+test("evidence HTML reads reject actual growth beyond the bound and honor cancellation and deadline", async () => {
+  const report = write("state/evidence/agents/growing/index.html", "four");
+  const handle = await fs.promises.open(report, "r");
+  try {
+    expect((await handle.stat()).size).toBe(4);
+    fs.appendFileSync(report, "more");
+    await expect(readEvidenceHtml(handle, 6, new AbortController().signal, 5_000)).rejects.toThrow("byte bound");
+  } finally { await handle.close(); }
+
+  const initiallyLarge = write("state/evidence/agents/large/index.html", "12345678");
+  const largeHandle = await fs.promises.open(initiallyLarge, "r");
+  try {
+    await expect(readEvidenceHtml(largeHandle, 4, new AbortController().signal, 5_000)).rejects.toThrow("byte bound");
+  } finally { await largeHandle.close(); }
+
+  const cancelled = new AbortController();
+  cancelled.abort();
+  const cancelledHandle = await fs.promises.open(report, "r");
+  try { await expect(readEvidenceHtml(cancelledHandle, 64, cancelled.signal, 5_000)).rejects.toThrow("client aborted"); }
+  finally { await cancelledHandle.close(); }
+  const deadlineHandle = await fs.promises.open(report, "r");
+  try { await expect(readEvidenceHtml(deadlineHandle, 64, new AbortController().signal, 0)).rejects.toThrow("time budget"); }
+  finally { await deadlineHandle.close(); }
 });
 
 test("a scope for a directory outside home serves nothing", async () => {

@@ -117,9 +117,15 @@ export const FRAME_SANDBOX = "allow-scripts";
 export const PROJECT_FRAME_SANDBOX = "allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals";
 
 /** Evidence pages may load only resources routed through their signed directory. */
-export function frameCsp(scope: string, origin: string, evidence: boolean, allowBase = false): string {
+export function frameCsp(scope: string, origin: string, evidence: boolean, allowBase = false, inlineImagesOnly = false): string {
   const sandbox = `sandbox ${evidence ? FRAME_SANDBOX : PROJECT_FRAME_SANDBOX}`;
   if (!evidence) return sandbox;
-  const resourceRoot = `${origin}/api/artifact/frame/${scope}/`;
-  return `${sandbox}; default-src 'none'; base-uri ${allowBase ? resourceRoot : "'none'"}; object-src 'none'; frame-src 'none'; child-src 'none'; form-action 'none'; script-src 'none'; style-src ${resourceRoot} 'unsafe-inline'; img-src ${resourceRoot} data:; font-src ${resourceRoot} data:; media-src ${resourceRoot}; connect-src ${resourceRoot}`;
+  const baseRoot = `${origin}/api/artifact/frame/${scope}/`;
+  /* Chromium rejects path-bearing IPv6 host sources. For literal IPv6 loopback,
+     CSP constrains the authority and the signed frame handler enforces the
+     directory path; every request remains on the authority that minted it. */
+  let resourceRoot = baseRoot;
+  try { if (new URL(origin).hostname.includes(":")) resourceRoot = origin; } catch { /* caller validates origin */ }
+  if (inlineImagesOnly) return `${sandbox}; default-src 'none'; base-uri 'none'; object-src 'none'; frame-src 'none'; child-src 'none'; form-action 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src 'none'; connect-src 'none'`;
+  return `${sandbox}; default-src 'none'; base-uri ${allowBase ? baseRoot : "'none'"}; object-src 'none'; frame-src 'none'; child-src 'none'; form-action 'none'; script-src 'none'; style-src ${resourceRoot} 'unsafe-inline'; img-src ${resourceRoot} data:; font-src ${resourceRoot} data:; media-src ${resourceRoot}; connect-src ${resourceRoot}`;
 }

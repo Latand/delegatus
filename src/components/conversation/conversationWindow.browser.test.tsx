@@ -7685,6 +7685,7 @@ describe("message document links", () => {
     const heading = "Disk usage report";
     fs.writeFileSync(report, `<!doctype html><html lang="en"><meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
+      <meta http-equiv="refresh" content="0;url=https://outside.invalid/refresh">
       <title>${heading}</title>
       <style>
         body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: #172332; background: #f4f7fa; }
@@ -7748,6 +7749,7 @@ describe("message document links", () => {
     };
     const sockets = ownedBrowserSocketEnvironment();
     let served: Awaited<ReturnType<typeof serveEvidenceFixture>> | undefined;
+    let alternateListener: ReturnType<typeof Bun.serve> | undefined;
     let browser: Browser | undefined;
     try {
       served = await serveEvidenceFixture(scratch, FIXTURE, responses);
@@ -7819,15 +7821,40 @@ describe("message document links", () => {
       }
       served.stop();
       served = await serveEvidenceFixture(scratch, FIXTURE, responses, { hostname: "::1" });
+      const alternateListenerRequests: string[] = [];
+      alternateListener = Bun.serve({
+        hostname: "127.0.0.1",
+        port: Number(new URL(served.base).port),
+        fetch(request) {
+          alternateListenerRequests.push(new URL(request.url).pathname);
+          return new Response("alternate loopback listener");
+        },
+      });
+      const ipv6ChartCount = chartResponses.length;
+      const ipv6Requests: string[] = [];
+      const ipv6Responses: string[] = [];
+      const ipv6Failures: string[] = [];
+      const ipv6Messages: string[] = [];
       const { context: ipv6Context, page: ipv6Page, pageErrors: ipv6Errors } = await openFixture(browser,
         `${served.base}?${new URLSearchParams({ case: "document-links", lang: "en", cwd: scratch, parent: scratch, evidenceReport: report, reportLabel: "Disk usage report" })}`,
         { width: 1280, height: 900 }, "light", "en");
+      ipv6Page.on("request", request => {
+        const url = new URL(request.url());
+        ipv6Requests.push(`${url.host} ${url.pathname.replace(/\/api\/artifact\/frame\/[^/]+/, "/api/artifact/frame/:scope")}`);
+      });
+      ipv6Page.on("response", response => {
+        const url = new URL(response.url());
+        if (url.pathname.includes("/api/artifact/frame/")) ipv6Responses.push(`${response.status()} ${response.headers()["content-type"] ?? ""} ${url.pathname.replace(/\/api\/artifact\/frame\/[^/]+/, "/api/artifact/frame/:scope")}`);
+      });
+      ipv6Page.on("requestfailed", request => ipv6Failures.push(`${request.failure()?.errorText ?? "unknown"} ${new URL(request.url()).pathname.replace(/\/api\/artifact\/frame\/[^/]+/, "/api/artifact/frame/:scope")}`));
+      ipv6Page.on("console", message => { if (message.type() === "error") ipv6Messages.push(message.text()); });
       try {
         const link = ipv6Page.getByRole("link", { name: "Disk usage report", exact: true });
         await link.click();
         const frame = ipv6Page.locator("[data-preview-frame]");
         await frame.contentFrame().getByRole("heading", { name: heading }).waitFor();
-        expect(framePolicies.at(-1)).toContain("http://localhost:");
+        expect(framePolicies.at(-1)).toContain("base-uri 'none'");
+        expect(framePolicies.at(-1)).not.toContain("localhost");
         const chart = frame.contentFrame().getByRole("img", { name: "Local usage chart" });
         await chart.waitFor();
         const chartState = await chart.evaluate(async image => {
@@ -7835,14 +7862,19 @@ describe("message document links", () => {
           try { await element.decode(); } catch (error) { return { width: element.naturalWidth, src: element.currentSrc, error: (error as Error).message }; }
           return { width: element.naturalWidth, src: element.currentSrc, error: null };
         });
-        expect({ chartState, response: chartResponses.at(-1), csp: framePolicies.at(-1), browserMessages })
-          .toMatchObject({ chartState: { width: 64, error: null } });
-        expect(chartResponses.at(-1)).toMatchObject({ status: 200, contentType: "image/png" });
+        expect({ chartState, chartCount: chartResponses.length - ipv6ChartCount, requests: ipv6Requests, responses: ipv6Responses, failures: ipv6Failures, csp: framePolicies.at(-1), messages: ipv6Messages })
+          .toMatchObject({ chartState: { width: 64, error: null }, chartCount: 0 });
+        expect(chartState.src).toMatch(/^data:image\/png;base64,/);
         expect(browserMessages.some(message => message.includes("chart.png") && message.includes("violates the following Content Security Policy"))).toBe(false);
+        expect(framePolicies.at(-1)).toContain("img-src data:");
+        expect(framePolicies.at(-1)).not.toContain("localhost");
+        expect(ipv6Requests.some(request => request.includes("localhost"))).toBe(false);
+        expect(alternateListenerRequests).toEqual([]);
         expect(ipv6Errors).toEqual([]);
       } finally { await ipv6Context.close(); }
     } finally {
       await browser?.close();
+      alternateListener?.stop(true);
       served?.stop();
       sockets.close();
       fs.rmSync(scratch, { recursive: true, force: true });

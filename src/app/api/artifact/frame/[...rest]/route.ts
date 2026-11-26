@@ -5,7 +5,7 @@ import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 
 import { classifyArtifact } from "@/lib/artifact/classify";
-import { containEvidenceHtml } from "@/lib/artifact/evidenceHtml";
+import { containEvidenceHtml, evidenceHtmlImageSources, transformEvidenceHtml } from "@/lib/artifact/evidenceHtml";
 import { frameCsp, frameMime, verifyFrameScope } from "@/lib/artifact/frameScope";
 import { admittedAs, evidenceFrameAdmission, lexicalAllowedRoots, realpathAdmitted, openAdmitted, realAllowedRoots, streamWindow, underRoot } from "@/lib/artifact/localFile";
 import { artifactEtag, artifactLimits, SNIFF_BYTES, sniffAgrees } from "@/lib/artifact/serve";
@@ -81,6 +81,65 @@ function segmentsOf(pathname: string): string[] | null {
   return segments;
 }
 
+/** Read untrusted HTML only while its actual bytes remain within the request budget. */
+export async function readEvidenceHtml(handle: fsp.FileHandle, maxBytes: number, signal: AbortSignal, timeBudgetMs: number): Promise<Buffer> {
+  const deadline = Date.now() + timeBudgetMs;
+  const chunks: Buffer[] = [];
+  let total = 0;
+  while (true) {
+    if (signal.aborted) throw new Error("client aborted");
+    if (Date.now() >= deadline) throw new Error("artifact time budget exceeded");
+    const buffer = Buffer.alloc(Math.min(64 * 1024, maxBytes + 1 - total));
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, total);
+    if (signal.aborted) throw new Error("client aborted");
+    if (Date.now() >= deadline) throw new Error("artifact time budget exceeded");
+    if (bytesRead === 0) return Buffer.concat(chunks, total);
+    total += bytesRead;
+    if (total > maxBytes) throw new Error("artifact exceeds the configured byte bound");
+    chunks.push(buffer.subarray(0, bytesRead));
+  }
+}
+
+async function inlineScopedImages(source: string, base: string, scope: string, maxBytes: number, host: string, signal: AbortSignal, timeBudgetMs: number): Promise<Map<string, string>> {
+  const baseUrl = new URL(base);
+  const scopeRoot = `${baseUrl.origin}/api/artifact/frame/${scope}/`;
+  const images = new Map<string, string>();
+  const deadline = Date.now() + timeBudgetMs;
+  let total = 0;
+  for (const sourceUrl of evidenceHtmlImageSources(source).slice(0, 32)) {
+    if (signal.aborted) throw new Error("client aborted");
+    if (Date.now() >= deadline) throw new Error("artifact time budget exceeded");
+    if (sourceUrl.startsWith("data:image/")) {
+      images.set(sourceUrl, sourceUrl);
+      continue;
+    }
+    if (sourceUrl.includes("\\")) continue;
+    let target: URL;
+    try { target = new URL(sourceUrl, baseUrl); } catch { continue; }
+    if (target.origin !== baseUrl.origin || !target.href.startsWith(scopeRoot)) continue;
+    const response = await GET(new NextRequest(target, { headers: {
+      host,
+      origin: "null",
+      "sec-fetch-site": "cross-site",
+      "sec-fetch-dest": "image",
+    }, signal }));
+    const mime = response.headers.get("content-type")?.split(";", 1)[0] ?? "";
+    const length = Number(response.headers.get("content-length"));
+    if (!response.ok || !/^image\/(?:png|jpeg|gif|webp|avif|bmp)$/.test(mime)
+      || !Number.isSafeInteger(length) || length < 0 || total + length > maxBytes) {
+      await response.body?.cancel().catch(() => {});
+      continue;
+    }
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (signal.aborted) throw new Error("client aborted");
+    if (Date.now() >= deadline) throw new Error("artifact time budget exceeded");
+    if (bytes.length !== length || total + bytes.length > maxBytes) continue;
+    total += bytes.length;
+    images.set(sourceUrl, `data:${mime};base64,${Buffer.from(bytes).toString("base64")}`);
+  }
+  return images;
+}
+
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const hostRejection = rejectForeignHost(req);
   if (hostRejection) return hostRejection;
@@ -95,20 +154,15 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const requestUrl = new URL(req.url);
   const protocol = forwardedProtocol === "https" ? "https" : requestUrl.protocol.slice(0, -1);
   const requestHost = req.headers.get("host");
-  // CSP host matching does not support IPv6 literals. For loopback IPv6,
-  // scope relative asset URLs to the equivalent localhost authority instead.
   let cspOrigin: string;
-  let ipv6Loopback = false;
   try {
     const authority = new URL(`${protocol}://${requestHost ?? requestUrl.host}`);
-    ipv6Loopback = authority.hostname.replace(/^\[|\]$/g, "") === "::1";
-    cspOrigin = ipv6Loopback
-      ? `${protocol}://localhost${authority.port ? `:${authority.port}` : ""}`
-      : authority.origin;
+    cspOrigin = authority.origin;
   }
   catch { return refuse(400, "invalid request authority"); }
-  const evidenceBase = kind === "evidence" && ipv6Loopback ? `${cspOrigin}/api/artifact/frame/${scope}/` : undefined;
-  const csp = frameCsp(scope, cspOrigin, kind === "evidence", Boolean(evidenceBase));
+  const ipv6Authority = new URL(cspOrigin).hostname.includes(":");
+  const evidenceBase = kind === "evidence" && !ipv6Authority ? `${cspOrigin}/api/artifact/frame/${scope}/` : undefined;
+  const csp = frameCsp(scope, cspOrigin, kind === "evidence", Boolean(evidenceBase), kind === "evidence" && ipv6Authority);
 
   const abs = path.resolve(directory, ...inside);
   const roots = lexicalAllowedRoots();
@@ -188,7 +242,41 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     let body: string | null = null;
     let responseLength = stat.size;
     if (kind === "evidence" && /\.html?$/i.test(real)) {
-      body = containEvidenceHtml((await handle.readFile()).toString("utf8"), evidenceBase);
+      let source: Buffer;
+      try {
+        source = await readEvidenceHtml(handle, limits.maxBytes, req.signal, limits.timeBudgetMs);
+      } catch (error) {
+        const message = (error as Error).message;
+        if (message === "artifact exceeds the configured byte bound") {
+          await handle.close();
+          return refuse(413, message);
+        }
+        if (message === "artifact time budget exceeded") {
+          await handle.close();
+          return refuse(408, message);
+        }
+        if (message === "client aborted") {
+          await handle.close();
+          return new NextResponse(null, { status: 499, headers: HEADERS_BASE });
+        }
+        throw error;
+      }
+      if (ipv6Authority) {
+        let images: Map<string, string>;
+        try {
+          images = await inlineScopedImages(source.toString("utf8"), evidenceBase ?? `${cspOrigin}/api/artifact/frame/${scope}/`, scope,
+            limits.maxBytes, req.headers.get("host") ?? requestUrl.host, req.signal, limits.timeBudgetMs);
+        } catch (error) {
+          const message = (error as Error).message;
+          await handle.close();
+          if (message === "client aborted") return new NextResponse(null, { status: 499, headers: HEADERS_BASE });
+          if (message === "artifact time budget exceeded") return refuse(408, message);
+          throw error;
+        }
+        body = transformEvidenceHtml(source.toString("utf8"), undefined, images);
+      } else {
+        body = containEvidenceHtml(source.toString("utf8"), evidenceBase);
+      }
       responseLength = Buffer.byteLength(body, "utf8");
     }
     const headers = new Headers({

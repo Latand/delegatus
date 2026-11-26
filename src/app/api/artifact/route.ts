@@ -101,13 +101,20 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<FailBody> | 
        the canonical directory that the frame grant later signs. */
     try {
       if (!evidenceRoot) return fail("access-denied", "path is outside the allowed roots");
-      const [root, reportDirectory, entry] = await Promise.all([
-        fs.realpath(evidenceRoot), fs.realpath(path.dirname(abs)), fs.lstat(abs),
+      const [root, reportDirectory] = await Promise.all([
+        fs.realpath(evidenceRoot), fs.realpath(path.dirname(abs)),
       ]);
-      if (!underRoot(reportDirectory, root) || entry.isSymbolicLink())
+      if (!underRoot(reportDirectory, root))
         return fail("access-denied", "evidence report alias is outside its admitted directory");
+      try {
+        await fs.lstat(abs);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return fail("not-found", "file not found");
+        throw error;
+      }
       evidenceBoundary = { root, reportDirectory };
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return fail("not-found", "file not found");
       return fail("access-denied", "evidence report directory is unavailable");
     }
   }
