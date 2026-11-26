@@ -67,7 +67,8 @@ for (const held of ["thread/items/list", "thread/turns/list"]) for (const status
     expect(f.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
     expect(f.closes()).toBe(2);
     let local = 0;
-    expect(await runCloudChecks(job, { run: async () => result }, async () => { local++; return 0; }, undefined, () => {})).toBe(1);
+    expect(await runCloudChecks(job, { run: async () => result }, async () => { local++; return 0; }, undefined, () => {}))
+      .toBe(["interrupted", "completed", "failed"].includes(status) ? 75 : 1);
     expect(local).toBe(0);
   }, 15000);
 }

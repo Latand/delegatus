@@ -3,8 +3,11 @@ import { act } from "react";
 import type { Root } from "react-dom/client";
 
 import type { AccountOption, EngineAccountsState } from "@/hooks/useEngineAccounts";
+import { ANTIGRAVITY_INSTALL_COMMAND } from "@/lib/onboarding/agentInstallCommands";
 import { installActEnv } from "@/test-helpers/actEnv";
 import { installOnboardingDom, jsonResponse } from "@/test-helpers/onboardingDom";
+
+import type { AntigravityAccount } from "./AntigravityCard";
 
 /*
  * Several accounts per engine (#2004, design §2.1): the Engines card is the
@@ -44,12 +47,17 @@ afterEach(async () => {
 let copilotPresent = true;
 dom.setRoute((url) => url.includes("/api/accounts/copilot") ? jsonResponse({ cli: { present: copilotPresent, reason: null }, active: "", accounts: [] }) : undefined);
 
-async function mount(claude: EngineAccountsState, codex: EngineAccountsState, cli: { claude: "found" | "missing"; codex: "found" | "missing" } = { claude: "found", codex: "found" }, onRecheck: () => void = () => {}): Promise<HTMLDivElement> {
+/** Antigravity as the dialog hands it down: the recorded state, with its checks counted. */
+function agyAccount(over: Partial<AntigravityAccount> = {}): AntigravityAccount {
+  return { cli: "found", auth: "signed_in", plan: null, loaded: true, probing: false, inconclusive: false, probe: async () => {}, reload: async () => {}, ...over };
+}
+
+async function mount(claude: EngineAccountsState, codex: EngineAccountsState, cli: { claude: "found" | "missing"; codex: "found" | "missing"; antigravity?: "found" | "missing" } = { claude: "found", codex: "found" }, onRecheck: () => void = () => {}, antigravity: AntigravityAccount = agyAccount()): Promise<HTMLDivElement> {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
   mounted = { root, host };
-  await act(async () => root.render(<EnginesStep claude={claude} codex={codex} cli={cli} now={1_800_000_000} onRecheck={onRecheck} />));
+  await act(async () => root.render(<EnginesStep claude={claude} codex={codex} antigravity={antigravity} cli={cli} now={1_800_000_000} onRecheck={onRecheck} />));
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
   return host;
 }
@@ -111,11 +119,12 @@ test("Claude without its tool carries its own command and no second-sign-in note
   expect(card.querySelector("[data-onboarding-accounts]")).toBeNull();
 });
 
-test("with no tool at all there is exactly one Check again, on the first card, and it looks for all three tools", async () => {
+test("with no tool at all there is exactly one Check again, on the first card, and it looks for all four tools", async () => {
   copilotPresent = false;
   try {
     let rechecks = 0;
-    const host = await mount(engineState("claude", [], ""), engineState("codex", [], ""), { claude: "missing", codex: "missing" }, () => { rechecks += 1; });
+    let agyReloads = 0;
+    const host = await mount(engineState("claude", [], ""), engineState("codex", [], ""), { claude: "missing", codex: "missing", antigravity: "missing" }, () => { rechecks += 1; }, agyAccount({ cli: "missing", auth: "unknown", reload: async () => { agyReloads += 1; } }));
     const buttons = Array.from(host.querySelectorAll("button")).filter((button) => button.textContent === "Check again");
     expect(buttons).toHaveLength(1);
     expect(host.querySelector("[data-onboarding-engine=claude]")!.contains(buttons[0]!)).toBe(true);
@@ -127,6 +136,7 @@ test("with no tool at all there is exactly one Check again, on the first card, a
     const before = dom.calls.filter((call) => call.url.includes("/api/accounts/copilot")).length;
     await act(async () => { (buttons[0] as HTMLButtonElement).click(); });
     expect(rechecks).toBe(1);
+    expect(agyReloads).toBe(1);
     expect(dom.calls.filter((call) => call.url.includes("/api/accounts/copilot")).length).toBe(before + 1);
   } finally {
     copilotPresent = true;
@@ -158,4 +168,41 @@ test("Claude explains the expected second sign-in on its own card", async () => 
   expect(note?.textContent).toContain("own Claude sign-in in an isolated configuration");
   expect(note?.textContent).toContain("second sign-in is expected");
   expect(host.querySelector("[data-onboarding-engine=codex] [data-onboarding-claude-signin]")).toBeNull();
+});
+
+test("Antigravity has its own card beside the others, and a missing agy shows its install command", async () => {
+  const claude = engineState("claude", [account({ id: "cl-main", label: "Main" })], "cl-main");
+  const host = await mount(claude, engineState("codex", [], ""), { claude: "found", codex: "found", antigravity: "missing" }, () => {}, agyAccount({ cli: "missing", auth: "unknown" }));
+  const card = host.querySelector("[data-onboarding-engine=antigravity]")!;
+  expect(card.getAttribute("data-engine-state")).toBe("missing");
+  expect(card.querySelector("[data-onboarding-engine-header]")?.textContent).toBe("Not installed");
+  expect(card.querySelector("code")?.textContent).toBe(ANTIGRAVITY_INSTALL_COMMAND.command);
+  expect(card.querySelector("button[aria-label='Copy command']")).not.toBeNull();
+  /* No sign-in while the command is not there to run. */
+  expect(card.querySelector("[data-antigravity-signin]")).toBeNull();
+  /* Claude and Codex are found, so Antigravity is the first card without its tool and carries the one button. */
+  expect(Array.from(card.querySelectorAll("button")).some((button) => button.textContent === "Check again")).toBe(true);
+});
+
+test("an installed agy that is signed out shows the agy command and a Check sign-in that runs the probe", async () => {
+  let probes = 0;
+  const host = await mount(engineState("claude", [], ""), engineState("codex", [], ""), { claude: "found", codex: "found", antigravity: "found" }, () => {}, agyAccount({ auth: "signed_out", probe: async () => { probes += 1; } }));
+  const card = host.querySelector("[data-onboarding-engine=antigravity]")!;
+  expect(card.getAttribute("data-engine-state")).toBe("signed-out");
+  expect(card.querySelector("[data-onboarding-engine-header]")?.textContent).toBe("Installed, signed out");
+  expect(card.querySelector("[data-antigravity-command]")?.textContent).toBe("agy");
+  expect(card.querySelector("button[aria-label='Copy command']")).not.toBeNull();
+  expect(card.textContent).toContain("choose Google OAuth");
+  const check = card.querySelector<HTMLButtonElement>("[data-antigravity-check]")!;
+  expect(check.textContent).toBe("Check sign-in");
+  await act(async () => { check.click(); });
+  expect(probes).toBe(1);
+});
+
+test("a signed-in agy reads Connected with its tier and offers no sign-in", async () => {
+  const host = await mount(engineState("claude", [], ""), engineState("codex", [], ""), { claude: "found", codex: "found", antigravity: "found" }, () => {}, agyAccount({ auth: "signed_in", plan: "Google AI Pro" }));
+  const card = host.querySelector("[data-onboarding-engine=antigravity]")!;
+  expect(card.getAttribute("data-engine-state")).toBe("connected");
+  expect(card.querySelector("[data-onboarding-engine-header]")?.textContent).toBe("Connected · Google AI Pro");
+  expect(card.querySelector("[data-antigravity-signin]")).toBeNull();
 });

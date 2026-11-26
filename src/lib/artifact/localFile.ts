@@ -203,6 +203,13 @@ function privatePathAllowed(candidate: string, areas: readonly PrivateArea[], pu
   return areas.every(({ root, passages }) => !underRoot(candidate, root) || passages.some(passes));
 }
 
+/** Secret destinations have no passages through private areas or fenced stores. */
+export function isPrivateLocalPath(candidate: string): boolean {
+  const configs = [path.join(homeRoot(), ".config"), path.join(os.homedir(), ".config"), process.env.XDG_CONFIG_HOME];
+  return privateAreas().some(({ root }) => underRoot(candidate, root))
+    || [...configs, ...fencedStores()].some(root => root && privateRootNames(root).some(name => underRoot(candidate, name)));
+}
+
 /** Exact project folders and worktrees, plus the product-owned stage scratch. */
 function projectRoots(): string[] {
   return [...new Set([...knownProjectFileRoots(), ...projectCurationSnapshot().manualProjects.map(entry => entry.root), statePath("scratch")])]

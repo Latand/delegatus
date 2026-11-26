@@ -7,7 +7,9 @@ import {
   FOCUS_HISTORY_STATE_KEY,
   recordFocusNavigation,
   recordProjectNavigation,
+  releaseFocusNavigation,
   retargetRecordedProject,
+  standsOnConversation,
   setFocusHistoryOwner,
   type FocusHistoryEntry,
   type FocusHistoryOwner,
@@ -182,5 +184,57 @@ describe("an owner", () => {
     recordFocusNavigation(fileA, "-p");
     second();
     expect(seen).toEqual(["second"]);
+  });
+});
+
+describe("releaseFocusNavigation", () => {
+  const board = "#p=-p";
+
+  test("a closed conversation's entry becomes the board in place: no push, no typed state left to replay", () => {
+    recordFocusNavigation(fileA, "-p");
+    const length = dom.history.length;
+    expect(releaseFocusNavigation(fileA, board)).toBe(true);
+    expect(dom.history.length).toBe(length);
+    expect(dom.location.hash).toBe(board);
+    expect(currentFocusEntry()).toBeNull();
+  });
+
+  test("the entry the closed conversation replaced is not one Back away", () => {
+    dom.history.replaceState(null, "", board);
+    recordFocusNavigation(fileA, "-p");
+    releaseFocusNavigation(fileA, board);
+    expect(dom.history.length).toBe(2);
+    expect(dom.location.hash).toBe(board);
+  });
+
+  test("a link that names the conversation without a typed entry is released too, by id or by path", () => {
+    dom.location.hash = "#c=conv-a";
+    expect(standsOnConversation(fileA)).toBe(true);
+    expect(releaseFocusNavigation(fileA, board)).toBe(true);
+    dom.location.hash = "#f=" + encodeURIComponent("/logs/old.jsonl");
+    expect(releaseFocusNavigation(legacy, board)).toBe(true);
+    expect(dom.location.hash).toBe(board);
+  });
+
+  test("closing a conversation the tab is not on leaves the address and the entry alone", () => {
+    recordFocusNavigation(fileB, "-p");
+    const length = dom.history.length;
+    expect(releaseFocusNavigation(fileA, board)).toBe(false);
+    expect(dom.history.length).toBe(length);
+    expect(dom.location.hash).toBe("#c=conv-b");
+    expect(currentFocusEntry()?.conversationId).toBe("conv-b");
+  });
+
+  test("a board address is left alone", () => {
+    dom.location.hash = board;
+    expect(releaseFocusNavigation(fileA, board)).toBe(false);
+  });
+
+  test("the phone's store owns its entries: nothing is written here", () => {
+    recordFocusNavigation(fileA, "-p");
+    const release = setFocusHistoryOwner({ focus() {}, project() {}, retarget() {} });
+    expect(releaseFocusNavigation(fileA, board)).toBe(false);
+    expect(dom.location.hash).toBe("#c=conv-a");
+    release();
   });
 });

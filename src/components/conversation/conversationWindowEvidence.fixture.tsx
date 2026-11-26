@@ -2329,10 +2329,10 @@ if (root && requested === "memory-cap") {
   createRoot(root).render(<main className="kb min-h-dvh w-full overflow-y-auto bg-canvas p-3 text-primary">
     {surface === "stages" ? <div data-memory-surface="stages" className="fixed inset-0"><StagesSheet
       title={pipeline.task} summary={summary}
-      panes={[{ stage: pipeline.stages[0]!, folded: false, attempts: pipeline.runs[0]!.attempts, shown: pipeline.runs[0]!.attempts[0]!, file: null, readerKey: null }]}
-      flowsById={new Map()} initialFocus="build" windowReader={null} placement={new ReaderPlacement()}
-      drafts={new StageDrafts(() => ADMITTED_AT)} ports={ports} onFold={noop} onFoldMany={noop} onChooseAttempt={noop}
-      onStageMenu={noop} onOpenRecorded={noop} onLeaveWindow={noop} onClose={noop}
+      panes={[{ stage: pipeline.stages[0]!, attempts: pipeline.runs[0]!.attempts, shown: pipeline.runs[0]!.attempts[0]!, file: null, readerKey: null }]}
+      flowsById={new Map()} selected="build" onSelect={noop} nowMs={ADMITTED_AT} windowReader={null} placement={new ReaderPlacement()}
+      drafts={new StageDrafts(() => ADMITTED_AT)} ports={ports} onChooseAttempt={noop}
+      onStageMenu={noop} onAnswer={noop} onOpenRecorded={noop} onLeaveWindow={noop} onClose={noop}
     /></div> : surface === "placeholder"
       ? <div data-memory-surface="placeholder" className="mx-auto h-[350px] max-w-2xl"><StagePlaceholderPane slot={slot} interactive={false} /></div>
       : <div data-memory-surface="screen" className="mx-auto max-w-2xl"><PipelineBlock summary={summary} density="screen" nowMs={ADMITTED_AT} /></div>}
@@ -2452,10 +2452,10 @@ function SetupStagesSheet({ pipeline }: { pipeline: Pipeline }) {
   const noop = () => {};
   return <StagesSheet
     title={pipeline.task} summary={summarizePipeline(pipeline)}
-    panes={[{ stage: pipeline.stages[0]!, folded: false, attempts, shown: attempts.find(attempt => attempt.n === shown)!, file: null, readerKey: null }]}
-    flowsById={new Map()} initialFocus="build" windowReader={null} placement={new ReaderPlacement()}
-    drafts={new StageDrafts(() => ADMITTED_AT)} ports={ports} onFold={noop} onFoldMany={noop} onChooseAttempt={(_stage, n) => setShown(n)}
-    onStageMenu={noop} onOpenRecorded={noop} onLeaveWindow={noop} onClose={noop}
+    panes={[{ stage: pipeline.stages[0]!, attempts, shown: attempts.find(attempt => attempt.n === shown)!, file: null, readerKey: null }]}
+    flowsById={new Map()} selected="build" onSelect={noop} nowMs={ADMITTED_AT} windowReader={null} placement={new ReaderPlacement()}
+    drafts={new StageDrafts(() => ADMITTED_AT)} ports={ports} onChooseAttempt={(_stage, n) => setShown(n)}
+    onStageMenu={noop} onAnswer={noop} onOpenRecorded={noop} onLeaveWindow={noop} onClose={noop}
   />;
 }
 
@@ -2532,6 +2532,16 @@ function mountMemberAccounts(root: HTMLElement) {
 function mountFileConfirmation(root: HTMLElement) {
   Date.now = () => Date.parse("2026-10-22T12:00:00Z");
   const state = params.get("state") ?? "pending";
+  /* `gap-<step>`: the browser is refused for that missing step, as the confirmation route says it. */
+  const gap = state.startsWith("gap-") ? state.slice(4) : null;
+  /* `step=<stage>` (with a telegram gap): the Telegram step the page offers is driven to that stage, and the bot's answers are the fixture's. */
+  const step = params.get("step");
+  /* The step opens a bot link in another tab and polls every few seconds; here it opens nothing and polls at once. */
+  if (step) {
+    (window as unknown as { open: unknown }).open = () => null;
+    const realSetTimeout = window.setTimeout.bind(window);
+    window.setTimeout = ((callback: TimerHandler, delay?: number, ...rest: unknown[]) => realSetTimeout(callback, delay !== undefined && delay >= 1_000 && delay <= 5_000 ? 40 : delay, ...rest)) as typeof window.setTimeout;
+  }
   /* `data=media` sends two images from outside the roots; `data=long` gives the file and the chat 70-character names. */
   const data = params.get("data");
   const long = data === "long";
@@ -2544,14 +2554,14 @@ function mountFileConfirmation(root: HTMLElement) {
     options: { conversationId: "conversation_fixture", clientRequestId: "fixture", chat: "-1000000000101", topicId: null, replyToMessageId: null, format: "plain", silent: false, images },
     files: images.map((image, index) => ({ path: image.path, resolvedPath: image.path, filename: image.path.split("/").pop()!, sha256: String(index + 1).repeat(64), bytes: 48_213 + index })),
     reasons: images.map(image => ({ code: "document_outside_roots" as const, path: image.path, roots: ["/sandbox/handoff"], reason: `${image.path} is outside the allowed document roots (/sandbox/handoff).` })),
-    createdAt: "2026-10-22T12:00:00.000Z", expiresAt: "2026-10-22T12:10:00.000Z", state: state === "owner" ? "pending" : state as FileConfirmationView["state"], ...decided,
+    createdAt: "2026-10-22T12:00:00.000Z", expiresAt: "2026-10-22T12:10:00.000Z", state: state === "owner" || gap ? "pending" : state as FileConfirmationView["state"], ...decided,
   } : {
     id: "fixture-confirmation", digest: "a".repeat(64), kind: "document", chatId: "-1000000000101", chatTitle, topicId: 7,
     options: { conversationId: "conversation_fixture", clientRequestId: "fixture", chat: "-1000000000101", topicId: 7, replyToMessageId: 42, format: "html", silent: true,
       document: { path: `/sandbox/handoff/${filename}`, filename, caption: "Requested file / Запитаний файл" } },
     files: [{ path: `/sandbox/handoff/${filename}`, resolvedPath: "/sandbox/.codex/auth.json", filename, sha256: "b".repeat(64), bytes: 2458 }],
     reasons: [{ code: "document_forbidden_path", path: "/sandbox/.codex/auth.json", segment: ".codex", reason: "/sandbox/.codex/auth.json passes through dot-directory .codex." }, { code: "document_outside_roots", path: "/sandbox/.codex/auth.json", roots: ["/sandbox/handoff"], reason: "/sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff)." }, { code: "document_secret", reason: "The file contains what looks like a secret (private_key, line 1).", secretClass: "private_key", line: 1 }],
-    createdAt: "2026-10-22T12:00:00.000Z", expiresAt: "2026-10-22T12:10:00.000Z", state: state === "owner" ? "pending" : state as FileConfirmationView["state"], ...decided,
+    createdAt: "2026-10-22T12:00:00.000Z", expiresAt: "2026-10-22T12:10:00.000Z", state: state === "owner" || gap ? "pending" : state as FileConfirmationView["state"], ...decided,
   };
   let sends = 0;
   const posts: unknown[] = [];
@@ -2561,8 +2571,26 @@ function mountFileConfirmation(root: HTMLElement) {
   Object.assign(window, { fileConfirmationSends: () => sends, fileConfirmationPosts: () => structuredClone(posts), releaseFileConfirmation: () => release() });
   window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), location.origin);
+    if (url.pathname === "/api/team/session/telegram" && init?.method === "POST") {
+      return step === "unavailable" ? Response.json({ error: "no Telegram bot is connected", code: "telegram_unavailable" }, { status: 409 })
+        : Response.json({ id: "tg-1", proof: "proof-1", url: "https://t.me/fixture_bot?start=one-time", expiresAt: "2026-10-22T12:10:00.000Z" });
+    }
+    if (url.pathname === "/api/team/session/telegram/tg-1" && init?.method === "POST") {
+      const body = JSON.parse(String(init.body));
+      /* The beat after the name shows never ends, so the confirmed stage stays on screen to be framed. */
+      if (body.action === "complete") return new Promise<Response>(() => {});
+      if (body.action === "not-me") return Response.json({ state: "denied" });
+      if (body.action === "confirm") {
+        return Response.json(step === "notLinked" ? { state: "needs_approval", firstName: "Stranger", ownerName: "Owner" }
+          : step === "taken" ? { state: "taken" } : step === "expired" ? { state: "expired" }
+            : step === "confirmed" ? { state: "confirmed", name: "Owner" } : { state: "linked", name: "Owner" });
+      }
+      /* A poll hears nothing until the stage asks for the code. */
+      return Response.json({ state: step === "waiting" ? "waiting" : "code_sent" });
+    }
     if (url.pathname !== "/api/telegram/bot/confirmation") return Response.json({});
     if (state === "owner") return Response.json({ code: "OPERATOR_REQUIRED" }, { status: 401 });
+    if (gap) return Response.json({ code: "OPERATOR_REQUIRED", missing: gap }, { status: 401 });
     if (init?.method === "POST") {
       const body = JSON.parse(String(init.body));
       posts.push(body);

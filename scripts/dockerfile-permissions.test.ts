@@ -6,12 +6,14 @@
 // stage copies them and (b) verify readability as the non-root runtime
 // identity after the last COPY, so a bad checkout fails the build instead.
 import { describe, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  copyFileSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -120,6 +122,40 @@ describe("SQLite registry Viewer runtime (#187)", () => {
   test("Docker launches every Viewer through the in-container Bun runtime", () => {
     expect(runtimeStage).toContain("CMD [\"sh\", \"-c\", \"exec bun-container --bun node_modules/.bin/next start");
     expect(compose).toContain("exec bun-container --bun node_modules/.bin/next start");
+  });
+
+  test("the packaged canonical publication hook stays inside the image Bun namespace", () => {
+    expect(runtimeStage).toContain("ENV LLV_GATE_IMAGE_BUN=bun-container");
+    expect(runtimeStage).toContain("COPY --from=build /app/scripts ./scripts");
+    expect(runtimeStage).toContain("COPY --from=build /app/.githooks/pre-push ./.githooks/pre-push");
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "image-hook-")));
+    try {
+      const image = join(root, "image app");
+      const candidate = join(root, "candidate");
+      const bin = join(root, "bin");
+      mkdirSync(join(image, ".githooks"), { recursive: true });
+      mkdirSync(join(image, "scripts"));
+      mkdirSync(candidate);
+      mkdirSync(bin);
+      const hook = join(image, ".githooks", "pre-push");
+      const gate = join(image, "scripts", "local-gate.ts");
+      copyFileSync(join(import.meta.dir, "..", ".githooks", "pre-push"), hook);
+      writeFileSync(gate, "");
+      writeFileSync(join(bin, "bun"), "#!/bin/sh\nexit 97\n", { mode: 0o700 });
+      writeFileSync(join(bin, "bun-container"), '#!/bin/sh\ntest -f "$1" || exit 98\nprintf "%s\\n" "$@"\n', { mode: 0o700 });
+
+      const result = spawnSync("bash", [hook], { cwd: candidate, input: "", encoding: "utf8", env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH}`,
+        LLV_SKIP_HOOKS: "0",
+        LLV_GATE_CANONICAL_TOOLS: "1",
+        LLV_GATE_IMAGE_BUN: "bun-container",
+      } });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trimEnd().split("\n")).toEqual([gate, "pre-push"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("every image stage uses the production-burned-in Bun runtime (#552)", () => {

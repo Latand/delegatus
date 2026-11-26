@@ -5,7 +5,7 @@ import fs from "node:fs";
 import * as fsPromises from "node:fs/promises";
 import path from "node:path";
 import tailwind from "@tailwindcss/postcss";
-import { chromium, type Browser, type ConnectOptions, type Page } from "playwright-core";
+import { chromium, type Locator, type Browser, type ConnectOptions, type Page } from "playwright-core";
 import postcss from "postcss";
 import sharp from "sharp";
 
@@ -2073,6 +2073,77 @@ const removeTool = (name: string) => async (page: Page) => {
   await page.waitForFunction(() => document.activeElement?.matches("[data-voice-tools]"), undefined, { timeout: 10_000 });
 };
 
+const planKeys = (scene: string, selector: string, interact?: (row: Locator) => Promise<unknown>): SettingsFrame => ({
+  surface: "window", name: `chatgpt-plan-${scene}`, scene: "voice-file", query: `chatgptplan=${scene}`, section: "keys",
+  steps: async page => {
+    const row = page.locator("[data-keys-row='chatgpt-plan']");
+    await row.waitFor();
+    if (await row.evaluate(element => element.previousElementSibling?.getAttribute("data-keys-row")) !== "openai")
+      throw new Error("ChatGPT plan must follow the OpenAI key");
+    await interact?.(row);
+  },
+  defining: `[data-keys-row='chatgpt-plan']${selector}`,
+});
+const noPlanAction = async (row: Locator) => {
+  if (await row.locator("button").count()) throw new Error("A read-only plan row offered an action");
+};
+const PLAN_FRAMES = [
+  planKeys("disconnected", "[data-chatgpt-plan-state='not_connected'] [data-chatgpt-plan-start]"),
+  planKeys("connecting", "[data-chatgpt-plan-state='connecting'] button"),
+  planKeys("connected", " [data-keys-menu][role=menu]", async row => {
+    await row.locator("[data-chatgpt-plan-menu]").click();
+    const menu = row.getByRole("menu");
+    await menu.locator("[data-keys-menu-item='plan-usage'][role=menuitem]").waitFor();
+    await menu.locator("[data-keys-menu-item='plan-sign-out'][role=menuitem]").waitFor();
+  }),
+  planKeys("firstUse", "[data-chatgpt-plan-state='connected'] button"),
+  planKeys("missingModel", "[data-chatgpt-plan-state='connected']"),
+  planKeys("disabled", "[data-chatgpt-plan-state='plan_disabled'] [data-chatgpt-plan-start]"),
+  planKeys("notEligible", "[data-chatgpt-plan-state='plan_disabled']", async row => {
+    await row.locator("[role=status]").nth(1).waitFor();
+    await row.locator("[data-chatgpt-plan-start]").waitFor();
+  }),
+  planKeys("requestInvalid", "[data-chatgpt-plan-state='plan_disabled']", async row => {
+    await row.locator("[role=status]").nth(1).waitFor();
+    await row.locator("[data-chatgpt-plan-start]").waitFor();
+  }),
+  planKeys("reconnect", "[data-chatgpt-plan-state='reconnect_required'] [data-chatgpt-plan-start]"),
+  planKeys("limit", "[data-chatgpt-plan-state='plan_limit'] [data-keys-menu]", async row => {
+    await row.locator("[data-chatgpt-plan-menu]").click();
+    await row.locator("[data-keys-menu-item='plan-usage'][role=menuitem]").waitFor();
+  }),
+  planKeys("retry-later", "[data-chatgpt-plan-state='retry_later'] [data-keys-menu]", async row => {
+    await row.locator("[data-chatgpt-plan-menu]").click();
+    await row.locator("[data-keys-menu-item='plan-usage'][role=menuitem]").waitFor();
+  }),
+  planKeys("remote", "[data-chatgpt-plan-state='remote_browser']", noPlanAction),
+  planKeys("staging", "[data-chatgpt-plan-state='off_staging']", noPlanAction),
+  planKeys("unconfigured", "[data-chatgpt-plan-state='off_unconfigured']", noPlanAction),
+  planKeys("unsupported", "[data-chatgpt-plan-state='off_unsupported_platform']", noPlanAction),
+  planKeys("declined", "[data-chatgpt-plan-state='not_connected'] [data-chatgpt-plan-start]"),
+  planKeys("unconfirmed", " a[href='https://chatgpt.com/settings']"),
+  planKeys("connected-unconfirmed", " a[href='https://chatgpt.com/settings']", async row => {
+    if (!(await row.innerText()).includes("OpenAI did not confirm sign-out")
+      && !(await row.innerText()).includes("OpenAI не підтвердив вихід")) throw new Error("The connected account lost its revocation warning");
+  }),
+  planKeys("error", "[data-chatgpt-plan-state='error']", noPlanAction),
+  planKeys("member", "[data-chatgpt-plan-state='connected']", async row => {
+    await noPlanAction(row);
+    if ((await row.innerText()).includes("Example account")) throw new Error("A member saw the plan owner's account");
+  }),
+  { surface: "voice", name: "chatgpt-plan-billing", scene: "voice-file", section: "voice",
+    query: "chatgptplan=billing&dev=default", details: true, defining: "[data-chatgpt-plan-billing='plan']" },
+  { surface: "voice", name: "chatgpt-plan-fallback", scene: "voice-file", section: "voice",
+    query: "chatgptplan=fallback&dev=default", details: true, defining: "[data-chatgpt-plan-billing='key']" },
+  { surface: "voice", name: "chatgpt-plan-blocked", scene: "voice-file", section: "voice",
+    query: "chatgptplan=blocked&dev=default", details: true, defining: "[data-chatgpt-plan-billing='blocked']",
+    steps: async page => {
+      const text = await page.locator("[data-chatgpt-plan-billing='blocked']").innerText();
+      if (!/No backend request was charged to the API key|Запит до бекенда не оплачувався ключем API/.test(text))
+        throw new Error("Blocked billing does not explain that the API key was not charged");
+    } },
+] satisfies SettingsFrame[];
+
 const SETTINGS_FRAMES: SettingsFrame[] = [
   /* The window. */
   { surface: "window", name: "from-menu", scene: "telegram-rest", steps: OPEN_MENU, defining: "[data-settings-title], [data-settings-section-row='general']" },
@@ -2246,6 +2317,7 @@ function readSettingsSurface(args: { phone: boolean; defining: string | null; ab
   }
   /* No bordered box in the surface's flow beyond its controls, and no control inside a control. */
   for (const element of scroller.querySelectorAll<HTMLElement>("*")) {
+    if (element.matches("[data-keys-menu][role=menu]")) continue;
     if (element.closest("button, select, input, textarea, a, [data-settings-choice-face], [data-memory-page], [data-header-menu-workers]")) continue;
     const style = getComputedStyle(element);
     if (["Top", "Right", "Bottom", "Left"].every((side) => parseFloat(style.getPropertyValue(`border-${side.toLowerCase()}-width`)) > 0) && element.getBoundingClientRect().height > 44) failures.push(`bordered box: ${element.tagName} ${element.className}`);
@@ -2467,13 +2539,13 @@ function readSettingsSurface(args: { phone: boolean; defining: string | null; ab
   return { failures: [...new Set(failures)], end: under, scrolls };
 }
 
-export async function captureSettingsWindowFrames(browser: Browser, base: string, out: string, phone: boolean, only?: (frame: string) => boolean) {
+export async function captureSettingsWindowFrames(browser: Browser, base: string, out: string, phone: boolean,
+  only?: (frame: string) => boolean, frames = SETTINGS_FRAMES) {
   fs.mkdirSync(out, { recursive: true });
   const devices = (phone ? ["phone", "landscape"] : ["desktop", "mid", "short"]) as (keyof typeof SETTINGS_DEVICES)[];
   const jobs: { frame: SettingsFrame; device: keyof typeof SETTINGS_DEVICES; lang: "en" | "uk"; theme: "light" | "dark"; key: string }[] = [];
-  for (const device of devices) for (const { lang, theme } of SETTINGS_COMBOS) for (const frame of SETTINGS_FRAMES) {
+  for (const device of devices) for (const { lang, theme } of SETTINGS_COMBOS) for (const frame of frames) {
     /* Every state in all four combinations at the named widths; the between and short heights read in two, at rest and with Details open. */
-    if ((device === "mid" || device === "short" || device === "landscape") && !((lang === "uk" && theme === "light") || (lang === "en" && theme === "dark"))) continue;
     const key = `${frame.surface}-${device}-${frame.name}-${lang}-${theme}`;
     if (only && !only(key)) continue;
     jobs.push({ frame, device, lang, theme, key });
@@ -2499,7 +2571,6 @@ export async function captureSettingsWindowFrames(browser: Browser, base: string
           await page.evaluate((section) => window.dispatchEvent(new CustomEvent("delegatus:open-settings-window", { detail: { section } })), frame.section);
           await page.locator("[data-settings-window], [data-mobile2-sheet='settings']").waitFor();
         }
-        if (frame.steps) await frame.steps(page, phone);
         if (frame.details) {
           const toggle = page.locator("[data-settings-details-toggle]").last();
           await toggle.scrollIntoViewIfNeeded();
@@ -2507,6 +2578,7 @@ export async function captureSettingsWindowFrames(browser: Browser, base: string
           await page.locator("[data-settings-details]").waitFor();
           await page.evaluate(() => { const scroller = document.querySelector("[data-settings-scroller], [data-mobile2-sheet-body]"); if (scroller) scroller.scrollTop = scroller.scrollHeight; });
         }
+        if (frame.steps) await frame.steps(page, phone);
         if (frame.defining) await page.locator(frame.defining).first().waitFor({ timeout: 20_000 }).catch(() => reading.failures.push(`never appeared: ${frame.defining}`));
         await page.evaluate(() => document.fonts.ready.then(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))));
         /* The fold's own height moved the scroller's end, and the whole-rows fit can answer after the first scroll: the frame reads the end as it settled. */
@@ -2540,9 +2612,26 @@ export async function captureSettingsWindowFrames(browser: Browser, base: string
   fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ readings, failures }, null, 2));
   /* The record: how many frames were read, what failed, and the shallowest foot under an open «Details». */
   const feet = readings.filter((reading) => reading.key.includes("details") && reading.scrolls && reading.end !== null).map((reading) => reading.end!);
-  fs.mkdirSync("evidence/settings-window", { recursive: true });
-  fs.writeFileSync(`evidence/settings-window/${phone ? "phone" : "desktop"}.json`, `${JSON.stringify({ driver: phone ? "src/components/mobile/issue1671Evidence.browser.test.tsx" : "src/components/kanban/kanbanBoard.browser.test.tsx", states: SETTINGS_FRAMES.length, frames: readings.flatMap((reading) => reading.frames).length, readings: readings.length, failures, shallowestFootUnderDetails: feet.length ? Math.min(...feet) : null }, null, 2)}\n`);
+  if (frames === SETTINGS_FRAMES) fs.mkdirSync("evidence/settings-window", { recursive: true });
+  if (frames === SETTINGS_FRAMES) fs.writeFileSync(`evidence/settings-window/${phone ? "phone" : "desktop"}.json`, `${JSON.stringify({ driver: phone ? "src/components/mobile/issue1671Evidence.browser.test.tsx" : "src/components/kanban/kanbanBoard.browser.test.tsx", states: frames.length, frames: readings.flatMap((reading) => reading.frames).length, readings: readings.length, failures, shallowestFootUnderDetails: feet.length ? Math.min(...feet) : null }, null, 2)}\n`);
   return { readings, failures };
+}
+
+export async function captureChatGPTPlanFrames(phone: boolean) {
+  const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "chatgpt-plan", phone ? "phone" : "desktop");
+  fs.mkdirSync(out, { recursive: true });
+  const server = await serveEvidenceFixture(out);
+  const sockets = ownedBrowserSocketEnvironment();
+  try {
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, env: sockets.env,
+      args: ["--no-sandbox", "--disable-dev-shm-usage"], ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try {
+      const { readings, failures } = await captureSettingsWindowFrames(browser, server.base, out, phone,
+        frame => phone ? frame.includes("-phone-") : frame.includes("-desktop-") || frame.includes("-mid-"), PLAN_FRAMES);
+      expect(readings).toHaveLength(PLAN_FRAMES.length * (phone ? 4 : 8));
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); }
+  } finally { sockets.close(); server.stop(); }
 }
 
 /** The setup states the evidence fixture draws, and what each must read. */

@@ -2184,15 +2184,45 @@ export class StructuredDeliveryQueue {
         const reason = `account switch failed: ${hold.reason}`;
         if (effect.kind === "native-queue") {
           if (!await this.executeNative(effect, reason, lane)) return true;
-        } else if (durableStatuses.get(effect.operationId)?.status === "delivering") {
-          // A switch failure cannot establish the fate of an earlier actuation.
-          this.noteWait(effect, "switch-failed", { wake: "retry", detail: hold.reason });
-          this.retrySoon();
+        } else if (!neverDispatched(durableStatuses.get(effect.operationId))) {
+          // The receipt sweep reconciles an earlier actuation by its original
+          // operation and fences it when the failed-switch admission window ends.
+          const admission = durableStatuses.get(effect.operationId);
+          const previousProgress = this.port.progress?.get(effect.operationId);
+          const acceptedAt = Date.parse(previousProgress?.admittedAt ?? admission?.admittedAt ?? admission?.at ?? "");
+          const persistedDeadline = previousProgress?.deadlinePolicy === "failed-switch"
+            ? Date.parse(previousProgress.deadlineAt ?? "") : NaN;
+          const deadlineAt = Number.isFinite(persistedDeadline) ? persistedDeadline
+            : Number.isFinite(acceptedAt) ? acceptedAt + SEND_SETTLEMENT_WINDOW_MS
+              : this.timing.now() + SEND_SETTLEMENT_WINDOW_MS;
+          this.port.progress?.deadline(effect.operationId, new Date(deadlineAt).toISOString(), "failed-switch");
+          this.noteWait(effect, "switch-failed", { detail: hold.reason });
           return true;
         } else {
-          await this.transitionUnlessSettled(effect.operationId, "failed", { reason });
+          await this.transitionUnlessSettled(effect.operationId, "failed", { reason },
+            { fromStatuses: ["pending", "queued"], requirePristineAdmission: true });
         }
         continue;
+      }
+      /* A failed-switch wait is a durable dispatch fence. The operator may
+         release the visible hold before the receipt sweep runs, and the
+         queue may have restarted since the switch failed. Its persisted
+         progress record still prevents a possibly-started operation from
+         being claimed by a replacement host. */
+      const progress = isMessageEffect(effect) ? this.port.progress?.get(effect.operationId) : null;
+      if (isMessageEffect(effect) && (progress?.waitReason === "switch-failed"
+        || progress?.deadlinePolicy === "failed-switch")) {
+        this.noteWait(effect, "switch-failed", { detail: "awaiting the original delivery receipt or settlement deadline" });
+        const settled = await this.checking(lane, effect, "reconciling the failed-switch receipt", () => this.readSettled(effect.operationId));
+        if (!settled.readable) {
+          this.noteWait(effect, "evidence-unreadable", { wake: "retry", detail: "durable delivery record is unavailable" });
+          return this.fenceUnavailable();
+        }
+        if (settled.value) {
+          await this.terminalizeUnverified(effect.operationId, DELIVERY_FENCED_BY_SETTLEMENT);
+          continue;
+        }
+        return true;
       }
       if (effect.kind === "native-queue") {
         const admission = durableStatuses.get(effect.operationId);

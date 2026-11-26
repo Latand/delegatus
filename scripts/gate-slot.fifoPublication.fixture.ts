@@ -37,7 +37,8 @@ export const QUEUE_FIFO_MODES = ["portable hooks first-open", "service hooks fir
 /** Publications through older hooks, helpers and the main-era dispatcher. */
 export const OLDER_LAUNCHER_FIFO_MODES = ["service hooks", "historical service hook", "older helper head", "main-era service prepare", "main-era service hook", "main-era service hook first-open", "main-era portable hooks"] as const;
 /** Publications from an older lane checkout, recognised only by the Viewer's launch record. */
-export const LAUNCH_RECORD_FIFO_MODES = ["unpinned service prepare", "unpinned portable prepare", "unpinned service prepare forged"] as const;
+export const LAUNCH_RECORD_FIFO_MODES = ["unpinned service prepare", "unpinned portable prepare", "unpinned service prepare forged",
+  "packaged portable prepare", "packaged portable prepare forged"] as const;
 type FifoPublicationMode = (typeof QUEUE_FIFO_MODES)[number] | (typeof OLDER_LAUNCHER_FIFO_MODES)[number] | (typeof LAUNCH_RECORD_FIFO_MODES)[number];
 
 export function registerFifoPublicationCases(modes: readonly FifoPublicationMode[]) {
@@ -52,6 +53,8 @@ export function registerFifoPublicationCases(modes: readonly FifoPublicationMode
       // launch record is the only evidence; a forged run first shows records
       // that name the wrong process or operation granting nothing.
       const unpinned = mode.startsWith("unpinned"), forged = mode.endsWith("forged");
+      const packaged = mode.startsWith("packaged");
+      const recordLaunch = unpinned || packaged;
       const mixedPrepare = mode.startsWith("mixed service prepare") || mode === "main-era service prepare" || unpinned;
       // Main after #4376 is the release deployed when this queue protocol lands.
       // Its dispatcher and wrapper carry no launch marker of their own.
@@ -61,6 +64,7 @@ export function registerFifoPublicationCases(modes: readonly FifoPublicationMode
       const ordinary = mode.includes("hooks") || historical || olderHead;
       const firstOpen = mode.endsWith("first-open");
       const f = fixture(), control = new AbortController(), roots: string[] = [];
+      const packagedRoot = path.join(f.dir, "packaged");
       const pending: ReturnType<typeof realExec>[] = [];
       const stamps: PublicationPreparerStamp[] = [];
       const launchProof = newPublicationLaunchProof();
@@ -78,7 +82,7 @@ export function registerFifoPublicationCases(modes: readonly FifoPublicationMode
           LLV_GATE_PUBLICATION_ID: name, CPU_SLOT_ROOT_PID: path.join(f.dir, name + ".pid"), LLV_OWNED_RUN_TIMEOUT_MS: "25000", LLV_GATE_SANDBOX_RECORD: undefined, LLV_GATE_PUSH_DEADLINE: undefined };
         // The Viewer hands the preparer it launches a secret in its exec
         // environment; its launch record carries the secret's digest.
-        if (unpinned && name === "first") env[PUBLICATION_LAUNCH_PROOF_ENV] = launchProof;
+        if (recordLaunch && name === "first") env[PUBLICATION_LAUNCH_PROOF_ENV] = launchProof;
         if (olderHead) {
           // Route through the same host-only interpreter binding supplied by the
           // launcher. The fixture's Bun shim still stands in for the check.
@@ -92,6 +96,10 @@ export function registerFifoPublicationCases(modes: readonly FifoPublicationMode
         // The reset unroutes an inherited launcher, so route afterwards.
         if (olderHead) Object.assign(env, installedGateAdmissionEnv(env));
         let command = ["bun", "scripts/local-gate.ts", "pre-push", "--publication-prepare"];
+        if (packaged && name === "first") {
+          env.LLV_GATE_CANONICAL_TOOLS = "1";
+          command[1] = path.join(packagedRoot, command[1]!);
+        }
         if (ordinary) {
           env.LLV_GATE_PUBLICATION_RECEIPT = undefined;
           command = ["bun", "scripts/local-gate.ts", "pre-push"];
@@ -126,7 +134,7 @@ export function registerFifoPublicationCases(modes: readonly FifoPublicationMode
         try {
           // The Viewer stamps its preparer as it spawns it (git.ts). Each wrapper
           // here execs in place, as systemd-run --scope and the Bun shims do.
-          const onSpawn = unpinned && !forged && name === "first"
+          const onSpawn = recordLaunch && !forged && name === "first"
             ? (pid: number) => { stamps.push(stampPublicationPreparer(pid, env.LLV_GATE_PUBLICATION_ID, env, publication.dir)); } : undefined;
           pending.push(Promise.resolve(realExec("bash", ["-c", 'echo "$$" > "$CPU_SLOT_ROOT_PID"; exec "$@" 2>"$CPU_SLOT_STDERR"', "publication-fixture", ...command], publication.dir, env, { timeoutMs: 30_000, signal: control.signal, onSpawn }))
             .then(result => { outcome = result; return result; }));
@@ -150,6 +158,14 @@ export function registerFifoPublicationCases(modes: readonly FifoPublicationMode
         return { env, waitFor };
       };
       try {
+        if (packaged) {
+          fs.mkdirSync(packagedRoot);
+          fs.cpSync(path.resolve("scripts"), path.join(packagedRoot, "scripts"), { recursive: true });
+          fs.copyFileSync(path.resolve("tsconfig.json"), path.join(packagedRoot, "tsconfig.json"));
+          for (const directory of ["src", "node_modules"]) {
+            fs.symlinkSync(path.resolve(directory), path.join(packagedRoot, directory), "dir");
+          }
+        }
         const first = (() => {
           if (!mixedPrepare) return publicationFixture();
           const deployed = legacyGateTree(f.dir, deployedRevision);
@@ -175,11 +191,14 @@ export function registerFifoPublicationCases(modes: readonly FifoPublicationMode
             fs.symlinkSync(path.join(historicalTree, "scripts", entry), target);
           }
         }
+        const comparator = path.resolve("scripts/local-gate-tests.ts");
+        const comparatorBefore = olderHead ? fs.readFileSync(comparator) : undefined;
         for (const publication of [first, peer]) {
           if (!useService) fs.writeFileSync(publication.writablePath("shims/systemctl"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
           fs.mkdirSync(publication.writablePath("scripts/gate-runner"));
           if (olderHead) stubOlderPublicationChecks(publication);
         }
+        if (comparatorBefore) expect(fs.readFileSync(comparator).equals(comparatorBefore)).toBeTrue();
         fs.appendFileSync(first.writablePath("record.ts"), `\nif (process.argv[2] === "tsc") {
           const fs = require("node:fs");
           fs.writeFileSync(${JSON.stringify(started)}, "started");
@@ -244,7 +263,7 @@ export function registerFifoPublicationCases(modes: readonly FifoPublicationMode
         const genuine = captureProcessIdentity(root);
         const digest = publicationLaunchDigest(launchProof);
         const launched = { identity: JSON.stringify(genuine), operation: "first", proof: digest };
-        if (unpinned && !forged) {
+        if (recordLaunch && !forged) {
           await Promise.all(stamps.map(stamp => stamp.recorded));
           expect(launchRows()).toEqual([launched]);
         }

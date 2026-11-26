@@ -20,6 +20,7 @@ import {
   validateAntigravitySessionId,
   type AntigravityAcpHostOptions,
 } from "./antigravityAcpHost";
+import { readAntigravityAuthState } from "@/lib/accounts/antigravity";
 import type { DeliveryReceipt } from "./engineHost";
 import { FileRuntimeEventStore } from "./eventStore";
 
@@ -611,6 +612,47 @@ describe("AntigravityAcpHost", () => {
     expect(await adopted.sessionMaterializationEvidence("delivery-3")).toEqual({ state: "materialized" });
     expect((await adopted.sessionMaterializationEvidence("delivery-4")).state).toBe("absent");
     await adopted.release();
+  });
+
+  describe("what a refused session records about the Google sign-in", () => {
+    const refusing = (method: "session/new" | "session/resume", error: { code: number; message: string }): AntigravityAcpHostOptions => {
+      let fake!: ScriptedAcpServer;
+      return {
+        cwd,
+        antigravityHome,
+        accountId: "default",
+        viewerMcpServer: null,
+        eventStore: new FileRuntimeEventStore(path.join(stateDir, "runtime-events")),
+        processIdentity: () => "start-id-auth",
+        signalProcess: ((_pid: number, signal?: NodeJS.Signals | number) => {
+          fake.signals.push(signal ?? "SIGTERM");
+          fake.closeChild(0);
+          return true;
+        }) as typeof process.kill,
+        spawnProcess: () => {
+          fake = makeFakeAcpChild((msg, api) => {
+            if (msg.method === "initialize") api.sendToHost({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1 } });
+            else if (msg.method === method) api.sendToHost({ jsonrpc: "2.0", id: msg.id, error });
+          });
+          return fake.child;
+        },
+      };
+    };
+
+    it("records signed out when session/new is refused for lack of a sign-in", async () => {
+      await expect(AntigravityAcpHost.start(refusing("session/new", { code: -32000, message: "Authentication required" }))).rejects.toThrow();
+      expect(readAntigravityAuthState()).toMatchObject({ authenticated: false });
+    });
+
+    it("records nothing when session/new is refused for a spent quota under the same code", async () => {
+      await expect(AntigravityAcpHost.start(refusing("session/new", { code: -32000, message: "RESOURCE_EXHAUSTED: quota exceeded" }))).rejects.toThrow();
+      expect(readAntigravityAuthState()).toBeNull();
+    });
+
+    it("records nothing when a resume is refused, even with the sign-in code", async () => {
+      await expect(AntigravityAcpHost.adopt("expected-session", refusing("session/resume", { code: -32000, message: "Authentication required" }))).rejects.toThrow();
+      expect(readAntigravityAuthState()).toBeNull();
+    });
   });
 
   it("validates session ids, rejects mismatched resume ids, refuses transcript symlinks, and stays bound to one open fd", async () => {

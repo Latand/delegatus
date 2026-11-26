@@ -835,6 +835,11 @@ describe("workspace authority", () => {
     expect(teamGate(request("/api/files", outsider), { bearerAuthenticated: false })?.status).toBe(403);
   });
 
+  test("ChatGPT plan status reaches workspace members through the production team gate", () => {
+    expect(WORKSPACE_ROUTES["/api/chatgpt-plan"]).toBe("team");
+    expect(teamGate(request("/api/chatgpt-plan", member), { bearerAuthenticated: false })).toBeNull();
+  });
+
   test("placement changes apply on the next request and after reopening the store", async () => {
     placeProject(store, owner, "repo-alpha", W2);
     resetTeamStoreForTests();

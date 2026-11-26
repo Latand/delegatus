@@ -2,11 +2,13 @@ import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { decodeHTML } from "entities";
+import * as self from "@/lib/links/self";
 import { TelegramBotService, productionTelegramBotDependencies } from "@/lib/telegram/bot/service";
 import { TelegramBotStore } from "@/lib/telegram/bot/store";
 import { FakeBotTransport, fakeBotToken, ok } from "@/lib/telegram/bot/fakeTransport";
 import { renderPrototypeTelegram } from "@/lib/prototypeReview/telegramPost";
 import { prototypeCopyLine } from "@/lib/prototypeReview/telegramAnswer";
+import { setProjectPresentation } from "@/lib/projects/presentation";
 import { telegramRound, telegramTask } from "@/lib/prototypeReview/telegram.fixture";
 import { loadTasks, saveTasks } from "@/lib/tasks/store";
 import { relayClaimBody } from "./poller";
@@ -24,8 +26,9 @@ import { relayCall } from "./client";
 const captures: Record<string, unknown> = {};
 test.each([true, false])("owner private loop captures real selection, claim, Telegram publish, copied answer and completion (owner tier %s)", async ownerTier => {
   const round = telegramRound("owner-private");
+  await setProjectPresentation(round.project, { name: "Orchard" }, "operator");
   saveTasks([telegramTask([round])]);
-  const wire: Record<string, unknown> = { claim: null, publish: null, polls: [], copied_answer: null, completion: null };
+  const wire: Record<string, unknown> = { claim: null, publish: null, copied_answer: null, completion: null };
   let claimed: ExternalRelayRequest | undefined;
   let completeCount = 0, publishes = 0;
   const server = await startTestRelay((req, body) => {
@@ -36,9 +39,9 @@ test.each([true, false])("owner private loop captures real selection, claim, Tel
     if (req.url?.endsWith("/messages")) {
       expect(req.url).toBe("/v1/targets/target_1/messages");
       publishes++;
-      if ((body as { message_id: number }).message_id === 17) wire.publish = body;
-      else (wire.polls as unknown[]).push(body);
-      return { body: { message_key: (body as { message_id: number }).message_id === 17 ? "m_review" : `m_poll_${(body as { message_id: number }).message_id}`, replayed: false } };
+      expect((body as { message_id: number }).message_id).toBe(17);
+      wire.publish = body;
+      return { body: { message_key: "m_review", replayed: false } };
     }
     if (req.url?.endsWith("/complete")) { completeCount++; wire.completion = body; }
     return { body: { status: "ok" } };
@@ -68,8 +71,10 @@ test.each([true, false])("owner private loop captures real selection, claim, Tel
     await service.connect(fakeBotToken()); await service.stopPoller();
     transport.handlers.getChat = () => ok({ id: 41, type: "private", first_name: "Owner" });
     transport.script("sendRichMessage", ok({ message_id: 17, date: 1791724800, chat: { id: 41 } }));
-    transport.script("sendPoll", ...[18, 19, 20].map(message_id => ok({ message_id, date: 1791724800 })));
-    const rich = renderPrototypeTelegram(round, [], "Review layout");
+    const origin = spyOn(self, "readSelf").mockReturnValue({ v: 1, installId: "fixture", label: "Fixture", publicUrl: "https://board.example.invalid", check: null });
+    let rich: ReturnType<typeof renderPrototypeTelegram>;
+    try { rich = renderPrototypeTelegram(round, [], "Review layout"); }
+    finally { origin.mockRestore(); }
     await service.sendOwnerReview({ clientRequestId: round.id, message: rich });
     expect(transport.callsOf("sendRichMessage")[0]!.params.chat_id).toBe(41);
     expect(store.chat("41")!.postAllowed).toBe(false);
@@ -79,13 +84,16 @@ test.each([true, false])("owner private loop captures real selection, claim, Tel
     const copied = decodeHTML(copyButton![1]!);
     expect(copied).toBe(prototypeCopyLine(round, 2));
     expect(await published).toBe("published");
-    await service.waitForReviewPolls();
-    await published;
     expect((wire.publish as { text: string }).text).toBe(rich.plainText!);
     expect((wire.publish as { text: string }).text).not.toContain("<tg-");
+    const sentText = rich.plainText!;
+    expect(sentText).toContain("Питання 1/3 · Where should this live?");
+    expect(sentText.split("\n")[1]).toBe(`#proto-${round.id.slice(3, 11)}`);
+    expect(sentText).toContain("Проєкт: Orchard");
+    expect(sentText).not.toMatch(/Review layout · #proto-/);
     await service.sendOwnerReview({ clientRequestId: round.id, message: rich });
-    await service.waitForReviewPolls();
-    expect(publishes).toBe(4);
+    expect(publishes).toBe(1);
+    expect(transport.callsOf("sendPoll")).toHaveLength(0);
     wire.copied_answer = copied;
     const request: ExternalRelayRequest = requestSchema.parse({ ...sampleRequest, request_id: `owner_private_${ownerTier}`, chat: { key: "private_chat_fixture" },
       answer: { max_chars: 4000, progress: "notes" }, input: { ...sampleRequest.input,
@@ -119,5 +127,5 @@ test.each([true, false])("owner private loop captures real selection, claim, Tel
       expected.claim.features.push("relay_guest_answers");
       expect(wire).toEqual(expected);
     }
-  } finally { await service.waitForReviewPolls(); await service.remove(); await server.close(); }
+  } finally { await service.remove(); await server.close(); }
 });

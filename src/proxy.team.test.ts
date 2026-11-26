@@ -9,7 +9,7 @@ import { installSpawnCapabilityResolver, internalServiceHeaders, spawnCapability
 import { productionViewerControlDependencies, viewerMcpBindings } from "@/lib/mcp/bindings";
 import { requestRemotePipelineTick } from "@/lib/pipelines/controllerSignal";
 import { viewerHealthRequestPlan, viewerRefusesUnauthorized } from "@/runtime-host/deploymentHealth";
-import { claimInstall, createHandoff } from "@/lib/team/members";
+import { claimInstall, createHandoff, createInvite, redeemJoin } from "@/lib/team/members";
 import { MEMBER_COOKIE } from "@/lib/team/sessions";
 import { resetTeamStoreForTests, teamStore } from "@/lib/team/store";
 import { POST as inviteRoute } from "@/app/api/team/invites/route";
@@ -22,6 +22,7 @@ import { probeHeadersFrom } from "../bin/internalService.mjs";
 
 import { proxy } from "./proxy";
 import { mcpHttpAccessToken, MCP_HTTP_ACCESS_HEADER } from "@/lib/mcp/httpAccess";
+import { GET as chatgptPlanGET, POST as chatgptPlanPOST, DELETE as chatgptPlanDELETE } from "@/app/api/chatgpt-plan/route";
 
 /* The two layers of sign-in-and-team D1 through the real proxy: the access
    key decides who reaches the Viewer at all, and only then, on a team
@@ -78,6 +79,36 @@ describe("team install", () => {
   let cookie = "";
   beforeEach(() => {
     cookie = claimInstall(teamStore(), "Mira", DESKTOP).cookie;
+  });
+
+  test("the production proxy admits member plan status while the handler hides account data and refuses writes", async () => {
+    const priorClient = process.env.LLV_CHATGPT_PLAN_CLIENT_ID;
+    delete process.env.LLV_CHATGPT_PLAN_CLIENT_ID;
+    try {
+      const store = teamStore();
+      const owner = store.owner()!;
+      const member = redeemJoin(store, createInvite(store, owner, null).code, "Plan member", DESKTOP);
+      const headers = { cookie: `${MEMBER_COOKIE}=${member.cookie}` };
+      const read = get("/api/chatgpt-plan", headers);
+      expect(proxy(read).headers.get("x-middleware-next")).toBe("1");
+      const response = await chatgptPlanGET(read);
+      expect(await response.json()).toEqual({ state: "off_unconfigured" });
+
+      const write = (method: "POST" | "DELETE") => new NextRequest("https://dev.example.net/api/chatgpt-plan", {
+        method, headers: { host: "dev.example.net", origin: "https://dev.example.net", ...headers,
+          "content-type": "application/json" },
+        ...(method === "POST" ? { body: JSON.stringify({ action: "sign-in" }) } : {}),
+      });
+      const post = write("POST");
+      expect(proxy(post).headers.get("x-middleware-next")).toBe("1");
+      expect((await chatgptPlanPOST(post)).status).toBe(403);
+      const remove = write("DELETE");
+      expect(proxy(remove).headers.get("x-middleware-next")).toBe("1");
+      expect((await chatgptPlanDELETE(remove)).status).toBe(403);
+    } finally {
+      if (priorClient === undefined) delete process.env.LLV_CHATGPT_PLAN_CLIENT_ID;
+      else process.env.LLV_CHATGPT_PLAN_CLIENT_ID = priorClient;
+    }
   });
 
   test("the key without a member sends a browser to sign in", () => {
