@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "classification": "synthetic",
   "generator": "scripts/capture-readme-media.ts",
-  "generatorSha256": "ce08b1e67ab24096c300d61f880516db4c3f21da47a158e1f3788a41b70d7e02",
+  "generatorSha256": "3233811963db6ca6c2ba21606e71390c7a7b5d6c8ee13e31e3eff3e0a345861c",
   "seed": "scripts/readme-demo-state.ts",
   "seedSha256": "a87949b4f1615a6a66fa13611b07548a7fd2fb33a331f422fc29538981151710",
   "command": "bun run build && bun scripts/capture-readme-media.ts",
@@ -28,7 +28,7 @@
         "meanDifference": 0.23,
         "ringsClipped": 0
       },
-      "sha256": "9a259f3e02efc402ecfceca94d863bfbf59ebe16ee1cd1ca3b05a3481499680c"
+      "sha256": "04f544866d7c2a7fd93f64a822c1619182f1b0691c0597961820cebf363fe799"
     },
     {
       "path": "orchestrator.svg",
@@ -51,7 +51,7 @@
         "meanDifference": 0.613,
         "ringsClipped": 1
       },
-      "sha256": "d661c175665129eb2789d9b8916671f517b438c6d8d21e496f5a13cd54b3623e"
+      "sha256": "5b885a5b1f8956909b5f0a8aa64ca00445a189cfb05df0260ab15e94a99e1c8f"
     },
     {
       "path": "conversation.svg",
@@ -71,14 +71,14 @@
       "renderBack": {
         "worstTileMean": 14.152,
         "changedTileShare": 0.007,
-        "meanDifference": 0.368,
+        "meanDifference": 0.362,
         "ringsClipped": 2
       },
-      "sha256": "4ed9bc6dc853721f0b4c8cb5f31329b0e5b86d81431ea79a9142e32b7e0ff31f"
+      "sha256": "1df06c16ed20fe8034f8823f7ab5b4932659f1b5ffa78932986966d0b72bac22"
     },
     {
       "path": "pipeline.svg",
-      "description": "A pipeline opened from its card: the stage graph with its fail edge, and each stage's conversation side by side.",
+      "description": "A pipeline opened from its card: the stage tabs with the fail rule under them, and the selected stage's conversation.",
       "viewport": {
         "width": 1272,
         "height": 944
@@ -90,14 +90,14 @@
         "height": 920
       },
       "colorScheme": "dark",
-      "rasterTiles": 27,
+      "rasterTiles": 22,
       "renderBack": {
-        "worstTileMean": 8.351,
-        "changedTileShare": 0.003,
-        "meanDifference": 0.369,
+        "worstTileMean": 8.39,
+        "changedTileShare": 0,
+        "meanDifference": 0.155,
         "ringsClipped": 0
       },
-      "sha256": "d91fe00548ab97ca834bd7af383c493f31d41c789137ae829eb1d368483999f0"
+      "sha256": "e56b49ef216b05379598708a52664e8a574c8b5da184c6dc82d881af3a3a5dbf"
     },
     {
       "path": "card-menu.svg",
@@ -120,7 +120,7 @@
         "meanDifference": 0.299,
         "ringsClipped": 0
       },
-      "sha256": "6e732a34b460599431b137c8bf8e3d692e5331f6af1d299648419739ba581ae7"
+      "sha256": "b42381fe399c9a725b1d86faa16c58dc567bee589f1791fae9c693f94bcb90c3"
     },
     {
       "path": "accounts.svg",
@@ -131,19 +131,19 @@
       },
       "crop": {
         "x": 255,
-        "y": 487,
+        "y": 461,
         "width": 400,
         "height": 321
       },
       "colorScheme": "dark",
       "rasterTiles": 19,
       "renderBack": {
-        "worstTileMean": 2.765,
+        "worstTileMean": 2.702,
         "changedTileShare": 0,
-        "meanDifference": 0.227,
+        "meanDifference": 0.216,
         "ringsClipped": 0
       },
-      "sha256": "50ad5b7594f036072f78e038395cf7a837f7751ba814a51fafd125ad63af3662"
+      "sha256": "377d2a8f23a09b94d0f6b93f1d980089c7b0a4217cb12abe05609ee84111127b"
     },
     {
       "path": "phone-conversation.svg",
@@ -157,10 +157,10 @@
       "renderBack": {
         "worstTileMean": 12.052,
         "changedTileShare": 0.02,
-        "meanDifference": 0.753,
+        "meanDifference": 0.752,
         "ringsClipped": 0
       },
-      "sha256": "4b2e8c91346e451b6db1ec5b5144eaaee6c373e2683066cad988cf857eb6b4e0"
+      "sha256": "43b6923847e78f36d7ea3e538cfab1a37146ee898011ee5ae0f7e0ba1e64d925"
     },
     {
       "path": "phone-board.svg",
@@ -174,10 +174,10 @@
       "renderBack": {
         "worstTileMean": 12.37,
         "changedTileShare": 0.022,
-        "meanDifference": 0.421,
+        "meanDifference": 0.422,
         "ringsClipped": 0
       },
-      "sha256": "0e262986402e05d76ab78b5949eda7d517c3107501e2aab39cbdf510c5b5fa74"
+      "sha256": "0e93d1cb2c697ad2382ee17d3ec5f4ef29dabb07c9bec04fca5f38c2b96410b0"
     }
   ]
 }
