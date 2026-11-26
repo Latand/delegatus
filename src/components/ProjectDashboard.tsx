@@ -2569,6 +2569,7 @@ function ProjectDashboardView({
                 closedPaths={board.prefs.hidden}
                 onRestoreConversation={restoreClosedConversation}
                 onReadersChange={holdReaders}
+                onReaderClosed={onCloseFile ? (file) => onCloseFile(file.path) : undefined}
                 seat={(boardId) => (
                   <KanbanSeat project={project} projectName={projectName} projectCwd={projectCwd} files={files} tasks={projectTasks} boardId={boardId} seatRead={desktopSeatRead} />
                 )}

@@ -171,3 +171,17 @@ test("a quarantined orphan raises an assigned card naming its conversation, and 
     expect(loadTasks(file).find(task => task.id === tasks[0]!.id)?.status).toBe("done");
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
+
+test("retry discovery loads only durable records and forgets a cleared row on restart", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "startup-retry-discovery-"));
+  try {
+    const writer = new StartupRowRetries(directory);
+    await writer.failed(KEY, "adoption-failed", 1000);
+    fs.writeFileSync(path.join(directory, "unfinished.tmp"), "partial");
+    const recovered = new StartupRowRetries(directory);
+    expect(await recovered.discover()).toEqual([KEY]);
+    expect(recovered.get(KEY)).toMatchObject({ reason: "adoption-failed", nextAt: 2000 });
+    await recovered.clear(KEY);
+    expect(await new StartupRowRetries(directory).discover()).toEqual([]);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});

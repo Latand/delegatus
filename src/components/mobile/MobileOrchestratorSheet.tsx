@@ -116,8 +116,9 @@ export function seatBadgeReading(
   decisionWaiting = false,
 ): { tone: SeatBadgeTone; text: string } {
   if (view.badge === "conversation" && file) {
-    const conversation = mobileRowState(file, now, { decisionWaiting });
-    return { tone: CONVERSATION_STATE_TONE[conversation.key], text: statePhrase(t, conversation, now) };
+    const conversation = mobileRowState(file, now, { decisionWaiting, seatWaiting: view.state === "waiting" });
+    /* A waiting row's dot is its tone: a decision asks (warning), an idle seat only waits (neutral). */
+    return { tone: conversation.key === "waiting" ? conversation.dot : CONVERSATION_STATE_TONE[conversation.key], text: statePhrase(t, conversation, now) };
   }
   return { tone: SEAT_STATE_TONE[view.state], text: t(ROW_STATE_LABEL[view.state]) };
 }

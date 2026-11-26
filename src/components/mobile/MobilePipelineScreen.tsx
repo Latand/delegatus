@@ -1,10 +1,9 @@
 "use client";
-import { StageSetupResult, latestSetup } from "@/components/pipelines/StageSetupResult";
 
-import { Boxes, Check, CircleX, Eye, FileDiff, GitMerge, ListChecks, Pause, Play, RotateCcw, SkipForward, Undo2 } from "lucide-react";
+import { Boxes, Check, CircleX, ClipboardList, Eye, FileDiff, GitMerge, History, Link2, ListChecks, Pause, Play, RotateCcw, SkipForward, Undo2 } from "lucide-react";
 
 import { ChevronLeft, ChevronRight } from "@/components/icons";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 
 import { useLocale } from "@/lib/i18n";
 import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
@@ -18,35 +17,37 @@ import { openReviewHistory } from "../flows/ReviewHistory";
 import { reviewerBindingTargetsForRound } from "../flows/flowModel";
 import type { ReceiptAction as BoardReceiptAction } from "../kanban/KanbanReceipts";
 import { summarizePipeline, workingStageConversations } from "../kanban/kanbanModel";
-import { pastAttempts } from "../kanban/pipelineGraph";
+import { operationalAttempts, pastAttempts } from "../kanban/pipelineGraph";
+import { StagesSheet, type SheetPane } from "../kanban/StagesSheet";
+import { ReaderPlacement, ReaderPortals, type ReaderView } from "../kanban/KanbanReaders";
+import { conversationIdentity } from "@/lib/accounts/identity";
 import { pastAttemptLabel, pastAttemptState, pastAttemptTone, pipelineTitle } from "../kanban/PipelineSection";
 import { laneState } from "../kanban/cardState";
 import { laneAnswerItems, menuAnswers } from "../kanban/laneAnswerMenu";
 import { browserPipelinePorts, type PipelinePorts } from "../kanban/pipelinePorts";
-import { pipelineActionOptions, type PipelineActionKind } from "../kanban/stagesModel";
+import { currentStageId, pipelineActionOptions, shownAttempt, type PipelineActionKind } from "../kanban/stagesModel";
 import { usePipelineActions, type PipelineActionIntent } from "../kanban/usePipelineActions";
 import {
   attemptNavTarget,
-  latestAttempt,
   patchPipeline,
   pipelineLinkedTasks,
   resolveStageNavFile,
+  stageAsksOperator,
   stageAttempts,
   stageConfigurable,
   stageNames,
   type StageNavTarget,
 } from "../pipelines/pipelineModel";
-import { PipelineBlock, PipelineStateLine } from "../pipelines/PipelineBlock";
+import { screenCurrentStageId } from "../pipelines/pipelineBlockModel";
 import { checkChoiceGroups, checkRowValue, publishingStage, usePipelineChecks, type CheckTerms } from "../pipelines/PipelineCheckSettings";
 import { blockAgeSeconds, type PipelineAnswer } from "../pipelines/pipelineBlockModel";
 import { StagePlaceholderPane } from "../pipelines/StagePlaceholderPane";
 import type { ConversationDrafts } from "../pipelines/conversationDraftClient";
-import { AddStageControl, conversationDraftLane, DraftStartButton, DraftStartNote } from "../pipelines/DraftStageControls";
-import { StageDraftMessage } from "../kanban/StageDraft";
+import { conversationDraftLane, DraftStartButton, DraftStartNote } from "../pipelines/DraftStageControls";
 import { StageDrafts } from "../kanban/stageDrafts";
 import type { StageSlot } from "../scheme/layout";
 import { humanizeDuration } from "../turnDuration";
-import { nowFragment, pipelineHiddenFromBoard } from "./mobileBoardModel";
+import { pipelineHiddenFromBoard } from "./mobileBoardModel";
 import { RECEIPT_MS, showReceipt, type ReceiptTimers } from "./MobileReceipt";
 import { WorkLinksPanel } from "@/components/workLinks/WorkLinkChips";
 import { LaneReviewPhoneSheet } from "@/components/laneReview/LaneReviewPhoneSheet";
@@ -429,14 +430,13 @@ export interface MobilePipelineScreenProps {
  * One pipeline on the phone, the phone's Stages view (#2072 slice 6,
  * docs/design/phone-kanban.md §3.13; mobile v2 lane 7 before it).
  *
- * The bar says where the lane stands, «needs a decision · stage 1 of 2 · 41m»,
- * and takes the title once the body's heading scrolls away. The body is the
- * one pipeline block at screen density: the title, the PR and issue chips with
- * Attach, the numbered stages with the passed ones folded and the current one
- * expanded, the answer to a decision or a spent review budget inside the
- * stage it is about, and each fail edge in the loop words. Under it the linked
- * tasks and «Past attempts · n», which lists every finished attempt and review
- * round, as the desktop card does.
+ * The bar names the lane, whole. The body is the Stages window of the board
+ * (`StagesSheet` at `presentation="screen"`): the line saying whom the lane
+ * waits on, the stages as a grid of tabs, the rule lines of the fail edges the
+ * tabs do not carry, and under them the selected stage's pane with its
+ * conversation. Everything the screen used to list under the stages is a row
+ * of the bar's ⋯: Attach a PR or issue, the linked tasks and «Past attempts ·
+ * n» (each its own face of the sheet), and Show on board for a hidden lane.
  *
  * The answers go through the board's own pipeline actions
  * (`usePipelineActions`), so the phone sends the requests the desktop's ⋯
@@ -472,7 +472,6 @@ export function MobilePipelineScreen({
   /* A draft made from a conversation (variant 3): its stages, then the first
      stage's first message with Edit, then Start at the foot. */
   const fromConversation = Boolean(conversationDrafts) && conversationDraftLane(pipeline);
-  const firstStage = pipeline.stages[0] ?? null;
   const nav = useMobileNavStore();
   const navState = useMobileNav();
   const links = useWorkLinks().of({ kind: "pipeline", id: pipeline.id });
@@ -484,8 +483,6 @@ export function MobilePipelineScreen({
   /* A closed lane has no screen left to stand on: Close lane goes back. */
   const lane = usePhonePipelineActs({ ports, acts, onClosed: () => nav.back() });
   const body = useRef<HTMLDivElement>(null);
-  const heading = useRef<HTMLHeadingElement>(null);
-  const titleAway = useScrolledAway(heading, body);
   /* Back to this pipeline lands where the operator left it (#2105). */
   useMobileScrollMemory(body, { kind: "pipeline", id: pipeline.id });
   const title = pipelineTitle(t, pipeline);
@@ -500,21 +497,48 @@ export function MobilePipelineScreen({
     return requestedStage && stageConfigurable(pipeline, requestedStage) ? requestedStage : null;
   });
   const openedOnStage = useRef(configuring);
+  /* The selected tab is the operator's choice, kept per lane; with none the
+     lane follows the stage it stands on. */
+  const [chosen, setChosen] = useMobileScreenState<string>({ kind: "pipeline", id: pipeline.id }, "tab", "");
+  const standing = screenCurrentStageId(summary) ?? currentStageId(pipeline, summary.views);
+  const selected = chosen && pipeline.stages.some((stage) => stage.id === chosen) ? chosen : standing;
   useEffect(() => {
-    if (openedOnStage.current) nav.openSheet("stage");
+    if (openedOnStage.current) {
+      setChosen(openedOnStage.current);
+      nav.openSheet("stage");
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once, for the stage the screen opened on
   }, []);
   const configureStage = (stage: PipelineStage): void => {
     setConfiguring(stage.id);
     nav.openSheet("stage");
   };
+  /* Each pane's shown attempt, and the one conversation the selected pane mounts. */
+  const [picks, setPicks] = useState<ReadonlyMap<string, number>>(() => new Map());
+  const panes = useMemo<SheetPane[]>(() => pipeline.stages.map((stage) => {
+    const shown = shownAttempt(pipeline, stage.id, picks.get(stage.id) ?? null);
+    const target = shown ? attemptNavTarget(shown) : null;
+    const file = target ? resolveStageNavFile(target, files) : null;
+    return { stage, attempts: operationalAttempts(pipeline, stage.id), shown, file, readerKey: file && stage.id === selected ? conversationIdentity(file) : null };
+  }), [pipeline, picks, files, selected]);
+  const [placement] = useState(() => new ReaderPlacement());
+  const parkRef = useCallback((park: HTMLDivElement | null) => placement.setPark(park), [placement]);
+  const chosenPane = panes.find((pane) => pane.readerKey && pane.file);
+  const readers = useMemo<ReaderView[]>(() => (chosenPane?.file && chosenPane.readerKey
+    ? [{
+      readerKey: chosenPane.readerKey, file: chosenPane.file, inSheet: true, owner: { cardId: pipeline.id, cardTitle: pipelineTitle(t, pipeline), stage: { pipeline, stage: chosenPane.stage } },
+      /* A stage that asked a question has its answer typed here: the composer says so. */
+      ...(stageAsksOperator(pipeline, chosenPane.stage.id) ? { composerPlaceholder: t("kanban.stages.answerPlaceholder") } : {}),
+    }]
+    : []), [chosenPane, pipeline, t]);
+
   const configStage = navState.sheet === "stage" && configuring
     ? pipeline.stages.find((stage) => stage.id === configuring) ?? null
     : null;
   useSheetSelection("stage", configStage !== null);
   /* The ⋯ sheet opens on the lane's own actions; its «Board menu» row turns
      it into the board's menu, and closing it resets the face. */
-  const [menuFace, setMenuFace] = useState<"pipeline" | "board" | "checks">("pipeline");
+  const [menuFace, setMenuFace] = useState<"pipeline" | "board" | "checks" | "tasks" | "past">("pipeline");
   useEffect(() => {
     if (navState.sheet !== "menu") setMenuFace("pipeline");
   }, [navState.sheet]);
@@ -534,21 +558,13 @@ export function MobilePipelineScreen({
     });
   };
   const dismissed = pipelineHiddenFromBoard(pipeline);
-  const stageFile = (stage: PipelineStage): FileEntry | null => resolveStageNavFile(attemptNavTarget(latestAttempt(pipeline, stage.id)), files);
-  const stageConversation = (stage: PipelineStage) => {
-    const file = stageFile(stage);
-    return { openable: Boolean(attemptNavTarget(latestAttempt(pipeline, stage.id))), latest: file ? nowFragment(file) : null };
-  };
   const openAttempt = (target: StageNavTarget): void => {
     const file = resolveStageNavFile(target, files);
     if (file) onOpenConversation(file);
     else window.location.hash = formatConversationHash({ conversationId: target.conversationId ?? undefined, path: target.agentPath ?? "" });
   };
-  const openStage = (_pipeline: Pipeline, stage: PipelineStage): void => {
-    const target = attemptNavTarget(latestAttempt(pipeline, stage.id));
-    if (target) openAttempt(target);
-  };
   const linked = pipelineLinkedTasks(pipeline, tasks, [...flows], files).filter((task) => task.id !== cameFromTask);
+  const past = usePastRows(pipeline, flows, flowsById, files, names, t);
 
   const sheets: SheetRenderer = (name, close) => {
     if (name === "changes") return <LaneReviewPhoneSheet pipelineId={pipeline.id} onClose={close} />;
@@ -583,6 +599,18 @@ export function MobilePipelineScreen({
                 />
               );
             })}
+            {dismissed ? (
+              <MobileSheetRow
+                icon={<Eye className="h-[18px] w-[18px]" aria-hidden />}
+                label={t("mobile2.pipeline.showOnBoard")}
+                disabled={held}
+                onSelect={() => {
+                  close();
+                  showOnBoard();
+                }}
+                attrs={{ "data-mobile2-pipeline-action": "showOnBoard", "data-mobile2-pipeline-patch": "undismiss" }}
+              />
+            ) : null}
             <LaneAnswerRows pipeline={pipeline} acting={acting} onAnswer={lane.answer} close={close} />
             {/* The lane's changed files, read-only on the phone (docs/design/lane-diff-comments.md §7). */}
             <MobileSheetRow
@@ -615,6 +643,80 @@ export function MobilePipelineScreen({
               onSelect={() => setMenuFace("board")}
               attrs={{ "data-mobile2-menu-row": "board" }}
             />
+            <MobileSheetDivider />
+            <MobileSheetRow
+              icon={<Link2 className="h-[18px] w-[18px]" aria-hidden />}
+              label={t("mobile2.pipeline.attachLink")}
+              onSelect={() => nav.openSheet("links")}
+              attrs={{ "data-mobile2-menu-row": "links" }}
+            />
+            {linked.length ? (
+              <MobileSheetRow
+                icon={<ClipboardList className="h-[18px] w-[18px]" aria-hidden />}
+                label={t("mobile2.pipeline.linkedTasks")}
+                trailing={<><span className="text-caption font-semibold tabular-nums text-muted">{linked.length}</span><ChevronRight className="h-4 w-4" aria-hidden /></>}
+                onSelect={() => setMenuFace("tasks")}
+                attrs={{ "data-mobile2-menu-row": "tasks" }}
+              />
+            ) : null}
+            {past.length ? (
+              <MobileSheetRow
+                icon={<History className="h-[18px] w-[18px]" aria-hidden />}
+                label={t("kanban.past.head", { count: past.length })}
+                trailing={<ChevronRight className="h-4 w-4" aria-hidden />}
+                onSelect={() => setMenuFace("past")}
+                attrs={{ "data-mobile2-menu-row": "past" }}
+              />
+            ) : null}
+            <p data-mobile2-stage-caption="" className="px-4 pb-2 pt-1.5 text-label text-muted">{t("mobile2.pipeline.stageCaption")}</p>
+          </div>
+        </MobileSheet>
+      );
+    }
+    if (name === "menu" && menuFace === "tasks") {
+      return (
+        <MobileSheet name="menu" title={t("mobile2.pipeline.linkedTasks")} onClose={close}>
+          <div role="menu" aria-label={t("mobile2.pipeline.linkedTasks")} className="flex flex-col" data-mobile2-pipeline-tasks={pipeline.id}>
+            <MobileSheetRow
+              icon={<ChevronLeft className="h-[18px] w-[18px]" aria-hidden />}
+              label={t("mobile2.pipeline.checksBack")}
+              onSelect={() => setMenuFace("pipeline")}
+              attrs={{ "data-mobile2-menu-row": "back" }}
+            />
+            <MobileSheetDivider />
+            {linked.map((task) => {
+              const label = task.text.split("\n", 1)[0]?.trim() || task.id;
+              return (
+                <MobileSheetRow
+                  key={task.id}
+                  label={label}
+                  ariaLabel={onOpenTask ? t("mobile2.pipeline.openTask", { label }) : undefined}
+                  trailing={<span className="text-caption text-muted">{t(`tasks.status.${task.status}`)}</span>}
+                  disabled={!onOpenTask}
+                  onSelect={() => {
+                    close();
+                    onOpenTask?.(task);
+                  }}
+                  attrs={{ "data-mobile2-linked-task": task.id }}
+                />
+              );
+            })}
+          </div>
+        </MobileSheet>
+      );
+    }
+    if (name === "menu" && menuFace === "past") {
+      return (
+        <MobileSheet name="menu" title={t("kanban.past.head", { count: past.length })} onClose={close}>
+          <div role="menu" aria-label={t("kanban.past.head", { count: past.length })} className="flex flex-col" data-mobile2-past={past.length}>
+            <MobileSheetRow
+              icon={<ChevronLeft className="h-[18px] w-[18px]" aria-hidden />}
+              label={t("mobile2.pipeline.checksBack")}
+              onSelect={() => setMenuFace("pipeline")}
+              attrs={{ "data-mobile2-menu-row": "back" }}
+            />
+            <MobileSheetDivider />
+            <PastRowsList rows={past} nowMs={now * 1000} onOpenConversation={(file) => { close(); onOpenConversation(file); }} />
           </div>
         </MobileSheet>
       );
@@ -667,20 +769,19 @@ export function MobilePipelineScreen({
       h: 0,
     };
     return (
-      <MobileSheet name="stage" title={t("mobile2.pipeline.configureTitle", { stage: names.get(configStage.id) ?? configStage.id })} onClose={close}>
+      <MobileSheet name="stage" title={t(stageConfigurable(pipeline, configStage.id) ? "mobile2.pipeline.configureTitle" : "mobile2.pipeline.stageMenu", { stage: names.get(configStage.id) ?? configStage.id })} onClose={close}>
         <div data-mobile2-stage-config={configStage.id} className="flex flex-col px-3 pb-3 [&_button]:min-h-11 [&_button]:min-w-11">
-          <StagePlaceholderPane slot={slot} interactive flow />
+          {stageConfigurable(pipeline, configStage.id) ? <StagePlaceholderPane slot={slot} interactive flow /> : null}
+          <StageActRows pipeline={pipeline} stage={configStage} names={names} acting={acting} onAnswer={lane.answer} close={close} />
         </div>
       </MobileSheet>
     );
   };
 
+  /* The bar names the lane, whole: the title wraps to a second line rather than end in an ellipsis. */
   const barTitle = (
     <span className="flex min-w-0 flex-1 flex-col">
-      {titleAway ? <span data-mobile2-title-text className="min-w-0 truncate text-title font-semibold leading-tight text-primary">{title}</span> : null}
-      <span data-mobile2-meta data-title-away={titleAway ? "" : undefined} className={`min-w-0 ${titleAway ? "overflow-hidden" : ""}`}>
-        <PipelineStateLine summary={summary} nowMs={now * 1000} />
-      </span>
+      <span data-mobile2-title-text className="line-clamp-2 min-w-0 break-words text-ui font-semibold leading-tight text-primary">{title}</span>
     </span>
   );
 
@@ -699,74 +800,32 @@ export function MobilePipelineScreen({
         </div>
       ) : undefined}
     >
-      <div ref={body} data-mobile2-pipeline-body className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-y-auto overflow-x-hidden px-3 pb-4 pt-2.5">
-        {dismissed ? (
-          <button
-            type="button"
-            data-mobile2-pipeline-action="showOnBoard"
-            data-mobile2-pipeline-patch="undismiss"
-            disabled={held}
-            className="inline-flex min-h-11 w-full shrink-0 items-center justify-center gap-1.5 rounded-[8px] bg-card px-3 text-body font-semibold text-secondary shadow-1 active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40"
-            onClick={showOnBoard}
-          >
-            <Eye className="h-4 w-4 shrink-0" aria-hidden />
-            {t("mobile2.pipeline.showOnBoard")}
-          </button>
-        ) : null}
-        <PipelineBlock
+      <div ref={body} data-mobile2-pipeline-body className="kb flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overflow-x-hidden pb-4 pt-1">
+        <StagesSheet
+          presentation="screen"
+          title={title}
           summary={summary}
-          density="screen"
+          panes={panes}
+          flowsById={flowsById}
+          selected={selected}
+          onSelect={setChosen}
           nowMs={now * 1000}
-          acting={acting}
-          headingRef={heading}
-          stageConversation={stageConversation}
-          onOpenStage={openStage}
-          onOpenAttempt={openAttempt}
-          onConfigureStage={(_pipeline, stage) => configureStage(stage)}
-          onWorkLinks={() => nav.openSheet("links")}
-          afterStages={fromConversation ? <AddStageControl pipeline={pipeline} ports={ports} variant="phone" /> : undefined}
+          windowReader={null}
+          placement={placement}
+          drafts={drafts}
+          ports={ports}
+          addStageVariant="phone"
+          fromConversation={fromConversation}
+          onChooseAttempt={(stageId, n) => setPicks((current) => new Map(current).set(stageId, n))}
+          onStageMenu={(stage) => configureStage(stage)}
+          onAnswer={lane.answer}
+          acting={Boolean(acting)}
+          onOpenRecorded={(target) => openAttempt({ conversationId: target.conversationId, agentPath: target.path })}
+          onLeaveWindow={() => {}}
+          onClose={() => {}}
         />
-        {/* Setup runs once per lane, before its first Builder: the phone shows its latest outcome. */}
-        <StageSetupResult setup={latestSetup(pipeline)} worktreeDir={pipeline.worktreeDir} />
-        {fromConversation && firstStage ? (
-          <section data-phone-draft-first-message={firstStage.id} className="flex shrink-0 flex-col gap-1.5">
-            <h3 className="m-0 flex min-h-[30px] items-center text-ui font-semibold text-secondary">
-              {t("kanban.fromConversation.firstMessage", { stage: names.get(firstStage.id) ?? firstStage.id })}
-            </h3>
-            {/* The board's own editor and store, so Save, conflicts and an unconfirmed write behave as on the card. */}
-            <div className="kb" data-surface="phone-first-message">
-              <StageDraftMessage pipeline={pipeline} stage={firstStage} name={names.get(firstStage.id) ?? firstStage.id} drafts={drafts} ports={ports} fromConversation />
-            </div>
-          </section>
-        ) : null}
-        {linked.length ? (
-          <section data-mobile2-section="tasks" className="flex shrink-0 flex-col gap-1.5">
-            <h3 className="flex min-h-[30px] items-center gap-1.5 text-ui font-semibold text-secondary">
-              {t("mobile2.pipeline.linkedTasks")}
-              <span className="text-label font-semibold tabular-nums text-muted">{linked.length}</span>
-            </h3>
-            {linked.map((task) => {
-              const label = task.text.split("\n", 1)[0]?.trim() || task.id;
-              const Tag = onOpenTask ? "button" : "div";
-              return (
-                <Tag
-                  key={task.id}
-                  {...(onOpenTask ? { type: "button" as const, onClick: () => onOpenTask(task), "aria-label": t("mobile2.pipeline.openTask", { label }) } : {})}
-                  data-mobile2-linked-task={task.id}
-                  className="flex min-h-11 w-full items-center gap-2.5 rounded-[12px] bg-quiet py-2 pl-3 pr-2.5 text-left ring-1 ring-inset ring-border active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                >
-                  <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-strong" />
-                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                    <span className="truncate text-body font-semibold leading-[1.25] text-secondary">{label}</span>
-                    <span className="truncate text-label text-muted">{t(`tasks.status.${task.status}`)}</span>
-                  </span>
-                  {onOpenTask ? <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden /> : null}
-                </Tag>
-              );
-            })}
-          </section>
-        ) : null}
-        <PastAttemptsSection pipeline={pipeline} flows={flows} flowsById={flowsById} files={files} names={names} nowMs={now * 1000} onOpenConversation={onOpenConversation} />
+        <div className="reader-park" aria-hidden="true" ref={parkRef} />
+        <ReaderPortals placement={placement} readers={readers} now={now} onClose={() => {}} onLeave={() => {}} onMenu={() => {}} />
       </div>
     </MobileShell>
   );
@@ -783,111 +842,130 @@ interface PastRow {
 }
 
 /**
- * «Past attempts · n» (§3.13), the last thing on the screen: every finished
- * attempt and review round of the lane, newest first, the rows the desktop
- * card's own «Past attempts» lists, then a round's other reviewer transcripts
- * (lane 10). A row whose transcript is in the scan opens it; one that left the
- * scan is a statement. Closed, it is one 44 px row.
+ * «Past attempts · n» (§3.13): every finished attempt and review round of the
+ * lane, newest first, the rows the desktop card's own «Past attempts» lists,
+ * then a round's other reviewer transcripts (lane 10). A row whose transcript
+ * is in the scan opens it; one that left the scan is a statement.
  */
-function PastAttemptsSection({ pipeline, flows, flowsById, files, names, nowMs, onOpenConversation }: {
-  pipeline: Pipeline;
-  flows: readonly Flow[];
-  flowsById: ReadonlyMap<string, Flow>;
-  files: readonly FileEntry[];
-  names: ReadonlyMap<string, string>;
-  nowMs: number;
-  onOpenConversation: (file: FileEntry) => void;
-}) {
+function usePastRows(pipeline: Pipeline, flows: readonly Flow[], flowsById: ReadonlyMap<string, Flow>, files: readonly FileEntry[], names: ReadonlyMap<string, string>, t: ReturnType<typeof useLocale>["t"]): PastRow[] {
+  return useMemo(() => {
+    const nameOf = (stageId: string) => names.get(stageId) ?? stageId;
+    const history = pastAttempts([pipeline], flowsById);
+    const archiveByStage = new Map<string, Map<number, string>>();
+    for (const run of pipeline.runs) {
+      const byAttempt = new Map<number, string>();
+      for (const attempt of run.attempts) if (attempt.flowId) byAttempt.set(attempt.n, attempt.flowId);
+      archiveByStage.set(run.stageId, byAttempt);
+    }
+    const listed = new Set(history.flatMap((row) => (row.conversation.path ? [row.conversation.path] : [])));
+    return [
+      ...history.map((row) => {
+        const archiveAttempt = row.kind === "round" ? row.attempt : row.kind === "attempt" ? row.n : null;
+        const archiveId = archiveAttempt != null ? archiveByStage.get(row.stageId)?.get(archiveAttempt) : null;
+        return {
+          archive: archiveId && (row.kind === "round" || !flowsById.has(archiveId))
+            ? { id: archiveId, round: row.kind === "round" ? row.n : undefined } : undefined,
+          key: row.key,
+          label: pastAttemptLabel(t, row, nameOf(row.stageId)),
+          state: pastAttemptState(t, row),
+          tone: pastAttemptTone(row),
+          atMs: row.atMs,
+          file: resolveStageNavFile({ conversationId: row.conversation.conversationId, agentPath: row.conversation.path }, files),
+        };
+      }),
+      ...pipeline.stages.flatMap((stage) => reviewTranscripts(pipeline, stage, flows, files)
+        .filter((transcript) => !listed.has(transcript.path))
+        .map((transcript) => ({
+          key: `${pipeline.id}:${stage.id}:transcript:${transcript.path}`,
+          label: `${nameOf(stage.id)} · ${t("mobile2.pipeline.reviewTranscript", { n: transcript.n })}`,
+          state: "",
+          tone: "",
+          atMs: 0,
+          file: files.find((entry) => entry.path === transcript.path) ?? null,
+        }))),
+    ];
+  }, [pipeline, flows, flowsById, files, names, t]);
+}
+
+function PastRowsList({ rows, nowMs, onOpenConversation }: { rows: readonly PastRow[]; nowMs: number; onOpenConversation: (file: FileEntry) => void }) {
   const { t } = useLocale();
-  /* Open or folded as the operator left it when Back returns here (#2105). */
-  const [open, setOpen] = useMobileScreenState({ kind: "pipeline", id: pipeline.id }, "past", false);
-  const nameOf = (stageId: string) => names.get(stageId) ?? stageId;
-  const history = pastAttempts([pipeline], flowsById);
-  const archiveByStage = new Map<string, Map<number, string>>();
-  for (const run of pipeline.runs) {
-    const byAttempt = new Map<number, string>();
-    for (const attempt of run.attempts) if (attempt.flowId) byAttempt.set(attempt.n, attempt.flowId);
-    archiveByStage.set(run.stageId, byAttempt);
-  }
-  const listed = new Set(history.flatMap((row) => (row.conversation.path ? [row.conversation.path] : [])));
-  const rows: PastRow[] = [
-    ...history.map((row) => {
-      const archiveAttempt = row.kind === "round" ? row.attempt : row.kind === "attempt" ? row.n : null;
-      const archiveId = archiveAttempt != null ? archiveByStage.get(row.stageId)?.get(archiveAttempt) : null;
-      return {
-        archive: archiveId && (row.kind === "round" || !flowsById.has(archiveId))
-          ? { id: archiveId, round: row.kind === "round" ? row.n : undefined } : undefined,
-        key: row.key,
-        label: pastAttemptLabel(t, row, nameOf(row.stageId)),
-        state: pastAttemptState(t, row),
-        tone: pastAttemptTone(row),
-        atMs: row.atMs,
-        file: resolveStageNavFile({ conversationId: row.conversation.conversationId, agentPath: row.conversation.path }, files),
-      };
-    }),
-    ...pipeline.stages.flatMap((stage) => reviewTranscripts(pipeline, stage, flows, files)
-      .filter((transcript) => !listed.has(transcript.path))
-      .map((transcript) => ({
-        key: `${pipeline.id}:${stage.id}:transcript:${transcript.path}`,
-        label: `${nameOf(stage.id)} · ${t("mobile2.pipeline.reviewTranscript", { n: transcript.n })}`,
-        state: "",
-        tone: "",
-        atMs: 0,
-        file: files.find((entry) => entry.path === transcript.path) ?? null,
-      }))),
-  ];
-  if (!rows.length) return null;
   const age = (atMs: number) => (atMs ? humanizeDuration(blockAgeSeconds((nowMs - atMs) / 1000)) : "");
   return (
-    <section data-mobile2-past={rows.length} className="shrink-0 overflow-hidden rounded-[12px] bg-card shadow-1">
-      <button
-        type="button"
-        aria-expanded={open}
-        data-mobile2-past-toggle
-        className="flex min-h-11 w-full items-center gap-2 px-3 text-left text-body font-semibold text-secondary active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
-        onClick={() => setOpen((value) => !value)}
-      >
-        <span className="min-w-0 flex-1 truncate">{t("kanban.past.head", { count: rows.length })}</span>
-        <ChevronRight className={`h-[18px] w-[18px] shrink-0 text-muted transition-transform motion-reduce:transition-none ${open ? "rotate-90" : ""}`} aria-hidden />
-      </button>
-      {open ? (
-        <ul className="flex flex-col">
-          {rows.map((row) => {
-            const canOpen = Boolean(row.file || row.archive);
-            const Tag = canOpen ? "button" : "div";
-            return (
-              <li key={row.key} className="flex items-stretch border-t border-border">
-                <Tag
-                  {...(canOpen ? { type: "button" as const, onClick: () => {
-                    if (row.file) onOpenConversation(row.file);
-                    else if (row.archive) openReviewHistory(row.archive.id, row.archive.round);
-                  }, "aria-label": row.file ? t("kanban.past.openAria", { label: row.label }) : `${t("reviewHistory.open")} · ${row.label}` } : {})}
-                  data-mobile2-past-row={row.key}
-                  data-mobile2-go={row.file ? "chat" : row.archive ? "review-history" : undefined}
-                  data-mobile2-review-history={!row.file ? row.archive?.id : undefined}
-                  data-review-round={!row.file ? row.archive?.round : undefined}
-                  className={`flex min-h-11 min-w-0 flex-1 items-center gap-2 py-1.5 pl-3 pr-2.5 text-left text-label tabular-nums ${canOpen ? "active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40" : ""}`}
-                >
-                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                    <span className="min-w-0 truncate text-ui font-semibold text-primary">{row.label}</span>
-                    <span className="min-w-0 truncate text-muted">
-                      {row.state ? <span className={row.tone === "ok" ? "text-success" : row.tone === "bad" ? "text-danger" : ""}>{row.state}</span> : null}
-                      {row.state && row.atMs ? " · " : ""}
-                      {age(row.atMs)}
-                      {row.file ? "" : `${row.state || row.atMs ? " · " : ""}${t("kanban.past.none")}`}
-                    </span>
-                  </span>
-                  {row.file ? <ChevronRight className="h-4 w-4 shrink-0 text-muted" aria-hidden /> : null}
-                </Tag>
-                {row.archive && row.file ? <button type="button" data-mobile2-review-history={row.archive.id} data-review-round={row.archive.round}
-                  aria-label={`${t("reviewHistory.open")} · ${row.label}`}
-                  className="min-h-11 min-w-11 shrink-0 px-2 text-ui font-semibold text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
-                  onClick={() => openReviewHistory(row.archive!.id, row.archive!.round)}>{t("reviewHistory.open")}</button> : null}
-              </li>
-            );
-          })}
-        </ul>
-      ) : null}
-    </section>
+    <ul className="flex flex-col">
+      {rows.map((row) => {
+        const canOpen = Boolean(row.file || row.archive);
+        const Tag = canOpen ? "button" : "div";
+        return (
+          <li key={row.key} className="flex items-stretch border-t border-border">
+            <Tag
+              {...(canOpen ? { type: "button" as const, onClick: () => {
+                if (row.file) onOpenConversation(row.file);
+                else if (row.archive) openReviewHistory(row.archive.id, row.archive.round);
+              }, "aria-label": row.file ? t("kanban.past.openAria", { label: row.label }) : `${t("reviewHistory.open")} · ${row.label}` } : {})}
+              data-mobile2-past-row={row.key}
+              data-mobile2-go={row.file ? "chat" : row.archive ? "review-history" : undefined}
+              data-mobile2-review-history={!row.file ? row.archive?.id : undefined}
+              data-review-round={!row.file ? row.archive?.round : undefined}
+              className={`flex min-h-11 min-w-0 flex-1 items-center gap-2 py-1.5 pl-3 pr-2.5 text-left text-label tabular-nums ${canOpen ? "active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40" : ""}`}
+            >
+              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className="min-w-0 break-words text-ui font-semibold text-primary">{row.label}</span>
+                <span className="min-w-0 break-words text-muted">
+                  {row.state ? <span className={row.tone === "ok" ? "text-success" : row.tone === "bad" ? "text-danger" : ""}>{row.state}</span> : null}
+                  {row.state && row.atMs ? " · " : ""}
+                  {age(row.atMs)}
+                  {row.file ? "" : `${row.state || row.atMs ? " · " : ""}${t("kanban.past.none")}`}
+                </span>
+              </span>
+              {row.file ? <ChevronRight className="h-4 w-4 shrink-0 text-muted" aria-hidden /> : null}
+            </Tag>
+            {row.archive && row.file ? <button type="button" data-mobile2-review-history={row.archive.id} data-review-round={row.archive.round}
+              aria-label={`${t("reviewHistory.open")} · ${row.label}`}
+              className="min-h-11 min-w-11 shrink-0 px-2 text-ui font-semibold text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+              onClick={() => openReviewHistory(row.archive!.id, row.archive!.round)}>{t("reviewHistory.open")}</button> : null}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/** Retry and Skip for the stage a pane's ⋯ opened, under the refusals the board's pane menu gives them: they act on the stage the lane waits on. */
+function StageActRows({ pipeline, stage, names, acting, onAnswer, close }: {
+  pipeline: Pipeline;
+  stage: PipelineStage;
+  names: ReadonlyMap<string, string>;
+  acting: PipelineActionKind | null;
+  onAnswer: (pipeline: Pipeline, answer: PipelineAnswer) => void;
+  close: () => void;
+}) {
+  const { t } = useLocale();
+  const options = pipelineActionOptions(pipeline);
+  const rows = (["retry-stage", "skip-stage"] as const).flatMap((action) => {
+    const option = options.find((entry) => entry.action === action);
+    if (!option) return [];
+    const refused = Boolean(option.refusal) || option.stageId !== stage.id;
+    return [{ action, option, refused }];
+  });
+  if (!rows.length) return null;
+  return (
+    <div role="menu" className="flex flex-col" data-mobile2-stage-acts={stage.id}>
+      {rows.map(({ action, option, refused }) => {
+        const Icon = ANSWER_ICON[action];
+        return (
+          <MobileSheetRow
+            key={action}
+            icon={<Icon className="h-[18px] w-[18px]" aria-hidden />}
+            label={t(action === "retry-stage" ? "kanban.stages.retryThis" : "kanban.stages.skipThis")}
+            disabled={refused || Boolean(acting)}
+            onSelect={() => {
+              close();
+              onAnswer(pipeline, { action, stageId: stage.id, stageName: names.get(stage.id) ?? stage.id, expectedAttempt: option.attempt });
+            }}
+            attrs={{ "data-mobile2-stage-act": action, "data-refused": refused ? "" : undefined }}
+          />
+        );
+      })}
+    </div>
   );
 }

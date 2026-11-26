@@ -9,6 +9,7 @@ import { reboundAssembledMcpGrants } from "./mcpAllowlist";
 import { normalizeRegistry, readOnlyConversationLookupFromSnapshot, type RegistryFile } from "./registry";
 import { buildRegistryPerformanceDataset, scaledRegistryPerformanceShape } from "./registryPerformanceDataset";
 import { OWNER_ENDINGS_CURSOR } from "./registryEndings";
+import { emptyAgentStateMetrics } from "@/lib/agentState/model";
 import {
   registryRowsMatching, archivedOwnersEndedSince, hotRegistryRows, registryConversationsForEntryKey, registryConversationsForPath, registryRowProjection, registryRetiredHostRows,
   SqliteAgentRegistryStore, type RegistryRowProjector,
@@ -45,6 +46,30 @@ function history() {
   };
   return { dataset, open };
 }
+
+test("hot registry startup accepts pre-Antigravity agent-state metrics and rejects malformed buckets", () => {
+  const { open } = history();
+  const store = open();
+  const normalizeHotRowsSteps = (agentStateMetrics: Record<string, unknown>) => {
+    const reader = store as unknown as {
+      normalizeHotRowsSteps(input: Record<string, unknown>): Generator<void, RegistryFile>;
+    };
+    const steps = reader.normalizeHotRowsSteps({ version: 2, entries: {}, receipts: {}, agentStateMetrics });
+    let result = steps.next();
+    while (!result.done) result = steps.next();
+    return result.value;
+  };
+  const legacy = emptyAgentStateMetrics();
+  delete (legacy.stuckByEngine as Partial<typeof legacy.stuckByEngine>).antigravity;
+
+  const loaded = normalizeHotRowsSteps({ current: legacy });
+  expect(Object.keys(loaded.agentStateMetrics.current?.stuckByEngine ?? {}).sort()).toEqual(["claude", "codex", "copilot"]);
+
+  expect(() => normalizeHotRowsSteps({ current: {
+    ...legacy,
+    stuckByEngine: { ...legacy.stuckByEngine, codex: null },
+  } })).toThrow("invalid agent-state row");
+});
 
 test("mixed foreign writes release superseded history views while keeping lazy archive reads", async () => {
   const { dataset, open } = history();

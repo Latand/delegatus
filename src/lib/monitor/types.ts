@@ -222,6 +222,8 @@ export type SeatTickWakeReasonKind =
       check, once per wait and seat; the operator sees it only once the seat
       escalates it. */
   | "worker-ask"
+  /** A Cleaner completion awaits a delivered wake receipt. */
+  | "disk-cleaner"
   /** Free space on a volume Delegatus writes to fell below the warning
       threshold: once per pressure episode, without waiting for the interval. */
   | "disk-pressure";
@@ -243,6 +245,7 @@ export const SEAT_TICK_WAKE_REASON_KINDS: readonly SeatTickWakeReasonKind[] = [
   "deploy-settled",
   "permission-request",
   "worker-ask",
+  "disk-cleaner",
   "disk-pressure",
 ];
 
@@ -1025,6 +1028,8 @@ export interface SeatTickOutstandingWake {
       here: an attempt still unresolved one wake interval later is put on the
       board. It ends nothing — an unresolved attempt keeps its identity. */
   preparedAt?: string;
+  /** Complete host ledger prefix observed before this wake was admitted. */
+  responseStart?: import("./seatWakeResponse").WakeResponseStart;
   /** The attention timestamp was synthesized from first observation. */
   preparationTimeUnknown?: true;
   /** The reservation guard rechecks this token. Expired callers are revoked
@@ -1540,6 +1545,8 @@ export interface SeatTickCard {
   ref: string;
   kind: "no-seat" | "retry-guard" | "tick-settings" | "source-unreadable" | "wake-unresolved" | "check-errors" | "mcp-unavailable" | "auth-failed" | "auto-rotation" | "host-recovery" | "disk-pressure";
   detail: string;
+  /** Update a disk warning with the cleaner's durable completion report. */
+  cleanupReport?: boolean;
   /**
    * Whether the condition still holds.
    *

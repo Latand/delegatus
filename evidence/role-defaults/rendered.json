@@ -4,6 +4,7 @@
     {
       "locale": "en",
       "width": 1280,
+      "layout": "table",
       "rows": [
         {
           "id": "reviewer",
@@ -40,6 +41,1241 @@
           "effort": "high",
           "cost": "moderate",
           "nudge": false
+        }
+      ],
+      "geometry": [
+        {
+          "id": "builder",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:trivial",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 70,
+          "optionRoom": 70,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:frontend",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 70,
+          "optionRoom": 70,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:docs",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 70,
+          "optionRoom": 70,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:apply-fixes",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6-Luna",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:frontend-fixes",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 70,
+          "optionRoom": 70,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:docs-fixes",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 70,
+          "optionRoom": 70,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "reviewer",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "reviewer:trivial",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6-Luna",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "verifier",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "architect",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 123.3,
+          "optionRoom": 122.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "visual-critic",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 123.3,
+          "optionRoom": 70,
+          "agyLabel": "Visual critic runs on Claude only",
+          "agyDot": true
+        },
+        {
+          "id": "orchestrator",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 123.3,
+          "optionRoom": 122.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "cleaner",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "prod-auditor",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "deployer",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "maintainer",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "merger",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "issue-reporter",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 70,
+          "optionRoom": 70,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        }
+      ],
+      "overflow": false,
+      "pageErrors": []
+    },
+    {
+      "locale": "en",
+      "width": 1024,
+      "layout": "table",
+      "rows": [
+        {
+          "id": "reviewer",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "visual-critic",
+          "effort": "high",
+          "cost": "heavy",
+          "nudge": false
+        },
+        {
+          "id": "architect",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "prod-auditor",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "merger",
+          "effort": "high",
+          "cost": "heavy",
+          "nudge": false
+        },
+        {
+          "id": "issue-reporter",
+          "effort": "high",
+          "cost": "moderate",
+          "nudge": false
+        }
+      ],
+      "geometry": [
+        {
+          "id": "builder",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:trivial",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 70,
+          "optionRoom": 70,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:frontend",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 70,
+          "optionRoom": 70,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:docs",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 70,
+          "optionRoom": 70,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:apply-fixes",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6-Luna",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:frontend-fixes",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 70,
+          "optionRoom": 70,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:docs-fixes",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 70,
+          "optionRoom": 70,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "reviewer",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "reviewer:trivial",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6-Luna",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "verifier",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "architect",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 123.3,
+          "optionRoom": 122.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "visual-critic",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 123.3,
+          "optionRoom": 70,
+          "agyLabel": "Visual critic runs on Claude only",
+          "agyDot": true
+        },
+        {
+          "id": "orchestrator",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 123.3,
+          "optionRoom": 122.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "cleaner",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "prod-auditor",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "deployer",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "maintainer",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "merger",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "issue-reporter",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 70,
+          "optionRoom": 70,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        }
+      ],
+      "overflow": false,
+      "pageErrors": []
+    },
+    {
+      "locale": "en",
+      "width": 740,
+      "layout": "table",
+      "rows": [
+        {
+          "id": "reviewer",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "visual-critic",
+          "effort": "high",
+          "cost": "heavy",
+          "nudge": false
+        },
+        {
+          "id": "architect",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "prod-auditor",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "merger",
+          "effort": "high",
+          "cost": "heavy",
+          "nudge": false
+        },
+        {
+          "id": "issue-reporter",
+          "effort": "high",
+          "cost": "moderate",
+          "nudge": false
+        }
+      ],
+      "geometry": [
+        {
+          "id": "builder",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 94.7,
+          "optionRoom": 82.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:trivial",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 58,
+          "optionRoom": 58,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:frontend",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 58,
+          "optionRoom": 58,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:docs",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 58,
+          "optionRoom": 58,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:apply-fixes",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6-Luna",
+          "labelRoom": 94.7,
+          "optionRoom": 82.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:frontend-fixes",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 58,
+          "optionRoom": 58,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:docs-fixes",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 58,
+          "optionRoom": 58,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "reviewer",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 94.7,
+          "optionRoom": 82.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "reviewer:trivial",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6-Luna",
+          "labelRoom": 94.7,
+          "optionRoom": 82.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "verifier",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 94.7,
+          "optionRoom": 82.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "architect",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 111.3,
+          "optionRoom": 110.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "visual-critic",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 111.3,
+          "optionRoom": 58,
+          "agyLabel": "Visual critic runs on Claude only",
+          "agyDot": true
+        },
+        {
+          "id": "orchestrator",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 111.3,
+          "optionRoom": 110.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "cleaner",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 94.7,
+          "optionRoom": 82.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "prod-auditor",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 94.7,
+          "optionRoom": 82.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "deployer",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 94.7,
+          "optionRoom": 82.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "maintainer",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 94.7,
+          "optionRoom": 82.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "merger",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 94.7,
+          "optionRoom": 82.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "issue-reporter",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 58,
+          "optionRoom": 58,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        }
+      ],
+      "overflow": false,
+      "pageErrors": []
+    },
+    {
+      "locale": "en",
+      "width": 700,
+      "layout": "card",
+      "rows": [
+        {
+          "id": "reviewer",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "visual-critic",
+          "effort": "high",
+          "cost": "heavy",
+          "nudge": false
+        },
+        {
+          "id": "architect",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "prod-auditor",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "merger",
+          "effort": "high",
+          "cost": "heavy",
+          "nudge": false
+        },
+        {
+          "id": "issue-reporter",
+          "effort": "high",
+          "cost": "moderate",
+          "nudge": false
+        }
+      ],
+      "geometry": [
+        {
+          "id": "builder",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 520.7,
+          "optionRoom": 508.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:trivial",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 484,
+          "optionRoom": 484,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:frontend",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 484,
+          "optionRoom": 484,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:docs",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 484,
+          "optionRoom": 484,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:apply-fixes",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "GPT-6-Luna",
+          "labelRoom": 520.7,
+          "optionRoom": 508.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:frontend-fixes",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 484,
+          "optionRoom": 484,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:docs-fixes",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 484,
+          "optionRoom": 484,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "reviewer",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 520.7,
+          "optionRoom": 508.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "reviewer:trivial",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "GPT-6-Luna",
+          "labelRoom": 520.7,
+          "optionRoom": 508.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "verifier",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 520.7,
+          "optionRoom": 508.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "architect",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 537.3,
+          "optionRoom": 536.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "visual-critic",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 537.3,
+          "optionRoom": 484,
+          "agyLabel": "Visual critic runs on Claude only",
+          "agyDot": true
+        },
+        {
+          "id": "orchestrator",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 537.3,
+          "optionRoom": 536.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "cleaner",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 520.7,
+          "optionRoom": 508.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "prod-auditor",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 520.7,
+          "optionRoom": 508.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "deployer",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 520.7,
+          "optionRoom": 508.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "maintainer",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 520.7,
+          "optionRoom": 508.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "merger",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 520.7,
+          "optionRoom": 508.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "issue-reporter",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 484,
+          "optionRoom": 484,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        }
+      ],
+      "overflow": false,
+      "pageErrors": []
+    },
+    {
+      "locale": "en",
+      "width": 660,
+      "layout": "card",
+      "rows": [
+        {
+          "id": "reviewer",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "visual-critic",
+          "effort": "high",
+          "cost": "heavy",
+          "nudge": false
+        },
+        {
+          "id": "architect",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "prod-auditor",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "merger",
+          "effort": "high",
+          "cost": "heavy",
+          "nudge": false
+        },
+        {
+          "id": "issue-reporter",
+          "effort": "high",
+          "cost": "moderate",
+          "nudge": false
+        }
+      ],
+      "geometry": [
+        {
+          "id": "builder",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 480.7,
+          "optionRoom": 468.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:trivial",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 444,
+          "optionRoom": 444,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:frontend",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 444,
+          "optionRoom": 444,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:docs",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 444,
+          "optionRoom": 444,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:apply-fixes",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "GPT-6-Luna",
+          "labelRoom": 480.7,
+          "optionRoom": 468.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:frontend-fixes",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 444,
+          "optionRoom": 444,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:docs-fixes",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 444,
+          "optionRoom": 444,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "reviewer",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 480.7,
+          "optionRoom": 468.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "reviewer:trivial",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "GPT-6-Luna",
+          "labelRoom": 480.7,
+          "optionRoom": 468.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "verifier",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 480.7,
+          "optionRoom": 468.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "architect",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 497.3,
+          "optionRoom": 496.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "visual-critic",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 497.3,
+          "optionRoom": 444,
+          "agyLabel": "Visual critic runs on Claude only",
+          "agyDot": true
+        },
+        {
+          "id": "orchestrator",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 497.3,
+          "optionRoom": 496.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "cleaner",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 480.7,
+          "optionRoom": 468.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "prod-auditor",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 480.7,
+          "optionRoom": 468.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "deployer",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 480.7,
+          "optionRoom": 468.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "maintainer",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 480.7,
+          "optionRoom": 468.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "merger",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 480.7,
+          "optionRoom": 468.6,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "issue-reporter",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 444,
+          "optionRoom": 444,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
         }
       ],
       "overflow": false,
@@ -48,6 +1284,7 @@
     {
       "locale": "en",
       "width": 390,
+      "layout": "card",
       "rows": [
         {
           "id": "reviewer",
@@ -84,6 +1321,217 @@
           "effort": "high",
           "cost": "moderate",
           "nudge": false
+        }
+      ],
+      "geometry": [
+        {
+          "id": "builder",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 188.2,
+          "optionRoom": 172.2,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:trivial",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 139.3,
+          "optionRoom": 139.3,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:frontend",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 139.3,
+          "optionRoom": 139.3,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:docs",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 139.3,
+          "optionRoom": 139.3,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:apply-fixes",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "GPT-6-Luna",
+          "labelRoom": 188.2,
+          "optionRoom": 172.2,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:frontend-fixes",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 139.3,
+          "optionRoom": 139.3,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "builder:docs-fixes",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 139.3,
+          "optionRoom": 139.3,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "reviewer",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 188.2,
+          "optionRoom": 172.2,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "reviewer:trivial",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "GPT-6-Luna",
+          "labelRoom": 188.2,
+          "optionRoom": 172.2,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "verifier",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 188.2,
+          "optionRoom": 172.2,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "architect",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 210.4,
+          "optionRoom": 209.5,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "visual-critic",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 210.4,
+          "optionRoom": 139.3,
+          "agyLabel": "Visual critic runs on Claude only",
+          "agyDot": true
+        },
+        {
+          "id": "orchestrator",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 210.4,
+          "optionRoom": 209.5,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "cleaner",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 188.2,
+          "optionRoom": 172.2,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "prod-auditor",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 188.2,
+          "optionRoom": 172.2,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "deployer",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 188.2,
+          "optionRoom": 172.2,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "maintainer",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 188.2,
+          "optionRoom": 172.2,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "merger",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 188.2,
+          "optionRoom": 172.2,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
+        },
+        {
+          "id": "issue-reporter",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 139.3,
+          "optionRoom": 139.3,
+          "agyLabel": "Antigravity is not connected",
+          "agyDot": true
         }
       ],
       "overflow": false,
@@ -92,6 +1540,7 @@
     {
       "locale": "uk",
       "width": 1280,
+      "layout": "table",
       "rows": [
         {
           "id": "reviewer",
@@ -130,12 +1579,224 @@
           "nudge": false
         }
       ],
+      "geometry": [
+        {
+          "id": "builder",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:trivial",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 70,
+          "optionRoom": 70,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:frontend",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 70,
+          "optionRoom": 70,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:docs",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 70,
+          "optionRoom": 70,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:apply-fixes",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6-Luna",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:frontend-fixes",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 70,
+          "optionRoom": 70,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:docs-fixes",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 70,
+          "optionRoom": 70,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "reviewer",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "reviewer:trivial",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6-Luna",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "verifier",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "architect",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 123.3,
+          "optionRoom": 122.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "visual-critic",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 123.3,
+          "optionRoom": 70,
+          "agyLabel": "Роль «Критик вигляду» працює лише на Claude",
+          "agyDot": true
+        },
+        {
+          "id": "orchestrator",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 123.3,
+          "optionRoom": 122.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "cleaner",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "prod-auditor",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "deployer",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "maintainer",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "merger",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "issue-reporter",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 70,
+          "optionRoom": 70,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        }
+      ],
       "overflow": false,
       "pageErrors": []
     },
     {
       "locale": "uk",
-      "width": 390,
+      "width": 1024,
+      "layout": "table",
       "rows": [
         {
           "id": "reviewer",
@@ -172,6 +1833,1241 @@
           "effort": "high",
           "cost": "moderate",
           "nudge": false
+        }
+      ],
+      "geometry": [
+        {
+          "id": "builder",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:trivial",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 70,
+          "optionRoom": 70,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:frontend",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 70,
+          "optionRoom": 70,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:docs",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 70,
+          "optionRoom": 70,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:apply-fixes",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6-Luna",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:frontend-fixes",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 70,
+          "optionRoom": 70,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:docs-fixes",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 70,
+          "optionRoom": 70,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "reviewer",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "reviewer:trivial",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6-Luna",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "verifier",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "architect",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 123.3,
+          "optionRoom": 122.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "visual-critic",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 123.3,
+          "optionRoom": 70,
+          "agyLabel": "Роль «Критик вигляду» працює лише на Claude",
+          "agyDot": true
+        },
+        {
+          "id": "orchestrator",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 123.3,
+          "optionRoom": 122.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "cleaner",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "prod-auditor",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "deployer",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "maintainer",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "merger",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 106.7,
+          "optionRoom": 94.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "issue-reporter",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 70,
+          "optionRoom": 70,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        }
+      ],
+      "overflow": false,
+      "pageErrors": []
+    },
+    {
+      "locale": "uk",
+      "width": 740,
+      "layout": "table",
+      "rows": [
+        {
+          "id": "reviewer",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "visual-critic",
+          "effort": "high",
+          "cost": "heavy",
+          "nudge": false
+        },
+        {
+          "id": "architect",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "prod-auditor",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "merger",
+          "effort": "high",
+          "cost": "heavy",
+          "nudge": false
+        },
+        {
+          "id": "issue-reporter",
+          "effort": "high",
+          "cost": "moderate",
+          "nudge": false
+        }
+      ],
+      "geometry": [
+        {
+          "id": "builder",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 94.7,
+          "optionRoom": 82.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:trivial",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 58,
+          "optionRoom": 58,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:frontend",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 58,
+          "optionRoom": 58,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:docs",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 58,
+          "optionRoom": 58,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:apply-fixes",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6-Luna",
+          "labelRoom": 94.7,
+          "optionRoom": 82.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:frontend-fixes",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 58,
+          "optionRoom": 58,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:docs-fixes",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 58,
+          "optionRoom": 58,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "reviewer",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 94.7,
+          "optionRoom": 82.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "reviewer:trivial",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6-Luna",
+          "labelRoom": 94.7,
+          "optionRoom": 82.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "verifier",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 94.7,
+          "optionRoom": 82.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "architect",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 111.3,
+          "optionRoom": 110.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "visual-critic",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 111.3,
+          "optionRoom": 58,
+          "agyLabel": "Роль «Критик вигляду» працює лише на Claude",
+          "agyDot": true
+        },
+        {
+          "id": "orchestrator",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 111.3,
+          "optionRoom": 110.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "cleaner",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 94.7,
+          "optionRoom": 82.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "prod-auditor",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 94.7,
+          "optionRoom": 82.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "deployer",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 94.7,
+          "optionRoom": 82.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "maintainer",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 94.7,
+          "optionRoom": 82.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "merger",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 94.7,
+          "optionRoom": 82.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "issue-reporter",
+          "groupOverCell": -10,
+          "selectClear": 10,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 58,
+          "optionRoom": 58,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        }
+      ],
+      "overflow": false,
+      "pageErrors": []
+    },
+    {
+      "locale": "uk",
+      "width": 700,
+      "layout": "card",
+      "rows": [
+        {
+          "id": "reviewer",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "visual-critic",
+          "effort": "high",
+          "cost": "heavy",
+          "nudge": false
+        },
+        {
+          "id": "architect",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "prod-auditor",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "merger",
+          "effort": "high",
+          "cost": "heavy",
+          "nudge": false
+        },
+        {
+          "id": "issue-reporter",
+          "effort": "high",
+          "cost": "moderate",
+          "nudge": false
+        }
+      ],
+      "geometry": [
+        {
+          "id": "builder",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 520.7,
+          "optionRoom": 508.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:trivial",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 484,
+          "optionRoom": 484,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:frontend",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 484,
+          "optionRoom": 484,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:docs",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 484,
+          "optionRoom": 484,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:apply-fixes",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "GPT-6-Luna",
+          "labelRoom": 520.7,
+          "optionRoom": 508.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:frontend-fixes",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 484,
+          "optionRoom": 484,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:docs-fixes",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 484,
+          "optionRoom": 484,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "reviewer",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 520.7,
+          "optionRoom": 508.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "reviewer:trivial",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "GPT-6-Luna",
+          "labelRoom": 520.7,
+          "optionRoom": 508.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "verifier",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 520.7,
+          "optionRoom": 508.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "architect",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 537.3,
+          "optionRoom": 536.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "visual-critic",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 537.3,
+          "optionRoom": 484,
+          "agyLabel": "Роль «Критик вигляду» працює лише на Claude",
+          "agyDot": true
+        },
+        {
+          "id": "orchestrator",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 537.3,
+          "optionRoom": 536.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "cleaner",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 520.7,
+          "optionRoom": 508.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "prod-auditor",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 520.7,
+          "optionRoom": 508.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "deployer",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 520.7,
+          "optionRoom": 508.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "maintainer",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 520.7,
+          "optionRoom": 508.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "merger",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 520.7,
+          "optionRoom": 508.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "issue-reporter",
+          "groupOverCell": 0,
+          "selectClear": -626,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 484,
+          "optionRoom": 484,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        }
+      ],
+      "overflow": false,
+      "pageErrors": []
+    },
+    {
+      "locale": "uk",
+      "width": 660,
+      "layout": "card",
+      "rows": [
+        {
+          "id": "reviewer",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "visual-critic",
+          "effort": "high",
+          "cost": "heavy",
+          "nudge": false
+        },
+        {
+          "id": "architect",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "prod-auditor",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "merger",
+          "effort": "high",
+          "cost": "heavy",
+          "nudge": false
+        },
+        {
+          "id": "issue-reporter",
+          "effort": "high",
+          "cost": "moderate",
+          "nudge": false
+        }
+      ],
+      "geometry": [
+        {
+          "id": "builder",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 480.7,
+          "optionRoom": 468.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:trivial",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 444,
+          "optionRoom": 444,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:frontend",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 444,
+          "optionRoom": 444,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:docs",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 444,
+          "optionRoom": 444,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:apply-fixes",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "GPT-6-Luna",
+          "labelRoom": 480.7,
+          "optionRoom": 468.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:frontend-fixes",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 444,
+          "optionRoom": 444,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:docs-fixes",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 444,
+          "optionRoom": 444,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "reviewer",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 480.7,
+          "optionRoom": 468.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "reviewer:trivial",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "GPT-6-Luna",
+          "labelRoom": 480.7,
+          "optionRoom": 468.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "verifier",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 480.7,
+          "optionRoom": 468.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "architect",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 497.3,
+          "optionRoom": 496.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "visual-critic",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 497.3,
+          "optionRoom": 444,
+          "agyLabel": "Роль «Критик вигляду» працює лише на Claude",
+          "agyDot": true
+        },
+        {
+          "id": "orchestrator",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 497.3,
+          "optionRoom": 496.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "cleaner",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 480.7,
+          "optionRoom": 468.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "prod-auditor",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 480.7,
+          "optionRoom": 468.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "deployer",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 480.7,
+          "optionRoom": 468.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "maintainer",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 480.7,
+          "optionRoom": 468.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "merger",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 480.7,
+          "optionRoom": 468.6,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "issue-reporter",
+          "groupOverCell": 0,
+          "selectClear": -586,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 444,
+          "optionRoom": 444,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        }
+      ],
+      "overflow": false,
+      "pageErrors": []
+    },
+    {
+      "locale": "uk",
+      "width": 390,
+      "layout": "card",
+      "rows": [
+        {
+          "id": "reviewer",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "visual-critic",
+          "effort": "high",
+          "cost": "heavy",
+          "nudge": false
+        },
+        {
+          "id": "architect",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "prod-auditor",
+          "effort": "xhigh",
+          "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "merger",
+          "effort": "high",
+          "cost": "heavy",
+          "nudge": false
+        },
+        {
+          "id": "issue-reporter",
+          "effort": "high",
+          "cost": "moderate",
+          "nudge": false
+        }
+      ],
+      "geometry": [
+        {
+          "id": "builder",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 188.2,
+          "optionRoom": 172.2,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:trivial",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 139.3,
+          "optionRoom": 139.3,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:frontend",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 139.3,
+          "optionRoom": 139.3,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:docs",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 139.3,
+          "optionRoom": 139.3,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:apply-fixes",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "GPT-6-Luna",
+          "labelRoom": 188.2,
+          "optionRoom": 172.2,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:frontend-fixes",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 139.3,
+          "optionRoom": 139.3,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "builder:docs-fixes",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 139.3,
+          "optionRoom": 139.3,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "reviewer",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 188.2,
+          "optionRoom": 172.2,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "reviewer:trivial",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "GPT-6-Luna",
+          "labelRoom": 188.2,
+          "optionRoom": 172.2,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "verifier",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 188.2,
+          "optionRoom": 172.2,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "architect",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 210.4,
+          "optionRoom": 209.5,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "visual-critic",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 210.4,
+          "optionRoom": 139.3,
+          "agyLabel": "Роль «Критик вигляду» працює лише на Claude",
+          "agyDot": true
+        },
+        {
+          "id": "orchestrator",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "Opus 5.5",
+          "labelRoom": 210.4,
+          "optionRoom": 209.5,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "cleaner",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 188.2,
+          "optionRoom": 172.2,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "prod-auditor",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 188.2,
+          "optionRoom": 172.2,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "deployer",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 188.2,
+          "optionRoom": 172.2,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "maintainer",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 188.2,
+          "optionRoom": 172.2,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "merger",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "GPT-6.1-Sol",
+          "labelRoom": 188.2,
+          "optionRoom": 172.2,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
+        },
+        {
+          "id": "issue-reporter",
+          "groupOverCell": 0,
+          "selectClear": -316,
+          "segmentsInside": true,
+          "label": "Claude Sonnet 5.5",
+          "labelRoom": 139.3,
+          "optionRoom": 139.3,
+          "agyLabel": "Antigravity не підключено",
+          "agyDot": true
         }
       ],
       "overflow": false,

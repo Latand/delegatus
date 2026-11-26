@@ -11,8 +11,8 @@ export function cleanerDiskEvidence(pressure: DiskPressure | null): CleanerDiskE
 export function cleanerBrief(run: CleanerRun, previous: CleanerRun | null): string {
   const bytes = (value: number | null | undefined) => value == null ? "unknown" : formatDiskBytes(value);
   return [
-    `Review reclaimable temporary work using the inventory and removal tools in docs/design/cleaner-agent.md.`,
-    `Run ${run.runId}. Trigger ${run.trigger}. Mode ${run.mode}. The guarded tools decide eligibility and record dry-run results.`,
+    "Review reclaimable temporary work using the proof rules in docs/design/cleaner-agent.md. Inspect and report the candidates.",
+    `Run ${run.runId}. Trigger ${run.trigger}. Mode ${run.mode}.`,
     "Volumes at claim (free / total)",
     ...run.evidence.volumes.map(row => `- ${row.roles.join(", ")} · ${bytes(row.freeBytes)} / ${bytes(row.totalBytes)} · ${row.level}`),
     "Measured categories",

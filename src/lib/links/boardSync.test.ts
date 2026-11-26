@@ -24,6 +24,7 @@ import { createLinkTestInstalls, type Captured } from "./testInstalls";
 
 const fixtures = createLinkTestInstalls();
 const { root, remote, key, install, stopInstall, request, link, sync, tasksOf, taskOn, createOn, patchOn, captured, oldSource, seedTranscript } = fixtures;
+const waitingForOperator = { status: "blocked", hold: { kind: "operator", note: "Approve the proposed change." } };
 const meters: Meter[] = [];
 afterEach(fixtures.stopAll);
 afterAll(async () => {
@@ -491,7 +492,7 @@ test("tasks created, changed in every group and deleted on either machine show o
   // Every group, from A and from B, each after one call.
   const groups: [string, Record<string, unknown>, (task: BoardTask) => unknown, unknown][] = [
     ["text", { text: "Plan the release, v2", details: "notes for agents" }, (task) => [task.text, task.details], ["Plan the release, v2", "notes for agents"]],
-    ["status", { status: "blocked" }, (task) => task.status, "blocked"],
+    ["status", waitingForOperator, (task) => task.status, "blocked"],
     ["look", { color: "sky", icon: "rocket", priority: "high" }, (task) => [task.color, task.icon, task.priority], ["sky", "rocket", "high"]],
     ["place", { pos: { x: 120, y: 340 } }, (task) => [task.placement, task.pos], ["pinned", { x: 120, y: 340 }]],
     ["links", { attachLinks: "acme/widget#12", linkKind: "pr" }, (task) => task.workLinks?.map((link) => `${link.repository}#${link.number}`), ["acme/widget#12"]],
@@ -519,7 +520,7 @@ test("tasks created, changed in every group and deleted on either machine show o
 
   // Different groups on both sides both survive.
   expect((await patchOn(a, fromB.id, { color: "amber" })).status).toBe(200);
-  expect((await patchOn(b, fromB.id, { status: "blocked" })).status).toBe(200);
+  expect((await patchOn(b, fromB.id, waitingForOperator)).status).toBe(200);
   await sync(a, peerId);
   for (const side of [a, b]) expect([(await taskOn(side, fromB.id))!.color, (await taskOn(side, fromB.id))!.status]).toEqual(["amber", "blocked"]);
 
@@ -766,7 +767,7 @@ test("with B's clock 7 minutes ahead an edit A makes after receiving B's edit st
   expect((await request(b, "/test/clock?offset=420000")).status).toBe(200);
   const task = await createOn(b, "Clocked");
   await sync(a, peerId);
-  expect((await patchOn(b, task.id, { status: "blocked" })).status).toBe(200);
+  expect((await patchOn(b, task.id, waitingForOperator)).status).toBe(200);
   await sync(a, peerId);
   expect((await taskOn(a, task.id))!.status).toBe("blocked");
   expect((await patchOn(a, task.id, { status: "done" })).status).toBe(200);
@@ -835,7 +836,7 @@ test("one edit costs its encoded row plus at most 300 bytes with 1 000 linked pr
     return { calls: wire.connections - start.connections, bytes: wire.up + wire.down - start.bytes };
   };
   const edited = await measure(async () => {
-    expect((await patchOn(a, task.id, { status: "blocked" })).status).toBe(200);
+    expect((await patchOn(a, task.id, waitingForOperator)).status).toBe(200);
     await sync(a, peerId);
     await sync(a, peerId);
   });
@@ -978,7 +979,7 @@ test("idle calls read no task row and write nothing on either side; 100 calls wh
   const fromA = await createOn(a, "Made on A");
   const fromB = await createOn(b, "Made on B");
   await sync(a, peerId);
-  expect((await patchOn(a, fromB.id, { status: "blocked" })).status).toBe(200);
+  expect((await patchOn(a, fromB.id, waitingForOperator)).status).toBe(200);
   expect((await request(b, `/api/tasks/${fromA.id}`, "DELETE")).status).toBe(200);
   await sync(a, peerId);
   await sync(a, peerId);
@@ -1047,7 +1048,7 @@ test("each applied page commits one tasks revision and at most one board_links r
 
   // B's edit reaches A as one page.
   const pulled = await change(async () => {
-    expect((await patchOn(b, task.id, { status: "blocked" })).status).toBe(200);
+    expect((await patchOn(b, task.id, waitingForOperator)).status).toBe(200);
     await sync(a, peerId);
   });
   expect(pulled.pulled).toBe(1);

@@ -1,4 +1,4 @@
-import { observeSeatWakeResponse, type SeatWakeResponse, type WakeResponseEvidence } from "./seatWakeResponse";
+import { captureSeatWakeResponseStart, observeSeatWakeResponse, type SeatWakeResponse, type WakeResponseEvidence, type WakeResponseStart } from "./seatWakeResponse";
 import { seatTickInstructionLines, seatTickInstructionReview } from "./seatTickInstructions";
 import { issueDeliverySeatSignals } from "@/lib/forge/issueDelivery";
 import { sendFailureSignals } from "@/lib/runtime/sendFailureNotice";
@@ -67,6 +67,7 @@ import { recordDeploySnapshots } from "@/lib/bridge/taskChanges";
 import type { SeatTickReportLog } from "./seatTickReports";
 import { operatorLocale } from "@/lib/operator/settings";
 import { bridgeReportsEnabled } from "@/lib/projects/settings";
+import { diskCleanerSignals } from "@/lib/cleaner/diskReport";
 import { viewerRepositoryProjects } from "@/lib/projects/viewerRepository";
 import viewerPackageManifest from "../../../package.json";
 import type { AgentLivenessRecord } from "@/lib/lifecycle/liveness";
@@ -541,6 +542,7 @@ function overdueTaskInputs(sources: SeatTickSources, project: string, now: numbe
 
 export interface SeatTickSources {
   wakeResponse?: (row: SeatWakeResponse, project?: string) => Promise<WakeResponseEvidence>;
+  wakeResponseStart?: (conversationId: string) => Promise<WakeResponseStart | undefined>;
   prepareRead?: () => Promise<void>;
   /** Warm problem credit without preparing general history for a deploy wake. */
   prepareMemoryProblems?: () => Promise<void>;
@@ -845,6 +847,7 @@ export function defaultSeatTickSources(): SeatTickSources {
       return readSeatTurnOutcome(conversation.engine, generation.path);
     },
     wakeResponse: observeSeatWakeResponse,
+    wakeResponseStart: captureSeatWakeResponseStart,
     recoverQuota: recoverSeatQuota,
     reviveSeatHost: async (request, dependencies) =>
       (await import("@/lib/runtime/structuredRecovery")).recoverDeadStructuredConversation(request, dependencies),
@@ -3616,7 +3619,7 @@ async function gatherSeatTickInputWork(
     pullRequestsUnavailable,
     pullRequestsObserved,
     pullRequestEvidenceKey: pullRequestEvidenceKeyAtRead,
-    signals: [...ledgerWarnings, ...signals(canonical, seat, sources, state.itemsShown ?? [], canonicalProject.keys(canonical)), ...(localPending ?? []), ...(sources.memoryProblems?.(canonical, state.itemsShown ?? [], seat?.conversationId ? seat : null) ?? []), ...await diskPressureSignals(sources)],
+    signals: [...ledgerWarnings, ...signals(canonical, seat, sources, state.itemsShown ?? [], canonicalProject.keys(canonical)), ...(localPending ?? []), ...(sources.memoryProblems?.(canonical, state.itemsShown ?? [], seat?.conversationId ? seat : null) ?? []), ...await diskPressureSignals(sources), ...await diskCleanerSignals(canonical, state.itemsShown ?? [], seat)],
     ownLanes,
     settledDeploys,
     settledMaintenance,

@@ -244,6 +244,18 @@ test("seat and task short references share collision checks while only waiting r
   expect(matchPrototypeAnswer(text, [], round.id, [decided])).toHaveProperty("input");
 });
 
+test("owner reply identity uses the current header and rejects ambiguous legacy parents", () => {
+  const round = telegramRound();
+  const parent = `🧪 Форма рішення · Review\n${prototypeReference(round)}\nПроєкт: Orchard\nОписание варианта\n#proto-deadcafe`;
+  expect(matchPrototypeAnswer("1b, 2a, 3b", [telegramTask([round])], undefined, [], parent)).toMatchObject({ input: {
+    answers: [{ options: [1] }, { options: [0] }, { options: [1] }],
+  } });
+  const legacy = `Прототип · Review\nПроєкт: Orchard\n\n${prototypeReference(round)}\nОписание варианта\n#proto-deadcafe`;
+  expect(matchPrototypeAnswer("1b", [telegramTask([round])], undefined, [], legacy)).toBeNull();
+  const legacyUnique = `Прототип · Review\nПроєкт: Orchard\n\n${prototypeReference(round)}\nОписание варианта`;
+  expect(matchPrototypeAnswer("1b", [telegramTask([round])], undefined, [], legacyUnique)).toHaveProperty("input");
+});
+
 test("owner free text is explicit while ordinary web answer validation keeps its published constraints", () => {
   const round = telegramRound();
   const custom = parsePrototypeAnswer(round, `${prototypeReference(round)} · 1: Моє місце.\n2: Мої поверхні.\n3: Мій час.`).input!;

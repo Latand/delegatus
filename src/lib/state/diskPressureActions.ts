@@ -4,7 +4,6 @@ import { withFileTransactionAsync } from "./fileTransaction";
 import { STATE_LOCK_WAIT_MS } from "./lockWait";
 import { writeJsonDurably } from "./durableJson";
 import { diskPressureWakeReady, formatDiskBytes, type DiskPressure } from "./diskPressure";
-import { requestDiskPressureSweeps } from "./diskPressureSweeps";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 import type { SeatTickCard } from "@/lib/monitor/types";
 import type { CleanerController } from "@/lib/cleaner/run";
@@ -16,7 +15,6 @@ type Notice = {
 export type DiskPressureActions = {
   active: () => boolean;
   project: () => Promise<string | null>;
-  early: () => void;
   card: (project: string, card: SeatTickCard, at: string) => Promise<boolean>;
   report: (project: string, episode: string, text: string, at: string) => Promise<boolean>;
   cleaner?: Pick<CleanerController, "claimPressure" | "pressureCard">;
@@ -33,7 +31,6 @@ export function productionDiskPressureActions(): DiskPressureActions {
       const project = projects.find(key => recordedProjectRemote(key) !== null) ?? projects[0];
       return project ? canonicalOrchestratorProject(project) : null;
     },
-    early: requestDiskPressureSweeps,
     card: async (project, card, at) => {
       const { ensureSeatTickCard } = await import("@/lib/monitor/seatTickController");
       return viewerReleaseOwnsTraffic() && ensureSeatTickCard(project, card, at);
@@ -91,9 +88,6 @@ export async function reconcileDiskPressure(input: DiskPressure, ports: DiskPres
     const notice: Notice = prior ?? { project, episode: pressure.episode, card: false, report: false, lastSweepAt: 0 };
     const persist = () => writeJsonDurably(file, notice);
     const now = Date.parse(pressure.at);
-    if (now - notice.lastSweepAt >= 15 * 60_000) {
-      ports.early(); notice.lastSweepAt = now; persist();
-    }
     if (!diskPressureWakeReady(pressure, now)) return;
     if (notice.card && notice.report && (!ports.cleaner || notice.cleanerTaskId)) return;
     const text = diskPressureNotice(pressure);

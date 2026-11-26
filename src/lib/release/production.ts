@@ -20,7 +20,9 @@ import { productionReleaseController, releaseRequestDigest, ReleaseValidationRef
 import { releaseCut, type ReleaseChange, type ReleaseDeployment } from "./policy";
 import { RELEASE_DEFAULTS } from "./settings";
 import { SEAT_TICK_WAKE_INTERVAL_MS } from "@/lib/monitor/seatTick";
+import { proveForgeRelease, type MergedReleasePr } from "./mergeProof";
 
+const commitSha = /^[a-f0-9]{40}$/;
 async function command(file: string, args: string[], cwd?: string): Promise<string> {
   return (await promisify(execFile)(file, args, { cwd, timeout: 30_000, maxBuffer: 4 * 1024 * 1024 })).stdout.trim();
 }
@@ -66,25 +68,27 @@ async function registryHasRelease(packageName: string, version: string): Promise
   if (!response.ok && response.status !== 404) throw new Error("release registry status is unreadable");
   return response.ok && (await response.json() as { version?: string }).version === version;
 }
-export async function mergedReleasePullRequest(repo: string, version: string, main: string, git: (...args: string[]) => Promise<string>, run: typeof command = command): Promise<{ commit: string; pr: number } | null> {
-  if (!/^\d+\.\d+\.\d+$/.test(version)) return null;
+export async function mergedReleasePullRequests(repo: string, version: string, main: string, git: (...args: string[]) => Promise<string>, run: typeof command = command): Promise<MergedReleasePr[]> {
+  if (!/^\d+\.\d+\.\d+$/.test(version)) return [];
   try {
-    const rows = JSON.parse(await run("gh", ["pr", "list", "--repo", repo, "--state", "merged", "--base", "main", "--search", `Release ${version}`, "--limit", "100", "--json", "title,number,baseRefName,mergedAt,headRefOid,mergeCommit"])) as {
-      title?: string; number?: number; baseRefName?: string; mergedAt?: string | null; headRefOid?: string; mergeCommit?: { oid?: string } | null;
+    const rows = JSON.parse(await run("gh", ["pr", "list", "--repo", repo, "--state", "merged", "--base", "main", "--search", `Release ${version}`, "--limit", "100", "--json", "title,number,baseRefName,mergedAt,headRefOid,headRefName,isCrossRepository,mergeCommit,body"])) as {
+      title?: string; number?: number; baseRefName?: string; mergedAt?: string | null; headRefOid?: string;
+      headRefName?: string; isCrossRepository?: boolean; body?: string; mergeCommit?: { oid?: string } | null;
     }[];
-    const candidates: { commit: string; pr: number }[] = [];
+    const candidates: MergedReleasePr[] = [];
     for (const row of rows) {
       const commit = row.mergeCommit?.oid;
       if (row.title !== `Release ${version}` || row.baseRefName !== "main" || !row.mergedAt
-        || !Number.isSafeInteger(row.number) || !/^[a-f0-9]{40}$/.test(commit ?? "")) continue;
+        || !Number.isSafeInteger(row.number) || row.number! < 1 || !commitSha.test(commit ?? "")) continue;
       try {
         await git("merge-base", "--is-ancestor", commit!, main);
         const pkg = await releasePackage(commit!, git);
-        if (pkg?.version === version) candidates.push({ commit: commit!, pr: row.number! });
+        if (pkg?.version === version) candidates.push({ commit: commit!, pr: row.number!, head: row.headRefOid,
+          branch: row.headRefName, body: row.body, sameRepository: row.isCrossRepository === false });
       } catch { /* A stale or unreadable PR is not recovery evidence. */ }
     }
-    return candidates.length === 1 ? candidates[0]! : null;
-  } catch { return null; }
+    return candidates;
+  } catch { return []; }
 }
 /** A tag alone cannot prove publication, and an unrelated cut cannot supersede this run. */
 export async function supersedingReleaseTag(repoDir: string, saved: { cut: string; lastTag: string }, run: typeof command = command,
@@ -217,17 +221,17 @@ export async function createReleasePipeline(request: CreatePipelineRequest, key:
   throw new Error(result.error ?? "release pipeline refused");
 }
 export function releaseControllerForSources(sources: SeatTickSources) {
-  // Use the merge queue's delivery proof for both handoff and in-flight checks.
   // The original preparation can retain a cancelled merge after ownership moves.
   const lanes = () => {
     const current = sources.pipelines();
     let all: readonly Pipeline[] | undefined;
     let owners: ReturnType<typeof indexMergeSuccessors> | undefined;
+    let deliveryOwners: ReturnType<typeof indexMergeSuccessors> | undefined;
     const retained = () => all ??= [...current, ...sources.archivedPipelines()];
-    const resolve = (lane: Pipeline): Pipeline => {
+    const resolve = (lane: Pipeline, forForgeProof = false): Pipeline => {
       if ((lane.state !== "completed" && lane.state !== "closed") || !lane.delivery || lane.delivery.active) return lane;
       const successor = mergeSuccessor(lane.state === "closed" ? { ...lane, state: "completed" } : lane,
-        owners ??= indexMergeSuccessors(retained()));
+        forForgeProof ? (deliveryOwners ??= indexMergeSuccessors(retained(), true)) : (owners ??= indexMergeSuccessors(retained())));
       return successor && canonicalOrchestratorProject(successor.project) === canonicalOrchestratorProject(lane.project)
         ? successor : lane;
     };
@@ -263,30 +267,54 @@ export function releaseControllerForSources(sources: SeatTickSources) {
       const registryHasTag = await registryHasRelease(pkg.name, version);
       const repo = await command("gh", ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"], repoDir);
       const snapshot = lanes();
-      const releasePr = pkg.version !== version ? await mergedReleasePullRequest(repo, pkg.version, main, (...args) => git(...args), command) : null;
+      const releasePrs = pkg.version !== version ? await mergedReleasePullRequests(repo, pkg.version, main, git) : [];
       let recovery: { commit: string; pr: number; cut: string | null } | null = null;
-      if (releasePr) {
-        const recorded = [readReleaseProject(project).live, ...readReleaseProject(project).history].filter(Boolean);
+      let recoveryForPipeline: string | undefined;
+      if (releasePrs.length) {
+        const { live, history } = readReleaseProject(project);
+        const recorded = [live, ...history];
+        const proven: { commit: string; pr: number; cut: string; preparationId: string }[] = [];
         for (const runRecord of recorded) {
-          if (runRecord!.lastTag !== name || !/^[a-f0-9]{40}$/.test(runRecord!.cut)) continue;
-          const owner = runRecord!.pipelineId ? snapshot.find(runRecord!.pipelineId) : null;
-          const resolved = owner ? snapshot.resolve(owner) : null;
-          if (resolved?.merge?.prNumber === releasePr.pr) {
-            recovery = { ...releasePr, cut: runRecord!.cut };
-            break;
+          if (!runRecord || runRecord.lastTag !== name || !commitSha.test(runRecord.cut)) continue;
+          const preparationId = runRecord.releasePipelineId ?? runRecord.pipelineId;
+          const preparation = preparationId && snapshot.find(preparationId);
+          if (!preparation || canonicalOrchestratorProject(preparation.project) !== project) continue;
+          const receipt = snapshot.resolve(preparation).merge;
+          for (const releasePr of releasePrs) {
+            const directHandoff = receipt?.state === "merged" && receipt.by === "auto-merge"
+              && receipt.prNumber === releasePr.pr && receipt.mergeCommit === releasePr.commit
+              && receipt.repository?.toLowerCase() === repo.toLowerCase();
+            if (directHandoff) {
+              try { await git("merge-base", "--is-ancestor", runRecord.cut, main); }
+              catch { continue; }
+              proven.push({ ...releasePr, cut: runRecord.cut, preparationId: preparation.id });
+              continue;
+            }
+            // Outside-merge receipts are written by the watcher after GitHub
+            // reports MERGED, so they require the same content proof as a
+            // receipt-free batch landing.
+            const owner = snapshot.resolve(preparation, true);
+            if (await proveForgeRelease(repoDir, repo, main, releasePr, runRecord.cut, project, preparation, owner)) {
+              proven.push({ ...releasePr, cut: runRecord.cut, preparationId: preparation.id });
+            }
           }
         }
-        if (!recovery) recovery = { ...releasePr, cut: null };
-        if (recovery.cut) {
-          try { await git("merge-base", "--is-ancestor", recovery.cut, main); }
-          catch { recovery = { ...releasePr, cut: null }; }
+        const unique = [...new Map(proven.map(proof => [`${proof.pr}:${proof.cut}:${proof.preparationId}`, proof])).values()];
+        if (unique.length === 1) {
+          const proof = unique[0]!;
+          recovery = { commit: proof.commit, pr: proof.pr, cut: proof.cut };
+          recoveryForPipeline = proof.preparationId;
+        } else if (releasePrs.length === 1) {
+          // Preserve the named missing-cut blocker when GitHub has a candidate
+          // but no recorded preparation proves it.
+          recovery = { commit: releasePrs[0]!.commit, pr: releasePrs[0]!.pr, cut: null };
         }
       }
-      return { repoDir, src, recovery, policy: { now: sources.now(), enabled: setting.enabled, requested: false,
+      return { repoDir, src, recovery, recoveryForPipeline, policy: { now: sources.now(), enabled: setting.enabled, requested: false,
         tickEnabled: effectiveSeatTickSettings(sources.settings(project), sources.now(), SEAT_TICK_WAKE_INTERVAL_MS).enabled,
         mergeEnabled: mergeOnReviewEnabled(project),
         live: snapshot.current.some(p => {
-          if (canonicalOrchestratorProject(p.project) !== project || p.state === "closed"
+          if (canonicalOrchestratorProject(p.project) !== project || p.state === "closed" || p.id === recoveryForPipeline
             || !/^(Release\s+(Delegatus|\d)|Реліз\s)/i.test(p.task)) return false;
           const releaseLane = p.stages.some(stage => stage.id === "prepare" || isReleasePublishStage(stage));
           if (!releaseLane) return false;
@@ -336,7 +364,7 @@ export function releaseControllerForSources(sources: SeatTickSources) {
       const snapshot = lanes();
       const saved = snapshot.find(id);
       const lane = saved ? snapshot.resolve(saved) : null;
-      return lane ? { state: lane.state, merged: lane.merge?.state === "merged",
+      return lane ? { state: lane.state, merged: lane.merge?.state === "merged", mergeBy: lane.merge?.by,
         mergeActive: !!lane.delivery?.active || !!lane.merge && (["queued", "checking", "waiting-checks", "updating", "merging", "refreshing"].includes(lane.merge.state)),
         mergeCancelled: lane.merge?.state === "cancelled",
         mergeStopReason: lane.merge?.state === "blocked" && lane.merge.reason === "the PR was closed" ? lane.merge.reason : null,

@@ -2,8 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { LegacyDocumentStore } from "@/lib/state/legacyDocumentStore";
-import { operatorDecisions } from "./read";
+import { resetLegacyDocumentStoresForTests } from "@/lib/state/legacyDocumentStore";
+import { SqliteStateCollection } from "@/lib/state/sqliteStateStore";
+import * as dismissals from "@/lib/attention/dismissals";
+import { operatorDecisions, readPrototypeReviews } from "./read";
 import { saveTasks, loadTasks, loadTasksForList, taskFeedSource } from "@/lib/tasks/store";
 import { findPrototypeRound, mutatePrototypeRound, withPrototypeState } from "./store";
 import { taskForPrototype } from "./world";
@@ -22,6 +24,66 @@ function tasks(): BoardTask[] {
       title: "Review", createdAt: at, publicationKey: "fixture", inputDigest: "fixture", source: { conversationId: null }, variants: [] } as PrototypeReviewRound] } : {}) }));
 }
 afterEach(() => { saveTasks([]); clearSeatRoundsForTests(); });
+
+test("cold and warm decision reads skip unrelated dismissals and keep each response detached across peer commits", () => {
+  const originalDir = process.env.LLV_STATE_DIR;
+  const dir = fs.mkdtempSync(path.join(state, "dismissal-projection-"));
+  process.env.LLV_STATE_DIR = dir;
+  try {
+    const author = { kind: "manager" as const, conversationId: null, role: null, via: { deputy: "first" } };
+    const task = tasks().at(-1)!;
+    const key = `prototype:${review}`;
+    const unrelated = Array.from({ length: 40 }, (_, n) => ({
+      subject: `other-${n}`, at, by: author, conversationId: null, path: null,
+    }));
+    // A path alias wins over an earlier subject with the same lookup key.
+    const direct = { kind: "prototype", taskId: task.id, subject: key, at, by: { kind: "operator" } };
+    const aliased = { ...direct, subject: "alias-owner", path: key, by: author };
+    fs.writeFileSync(path.join(dir, "attention-dismissals.json"), JSON.stringify({
+      schemaVersion: 1, revision: 1, updatedAt: at, records: [...unrelated, direct, aliased],
+    }));
+    const read = () => readPrototypeReviews(task).rounds[0]!.hidden?.by;
+    expect(read()).toEqual(author);
+    dismissals.importLegacyAttentionDismissals();
+    let unrelatedCopies = 0;
+    const clone = globalThis.structuredClone;
+    function countedRead() {
+      try {
+        globalThis.structuredClone = (value, ...args) => {
+          const unrelatedRow = (row: unknown) => (row as { key?: string } | null)?.key === "d:other-0";
+          if (unrelatedRow(value) || (Array.isArray(value) && value.some(unrelatedRow)) || (value instanceof Map && value.has("other-0"))) unrelatedCopies++;
+          return clone(value, ...args);
+        };
+        return read();
+      } finally { globalThis.structuredClone = clone; }
+    }
+    const held = countedRead();
+    expect(held).toEqual(author);
+    if (held?.kind !== "manager") throw new Error("missing dismissal owner");
+    held.via!.deputy = "client edit";
+
+    const fresh = countedRead();
+    expect(fresh).toEqual(author);
+    const peer = new SqliteStateCollection<{ key: string; value: unknown }>(path.join(dir, "state.sqlite"), {
+      collection: "attention_dismissals", schemaVersion: 1, busyMessage: "busy",
+      key: row => row.key, decode: value => value as { key: string; value: unknown }, clone: structuredClone,
+    });
+    try {
+      // Even an ordinary dismissal can shadow a prototype subject through its path.
+      peer.boundedPatch(1, tx => tx.put({ key: "d:alias-owner", value: { ...aliased, kind: undefined } }));
+      expect(countedRead()).toBeUndefined();
+      peer.boundedPatch(1, tx => tx.put({ key: "d:alias-owner", value: { ...aliased, restoredAt: at, restoredBy: { kind: "operator" } } }));
+    } finally { peer.close(); }
+    expect(countedRead()).toEqual({ kind: "operator" });
+    expect(fresh).toEqual(author);
+    expect(held.via!.deputy).toBe("client edit");
+    expect(unrelatedCopies).toBe(0);
+  } finally {
+    resetLegacyDocumentStoresForTests();
+    if (originalDir === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = originalDir;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("prototype reads never decode unrelated tasks and retain project denial", async () => {
   saveTasks(tasks());
@@ -178,17 +240,12 @@ test("a Decisions response uses one dismissal snapshot for every task and the re
     const round = { ...source.prototypeReviews![0]!, id: `pr_${n.toString(16).padStart(32, "0")}`, taskId: id };
     return { ...source, id, prototypeReviews: [round] };
   });
-  const read = LegacyDocumentStore.prototype.read;
-  let lookups = 0;
-  const spy = spyOn(LegacyDocumentStore.prototype, "read").mockImplementation(function (this: LegacyDocumentStore<unknown>, filePath) {
-    if (path.basename(filePath) === "attention-dismissals.json") lookups++;
-    return read.call(this, filePath);
-  });
+  const spy = spyOn(dismissals, "readExistingPrototypeDismissals");
   try {
     const selected = entries[3]!.prototypeReviews[0]!.id;
     const result = operatorDecisions(source.project, entries, selected);
     expect(result.decisions.map(round => round.id)).toEqual(entries.map(task => task.prototypeReviews[0]!.id));
     expect(result.round?.id).toBe(selected);
-    expect(lookups).toBe(1);
+    expect(spy).toHaveBeenCalledTimes(1);
   } finally { spy.mockRestore(); }
 });

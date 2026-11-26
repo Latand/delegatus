@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
 import { fileConfirmationReason } from "./fileConfirmationContract";
+import { officeParts, officeZip } from "./officeDocuments.fixture";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-telegram-bot-service-"));
 const OLD_STATE = process.env.LLV_STATE_DIR;
@@ -458,6 +459,61 @@ const FORGE_TOKEN = ["gh", "p_", "Fx7".repeat(12)].join("");
 function sendDocument(document: unknown, extra: Record<string, unknown> = {}) {
   return service.sendDocument({ conversationId: "conversation_writer", clientRequestId: "doc", chat: "team-reports", document, ...extra });
 }
+
+test("Office imported parts and alternate displayed text stay behind confirmation", async () => {
+  await allowedTeam();
+  const fixtureText = FORGE_TOKEN;
+  const docx = (document: string, additions: Record<string, string> = {}) => officeZip({
+    ...officeParts("docx"), "word/document.xml": document, ...additions,
+  });
+  const wordDocument = (content: string, paragraphStyle = "", tableStyle = "") => `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>${tableStyle
+    ? `<w:tbl><w:tblPr><w:tblStyle w:val="${tableStyle}"/></w:tblPr><w:tr><w:tc><w:p>${content}</w:p></w:tc></w:tr></w:tbl>`
+    : `<w:p>${paragraphStyle ? `<w:pPr><w:pStyle w:val="${paragraphStyle}"/></w:pPr>` : ""}${content}</w:p>`}</w:body></w:document>`;
+  const run = (text: string, properties = "") => `<w:r>${properties ? `<w:rPr>${properties}</w:rPr>` : ""}<w:t>${text}</w:t></w:r>`;
+  const fixtures: Array<[string, string, Buffer]> = [
+    ["rtf-import.docx", "docx", docx(wordDocument('<w:altChunk r:id="rIdA"/>'), {
+      "word/_rels/document.xml.rels": '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdA" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/aFChunk" Target="afchunk.rtf"/></Relationships>',
+      "word/afchunk.rtf": `{\\rtf1\\ansi ${fixtureText.slice(0, 16)}\r\n${fixtureText.slice(16)}\\par}`,
+    })],
+    ["html-import.docx", "docx", docx(wordDocument('<w:altChunk r:id="rIdA"/>'), {
+      "word/_rels/document.xml.rels": '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdA" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/aFChunk" Target="afchunk.htm"/></Relationships>',
+      "word/afchunk.htm": `x${fixtureText.slice(0, 15)}<b></b>${fixtureText.slice(15)}`,
+    })],
+    ["paragraph-style.docx", "docx", docx(wordDocument(run(fixtureText.slice(0, 15), '<w:vanish w:val="0"/>') + run(".", '<w:rStyle w:val="Visible"/>') + run(fixtureText.slice(15), '<w:vanish w:val="0"/>'), "HiddenParagraph"), {
+      "word/styles.xml": '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:styleId="HiddenParagraph"><w:rPr><w:vanish/></w:rPr></w:style><w:style w:type="character" w:styleId="Visible"><w:rPr><w:vanish w:val="0"/></w:rPr></w:style></w:styles>',
+      "word/_rels/document.xml.rels": '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdS" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>',
+    })],
+    ["table-style.docx", "docx", docx(wordDocument(run(fixtureText.slice(0, 15), '<w:vanish w:val="0"/>') + run(".", '<w:rStyle w:val="Visible"/>') + run(fixtureText.slice(15), '<w:vanish w:val="0"/>'), "", "Grid"), {
+      "word/styles.xml": '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="table" w:styleId="Grid"><w:tblStylePr w:type="wholeTable"><w:rPr><w:vanish/></w:rPr></w:tblStylePr></w:style><w:style w:type="character" w:styleId="Visible"><w:rPr><w:vanish w:val="0"/></w:rPr></w:style></w:styles>',
+      "word/_rels/document.xml.rels": '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdS" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>',
+    })],
+    ["tracked-format.docx", "docx", docx(wordDocument(run(fixtureText.slice(0, 15), '<w:vanish w:val="0"/>') + run(".", '<w:rPrChange><w:rPr><w:vanish/></w:rPr></w:rPrChange>') + run(fixtureText.slice(15), '<w:vanish w:val="0"/>')))],
+  ];
+  const xlsxEntries = officeParts("xlsx");
+  const xlsx = (sheet: string, extraStyles = "", forceRecalc = false) => officeZip({
+    ...xlsxEntries,
+    "xl/workbook.xml": `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Report" sheetId="1" r:id="rId1"/></sheets>${forceRecalc ? '<calcPr fullCalcOnLoad="1"/>' : ""}</workbook>`,
+    "xl/worksheets/sheet1.xml": sheet,
+    "xl/styles.xml": extraStyles || '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>',
+    "xl/_rels/workbook.xml.rels": '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rIdS" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>',
+  });
+  fixtures.push(
+    ["format-literal.xlsx", "xlsx", xlsx(`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row><c r="A1" s="1"><v>1</v></c></row></sheetData></worksheet>`, `<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="${fixtureText.split("").join("\\")}"/></numFmts><cellXfs count="2"><xf/><xf numFmtId="164"/></cellXfs></styleSheet>`)],
+    ["formula-literal.xlsx", "xlsx", xlsx(`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row><c r="A1"><f>\"${fixtureText.slice(0, 15)}\"&amp;\"${fixtureText.slice(15)}\"</f></c></row></sheetData></worksheet>`)],
+    ["forced-recalc.xlsx", "xlsx", xlsx(`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row><c r="A1" t="inlineStr"><is><t>${fixtureText.slice(0, 15)}</t></is></c><c r="B1" t="inlineStr"><is><t>${fixtureText.slice(15)}</t></is></c><c r="C1"><f>CONCAT(A1,B1)</f></c></row></sheetData></worksheet>`, "", true)],
+  );
+  for (const [name, extension, bytes] of fixtures) {
+    const file = documentFile(path.join(HANDOFF, name), bytes);
+    const error = await refusal(() => sendDocument({ path: file }, { clientRequestId: name }));
+    expect([name, error.code]).toEqual([name, extension === "docx" && name.includes("import") ? "document_invalid" : "document_secret"]);
+  }
+  expect(transport.callsOf("sendDocument")).toHaveLength(0);
+
+  const neutral = documentFile(path.join(HANDOFF, "neutral.xlsx"), officeZip(officeParts("xlsx")));
+  transport.script("sendDocument", ok({ message_id: 199, date: T0 + 100 }));
+  expect(await sendDocument({ path: neutral }, { clientRequestId: "neutral-office" })).toMatchObject({ messageIds: [199] });
+  expect(transport.callsOf("sendDocument")).toHaveLength(1);
+});
 
 test("a document receipt has its own namespace: the same key under text, photo and document posts three times", async () => {
   await allowedTeam();

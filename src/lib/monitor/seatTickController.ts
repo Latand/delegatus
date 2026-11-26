@@ -325,12 +325,14 @@ function cardText(project: string, card: SeatTickCard, at: string, existing?: Bo
     host-recovery keep their monitor ref here as well. */
 function cardDetails(card: SeatTickCard): string {
   const fact = `${CARD_FACT_PREFIX} ${cardFact(card)}`;
+  if (card.kind === "disk-pressure" && card.cleanupReport) return `${fact}\n${DISK_CLEANER_CARD_MARKER}`;
   if (card.kind !== "auto-rotation" && card.kind !== "host-recovery") return fact;
   const marker = `${MONITOR_REF_PREFIX} ${card.ref}`;
   return [fact, card.record ? redactBounded(card.record, CARD_TEXT_LIMIT) : "", marker].filter(Boolean).join("\n\n");
 }
 
 const CARD_FACT_PREFIX = "monitor-fact:";
+const DISK_CLEANER_CARD_MARKER = "monitor-cleaner-report";
 
 /** Stable across checks and restarts, including after the create receipt expires.
     Recovery notices also distinguish an intermediate outcome from its terminal one. */
@@ -430,6 +432,21 @@ export function ensureSeatTickCard(project: string, card: SeatTickCard, at: stri
        whatever the card itself turns out to need. */
     const unchanged = absorbed ? { state, result: true } : { state: undefined, result: true };
     const existing = standingSeatTickCard(state.tasks, project, card);
+    if (card.kind === "disk-pressure" && card.cleanupReport) {
+      const previous = existing ?? state.tasks.findLast(task => canonicalOrchestratorProject(task.project) === project && taskMonitorRef(task) === card.ref);
+      const text = cardText(project, card, at, previous);
+      const details = cardDetails(card);
+      if (previous?.text === text && previous.details === details && (card.state !== "resolved" || previous.status === "done")) return unchanged;
+      const created = previous ? null : createTask(state.tasks, { project, text, details, placement: "unplaced",
+        clientRequestId: monitorClientRequestId(`${card.ref}:${project}`) }, state.recentCreates, { allowBoardOverflow: true });
+      if (created && !created.ok) return { state: undefined, result: false };
+      const id = previous?.id ?? (created?.ok ? created.task.id : null);
+      if (!id) return { state: undefined, result: false };
+      const patched = patchTask(created?.ok ? created.tasks : state.tasks, id,
+        { text, details, ...(card.state === "resolved" ? { status: "done" } : {}) }, at, { allowBoardOverflow: true });
+      return patched.ok ? { state: { ...state, tasks: patched.tasks, recentCreates: created?.ok ? created.recentCreates : state.recentCreates }, result: true }
+        : { state: undefined, result: false };
+    }
     if (card.state === "resolved") {
       if (!existing) return unchanged;
       const resolvedAt = new Date().toISOString();
@@ -450,6 +467,7 @@ export function ensureSeatTickCard(project: string, card: SeatTickCard, at: stri
          card that tracks a standing state — the one kind that declares its
          `state` — is kept in step with what it describes. */
       if (card.state !== "open") return unchanged;
+      if (card.kind === "disk-pressure" && existing.details?.split("\n").includes(DISK_CLEANER_CARD_MARKER)) return unchanged;
       if (card.kind === "check-errors" && existing.details?.split("\n").includes(details)) return unchanged;
       if (existing.text === text && existing.details === details) return unchanged;
       const updated = patchTask(state.tasks, existing.id, { text, details });
@@ -501,12 +519,14 @@ function standingSeatTickCard(tasks: readonly BoardTask[], project: string, card
 /** Whether the board already holds exactly what {@link ensureSeatTickCard}
     would leave there, so the check has nothing to write. */
 function seatTickCardIsCurrent(project: string, card: SeatTickCard, at: string, tasks: readonly BoardTask[]): boolean {
+  if (card.kind === "disk-pressure" && card.cleanupReport) return false;
   if (card.kind === "wake-unresolved" && tasks.some((task) => isAttemptCard(task, project))) return false;
   const existing = standingSeatTickCard(tasks, project, card);
   if (card.state === "resolved") return !existing;
   if (completedSeatTickCard(tasks, project, card, at)) return true;
   if (!existing) return false;
   if (card.state !== "open") return true;
+  if (card.kind === "disk-pressure" && existing.details?.split("\n").includes(DISK_CLEANER_CARD_MARKER)) return true;
   const details = cardDetails(card);
   // Check-error cards retain the opening snapshot of their durable episode.
   if (card.kind === "check-errors") return existing.details?.split("\n").includes(details) ?? false;
@@ -2204,6 +2224,7 @@ async function check(
   // and before ordinary busy-seat suppression; receipt accounting is separate.
   let responseRecovery: (() => Promise<void>) | undefined;
   let responseHeld = false;
+  let responseDetail: string | undefined;
   const responseGuard = () => {
     if (sources.wakeResponse && readState(canonical).wakeResponse) throw new DeliveryAdmissionRefusedError("wake-response-pending");
   };
@@ -2240,7 +2261,7 @@ async function check(
     }
     if (!same()) return;
     const observe = async () => {
-      const evidence = await sources.wakeResponse!(row, canonical);
+      const evidence = await sources.wakeResponse!(readState(canonical).wakeResponse ?? row, canonical);
       if (!same()) return evidence;
       if (evidence.providerFailure) {
         const outcome = await sources.seatTurnOutcome?.(row.conversationId);
@@ -2257,16 +2278,21 @@ async function check(
       const fresh = readState(canonical);
       await seatTickMutation("writeState", () => writeState(canonical, { ...fresh, wakeResponse: response }));
     };
-    const card = (detail: string, resolved = false) => ensureCard(canonical, { ref: "seat-wake-response", kind: "host-recovery",
-      instance: row.clientMessageId, state: resolved ? "resolved" : "open", detail }, new Date(sources.now()).toISOString());
+    const card = (detail: string, resolved = false) => {
+      responseDetail = resolved ? undefined : detail;
+      return ensureCard(canonical, { ref: "seat-wake-response", kind: "host-recovery",
+        instance: row.clientMessageId, state: resolved ? "resolved" : "open", detail }, new Date(sources.now()).toISOString());
+    };
     if (evidence.answered) { card("The delivered wake received a model response.", true); await persist(undefined); return; }
     // Serialize agenda delivery until this obligation is reconciled. Its recent
     // progress cannot authorize a second input whose response would be lost.
     responseHeld = true;
     const progress = evidence.progressAt && Date.parse(evidence.progressAt) <= sources.now()
       && Date.parse(evidence.progressAt) > Date.parse(row.progressAt) ? evidence.progressAt : row.progressAt;
-    if (progress !== row.progressAt || evidence.turnId && evidence.turnId !== row.turnId || evidence.generationId && evidence.generationId !== row.generationId)
-      await persist({ ...row, progressAt: progress, ...(evidence.turnId ? { turnId: evidence.turnId } : {}), ...(evidence.generationId ? { generationId: evidence.generationId } : {}) });
+    if (progress !== row.progressAt || evidence.turnId && evidence.turnId !== row.turnId || evidence.generationId && evidence.generationId !== row.generationId
+      || evidence.scan && JSON.stringify(evidence.scan) !== JSON.stringify(row.scan))
+      await persist({ ...row, progressAt: progress, ...(evidence.turnId ? { turnId: evidence.turnId } : {}), ...(evidence.generationId ? { generationId: evidence.generationId } : {}),
+        ...(evidence.scan ? { scan: evidence.scan } : {}) });
     if (!same() || sources.now() - Date.parse(progress) < row.boundMs) return;
     responseHeld = true;
     let detail = evidence.wait;
@@ -2533,7 +2559,7 @@ async function check(
     const record: SeatTickRunRecord = { schemaVersion: 1, at: new Date(sources.now()).toISOString(), project: canonical,
       seatEpoch: sources.seatFor(canonical).active?.seatEpoch ?? null, verdict: "refused", reasons: [], items: 0,
       deferred: 0, eventsThrough: fresh.eventsThrough ?? 0, delivery: null,
-      detail: ["Delivered wake remains unanswered; recovery or its ownership hold is recorded on the board. Ordinary agenda sends remain fenced.", authDetail, autoRotateDetail].filter(Boolean).join("; ") };
+      detail: [responseDetail ?? "Delivered wake remains unanswered. Ordinary agenda sends remain fenced.", authDetail, autoRotateDetail].filter(Boolean).join("; ") };
     appendRecord(record); return record;
   }
   let proposalIssues: readonly ProposalIssue[] = [];
@@ -2713,9 +2739,10 @@ async function check(
       delivery = { clientMessageId, outcome: "refusal-circuit" };
       fenceDetail = seatTickRefusalCircuitSentence(refusals!);
     } else if (commit) {
+      const responseStart = await sources.wakeResponseStart?.(input.seat.conversationId);
       const wake = {
         clientMessageId, conversationId: input.seat.conversationId, seatEpoch: input.seat.seatEpoch,
-        operationId: null, commit, text, preparedAt: at,
+        operationId: null, commit, text, preparedAt: at, ...(responseStart ? { responseStart } : {}),
       };
       const accounting = state.accounting ? tickAccounting(state.accounting.filename, input.project) : null;
       /* One prepared attempt per project, whichever store holds the row. The

@@ -14,8 +14,10 @@ becomes a passing receipt for the whole selection.
 - Reuse requires the same clean worktree, commit, tree, branch, comparison base,
   full working inputs (including ignored files), installed dependency bytes,
   gate and runtime bytes, Git configuration, execution environment, selection
-  and budgets. The existing gate input snapshot supplies the source and tool
-  fingerprints. The head key also binds the physical checkout directory.
+  and individual file limit. A longer phase or publication deadline keeps
+  that file's receipt valid. The existing gate input snapshot supplies the
+  source and tool fingerprints. The head key also binds the physical checkout
+  directory.
 - Whole-step receipts bind explicit `LLV_GATE_CHECK_ENV` values, including
   names that match a transport prefix. The local hook supplies fresh isolation
   directories, so caller values for those directories do not key its receipts.
@@ -64,28 +66,37 @@ The head-file cache limits the namespace to 8192 entries and 256 MiB, limits
 each record to 1 MiB, and treats malformed or unavailable records as misses.
 Head-file receipts expire after 24 hours. No additional service or timer runs.
 
-The selected checks, file budgets, aggregate budget, publication privacy checks
-and required CI checks retain their existing rules. A persistent assertion
-failure still blocks publication after unrelated green files are reused.
+Head and baseline phases get 15 execution minutes for selections of up to
+30 files and one extra minute for every additional four files, rounded up.
+The comparison shares a 40-minute ceiling across phases, including baseline
+setup and confirmations. Each file retains its five-minute limit.
+A phase cutoff leaves its unfinished file without a comparison verdict.
+The publisher gives retries of the same accepted head one fixed 45-minute
+push budget after a recorded deadline, including one minute for the pack.
+CPU admission is credited separately. A persistent assertion failure still
+blocks publication after unrelated green files are reused.
 
 ## Verification
 
 `scripts/local-gate.checkpoints.test.ts` uses separate comparator processes and
 synthetic repositories. It demonstrates retained green files beside an
 incomplete file, source/environment/ignored-input invalidation, malformed
-receipts, and an aggregate deadline after eight of twelve files. The second
-invocation executes only the remaining four. The deadline is controlled in the
-parent; the child checks keep their real clocks and execution bounds.
+receipts, and three budget limits after eight of twelve files. The phase and
+comparison deadlines can expire, or the remaining time can be too short for
+a full file and its cleanup. The next invocation runs only the remaining four
+files. The parent clock controls the simulated deadline, and the workers keep
+their real clocks and execution bounds. A hung file reaches its individual
+limit on both the initial run and the retry that reuses a green peer.
 `scripts/local-gate.checkpoints.hook.test.ts` expires the native pre-push hook
-after one file completes while another is still running. It checks that cleanup
-removes the services and directories, that the retry runs only the interrupted
-file, and that a manager change before file completion prevents sealing. It
-also checks receipt bytes, fresh declared directories, input and runner
-replacement, and manager identity loss or drift after reuse. The
-`check-step "touched tests"` regression covers warm
-and cold retries after changing only the external `BASH_ENV` bytes.
-The native hook also declines stale whole-step receipts after changes to a
-declared variable or the startup file. Warm retries report the same assertion
+after one file completes while another is still running. It checks that the services and directories
+were removed, the retry runs only the interrupted file, and a manager change
+before file completion prevents sealing. It also checks receipt bytes, fresh
+declared directories, input and runner replacement, and manager identity loss
+or drift after reuse. In `scripts/local-gate.checkpoints.stepPasses.test.ts`,
+the `check-step "touched tests"` regression covers warm and cold retries after
+changing only the external `BASH_ENV` bytes. The native hook also declines
+stale whole-step receipts after changes to a declared variable or the startup
+file. Warm retries report the same assertion
 failure as cold runs and reuse the pass when only private allocations change.
 
 This repairs the Delegatus repository's publication integration. The generic

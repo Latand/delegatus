@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { measureTempBytes, resolvePhysicalPath, type ProcessScan, isUvCacheMarker } from "@/lib/tempSweep";
+import { measureTempBytes, processPathWithinLimits, resolvePhysicalPath, type ProcessScan, isUvCacheMarker } from "@/lib/tempSweep";
 import { reportMediaIndex } from "@/lib/reportMedia/lookup";
 import { recordedRootHeld } from "@/lib/recordedChecks/store";
 import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTempDiagnostics";
@@ -58,6 +58,8 @@ const vanished = (error: unknown) => ["ENOENT", "ENOTDIR"].includes((error as No
  * or when the pid is present again, the process counts as alive. */
 const allExited = (pids: readonly (number | null)[] | undefined) => process.platform === "linux" && !!pids?.length
   && pids.every(pid => pid !== null && !fs.existsSync(`/proc/${pid}`));
+/** `/proc` entries describe processes; none of them is a working checkout. */
+const procCwd = (cwd: string) => { const resolved = path.resolve(cwd); return resolved === "/proc" || resolved.startsWith("/proc/"); };
 const LINK_HOP_LIMIT = 256;
 const segments = (file: string) => file.split(path.sep).filter(Boolean);
 
@@ -149,7 +151,19 @@ const granuleRemainingMs = (stat: fs.Stats, now: number) => {
   return Math.max(0, granule - Math.abs(now - stat.ctimeMs), granule - Math.abs(now - stat.mtimeMs));
 };
 
-async function repositoryLinks(directory: string, timeout?: number): Promise<{ links: string[]; directories: RepositoryDirectoryVersion[] }> {
+/** Directory reads in flight at once during one checkout walk. */
+const REPOSITORY_WALK_CONCURRENCY = 8;
+
+/** How many times a caller that tolerates a changing directory reads or waits
+ * on one before it accepts the newest listing. */
+const TOLERATED_DIRECTORY_READS = 3;
+
+/** `tolerateChange` is for a caller that already accepts links created after
+ * the read (a root idle for a day cannot gain a legitimate one): a directory
+ * that changes while it is read is read again a bounded number of times and
+ * then its newest listing stands, so one hot directory (a build output, an
+ * atomic-rename writer) cannot void the walk of its whole checkout. */
+async function repositoryLinks(directory: string, timeout?: number, tolerateChange = false): Promise<{ links: string[]; directories: RepositoryDirectoryVersion[] }> {
   const deadline = performance.now() + attemptTempRemaining(timeout ?? 15_000);
   // An unreadable checkout, including an absent one, proves nothing about
   // its links. Let the failed read retain this root until a later sweep.
@@ -171,46 +185,84 @@ async function repositoryLinks(directory: string, timeout?: number): Promise<{ l
       ]);
     } finally { if (timer) clearTimeout(timer); }
   };
-  const visit = async (current: string): Promise<void> => {
+  /** Reads one directory and returns the subdirectories still to read. */
+  const visit = async (current: string): Promise<string[]> => {
+    // A subdirectory removed while the walk was under way has no links left to find.
+    if (!tolerateChange || current === directory) return visitDirectory(current);
+    try { return await visitDirectory(current); }
+    catch (error) { if (vanished(error)) return []; throw error; }
+  };
+  const visitDirectory = async (current: string): Promise<string[]> => {
     let before = fs.lstatSync(current);
     const skipMount = () => {
       if (before.dev === rootDevice) return false;
       directories.push({ path: current, identity: `${before.dev}:${before.ino}`, mtimeMs: before.mtimeMs, ctimeMs: before.ctimeMs, mount: true });
       return true;
     };
-    if (skipMount()) return;
+    if (skipMount()) return [];
     // The kernel stamps a directory from a coarse clock, and some file systems
     // store whole seconds. An entry made in the same granule as the
     // directory's previous change leaves its timestamps as they were, so a
     // list read inside that granule could pair with timestamps that a later
     // link shares. Such a list is read again once the granule passed; from
     // then on every change moves the timestamps and the validators see it.
+    let waits = 0;
     for (let wait = granuleRemainingMs(before, Date.now()); wait > 0; wait = granuleRemainingMs(before, Date.now())) {
+      // A directory written faster than the granule never leaves it.
+      if (tolerateChange && waits++ >= TOLERATED_DIRECTORY_READS) break;
       checkBudget();
       await new Promise(resolve => setTimeout(resolve, Math.max(1, Math.min(attemptTempRemaining(), Math.max(wait, TIMESTAMP_GRANULE_MS)))));
       before = fs.lstatSync(current);
-      if (skipMount()) return;
+      if (skipMount()) return [];
     }
-    const entries = await readEntries(current);
+    let entries = await readEntries(current);
     checkBudget();
-    const after = fs.lstatSync(current, { throwIfNoEntry: false });
+    let after = fs.lstatSync(current, { throwIfNoEntry: false });
     // The entry list and its cache validator must describe the same directory
     // version. A link created after readdir but before lstat would otherwise
     // pair a negative list with the new directory timestamps.
-    if (!after?.isDirectory() || after.isSymbolicLink()
-      || `${before.dev}:${before.ino}` !== `${after.dev}:${after.ino}`
-      || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) {
-      throw new AttemptTempBudgetDeferred("checkout changed during link inventory; retry next tick");
-    }
-    directories.push({ path: current, identity: `${after.dev}:${after.ino}`, mtimeMs: after.mtimeMs, ctimeMs: after.ctimeMs });
-    for (const entry of entries) {
+    const sameVersion = (version: typeof before, now: typeof after) => !!now?.isDirectory() && !now.isSymbolicLink()
+      && `${version.dev}:${version.ino}` === `${now.dev}:${now.ino}` && version.mtimeMs === now.mtimeMs && version.ctimeMs === now.ctimeMs;
+    for (let reads = 1; !sameVersion(before, after); reads++) {
+      if (!tolerateChange) throw new AttemptTempBudgetDeferred("checkout changed during link inventory; retry next tick");
+      // The directory is gone or no longer a directory: it holds no link.
+      if (!after?.isDirectory() || after.isSymbolicLink()) return [];
+      if (reads >= TOLERATED_DIRECTORY_READS) break;
+      before = after;
+      entries = await readEntries(current);
       checkBudget();
-      const file = path.join(current, entry.name);
-      if (entry.isSymbolicLink()) links.push(file);
-      else if (entry.isDirectory() && entry.name !== ".git") await visit(file);
+      after = fs.lstatSync(current, { throwIfNoEntry: false });
     }
+    if (!after?.isDirectory() || after.isSymbolicLink()) return [];
+    directories.push({ path: current, identity: `${after.dev}:${after.ino}`, mtimeMs: after.mtimeMs, ctimeMs: after.ctimeMs });
+    // The budget is read once per directory (above), not once per entry: a
+    // dependency tree holds millions of plain files, and reading the clock for
+    // each of them made a walk thirty times slower than the listing it performs.
+    const subdirectories: string[] = [];
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) links.push(path.join(current, entry.name));
+      else if (entry.isDirectory() && entry.name !== ".git") subdirectories.push(path.join(current, entry.name));
+    }
+    return subdirectories;
   };
-  try { await visit(directory); }
+  // Directory reads overlap on the thread pool; a large checkout is one walk
+  // of a hundred thousand directories. The first failure stops new reads, and
+  // the walk ends when every read in flight has settled, so nothing writes to
+  // the result after it is returned.
+  const walk = () => new Promise<void>((resolve, reject) => {
+    const pending = [directory];
+    let running = 0, failed = false, failure: unknown;
+    const pump = () => {
+      while (!failed && running < REPOSITORY_WALK_CONCURRENCY && pending.length) {
+        running++;
+        visit(pending.pop()!).then(children => { pending.push(...children); }, error => { if (!failed) { failed = true; failure = error; } })
+          .finally(() => { running--; pump(); });
+      }
+      if (running === 0) { if (failed) reject(failure); else resolve(); }
+    };
+    pump();
+  });
+  try { await walk(); }
   catch (error) {
     if (error instanceof AttemptTempBudgetDeferred) throw error;
     // A checkout removed during the walk keeps its code, so a caller can tell
@@ -222,9 +274,9 @@ async function repositoryLinks(directory: string, timeout?: number): Promise<{ l
 }
 
 /** Each link's target as written, including dangling links. */
-async function repositoryLinkTargets(repository: string, timeout?: number): Promise<RepositoryLinkSnapshot> {
+async function repositoryLinkTargets(repository: string, timeout?: number, tolerateChange = false): Promise<RepositoryLinkSnapshot> {
   const deadline = performance.now() + attemptTempRemaining(timeout ?? 15_000);
-  const inventory = await repositoryLinks(repository, timeout), lexicalTargets: string[] = [];
+  const inventory = await repositoryLinks(repository, timeout, tolerateChange), lexicalTargets: string[] = [];
   for (const link of inventory.links) {
     checkAttemptTempDeadline();
     let target: string;
@@ -236,7 +288,7 @@ async function repositoryLinkTargets(repository: string, timeout?: number): Prom
   // remainder of this checkout is still being traversed. Revalidate the full
   // inventory at the authority boundary so that such a late link cannot turn
   // an earlier negative into deletion permission.
-  for (const directory of inventory.directories) {
+  for (const directory of tolerateChange ? [] : inventory.directories) {
     if (attemptTempRemaining(deadline - performance.now()) <= 0)
       throw new AttemptTempBudgetDeferred("checkout link inventory exceeded its time budget");
     const current = fs.lstatSync(directory.path, { throwIfNoEntry: false });
@@ -274,7 +326,7 @@ export class RepositoryLinkInventory {
   private readonly deadline: number;
   readonly walks: string[] = [];
   private readonly freshMs: number;
-  constructor(private readonly options: { now?: () => number; budgetMs?: number; freshMs?: number; retained?: RetainedCheckoutReads; validationReuseMs?: number } = {}) {
+  constructor(private readonly options: { now?: () => number; budgetMs?: number; freshMs?: number; retained?: RetainedCheckoutReads; validationReuseMs?: number; walkMs?: number; trustFreshReads?: boolean } = {}) {
     this.deadline = this.now() + attemptTempRemaining(options.budgetMs ?? 30_000);
     this.freshMs = options.freshMs ?? (options.retained ? RETAINED_CHECKOUT_READ_MAX_AGE_MS : 10_000);
     // A checkout that stopped being a consumer is never asked for again.
@@ -303,6 +355,10 @@ export class RepositoryLinkInventory {
   /** Validates a completed read and records when it last held. */
   private readUnchanged(read: RepositoryLinkRead, reuse: boolean) {
     if (!read.directories) return false;
+    // A caller that only needs links that already existed (a root idle for a
+    // day cannot gain a legitimate new one) accepts a read for as long as it
+    // is fresh, instead of repeating the walk of a checkout that keeps changing.
+    if (this.options.trustFreshReads) return true;
     const reuseMs = this.options.validationReuseMs ?? 0;
     if (reuse && reuseMs > 0 && read.validatedAt !== undefined && performance.now() - read.validatedAt <= reuseMs) return true;
     const unchanged = this.directoriesUnchanged(read.directories);
@@ -410,13 +466,20 @@ export class RepositoryLinkInventory {
   }
   /** The nearest enclosing checkout of a process cwd, held by `pids` in the scan. */
   repositoryOf(cwd: string, pids: readonly (number | null)[] = []): string | null {
+    // A sandboxed browser renderer keeps its cwd inside the `/proc` entry of a
+    // helper that has since exited. Nothing under `/proc` is a checkout, and
+    // a directory that no longer exists cannot be read for links: either way
+    // this process names no checkout. Its other references still count.
+    if (procCwd(cwd)) { this.repositoriesOf.delete(cwd); this.holders.delete(cwd); return null; }
     if (pids.length) this.holders.set(cwd, pids);
     // Record negative results too: an existing cwd outside a checkout can
     // become a checkout while another awaited observation is in flight.
     let discovery: RepositoryDiscovery;
     try { discovery = this.discoverRepository(cwd); }
     catch (error) {
-      if (vanished(error) && this.abandoned(cwd)) { this.repositoriesOf.delete(cwd); return null; }
+      // An earlier discovery of a live process's cwd stays recorded, so the
+      // dispatch fence still sees that the directory changed under it.
+      if (vanished(error)) { if (this.abandoned(cwd)) this.repositoriesOf.delete(cwd); return null; }
       throw error;
     }
     this.repositoriesOf.set(cwd, discovery);
@@ -432,6 +495,10 @@ export class RepositoryLinkInventory {
       // outside the checkout. Re-resolve its physical destination on every
       // use; checkout directory metadata cannot invalidate that alias change.
       const lexical = await cached.targets;
+      // A caller that trusts fresh reads also trusts the destinations it
+      // already resolved, so a root costs a comparison, not tens of thousands
+      // of path resolutions.
+      if (this.options.trustFreshReads && cached.physicalTargets) return cached.physicalTargets;
       const physical = observedTargets(lexical);
       cached.physicalTargets = physical;
       return physical;
@@ -439,7 +506,7 @@ export class RepositoryLinkInventory {
     this.options.retained?.delete(repository);
     const remaining = attemptTempRemaining(this.deadline - now);
     if (remaining <= 0) return Promise.reject(new AttemptTempBudgetDeferred());
-    const snapshot = repositoryLinkTargets(repository, Math.min(15_000, remaining));
+    const snapshot = repositoryLinkTargets(repository, Math.min(this.options.walkMs ?? 15_000, remaining), this.options.trustFreshReads);
     const targets = snapshot.then(result => result.lexicalTargets);
     const observed: Promise<string[]> = targets.catch(error => {
       // A refused read is not a cache entry. The next root can observe a
@@ -477,6 +544,19 @@ export async function repositoryReferencesAttemptTemp(repository: string, origin
   return (await inventory.targets(repository, discovered)).some(referencesRoot(attemptRoots(original, current)));
 }
 
+/** The hops of a path's link chain do not depend on the root asked about, so
+ * one scan resolves each distinct path once however many roots a pass checks
+ * against it. A scan is a snapshot of a moment; the chain is read at the first
+ * question it is asked. */
+const linkChains = new WeakMap<ProcessScan, Map<string, string[]>>();
+function linkChain(scan: ProcessScan, file: string): string[] {
+  let chains = linkChains.get(scan);
+  if (!chains) linkChains.set(scan, chains = new Map());
+  let chain = chains.get(file);
+  if (!chain) chains.set(file, chain = followLinkChain(file));
+  return chain;
+}
+
 /** Idle processes can still depend on a symlink in their checkout. Resolve
  * links without descending through them, including currently dangling links.
  * Every checkout that holds a live process is read; there is no count at
@@ -490,7 +570,7 @@ export function attemptProcessReferencesClear(original: string, current: string,
       // A path can traverse a protected root and finish outside it. Keep
       // every forwarding hop and each directory climbed by '..', even when
       // realpath could return a final destination immediately.
-      return followLinkChain(path.isAbsolute(file) ? file : path.resolve(file)).some(held);
+      return linkChain(scan, path.isAbsolute(file) ? file : path.resolve(file)).some(held);
     } catch (error) {
       if (error instanceof AttemptTempBudgetDeferred) throw error;
       if (strict) throw error;
@@ -510,37 +590,76 @@ export function attemptProcessReferencesClear(original: string, current: string,
       const candidates = [value, ...(assignment === undefined ? [] : [assignment]),
         ...[...value.matchAll(/["'](\/[^"']+)["']|\/(?:[^\s\x00'"`=;|&<>])+/g)].map(match => match[1] ?? match[0])];
       return candidates.some(candidate => {
-        if (candidate.length > 4096 || segments(candidate).some(name => Buffer.byteLength(name) > 255)) return false;
-        if (path.isAbsolute(candidate)) return referenced(candidate);
+        if (path.isAbsolute(candidate)) return processPathWithinLimits(candidate) && referenced(candidate);
         const cwd = process.paths[0];
         return !!cwd && candidate.length > 0 && !candidate.startsWith("-")
           && (!/\s/.test(candidate) || candidate === assignment)
+          && processPathWithinLimits(cwd + path.sep + candidate)
           && referenced(cwd + path.sep + candidate);
       });
     }));
 }
-export async function attemptReferencesClear(original: string, current: string, scan: ProcessScan,
-  containers: (roots: readonly string[]) => Promise<boolean> = containerMountsClear,
-  inventory = new RepositoryLinkInventory()): Promise<boolean> {
-  const roots = attemptRoots(original, current);
-  const referenced = (file: string) => [file, resolvePhysicalPath(file)].some(referencesRoot(roots));
-  if (!attemptProcessReferencesClear(original, current, scan)) return false;
-  if (process.platform === "linux") {
-    for (const line of fs.readFileSync("/proc/net/unix", "utf8").split("\n").slice(1)) {
-      const socket = line.trim().split(/\s+/).slice(7).join(" ");
-      if (socket.startsWith(path.sep) && referenced(socket)) return false;
-    }
-  }
-  const repositories = new Set<string>();
-  const processCwds: string[] = [];
-  const holders = new Map<string, (number | null)[]>(), consumers = new Map<string, Set<string>>();
+/** The working directory of every live process in the scan, and the processes
+ * holding each, which tell whether a directory's holders have all exited. */
+function processWorkingDirectories(scan: ProcessScan) {
+  const cwds: string[] = [];
+  const holders = new Map<string, (number | null)[]>();
   for (const process of scan.processes) {
     checkAttemptTempDeadline();
     const cwd = process.paths[0];
     if (!cwd?.startsWith(path.sep)) continue;
-    processCwds.push(cwd);
+    cwds.push(cwd);
     holders.set(cwd, [...holders.get(cwd) ?? [], process.namespace ? process.pid : null]);
   }
+  return { cwds, holders };
+}
+
+/** Reads the link inventory of every checkout a live process works in, once,
+ * before any root is examined. Each completed read stays in the inventory (and
+ * in its retained reads) for the root checks that follow and for the next
+ * tick. A checkout whose read cannot finish inside its window is counted and
+ * the others are still read, so every tick leaves the inventory more complete
+ * than it found it. A read that fails for another reason is not cached; the
+ * root check repeats it and meets the same error. */
+export async function warmCheckoutInventory(scan: ProcessScan, inventory: RepositoryLinkInventory): Promise<{ checkouts: number; incomplete: number }> {
+  const { cwds, holders } = processWorkingDirectories(scan);
+  inventory.retainDiscoveries(cwds);
+  const repositories = new Set<string>();
+  for (const cwd of cwds) {
+    try { const repository = inventory.repositoryOf(cwd, holders.get(cwd)); if (repository) repositories.add(repository); }
+    catch (error) { if (error instanceof AttemptTempBudgetDeferred) throw error; }
+  }
+  let incomplete = 0;
+  for (const repository of [...repositories].sort()) {
+    try { await inventory.targets(repository, true); }
+    catch (error) { if (error instanceof AttemptTempBudgetDeferred) incomplete++; }
+  }
+  return { checkouts: repositories.size, incomplete };
+}
+
+export async function attemptReferencesClear(original: string, current: string, scan: ProcessScan,
+  containers?: (roots: readonly string[]) => Promise<boolean>,
+  inventory = new RepositoryLinkInventory(), onHold?: (reasonCode: string) => void): Promise<boolean> {
+  const hold = await attemptReferenceHold(original, current, scan, containers, inventory);
+  if (hold) onHold?.(hold);
+  return hold === null;
+}
+
+async function attemptReferenceHold(original: string, current: string, scan: ProcessScan,
+  containers?: (roots: readonly string[]) => Promise<boolean>,
+  inventory = new RepositoryLinkInventory()) {
+  const roots = attemptRoots(original, current);
+  const referenced = (file: string) => [file, resolvePhysicalPath(file)].some(referencesRoot(roots));
+  if (!attemptProcessReferencesClear(original, current, scan)) return "process_reference";
+  if (process.platform === "linux") {
+    for (const line of fs.readFileSync("/proc/net/unix", "utf8").split("\n").slice(1)) {
+      const socket = line.trim().split(/\s+/).slice(7).join(" ");
+      if (socket.startsWith(path.sep) && referenced(socket)) return "unix_socket_reference";
+    }
+  }
+  const repositories = new Set<string>();
+  const consumers = new Map<string, Set<string>>();
+  const { cwds: processCwds, holders } = processWorkingDirectories(scan);
   // The scan is the list of live processes. Discoveries recorded for an
   // earlier root of this tick stay only for cwds a live process still holds.
   inventory.retainDiscoveries(processCwds);
@@ -564,41 +683,89 @@ export async function attemptReferencesClear(original: string, current: string, 
     return false;
   };
   discover();
-  if (await checkoutLinksIn()) return false;
-  if (process.platform === "linux" && !await containers([original, current])) return false;
+  if (await checkoutLinksIn()) return "checkout_link_reference";
+  if (process.platform === "linux") {
+    const hold = containers
+      ? await containers([original, current]) ? null : "container_reference_observer_hold"
+      : await containerReferenceHold([original, current]);
+    if (hold) return hold;
+  }
   // The container query yields. Re-resolve every consumer checkout and links
   // after it, then synchronously validate the directory snapshots so a late
   // disappearance, permission change, replacement, or link creation cannot
   // ride on the earlier negative inventory.
   discover();
-  if (await checkoutLinksIn()) return false;
-  return [...repositories].every(repository => inventory.unchanged(repository));
+  if (await checkoutLinksIn()) return "checkout_link_reference";
+  return [...repositories].every(repository => inventory.unchanged(repository)) ? null : "checkout_changed";
 }
 
 async function containerMountsClear(roots: readonly string[], remaining?: () => number): Promise<boolean> {
-  const physicalRoots = [...new Set(roots.flatMap(root => [root, resolvePhysicalPath(root)]))];
+  return await containerReferenceHold(roots, remaining) === null;
+}
+
+/** One mount of a running container: where it comes from on the host and
+ * where the container sees it. `destination` is `null` when the runtime did
+ * not report it, which proves nothing about the path the container uses. */
+export type ContainerMount = { source: string; destination: string | null };
+
+/** The bind-mount and volume mounts of every running container. `null` means
+ * the inventory could not be read whole, which proves nothing. Without a
+ * container runtime there is nothing to hold. */
+export async function readContainerMounts(remaining?: () => number): Promise<ContainerMount[] | null> {
   let active: string[];
   try { active = (await run("docker", ["ps", "-q"], remaining?.())).stdout.trim().split(/\s+/).filter(Boolean); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return true; throw error; }
-  if (active.length > 1024 || new Set(active).size !== active.length) return false;
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
+  if (active.length > 1024 || new Set(active).size !== active.length) return null;
+  const mounts: ContainerMount[] = [];
   for (let offset = 0; offset < active.length; offset += 32) {
     const ids = active.slice(offset, offset + 32);
     // Read only ownership metadata, in bounded replies. Whole inspect output
     // also includes credentials and unrelated configuration.
     const output = (await run("docker", ["inspect", "--format", '{"Id":{{json .Id}},"Mounts":{{json .Mounts}}}', ...ids], remaining?.())).stdout;
     const containers = output.trim().split("\n").filter(Boolean).map(line => JSON.parse(line));
-    if (containers.length !== ids.length) return false;
-    if (!ids.every(id => {
+    if (containers.length !== ids.length) return null;
+    for (const id of ids) {
       const matches = containers.filter(container => typeof container?.Id === "string" && container.Id.startsWith(id));
-      if (matches.length !== 1 || !Array.isArray(matches[0].Mounts)) return false;
-      return matches[0].Mounts.every((mount: { Type?: string; Source?: string }) => {
-        if (mount.Type === "tmpfs") return true;
-        return typeof mount.Source === "string" && path.isAbsolute(mount.Source)
-          && ![mount.Source, resolvePhysicalPath(mount.Source)].some(source => physicalRoots.some(root => inside(source, root) || inside(root, source)));
-      });
-    })) return false;
+      if (matches.length !== 1 || !Array.isArray(matches[0].Mounts)) return null;
+      for (const mount of matches[0].Mounts as { Type?: string; Source?: string; Destination?: string }[]) {
+        if (mount.Type === "tmpfs") continue;
+        if (typeof mount.Source !== "string" || !path.isAbsolute(mount.Source)) return null;
+        mounts.push({ source: mount.Source, destination: typeof mount.Destination === "string" && path.isAbsolute(mount.Destination) ? mount.Destination : null });
+      }
+    }
   }
-  return true;
+  return mounts;
+}
+
+const physicalRootsOf = (roots: readonly string[]) => [...new Set(roots.flatMap(root => [root, resolvePhysicalPath(root)]))];
+
+/** Whether running containers hold any of the roots. One rule for the ledger
+ * sweep, the unregistered pass and the namespace cleanup:
+ *
+ * - a mount of a root or of anything inside it holds exactly that data;
+ * - a mount of an ancestor that the container sees at the same path (Delegatus's
+ *   own containers mount the whole home directory onto itself) holds nothing by
+ *   itself, because a process of that container reports its paths the way this
+ *   process scan matches them, so one working inside a root shows in the scan;
+ * - a mount of an ancestor at another destination holds: a process there
+ *   reports the root under a path this scan cannot match;
+ * - an inventory that could not be read whole, or a mount of an ancestor whose
+ *   destination is unknown, holds. */
+export function containerMountHold(roots: readonly string[], mounts: readonly ContainerMount[] | null): "container_inventory_unknown" | "container_mount_reference" | null {
+  if (!mounts) return "container_inventory_unknown";
+  const physicalRoots = physicalRootsOf(roots);
+  for (const mount of mounts) {
+    const sources = [mount.source, resolvePhysicalPath(mount.source)];
+    if (sources.some(source => physicalRoots.some(root => inside(source, root)))) return "container_mount_reference";
+    if (!sources.some(source => physicalRoots.some(root => inside(root, source)))) continue;
+    const samePath = mount.destination !== null && sources.includes(mount.destination);
+    if (!samePath) return "container_mount_reference";
+  }
+  return null;
+}
+
+async function containerReferenceHold(roots: readonly string[], remaining?: () => number) {
+  return containerMountHold(roots, await readContainerMounts(remaining));
 }
 
 const markers = ["(", "-name", ".delegatus-keep", "-o", "-path", "*/worktrees/*/gitdir",
@@ -846,6 +1013,11 @@ function removeEmptyNamespaceRoot(directory: string, identity: string, postDelet
  * each command impose time bounds instead of permanently retaining it at an
  * entry-count ceiling. Linked worktrees remain with their preservation owner. */
 export async function inspectAttemptTree(directory: string, original = directory, settings: NamespaceBudget = {}): Promise<boolean> {
+  return await attemptTreeHold(directory, original, settings) === null;
+}
+
+export async function attemptTreeHold(directory: string, original = directory, settings: NamespaceBudget = {}) {
+  const markerCode = (file: string) => path.basename(file) === ".delegatus-keep" ? "keep_marker" : "git_boundary";
   if (process.platform === "win32") {
     const pending = [directory]; let found = 0;
     while (pending.length) {
@@ -853,22 +1025,25 @@ export async function inspectAttemptTree(directory: string, original = directory
       for (const entry of await fs.promises.readdir(current, { withFileTypes: true })) {
         const file = path.join(current, entry.name);
         const marker = protectionMarker(file, entry.isDirectory());
-        if (marker && (++found > MARKER_LIMIT || markerHolds(file, directory, original))) return false;
+        if (marker && ++found > MARKER_LIMIT) return "protection_marker_limit";
+        if (marker && markerHolds(file, directory, original)) return markerCode(file);
         if (entry.isDirectory()) pending.push(file);
       }
     }
-    return true;
+    return null;
   }
   const until = performance.now() + attemptTempRemaining(namespaceTimeout(settings));
   try {
     const found = (await run("find", [directory, "-xdev", ...markers, "-print0"], Math.max(1, Math.min(15_000, Math.floor(attemptTempRemaining(until - performance.now())))))).stdout.split("\0").filter(Boolean);
-    return found.length <= MARKER_LIMIT && !found.some(file => markerHolds(file, directory, original));
+    if (found.length > MARKER_LIMIT) return "protection_marker_limit";
+    const held = found.find(file => markerHolds(file, directory, original));
+    return held ? markerCode(held) : null;
   }
   catch (error) {
     if (error instanceof AttemptTempBudgetDeferred || process.platform !== "linux") throw error;
     try { await containerCommand(directory, "inspect", original, undefined, false, undefined,
-      { ...settings, budgetMs: attemptTempRemaining(until - performance.now()) }); return true; }
-    catch (fallbackError) { if (fallbackError instanceof AttemptTempBudgetDeferred) throw fallbackError; return false; }
+      { ...settings, budgetMs: attemptTempRemaining(until - performance.now()) }); return null; }
+    catch (fallbackError) { if (fallbackError instanceof AttemptTempBudgetDeferred) throw fallbackError; return "namespace_tree_hold"; }
   }
 }
 
