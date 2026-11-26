@@ -106,7 +106,12 @@ groups=\$(id -G | tr ' ' ',')
 # Compose shares the host PID namespace. Keep the launch handle through exec.
 # A host without python3 reports an unprotected launch. Guarded launches need
 # the Python exec acknowledgement and refuse when it is unavailable.
+# nsenter is setuid, so glibc starts it in secure-execution mode and drops
+# TMPDIR from its environment. A stage's TMPDIR names its on-disk attempt
+# scratch; carry it across under another name and restore it on the host.
+if [ -n "\${TMPDIR+x}" ]; then export LLV_SHIM_TMPDIR="\$TMPDIR"; else unset LLV_SHIM_TMPDIR; fi
 exec nsenter -t 1 -m -p -C --no-fork -- /usr/bin/setpriv --reuid="\$uid" --regid="\$gid" --groups="\$groups" -- /bin/sh -c 'cd "\$1" || exit; shift
+if [ -n "\${LLV_SHIM_TMPDIR+x}" ]; then TMPDIR=\$LLV_SHIM_TMPDIR; export TMPDIR; unset LLV_SHIM_TMPDIR; fi
 if [ -n "\${LLV_SIGNAL_LAUNCHER:-}" ]; then
   launcher=\$LLV_SIGNAL_LAUNCHER; receipt=\$LLV_SIGNAL_RECEIPT; unset LLV_SIGNAL_LAUNCHER LLV_SIGNAL_RECEIPT LLV_DOCKER_NSENTER_SHIMS
   if [ -x /usr/bin/python3 ]; then
@@ -174,6 +179,7 @@ COPY --from=build /app/.githooks/pre-push ./.githooks/pre-push
 COPY --from=build /app/vendor ./vendor
 COPY --from=build /app/scripts/runtime-host-viewer-adapter.ts ./scripts/runtime-host-viewer-adapter.ts
 COPY --from=build /app/scripts/runtime-host-healthcheck.ts ./scripts/runtime-host-healthcheck.ts
+COPY --from=build /app/scripts/verify-provisioning-release.mjs ./scripts/verify-provisioning-release.mjs
 COPY --from=build /app/scripts/gate-slot.sh /app/scripts/owned-runner.ts /app/scripts/cpu-admission.ts /app/scripts/cpu-admission-lock.ts /app/scripts/test-child-guardian.ts ./scripts/
 COPY --from=build /app/node_modules ./node_modules
 

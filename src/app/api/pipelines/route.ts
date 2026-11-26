@@ -1,3 +1,4 @@
+import { publicProvisioningPipeline } from "@/lib/pipelines/provisioningRecord";
 import { briefWarningAnswer } from "@/lib/pipelines/briefWarnings";
 import { conversationWorkspacePrincipal } from "@/lib/team/workspacePrincipal";
 import { teamActor } from "@/lib/team/actor";
@@ -74,7 +75,7 @@ function pipelineListResponse(pipelines: readonly Pipeline[]): NextResponse<Pipe
         if (index === -1) { index = 0; controller.enqueue(encoder.encode('{"pipelines":[')); }
         else if (index < pipelines.length) {
           controller.enqueue(withViewerOperation("pipelines.get", () =>
-            encoder.encode(`${index ? "," : ""}${JSON.stringify(pipelines[index++])}`)));
+            encoder.encode(`${index ? "," : ""}${JSON.stringify(publicProvisioningPipeline(pipelines[index++]!))}`)));
         } else {
           pipelines = [];
           controller.enqueue(encoder.encode("]}"));
@@ -200,7 +201,7 @@ async function workspacePOST(req: NextRequest): Promise<NextResponse<{ ok: true;
        release's controller; 202 says the record is not stored yet. */
     return NextResponse.json({
       ok: true,
-      pipeline: result.pipeline,
+      pipeline: publicProvisioningPipeline(result.pipeline),
       ...(result.repositoryInitialization ? { repositoryInitialization: result.repositoryInitialization } : {}),
       ...(result.queued ? { queued: result.queued } : {}),
       ...(result.warnings?.length ? { warnings: result.warnings } : {}),

@@ -10,6 +10,7 @@ import { sweepExternalRelayOrphans } from "./poller";
 import { procBackend } from "@/lib/proc";
 import { requestSchema } from "./protocol";
 import { contextRequest } from "./request.fixture";
+import { relayRequestDeadline, remainingMs } from "./deadline";
 import { endRequesterLease, openRequesterLease, requesterLeaseWriter } from "./requesterLease";
 
 const context = { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: 12 };
@@ -146,6 +147,65 @@ test("lost send ACK and repeated delivery use the persisted key and payload", as
     expect(payloads[0]).toMatchObject({ ...context, text: "Answer <with> & text", parse_mode: null, silent: false });
   } finally { await f.close(); }
 });
+
+test("a fresh process recovers one destination receipt after the ten-minute request window", async () => {
+  const requestId = "late_restart_receipt";
+  const receivedAt = Date.parse("2026-10-24T15:00:00Z");
+  const deadline = relayRequestDeadline({}, receivedAt);
+  expect(deadline.at - receivedAt).toBe(600_000);
+  const requestBody = { ...body, duration_ms: deadline.at - receivedAt + 1 };
+  const messages = new Map<string, unknown>();
+  const committed = Promise.withResolvers<void>();
+  let acknowledge = false;
+  let requests = 0;
+  const f = await fixture(requestId, context, true, (_request, payload) => {
+    requests += 1;
+    const key = (payload as { client_key: string }).client_key;
+    if (messages.has(key)) expect(payload).toEqual(messages.get(key));
+    messages.set(key, payload);
+    committed.resolve();
+    return acknowledge ? { body: cloneReceipt(101, true) } : { drop: true };
+  });
+  const startDelivery = (now: number) => {
+    const child = Bun.spawn([process.execPath, "--no-env-file", "-e", `
+      import { deliverOwnerLateAnswer } from './src/lib/externalRelay/ownerLateDelivery.ts';
+      const { relay, requestId, requestBody, now } = JSON.parse(process.env.LATE_RECEIPT_FIXTURE);
+      Date.now = () => now;
+      const outcome = await deliverOwnerLateAnswer(relay, requestId, requestBody, [], () => true);
+      process.stdout.write(outcome.delivery);
+    `], {
+      env: { ...process.env, LATE_RECEIPT_FIXTURE: JSON.stringify({ relay: f.relay, requestId, requestBody, now }) },
+      stdout: "pipe", stderr: "pipe",
+    });
+    const result = Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    return { child, result };
+  };
+  const deliver = async (now: number) => {
+    const [status, output, diagnostics] = await startDelivery(now).result;
+    if (status !== 0) throw new Error(`late delivery fixture exited ${status}: ${diagnostics}`);
+    return output.trim().split("\n").at(-1);
+  };
+  try {
+    expect(remainingMs(deadline, deadline.at + 1)).toBe(0);
+    const first = startDelivery(deadline.at + 1);
+    try {
+      await Promise.race([committed.promise, first.result.then(() => { throw new Error("fixture exited before the destination committed"); })]);
+    } finally {
+      if (first.child.exitCode === null) first.child.kill();
+      await first.result;
+    }
+    const saved = f.pending();
+    expect(saved).toMatchObject({ status: "retry", payload: context, firstAttemptAt: deadline.at + 1 });
+    expect(saved?.parts?.[0]?.receipt).toBeUndefined();
+    acknowledge = true;
+    expect(await deliver(saved!.nextAttemptAt!)).toBe("accepted");
+    expect(f.pending()?.parts?.[0]?.receipt).toMatchObject({ kind: "sent", messageId: 101, replayed: true });
+    expect([...messages.values()]).toEqual([saved?.payload]);
+    const settledRequests = requests;
+    expect(await deliver(saved!.nextAttemptAt! + 30_000)).toBe("accepted");
+    expect(requests).toBe(settledRequests);
+  } finally { await f.close(); }
+}, 20_000);
 
 for (const [name, delivery] of [
   ["absent", undefined], ["missing-trigger", { chat_id: context.chat_id, message_thread_id: 12 }],

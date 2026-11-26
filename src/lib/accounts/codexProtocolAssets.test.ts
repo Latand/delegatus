@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-const versions = ["0.154.0", "0.159.0", "0.162.1", "0.163.0", "0.164.0", "0.165.0", "0.166.0", "0.167.0", "0.168.0", "0.169.0", "0.170.0"];
+const versions = ["0.154.0", "0.159.0", "0.162.1", "0.163.0", "0.164.0", "0.165.0", "0.166.0", "0.167.0", "0.168.0", "0.169.0", "0.170.0", "0.171.0", "0.172.0"];
 let root: string;
 let bundle: string;
 afterAll(() => { if (root) fs.rmSync(root, { recursive: true, force: true }); });
