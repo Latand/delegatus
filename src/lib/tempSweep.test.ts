@@ -577,7 +577,7 @@ test("a sweep removes old owned directories and keeps young, foreign, shared, in
   });
 
   expect(report.removed.map((removal) => path.basename(removal.path)).sort()).toEqual(["llv-test-run-old", "pending-producer-old"]);
-  expect(report.removed.every((removal) => removal.bytes > 0 && removal.ageHours >= 48)).toBeTrue();
+  expect(report.removed.every((removal) => removal.bytes > 0 && removal.ageHours !== null && removal.ageHours >= 48)).toBeTrue();
   expect(report.removedBytes).toBe(report.removed.reduce((sum, removal) => sum + removal.bytes, 0));
   expect(fs.existsSync(old)).toBeFalse();
   expect(fs.existsSync(legacy)).toBeFalse();
