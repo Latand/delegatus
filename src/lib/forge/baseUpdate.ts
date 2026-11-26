@@ -1,12 +1,12 @@
 import { engineForgeWriteEnv } from "@/lib/git/agentForgeCredentials";
-import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
+import { repositoryCommitIdentity } from "@/lib/git/repositoryCommitIdentity";
 import { realExec, type ExecPort } from "@/lib/workflows/provision";
 
 /*
  * The merge queue's mechanical base update (docs/design/merge-queue-refresh-capacity.md §5).
  * A PR that is only behind its base gets the merge of the published base into
- * its published head, made by the merge runner itself under the Delegatus
- * machine identity, and pushed to the PR branch as a fast-forward. Git writes
+ * its published head, made by the merge runner under the owner's GitHub
+ * noreply identity and pushed to the PR branch as a fast-forward. Git writes
  * objects only: the checkout, its index and its branch refs stay untouched.
  * A textual conflict is answered as such and goes to a refresh lane.
  */
@@ -21,7 +21,8 @@ export type BaseUpdateRequest = {
   /** The update's recorded `requestedAt`; its whole seconds pin both commit dates. */
   at: string;
 };
-export type BaseUpdatePlan = { kind: "commit"; commit: string } | { kind: "conflict" } | { kind: "current" };
+export type BaseUpdatePlan = { kind: "commit"; commit: string } | { kind: "conflict" } | { kind: "current" }
+  | { kind: "refused"; reason: string };
 export type BaseUpdatePush = { repoDir: string; remote: string; branch: string; commit: string };
 
 const SHA = /^[0-9a-f]{40}$/i;
@@ -39,8 +40,8 @@ function refused(step: string, result: { code: number | null; stderr: string }):
 }
 
 /** The merge commit for `request`, or why there is none. The same request
- * recreates the same commit: tree, parents, identity, dates and message are
- * all fixed by it. */
+ * recreates the same commit while the installation's identity and attribution
+ * setting agree with the original plan. The runner checks the recorded SHA. */
 export async function planBaseUpdate(request: BaseUpdateRequest, exec: ExecPort = realExec): Promise<BaseUpdatePlan> {
   const seconds = Math.floor(Date.parse(request.at) / 1000);
   if (!SHA.test(request.head) || !SHA.test(request.base) || !Number.isFinite(seconds)) throw new Error("base update needs two commit ids and a time");
@@ -59,10 +60,12 @@ export async function planBaseUpdate(request: BaseUpdateRequest, exec: ExecPort 
   if (merged.code === 1) return { kind: "conflict" };
   const tree = merged.stdout.trim().split("\n")[0] ?? "";
   if (merged.code !== 0 || !SHA.test(tree)) throw refused("merge-tree", merged);
+  const identity = await repositoryCommitIdentity(request.repoDir, exec, undefined, "lane");
+  if (identity.refusal) return { kind: "refused", reason: identity.refusal };
   const date = `@${seconds} +0000`;
   const made = await git(["-c", "commit.gpgsign=false", "commit-tree", tree, "-p", request.head, "-p", request.base,
-    "-m", `Merge ${request.base} into ${request.head}`],
-  { ...controllerCommitIdentityEnv(), GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date });
+    "-m", `Merge ${request.base} into ${request.head}`, ...(identity.coauthor ? ["-m", identity.coauthor] : [])],
+  { ...identity.env, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date });
   const commit = made.stdout.trim();
   if (made.code !== 0 || !SHA.test(commit)) throw refused("commit-tree", made);
   return { kind: "commit", commit };
@@ -70,7 +73,7 @@ export async function planBaseUpdate(request: BaseUpdateRequest, exec: ExecPort 
 
 /** A plain push: git refuses anything but a fast-forward. Repository hooks
  * are skipped because the commit publishes no new text (the merge of two
- * published commits, fixed words and two ids, the machine identity); the
+ * published commits, a generated message and a GitHub noreply identity); the
  * required checks on the pushed head gate the merge. A declared App
  * repository receives it as the Delegatus GitHub App. */
 export async function pushBaseUpdate(request: BaseUpdatePush, exec: ExecPort = realExec): Promise<void> {

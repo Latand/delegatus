@@ -662,7 +662,7 @@ base moves during refresh, the existing second-movement and same-base guards
 still apply. Refresh admission checks the current delivery and completed review
 both after forge awaits and under the reservation write lock.
 
-The mechanical update merges the base tip under the machine identity,
+The mechanical update merges the base tip under the owner's GitHub noreply identity,
 records the exact commit before a fast-forward push, then waits for checks
 on that head. A refresh lane holds the repository slot only until its
 refresh attempt has a verdict.

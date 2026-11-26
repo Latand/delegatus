@@ -7,6 +7,7 @@ import { fixtureForgeAccount, fixtureNoreply, seedForgeCommitAccount } from "@/t
 import { realExec } from "@/lib/workflows/provision";
 import { controllerCommitIdentityEnv } from "./controllerCommitIdentity";
 import { DELEGATUS_COAUTHOR, REPOSITORY_IDENTITY, repositoryCommitIdentity, repositoryPublicationSource } from "./repositoryCommitIdentity";
+import { prepareStageGitGuard } from "./stageAttemptGuard";
 import { agentCodexPublicationPolicy, agentPublicationIdentityEnv } from "./agentPublicationIdentity";
 import { withAgentConfigSandbox } from "@/lib/runtime/agentConfigSandbox";
 import { prepareAgentPublicationSpec, shellQuote, withSpawnCapability } from "@/lib/agent/cli";
@@ -116,7 +117,40 @@ test.each(["absent", "partial"])("repository identity supplies the account ident
   } finally { f.close(); }
 });
 
-test.each(["renamed-project", "renamed-project "])("checked-in privacy configuration preserves machine policy in %s", async repositoryName => {
+test.each([true, false])("a stage uses owner noreply in a repository with a privacy policy (attribution: %s)", async attribution => {
+  const f = await fixture();
+  try {
+    await f.run(["config", "--global", "user.name", "Repository Fixture"]);
+    await f.run(["config", "--global", "user.email", email]);
+    const before = fs.readFileSync(f.source.GIT_CONFIG_GLOBAL!, "utf8");
+    fs.writeFileSync(path.join(f.repo, "package.json"), JSON.stringify({ scripts: { "privacy:check": "bun scripts/privacy-publication-gate.ts" } }));
+    fs.mkdirSync(path.join(f.repo, "scripts"));
+    fs.writeFileSync(path.join(f.repo, "scripts/privacy-known-value-fingerprints.json"), "{}");
+    await f.run(["add", "package.json", "scripts"]);
+    await f.run(["commit", "-qm", "base"]);
+    const lane = path.join(f.root, "lane");
+    await f.run(["worktree", "add", "-qb", "topic", lane]);
+    if (!attribution) updateOperatorSettings({ commitAttribution: false }, "2026-11-26T16:10:00Z");
+    const guard = await prepareStageGitGuard("fixture-launch", lane, realExec, "2026-11-26T16:10:00Z", () => {});
+    const source = await repositoryPublicationSource(lane, { ...f.source, ...guard });
+    const env = { ...source, ...agentPublicationIdentityEnv(source) };
+    await f.run(["commit", "--allow-empty", "-qm", "lane change"], env, lane);
+    expect(await f.run(["log", "-1", "--format=%an%n%ae%n%cn%n%ce"], f.source, lane)).toBe(
+      ["Repository Fixture", fixtureNoreply, "Repository Fixture", fixtureNoreply].join("\n"),
+    );
+    expect(await f.run(["log", "-1", "--format=%(trailers:only)"], f.source, lane)).toBe(attribution ? DELEGATUS_COAUTHOR : "");
+    expect(fs.readFileSync(f.source.GIT_CONFIG_GLOBAL!, "utf8")).toBe(before);
+    fs.unlinkSync(path.join(f.source.LLV_STATE_DIR!, "forge-commit-account.json"));
+    const unresolved = await repositoryPublicationSource(lane, { ...f.source, ...guard });
+    const failed = await realExec("git", ["commit", "--allow-empty", "-qm", "cannot commit"], lane, {
+      ...unresolved, ...agentPublicationIdentityEnv(unresolved),
+    });
+    expect(failed.code).not.toBe(0);
+    expect(failed.stderr).toContain("gh auth login --hostname github.com");
+  } finally { f.close(); }
+});
+
+test.each(["renamed-project", "renamed-project "])("standalone launch retains checked-in machine policy in %s", async repositoryName => {
   const f = await fixture(repositoryName);
   try {
     await f.run(["config", "user.name", "Repository Fixture"]); await f.run(["config", "user.email", email]);

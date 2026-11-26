@@ -164,7 +164,7 @@ through injected platform values on the test runner.
 
 ## Repository authorship
 
-In user repositories the Git author and committer use the installation owner's
+In every lane the Git author and committer use the installation owner's
 GitHub noreply address. Delegatus derives it from the authenticated GitHub CLI
 account's user ID and login. The effective `user.name` supplies a display name
 when valid, with the login as a fallback. This leaves Git configuration untouched.
@@ -182,16 +182,15 @@ Settings → Privacy controls the Delegatus co-author trailer across the
 installation. It is on by default and applies on the next launch and to
 controller commits. Engines can add their own attribution.
 
-The checked-in publication policy opts a project into machine authorship:
-`package.json` declares a `privacy:check` script using the publication gate,
-and `scripts/privacy-known-value-fingerprints.json` exists. This repository
-therefore retains its current author, privacy checks and attribution policy,
-including after a checkout or repository rename. Names and remotes never
-select the policy.
+Outside a lane, a project can select machine authorship for standalone agents
+by declaring a `privacy:check` script using the publication gate and including
+`scripts/privacy-known-value-fingerprints.json`. This supports tools such as
+the batch merger. The privacy gate also applies to lane commits in such
+repositories.
 
 The selection is rebound before each structured, terminal or headless launch.
 Claude settings, Codex shell policy, the configuration sandbox and the history
-guard consume that same selection. Settlement, reconciliation and workflow
-merges use it too. The history guard adds the trailer during message
-preparation, preserves repository hooks, and keeps its existing protection
-against replacing another author's history.
+guard consume that same selection. Settlement, reconciliation, workflow merges
+and automatic base updates use the owner's noreply identity. The history guard
+adds the trailer during message preparation, preserves repository hooks, and
+keeps its existing protection against replacing another author's history.

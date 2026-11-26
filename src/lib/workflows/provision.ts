@@ -280,7 +280,7 @@ export async function finishMerge(wf: Workflow, exec: ExecPort, cleanupExec: Exe
   if (!/^[0-9a-f]{40}$/i.test(expectedTree)) {
     return { ok: false, error: "the workflow merge could not be previewed safely; inspect the repo before retrying" };
   }
-  const identity = await repositoryCommitIdentity(wf.repoDir, exec);
+  const identity = await repositoryCommitIdentity(wf.repoDir, exec, undefined, "lane");
   if (identity.refusal) return { ok: false, error: identity.refusal };
   const merge = (await exec("git", ["merge", "--no-ff", wf.branch, "-m", `Merge ${wf.branch}: ${prTitle(wf)}`,
     ...(identity.coauthor ? ["-m", identity.coauthor] : [])], wf.repoDir, identity.env));

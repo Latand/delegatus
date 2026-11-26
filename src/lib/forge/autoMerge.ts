@@ -47,7 +47,7 @@ import { githubRepositoryOfRemote } from "./workLinks";
  *
  * A PR behind its base (reported BEHIND or proven after bounded UNKNOWN)
  * is updated by the runner itself: the
- * merge of the base tip into the PR head, under the machine identity, pushed
+ * merge of the base tip into the PR head, under the owner's noreply identity, pushed
  * as a fast-forward (docs/design/merge-queue-refresh-capacity.md §5).
  * A conflict, a BEHIND PR the runner cannot update, or a red check on an
  * outdated base starts visible refresh work
@@ -812,6 +812,10 @@ async function updateBehindBase(read: Pipeline, merge: PipelineMerge, view: Pull
   if (before) return wait(before);
   const plan = await updateBase.plan({ ...target, head: view.headRefOid, base, at: iso(now) });
   if (plan.kind === "conflict") return false;
+  if (plan.kind === "refused") {
+    await commit(ports, read, live => { bookkeeping(live); block(live, plan.reason, now); });
+    return true;
+  }
   // The head already contains the base: GitHub has not caught up yet.
   if (plan.kind === "current") {
     if (!failedBase) return wait(null);

@@ -9,6 +9,7 @@ import type { RefreshOptions } from "./autoRefresh";
 import type { BaseUpdatePush, BaseUpdateRequest } from "./baseUpdate";
 import { createHash } from "node:crypto";
 import type { MergeOnReviewSetting } from "@/lib/projects/settings";
+import { COMMIT_ACCOUNT_REFUSAL } from "@/lib/git/forgeCommitAccount";
 
 /* The merge runner (#2187 §4.3-§4.4) against a fake `gh` and clock: invented
    repositories, heads and checks, no network. The stores resolve their state
@@ -1236,13 +1237,15 @@ function behindQueue(count: number, options: { strict?: boolean; refreshConcurre
   if (options.refreshConcurrency) Object.assign(h.ports, { refreshConcurrency: options.refreshConcurrency });
   const plans: BaseUpdateRequest[] = [];
   const pushes: Array<BaseUpdatePush & { mergesBefore: number }> = [];
-  const git = { conflict: false, pushFailure: null as string | null, landed: (pr: PullRequest) => { pr.checks = [green("ci")]; }, moveHead: null as string | null,
+  const git = { conflict: false, identityResolved: true, pushFailure: null as string | null,
+    landed: (pr: PullRequest) => { pr.checks = [green("ci")]; }, moveHead: null as string | null,
     planned: null as (() => void) | null };
   Object.assign(h.ports, { updateBase: {
     plan: async (request: BaseUpdateRequest) => {
       plans.push(structuredClone(request));
       git.planned?.();
       if (git.conflict) return { kind: "conflict" as const };
+      if (!git.identityResolved) return { kind: "refused" as const, reason: COMMIT_ACCOUNT_REFUSAL };
       return { kind: "commit" as const, commit: createHash("sha1").update(`${request.head}:${request.base}:${request.at}`).digest("hex") };
     },
     push: async (request: BaseUpdatePush) => {
@@ -1256,6 +1259,15 @@ function behindQueue(count: number, options: { strict?: boolean; refreshConcurre
   } });
   return { h, plans, pushes, git };
 }
+
+test("an unresolved GitHub account blocks a base update without reserving or pushing a commit", async () => {
+  const { h, git, plans, pushes } = behindQueue(1);
+  git.identityResolved = false;
+  await h.sweep();
+  expect(plans).toHaveLength(1);
+  expect(h.merge("queued-0")).toMatchObject({ state: "blocked", reason: COMMIT_ACCOUNT_REFUSAL, updates: [] });
+  expect([pushes.length, h.creates.length, h.merges().length]).toEqual([0, 0, 0]);
+});
 
 function unknownQueue(count = 1, options: { resume?: UpdateSnapshot; current?: boolean; slots?: number } = {}) {
   const queue = behindQueue(count, { strict: false, resume: options.resume, refreshConcurrency: options.slots,

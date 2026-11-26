@@ -42,7 +42,7 @@ export function validRepositoryAuthorName(name: string): boolean {
 /** Git supplies the display name, including worktree and global config.
  * The email comes exclusively from the installation's GitHub account. */
 export async function repositoryCommitIdentity(cwd: string, exec: ExecPort = realExec,
-  source?: NodeJS.ProcessEnv): Promise<RepositoryCommitIdentity> {
+  source?: NodeJS.ProcessEnv, purpose: "launch" | "lane" = "launch"): Promise<RepositoryCommitIdentity> {
   try { await fs.stat(cwd); }
   catch (error) {
     // A synthetic/nonexistent launch directory has no repository identity.
@@ -57,7 +57,9 @@ export async function repositoryCommitIdentity(cwd: string, exec: ExecPort = rea
   if (root.code !== 0) throw new Error("Repository Git identity could not be read (values withheld)");
   const reportedRoot = root.stdout.replace(/\r?\n$/, "");
   const directory = path.isAbsolute(reportedRoot) ? reportedRoot : cwd;
-  if (await repositoryHasPrivacyPolicy(directory)) return machineIdentity();
+  // Standalone tools such as the batch merger can retain the repository's
+  // machine policy. A pipeline stage always binds the installation's owner.
+  if (purpose === "launch" && !source?.LLV_STAGE_GIT_RECEIPT && await repositoryHasPrivacyPolicy(directory)) return machineIdentity();
   const account = await resolveForgeCommitAccount();
   if (!account) return { policy: "repository", env: controllerCommitIdentityEnv(), refusal: COMMIT_ACCOUNT_REFUSAL };
   const configured = await exec("git", ["config", "--null", "--get", "user.name"], cwd, readEnv,

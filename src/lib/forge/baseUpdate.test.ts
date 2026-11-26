@@ -3,12 +3,17 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { COMMIT_ACCOUNT_REFUSAL } from "@/lib/git/forgeCommitAccount";
+import { DELEGATUS_COAUTHOR } from "@/lib/git/repositoryCommitIdentity";
+import { updateOperatorSettings } from "@/lib/operator/settings";
+import { fixtureForgeAccount, fixtureNoreply, seedForgeCommitAccount } from "@/test-helpers/forgeCommitAccount";
 
 /* The merge runner's base update against real Git: a local bare remote, a
    publishing clone and the project checkout the runner works in. No network. */
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-base-update-"));
 const previousStateDir = process.env.LLV_STATE_DIR;
 process.env.LLV_STATE_DIR = path.join(root, "state");
+seedForgeCommitAccount();
 const { BaseUpdateError, planBaseUpdate, pushBaseUpdate } = await import("./baseUpdate");
 
 afterAll(() => {
@@ -64,7 +69,7 @@ const snapshot = (repoDir: string) => ({
   fetchHead: fs.existsSync(path.join(repoDir, ".git", "FETCH_HEAD")),
 });
 
-test("a clean base update is the machine's exact merge, recreated identically and pushed as a fast-forward", async () => {
+test("a base update uses the owner's exact identity and is pushed as a fast-forward", async () => {
   const { remote, repoDir, head, base } = fixture("clean", "topic.txt", "main.txt");
   const before = snapshot(repoDir);
   const request = { repoDir, remote: "origin", head, base, at: AT };
@@ -74,7 +79,9 @@ test("a clean base update is the machine's exact merge, recreated identically an
   expect(git(repoDir, "rev-list", "--parents", "-n", "1", plan.commit)).toBe(`${plan.commit} ${head} ${base}`);
   expect(git(repoDir, "rev-parse", `${plan.commit}^{tree}`)).toBe(git(repoDir, "merge-tree", "--write-tree", head, base));
   expect(git(repoDir, "log", "-1", "--format=%an|%ae|%cn|%ce|%at|%ct|%s", plan.commit))
-    .toBe(`Delegatus|noreply@delegatus.invalid|Delegatus|noreply@delegatus.invalid|${AT_SECONDS}|${AT_SECONDS}|Merge ${base} into ${head}`);
+    .toBe([fixtureForgeAccount.login, fixtureNoreply, fixtureForgeAccount.login, fixtureNoreply,
+      AT_SECONDS, AT_SECONDS, `Merge ${base} into ${head}`].join("|"));
+  expect(git(repoDir, "log", "-1", "--format=%(trailers:only)", plan.commit)).toBe(DELEGATUS_COAUTHOR);
   expect(await planBaseUpdate(request)).toEqual(plan);
   expect(await planBaseUpdate({ ...request, at: "2026-10-31T11:00:01.000Z" })).not.toEqual(plan);
 
@@ -86,6 +93,29 @@ test("a clean base update is the machine's exact merge, recreated identically an
     refs: [...before.refs.split("\n"), `refs/remotes/origin/topic ${plan.commit}`].sort().join("\n") });
   // The pushed head already contains the base.
   expect(await planBaseUpdate({ ...request, head: plan.commit })).toEqual({ kind: "current" });
+});
+
+test("base updates honor opt-out and refuse an unresolved account", async () => {
+  const { remote, repoDir, head, base } = fixture("attribution", "topic.txt", "main.txt");
+  const request = { repoDir, remote: "origin", head, base, at: AT };
+  const email = ["fixture", "example.invalid"].join("@");
+  git(repoDir, "config", "user.name", "Update Fixture");
+  git(repoDir, "config", "user.email", email);
+  try {
+    updateOperatorSettings({ commitAttribution: false }, AT);
+    const plan = await planBaseUpdate(request);
+    if (plan.kind !== "commit") throw new Error(`expected a commit, got ${plan.kind}`);
+    expect(git(repoDir, "log", "-1", "--format=%an%n%ae%n%cn%n%ce", plan.commit))
+      .toBe(["Update Fixture", fixtureNoreply, "Update Fixture", fixtureNoreply].join("\n"));
+    expect(git(repoDir, "log", "-1", "--format=%(trailers:only)", plan.commit)).toBe("");
+    fs.unlinkSync(path.join(root, "state", "forge-commit-account.json"));
+    expect(await planBaseUpdate(request)).toEqual({ kind: "refused", reason: COMMIT_ACCOUNT_REFUSAL });
+    expect(git(remote, "rev-parse", "refs/heads/topic")).toBe(head);
+    expect(git(repoDir, "config", "user.email")).toBe(email);
+  } finally {
+    seedForgeCommitAccount();
+    updateOperatorSettings({ commitAttribution: true }, AT);
+  }
 });
 
 test("a textual conflict answers conflict and pushes nothing", async () => {

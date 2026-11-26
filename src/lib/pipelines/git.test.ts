@@ -1,4 +1,4 @@
-import { fixtureNoreply, seedForgeCommitAccount } from "@/test-helpers/forgeCommitAccount";
+import { fixtureForgeAccount, fixtureNoreply, seedForgeCommitAccount } from "@/test-helpers/forgeCommitAccount";
 import { cpuPriorityFromEnv } from "../runtime/cpuPriority";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { CONTROLLER_ARTIFACT_GIT_PATHS, CONTROLLER_ARTIFACT_PATHSPECS } from "./controllerArtifacts";
@@ -310,8 +310,8 @@ async function isolatedIdentityRepo() {
   fs.mkdirSync(path.join(repo, ".git", "hooks"), { recursive: true });
   fs.mkdirSync(path.join(repo, ".git", "info"), { recursive: true });
   fs.writeFileSync(path.join(repo, "source.ts"), "export const value = 1;\n");
-  // Existing privacy-bound settlement/reconciliation cases model this
-  // repository through its configuration, independent of its checkout name.
+  // These cases exercise a repository with checked-in privacy checks,
+  // independent of its checkout name.
   fs.writeFileSync(path.join(repo, "package.json"), JSON.stringify({ scripts: { "privacy:check": "bun scripts/privacy-publication-gate.ts" } }));
   fs.mkdirSync(path.join(repo, "scripts"));
   fs.writeFileSync(path.join(repo, "scripts/privacy-known-value-fingerprints.json"), "{}");
@@ -1843,9 +1843,8 @@ test("read-only declared output commits with no host Git identity and leaves con
     const result = (await commitPipelineStage(subject, "audit", false, box.exec, ["reports/audit.md"]));
     expect(result.ok).toBe(true);
     expect((await box.run("show", "--name-only", "--format=", "HEAD"))).toBe("reports/audit.md");
-    const fallbackEmail = ["noreply", "delegatus.invalid"].join("@");
     expect((await box.run("log", "-1", "--format=%an%n%ae%n%cn%n%ce"))).toBe(
-      ["Delegatus", fallbackEmail, "Delegatus", fallbackEmail].join("\n"),
+      [fixtureForgeAccount.login, fixtureNoreply, fixtureForgeAccount.login, fixtureNoreply].join("\n"),
     );
     expect((await box.exec("git", ["config", "--local", "--get", "user.name"], box.repo)).code).not.toBe(0);
     expect((await box.exec("git", ["config", "--local", "--get", "user.email"], box.repo)).code).not.toBe(0);
@@ -1854,7 +1853,7 @@ test("read-only declared output commits with no host Git identity and leaves con
   }
 });
 
-test.each([false, true])("read-only output uses the controller identity despite personal Git config (role-specific: %s) and passes publication", async (roleSpecific) => {
+test.each([false, true])("read-only output uses owner noreply despite personal Git config (role-specific: %s) and passes publication", async (roleSpecific) => {
   const box = (await isolatedIdentityRepo());
   try {
 
@@ -1875,9 +1874,8 @@ test.each([false, true])("read-only output uses the controller identity despite 
     fs.writeFileSync(path.join(box.repo, "reports", "audit.md"), "audited\n");
 
     expect((await commitPipelineStage(subject, "audit", false, box.exec, ["reports/audit.md"])).ok).toBe(true);
-    const controllerEmail = ["noreply", "delegatus.invalid"].join("@");
     expect((await box.run("log", "-1", "--format=%an%n%ae%n%cn%n%ce"))).toBe(
-      ["Delegatus", controllerEmail, "Delegatus", controllerEmail].join("\n"),
+      ["Configured Test", fixtureNoreply, "Configured Test", fixtureNoreply].join("\n"),
     );
     expect((await box.run("config", "--local", "--get", "user.email"))).toBe(email);
     expect((await box.run("config", "--local", "--get", "user.name"))).toBe("Configured Test");
@@ -1907,9 +1905,8 @@ test("controller stage commit overrides inherited identities and leaves agent co
     subject.worktreeDir = box.repo;
 
     expect((await commitPipelineStage(subject, "build", true, box.exec)).ok).toBe(true);
-    const controllerEmail = ["noreply", "delegatus.invalid"].join("@");
     expect((await box.run("log", "-1", "--format=%an%n%ae%n%cn%n%ce"))).toBe(
-      ["Delegatus", controllerEmail, "Delegatus", controllerEmail].join("\n"),
+      [fixtureForgeAccount.login, fixtureNoreply, fixtureForgeAccount.login, fixtureNoreply].join("\n"),
     );
     (await box.run("commit", "--allow-empty", "-m", "agent work"));
     expect((await box.run("log", "-1", "--format=%an%n%ae%n%cn%n%ce"))).toBe(
@@ -2326,9 +2323,15 @@ test("publication excludes the remote base and lane tips and admits a forge comm
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
-test("publication without a GitHub account refuses even a safe commit in a user repository", async () => {
+test.each([false, true])("publication without a GitHub account refuses even a safe commit (privacy policy: %s)", async privacy => {
   const box = await publishSandbox();
   try {
+    if (privacy) {
+      const cwd = box.subject.worktreeDir;
+      fs.mkdirSync(path.join(cwd, "scripts"));
+      fs.writeFileSync(path.join(cwd, "package.json"), JSON.stringify({ scripts: { "privacy:check": "bun scripts/privacy-publication-gate.ts" } }));
+      fs.writeFileSync(path.join(cwd, "scripts/privacy-known-value-fingerprints.json"), "{}");
+    }
     const sha = await box.commit("change.txt", "accepted work\n");
     fs.unlinkSync(path.join(publicationState, "forge-commit-account.json"));
     expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: sha })).toMatchObject({

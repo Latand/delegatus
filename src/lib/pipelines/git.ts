@@ -858,7 +858,7 @@ async function commitStageTree(pipeline: Pipeline, parent: string, tree: string,
       return { ok: false, error: "the stage commit tree differs from its declared output paths; preserve the index and worktree" };
     }
   }
-  const identity = await repositoryCommitIdentity(cwd, exec);
+  const identity = await repositoryCommitIdentity(cwd, exec, undefined, "lane");
   if (identity.refusal) return { ok: false, error: identity.refusal };
   const markerKey = identity.policy === "repository" && !identity.coauthor ? "Stage-Settlement" : "Delegatus-Stage-Settlement";
   const marker = `${markerKey}: ${crypto.randomUUID()}`;
@@ -1409,8 +1409,9 @@ export async function reconcilePipelineStageHead(pipeline: Pipeline, head: strin
   const local = (await currentPipelineBranchHead(pipeline, exec));
   if (!local.ok) return local;
   if (local.sha !== head) return { ok: false, error: "the stage head moved before history reconciliation" };
-  const repositoryIdentity = await repositoryCommitIdentity(pipeline.worktreeDir, exec);
+  const repositoryIdentity = await repositoryCommitIdentity(pipeline.worktreeDir, exec, undefined, "lane");
   if (repositoryIdentity.refusal) return { ok: false, error: repositoryIdentity.refusal };
+  const hasPrivacyPolicy = await repositoryHasPrivacyPolicy(pipeline.worktreeDir);
   // Check every commit this parent would reintroduce, including an unsafe
   // ancestor behind an admitted accepted tip. Unknown identities are refused
   // conservatively; values and partial metadata reads never enter the reason.
@@ -1421,7 +1422,7 @@ export async function reconcilePipelineStageHead(pipeline: Pipeline, head: strin
     const [commit, parents, ...fields] = line.split("\0");
     if (!/^[0-9a-f]{40}$/.test(commit) || !/^(?:[0-9a-f]{40}(?: [0-9a-f]{40})*)?$/.test(parents) || fields.length !== 4) return unreadableIdentity;
     for (const offset of [0, 2]) {
-      if (repositoryIdentity.policy === "machine"
+      if (hasPrivacyPolicy
         && (!admittedCommitMailbox(fields[offset], fields[offset + 1], offset === 0 ? "author" : "committer", parents ? parents.split(" ").length : 0, true)
           || publicationTextSafe(`${fields[offset]} ${fields[offset + 1]}`) === null)) return { ok: false,
         error: `history reconciliation refused to restore ${commit.slice(0, 12)} ${offset === 0 ? "author" : "committer"} identity; restored commits require publication-safe attribution (values withheld)` };
@@ -1436,7 +1437,7 @@ export async function reconcilePipelineStageHead(pipeline: Pipeline, head: strin
     if (messageStart < 0) return unreadableMessage;
     const encoding = /^encoding (.+)$/m.exec(bytes.subarray(0, messageStart).toString("ascii"))?.[1];
     if (encoding && !/^utf-?8$/i.test(encoding)) return unreadableMessage;
-    if (repositoryIdentity.policy === "machine" && !admittedPublicationMessage(bytes.subarray(messageStart + 2).toString("utf8"))) return { ok: false,
+    if (hasPrivacyPolicy && !admittedPublicationMessage(bytes.subarray(messageStart + 2).toString("utf8"))) return { ok: false,
       error: `history reconciliation refused to restore ${commit.slice(0, 12)} commit message; restored commits require publication-safe messages (values withheld)` };
   }
   const branch = (await exec("git", ["symbolic-ref", "HEAD"], pipeline.worktreeDir));
@@ -2442,8 +2443,7 @@ function publicationPhaseDetail(timing: PipelinePublishResult["phaseTimings"]): 
 async function checkPublicationMailboxes(pipeline: Pipeline, acceptedSha: string, remoteSha: string,
   baseSha: string, exec: ExecPort): Promise<string | null> {
   const cwd = pipeline.worktreeDir;
-  const machine = await repositoryHasPrivacyPolicy(cwd);
-  if (!machine && !await resolveForgeCommitAccount()) return COMMIT_ACCOUNT_REFUSAL;
+  if (!await resolveForgeCommitAccount()) return COMMIT_ACCOUNT_REFUSAL;
   const unreadable = "publication refused because new commit identities could not be verified (values withheld)";
   const git = withLiteralGitObjects(exec);
   // The publication probe reports the base alongside the destination. The
@@ -2467,12 +2467,10 @@ async function checkPublicationMailboxes(pipeline: Pipeline, acceptedSha: string
     const [sha, parents, author, authorEmail, committer, committerEmail] = fields.slice(i, i + 6);
     if (!/^[0-9a-f]{40}$/.test(sha) || !/^(?:[0-9a-f]{40}(?: [0-9a-f]{40})*)?$/.test(parents)) return unreadable;
     const count = parents ? parents.split(" ").length : 0;
-    // Validate even when the checkout declares a privacy gate. A lane can
-    // change its own policy files, but cannot exempt its new mailboxes.
-    if (!admittedCommitMailbox(author, authorEmail, "author", count, machine)) {
+    if (!admittedCommitMailbox(author, authorEmail, "author", count, false)) {
       return `publication refused for ${shortId(sha)} author identity. New commits require a noreply mailbox (values withheld)`;
     }
-    if (!admittedCommitMailbox(committer, committerEmail, "committer", count, machine)) {
+    if (!admittedCommitMailbox(committer, committerEmail, "committer", count, false)) {
       return `publication refused for ${shortId(sha)} committer identity. New commits require a noreply mailbox (values withheld)`;
     }
   }
