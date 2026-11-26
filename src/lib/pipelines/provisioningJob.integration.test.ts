@@ -2188,3 +2188,79 @@ test.skipIf(process.platform !== "linux").each(["step permit", "committed go"] a
       await removeProvisioningFixture(root);
     }
   }), 23_000);
+
+test.skipIf(process.platform !== "linux")("a live worker recorded under another PID namespace keeps custody until it can be proved gone", () => withControllerAuditState(async () => {
+  const { h, repo, root } = await realWorktreeLane("foreign-pidns-worker", BUILD_ONLY as never);
+  const { systemBootEpoch, captureProcessIdentity } = await import("@/lib/processIdentity");
+  const original = h.ports.provisionExec!;
+  const entered = latch(), reply = latch();
+  let reads = 0, dispatches = 0;
+  h.ports.provisionExec = async (command, args, cwd, signal, options) => {
+    if (command === "git" && args.includes("--git-common-dir") && ++reads === 1) {
+      entered.resolve();
+      await reply.promise;
+    } else if (reads > 0 && command === "git") dispatches++;
+    return original(command, args, cwd, signal, options);
+  };
+  const child = Bun.spawn(["sleep", "120"], { stdout: "ignore", stderr: "ignore" });
+  try {
+    const current = systemBootEpoch()!;
+    const foreign = current.replace(/pidns:.*$/, "pidns:pid:[4026539999]");
+    expect(foreign).not.toBe(current);
+    const lane = (await createPipelineFromRequest({ task: "Keep a foreign-namespace worker", repoDir: repo,
+      publication: "internal", stages: BUILD_ONLY as never }, h.ports)).pipeline!;
+    await tickPipelinesController([], h.ports);
+    await until(entered.promise);
+    await settleProvisioningJobsForTests();
+    const startIdentity = captureProcessIdentity(child.pid).startIdentity!;
+    const seed = async (bootEpoch: string) => withPipelineMutation(async (rows, persist) => {
+      const row = rows.find(item => item.id === lane.id)!;
+      row.provisioningJob = { ...row.provisioningJob!, worker: { pid: child.pid, startIdentity, bootEpoch } };
+      await persist([row]);
+    });
+    await seed(foreign);
+    reply.resolve();
+    dispatches = 0;
+    for (let tick = 0; tick < 5; tick++) { await tickPipelinesController([], h.ports); await Bun.sleep(20); }
+    await settleProvisioningJobsForTests();
+    const held = await findControllerPipeline(lane.id);
+    expect(dispatches).toBe(0);
+    expect(held?.runs[0]?.attempts).toHaveLength(0);
+    expect(held?.provisioningJob?.worker).toMatchObject({ pid: child.pid, bootEpoch: foreign });
+    child.kill("SIGKILL");
+    await child.exited;
+    await seed(current);
+    h.advanceWallClock(60_000);
+    await driveProvisioning(h.ports, async () => (await findControllerPipeline(lane.id))?.state === "running");
+    expect(dispatches).toBeGreaterThan(0);
+  } finally {
+    child.kill("SIGKILL");
+    reply.resolve();
+    await settleProvisioningJobsForTests();
+    await settlePipelineControllerJobs();
+    await settlePipelineStopReadLanes();
+    await removeProvisioningFixture(root);
+  }
+}), 30_000);
+
+test("the base fetch keeps its 60 s Git timeout instead of the step's remaining budget", () => withControllerAuditState(async () => {
+  const { h, repo, root } = await realWorktreeLane("fetch-timeout-contract", BUILD_ONLY as never);
+  const timeouts: Array<number | undefined> = [];
+  try {
+    delete h.ports.provisionExec;
+    const execute = h.ports.exec;
+    h.ports.exec = async (command, args, cwd, env, options) => {
+      if (command === "git" && args[0] === "fetch") timeouts.push((options as { timeoutMs?: number } | undefined)?.timeoutMs);
+      return execute(command, args, cwd, env, options);
+    };
+    const lane = (await createPipelineFromRequest({ task: "Fetch with the documented timeout", repoDir: repo,
+      publication: "internal", stages: BUILD_ONLY as never }, h.ports)).pipeline!;
+    await driveProvisioning(h.ports, async () => (await findControllerPipeline(lane.id))?.state === "running");
+    expect(timeouts).toEqual([60_000]);
+  } finally {
+    await settleProvisioningJobsForTests();
+    await settlePipelineControllerJobs();
+    await settlePipelineStopReadLanes();
+    await removeProvisioningFixture(root);
+  }
+}), 20_000);

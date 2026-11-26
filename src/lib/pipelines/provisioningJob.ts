@@ -234,7 +234,7 @@ type JobHooks = { phaseDone?: Promise<void>; parked(row: Pipeline): void };
 function workerExited(worker: NonNullable<ProvisioningRecord["worker"]>): boolean {
   const boot = systemBootEpoch();
   if (!boot || !worker.bootEpoch) return false;
-  if (worker.bootEpoch !== boot) return true;
+  if (worker.bootEpoch !== boot) return bootEpochProvesExit(worker.bootEpoch, boot);
   if (processIdentityStatus(worker) !== "dead") return false;
   try { process.kill(-worker.pid, 0); return false; }
   catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; }
@@ -775,7 +775,9 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
     try {
       read();
       if (add) await recordProvisionFixtureEvent("worktree-add", { pipelineId: id });
-      const timeoutMs = Math.min(options?.timeoutMs ?? Infinity, Math.max(1, Math.floor(stopAt - clock.monotonicMs())));
+      // The fetch keeps its own Git timeout; the step watchdog aborts the signal at stopAt.
+      const timeoutMs = fetch && options?.timeoutMs !== undefined ? options.timeoutMs
+        : Math.min(options?.timeoutMs ?? Infinity, Math.max(1, Math.floor(stopAt - clock.monotonicMs())));
       const result = launcher ? await git.exec(launcher.command,
         ["--no-env-file", launcher.entry, "add", String(Date.now() + timeoutMs), effectCwd, ...effectArgs],
         launcher.cwd, signal, { ...options, timeoutMs, inheritFd: fence!.fd })

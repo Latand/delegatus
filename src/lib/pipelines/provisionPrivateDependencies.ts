@@ -109,7 +109,7 @@ export async function preparePrivateDependencies(repository: string, checkout: s
   const now = ports.now ?? Date.now;
   const census = async () => {
     const observation = await (ports.observeLegacy ?? observeLegacyInstaller)(checkout);
-    if (observation.kind !== "clear") await ports.uncertain(observation);
+    if (observation.kind !== "clear") return ports.uncertain(observation);
     if (observation.observedAt > now() || now() - observation.observedAt > 5_000) {
       await ports.uncertain({ kind: "incomplete", reason: "expired" });
     }
