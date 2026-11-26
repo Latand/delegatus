@@ -6,6 +6,8 @@ import { pipelineChangeSource, pipelineRecordReader } from "@/lib/pipelines/stor
 import { laneFinish, FINISHED_LANE_RETENTION_MS } from "@/lib/pipelines/laneFinish";
 import type { PipelineStageAttempt } from "@/lib/pipelines/types";
 import { attemptTempJournalPath, tempSweepMode } from "@/lib/tempSweep";
+import { attemptTempFailureDetail } from "./attemptTempDiagnostics";
+import { runUnregisteredScratchPass, unregisteredScratchSummary, type UnregisteredScratchReport } from "./unregisteredScratch";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import fs from "node:fs";
 import { createHash } from "node:crypto";
@@ -203,6 +205,13 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
     let backfill: Awaited<ReturnType<typeof backfillAttemptTempRetention>> = { checked: 0, updated: 0 };
     let cleanupChildCpuSeconds = 0;
     let sourceAttributedBeforeRetirement = 0;
+    // Roots nothing owns are removed by age and liveness, ahead of the ledger
+    // page, so a ledger that is under its cap cannot leave them on the disk.
+    let unregistered: UnregisteredScratchReport | null = null;
+    try {
+      unregistered = await runUnregisteredScratchPass(store, { mode, scan: ports.scan, references: ports.references, availableBytes: ports.availableBytes,
+        checkoutReads, accountCpuSeconds: seconds => { if (Number.isFinite(seconds) && seconds > 0) cleanupChildCpuSeconds += seconds; } });
+    } catch (error) { console.error("[attempt temp] unregistered scratch pass failed", attemptTempFailureDetail(error)); }
     const options: AttemptTempSweepOptions = {
       runBudgetMs: attemptTempRemaining(40_000),
       state: recordingAttemptTempState(store), authority: attemptScratchAuthority, evidenceAuthority: attemptTempAuthority,
@@ -250,8 +259,8 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
     copies.sourceAttributed += sourceAttributedBeforeRetirement;
     const cpu = process.cpuUsage(cpuStarted);
     const cleanup = store.cleanupMetrics(Date.now(), roots.reclaimedBytes, (cpu.user + cpu.system) / 1e6 + cleanupChildCpuSeconds);
-    const report = { ...roots, errors: roots.errors + (backfill.errors ?? 0), copies, backfill,
-      cleanup,
+    const report = { ...roots, errors: roots.errors + (backfill.errors ?? 0) + (unregistered?.errors ?? 0), copies, backfill,
+      cleanup, unregistered,
       retention: { ...store.retention(Date.now(), options.retentionMs), scratchPeriodDays: ATTEMPT_SCRATCH_RETENTION_MS / 86400000,
         evidencePeriodDays: FINISHED_LANE_RETENTION_MS / 86400000 } };
     const file = statePath("attempt-temp-report.json");
@@ -260,7 +269,8 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
     const previous = recordedReport(file, mode);
     const changed = JSON.stringify(previous.condition) !== JSON.stringify(condition);
     const forecastChanged = previous.retention !== undefined && JSON.stringify(previous.retention) !== JSON.stringify(report.retention);
-    const noteworthy = report.pass || report.adopted || report.operatorHeld || report.removed || copies.removed || copies.sourceAttributed || report.errors || copies.errors
+    const noteworthy = unregistered?.removed || unregistered?.finishedInterrupted || unregistered?.errors || unregistered?.trigger || unregistered?.deferred
+      || report.pass || report.adopted || report.operatorHeld || report.removed || copies.removed || copies.sourceAttributed || report.errors || copies.errors
       || report.spaceError || report.lowSpace || report.deferred || report.overCapBytes || changed || forecastChanged
       || report.retention.dueBytes || report.retention.upcomingBytes;
     {
@@ -272,7 +282,9 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
         + (last ? `Last pass ${last.ended === "complete" ? "completed" : "ended when pressure cleared"} in ${minutes(last.durationMs)} over ${last.ticks} ticks, `
           + `${last.visited} visits, ${last.removed} roots removed (${gb(last.removedBytes)}). ` : "")
         + (full && last?.ended !== "complete" ? `Last full pass completed in ${minutes(full.durationMs)} over ${full.ticks} ticks. ` : "");
-      const summary = passText + `${report.lowSpace ? "Scratch free space is below the working reserve. " : ""}`
+      const u = report.unregistered;
+      const unregisteredText = u ? unregisteredScratchSummary(u, mode, gb) : "";
+      const summary = passText + unregisteredText + `${report.lowSpace ? "Scratch free space is below the working reserve. " : ""}`
         + `${report.spaceError ? `Scratch free-space observation failed: ${report.spaceError}. ` : ""}`
         + `Recorded allocation ${gb(report.bytes)}; cap ${gb(report.capBytes)}; ${mode === "dry-run" ? "would reclaim" : "reclaimed"} ${gb(report.removedBytes)} attributed; `
         + `budget deferred ${gb(report.deferredBytes)}; held live ${gb(report.liveHeldBytes)}; held by evidence ${gb(report.evidenceHeldBytes)}; `
@@ -290,7 +302,8 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
         + `${copies.removed} automatic copies removed, ${copies.unattributed.count} unattributed copies retained`
         + (pass ? `; pass ${pass.position}/${pass.total} roots, ${pass.ticks} ticks, ${pass.removed} roots (${pass.removedBytes} bytes) removed this pass${pass.ended ? `, ${pass.ended}` : ""}` : "")
         + (last ? `; last pass ${last.ended} in ${last.durationMs} ms over ${last.ticks} ticks, ${last.removed} roots (${last.removedBytes} bytes) removed` : "")
-        + (full ? `; last full pass ${full.durationMs} ms` : ""));
+        + (full ? `; last full pass ${full.durationMs} ms` : "")
+        + (u ? `; unregistered scratch ${u.found} roots, ${u.examined} examined, ${u.removed + u.finishedInterrupted} removed (${u.removedBytes} bytes), ${u.errors} errors${u.trigger ? `, trigger ${u.trigger}` : ""}${u.deferred ? `, ${u.deferred}` : ""}` : ""));
     }
     return report;
   } catch (error) {
