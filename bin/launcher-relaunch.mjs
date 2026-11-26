@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import net from "node:net";
 import { fileURLToPath } from "node:url";
 import { headRevision, probePageAndChunk, readStartIdentity, runtimeHostStartIdentity, TERMINAL_BOOTSTRAP_TIMEOUT_MS } from "./self-update-supervisor.mjs";
+import { terminalHealthPublishedBefore } from "./launcher-deadline.mjs";
 import { probeHeadersFrom } from "./internalService.mjs";
 import { viewerBootGateKey } from "./viewerGateKey.mjs";
 import { assertLauncherAvailable } from "./launcher-adoption.mjs";
@@ -146,7 +147,7 @@ async function terminalBootstrap(encoded, nextEntry, args) {
   const rollback = detail => {
     const currentTrial = read(trialFile) ?? intent;
     restore(); atomic(trialFile, JSON.stringify({ ...currentTrial, state: "rolled-back", detail,
-      rollbackDeadlineAt: Date.now() + ROLLBACK_TIMEOUT_MS }) + "\n");
+      rollbackDeadlineAt: currentTrial.rollbackDeadlineAt ?? Date.now() + ROLLBACK_TIMEOUT_MS }) + "\n");
   };
   if (!loads) rollback("The replacement launcher failed its load check.");
   startupLock.release();
@@ -196,19 +197,28 @@ async function terminalBootstrap(encoded, nextEntry, args) {
   const key = viewerBootGateKey(process.env);
   const headers = probeHeadersFrom(dirname(directory));
   if (key && !/[^\t\x20-\x7e]/.test(key)) headers.authorization = `Bearer ${key.trim()}`;
-  const rollbackExpiry = failed ? read(trialFile)?.rollbackDeadlineAt : null;
-  const deadline = Math.min(performance.now() + TERMINAL_BOOTSTRAP_TIMEOUT_MS,
-    rollbackExpiry ? performance.now() + Math.max(0, rollbackExpiry - Date.now())
-      : owned ? performance.now() + Math.max(0, switchDeadline(apply) - Date.now()) : Infinity);
+  const deadline = performance.now() + TERMINAL_BOOTSTRAP_TIMEOUT_MS;
+  const switchExpiry = owned ? switchDeadline(apply) : Infinity;
+  let rollbackExpiry;
   while (performance.now() < deadline) {
-    const trial = read(trialFile); const record = read(recordFile);
-    if (trial?.requestId === intent.requestId && trial.state === "rolled-back") failed = true;
+    const trial = read(trialFile);
+    if (trial?.requestId === intent.requestId && trial.target === intent.target && trial.state === "rolled-back") {
+      failed = true;
+      rollbackExpiry ??= trial.rollbackDeadlineAt;
+    }
+    // The watchdog writes rolled-back only after its owned children stop. Keep
+    // observing for that bounded teardown, then honor the persisted rollback.
+    const now = Date.now();
+    if (failed && now >= rollbackExpiry) break;
+    if (!failed && now >= switchExpiry + 2 * STOP_TIMEOUT_MS) break;
+    const record = read(recordFile);
     if (record && record.launcher.pid === child.pid && record.launcher.startIdentity && record.launcher.startIdentity === readStartIdentity(child.pid)
       && (!record.launcher.state || record.launcher.state === "healthy") && record.web.state === "healthy" && record.runtimeHost.state === "healthy"
       && record.web.startIdentity && record.runtimeHost.startIdentity
       && record.web.startIdentity === readStartIdentity(record.web.pid) && record.runtimeHost.startIdentity === readStartIdentity(record.runtimeHost.pid)
       && record.web.revision === record.runtimeHost.revision
       && record.web.revision === (failed ? plan.priorRevision : plan.target.slice(0, 7))
+      && (failed || terminalHealthPublishedBefore(record, switchExpiry))
       && (failed || record.launcher.requestId === intent.requestId)) {
       const socketHealthy = await terminalHostHealthy(record);
       if (socketHealthy && await probePageAndChunk(record.port, 5000, headers) === null) {
@@ -230,16 +240,16 @@ async function terminalBootstrap(encoded, nextEntry, args) {
     await new Promise(resolve => setTimeout(resolve, 100));
   }
   const trial = read(trialFile);
-  const detail = trial?.rollbackDeadlineAt && Date.now() >= trial.rollbackDeadlineAt
+  const switchOverrun = !failed && Date.now() >= switchExpiry;
+  const detail = failed && Date.now() >= rollbackExpiry
     ? "The launcher rollback exceeded its 10 minute deadline"
-    : owned && Date.now() >= switchDeadline(apply)
-      ? trial?.switchOverrun ?? SWITCH_OVERRUN
+    : switchOverrun ? trial?.switchOverrun ?? SWITCH_OVERRUN
       : "Terminal launcher bootstrap exceeded its deadline";
-  if (owned && Date.now() >= switchDeadline(apply) && trial) {
+  if (switchOverrun && trial) {
     trial.switchOverrun = trial.switchOverrun ?? SWITCH_OVERRUN;
     atomic(trialFile, JSON.stringify(trial) + "\n");
   }
-  if (!startedPrior) rollback(detail);
+  if (!failed) rollback(detail);
   await refuseLauncher(detail, child, startedPrior ? priorIdentity : readStartIdentity(child.pid), read(trialFile) ?? trial);
   throw new Error("Launcher health could not be verified; update custody was retained.");
 }
@@ -391,11 +401,13 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
     catch (error) { detail = `${detail}: ${error.message}`; }
     refuse(detail);
   };
+  let startupExpiry;
   const arm = () => {
     clearTimeout(watchdog);
     expired = false;
     const deadline = trial?.state === "rolled-back" ? trial.rollbackDeadlineAt
       : trial ? trial.switchDeadlineAt : Date.now() + SWITCH_TIMEOUT_MS;
+    startupExpiry = deadline;
     watchdog = setTimeout(() => {
       expired = true;
       const detail = trial?.state === "rolled-back" ? "The launcher rollback exceeded its 10 minute deadline"
@@ -624,6 +636,7 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
     retainsCustody: () => trial !== null || existsSync(paths.request),
     hasTrial: () => trial !== null && trial.state !== "rolled-back",
     isReplacementStart: () => trial !== null,
+    startupExpiry: () => startupExpiry,
     async recoverPending() {
       if (trial?.state === "rolled-back" && Date.now() >= trial.rollbackDeadlineAt) {
         return stopAndRefuse("The launcher rollback exceeded its 10 minute deadline");

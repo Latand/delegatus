@@ -36,11 +36,13 @@ test("seat tick actions wait for committed worktree recovery without blocking co
   let finishRecovery!: () => void;
   const recovery = new Promise<void>(resolve => { finishRecovery = resolve; });
   let tickStarted = false;
+  let loadedControllers = 0;
   await startCurrentReleaseControllers({}, {
     loadFlowPipelineController: async () => ({ startFlowPipelineController: () => {} }),
     loadAccountMigrationController: async () => ({ startAccountMigrationController: async () => {} }),
     loadSeatTick: async () => ({ startSeatTick: () => { tickStarted = true; return true; } }),
-  }, { beforeSeatTick: recovery });
+  }, { beforeSeatTick: recovery, onStep: () => { loadedControllers++; } });
+  expect(loadedControllers).toBe(3);
   expect(tickStarted).toBeFalse();
   finishRecovery();
   await recovery;

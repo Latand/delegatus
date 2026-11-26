@@ -145,13 +145,15 @@ interface Snapshot {
 }
 
 let snapshotMemo: Snapshot | null = null;
-let resourceSnapshotMemo: { at: number; data: Promise<WindowsSnapshot> } | null = null;
+let resourceSnapshotMemo: Snapshot | null = null;
+let resourceSnapshotFlight: Promise<Snapshot> | null = null;
 
 /** Test seam: forces the next read to take a fresh snapshot rather than one up
     to five seconds old, so a test that just spawned a child can see it. */
 export function resetWindowsSnapshotForTests(): void {
   snapshotMemo = null;
   resourceSnapshotMemo = null;
+  resourceSnapshotFlight = null;
 }
 
 /** Take a fresh command result and populate the same cache every backend reader
@@ -172,8 +174,7 @@ function snapshot(): Snapshot {
   return snapshotMemo!;
 }
 
-function cwdFor(pid: number): string | null {
-  const current = snapshot();
+function cwdFor(current: Snapshot, pid: number): string | null {
   const cached = current.cwds.get(pid);
   if (cached !== undefined) return cached;
   const raw = windowsProcessCwd(pid);
@@ -200,7 +201,7 @@ function readArgv(pid: number): string[] {
 }
 
 function readCwd(pid: number): string | null {
-  return cwdFor(pid);
+  return cwdFor(snapshot(), pid);
 }
 
 function readPpid(pid: number): number | null {
@@ -215,6 +216,7 @@ function processIdentity(pid: number): string | null {
 function processExited(): boolean {
   return false;
 }
+async function resourceProcessExited(): Promise<boolean> { return false; }
 
 /**
  * `Win32_Process` already counts user and kernel time per process, so the CPU
@@ -237,7 +239,13 @@ function readEnvVar(): string | null {
 }
 
 function listProcesses(): ProcSnapshotEntry[] {
-  return snapshotEntries(snapshot().data, cwdFor, CONSTANT_TTY);
+  const current = snapshot();
+  return snapshotEntries(current.data, (pid) => cwdFor(current, pid), CONSTANT_TTY);
+}
+
+async function resourceListProcesses(): Promise<ProcSnapshotEntry[]> {
+  const current = await resourceSnapshot();
+  return snapshotEntries(current.data, (pid) => cwdFor(current, pid), CONSTANT_TTY);
 }
 
 /**
@@ -256,8 +264,8 @@ async function resourceSystemMemory(): Promise<SystemMemory | null> {
   return systemMemory();
 }
 
-function processMemory(pids: Iterable<number>): Map<number, ProcessMemory> {
-  const rows = snapshot().data.rows;
+function memoryFromSnapshot(snapshot: WindowsSnapshot, pids: Iterable<number>): Map<number, ProcessMemory> {
+  const rows = snapshot.rows;
   const map = new Map<number, ProcessMemory>();
   for (const pid of pids) {
     if (!Number.isInteger(pid) || pid <= 0) continue;
@@ -267,36 +275,38 @@ function processMemory(pids: Iterable<number>): Map<number, ProcessMemory> {
   return map;
 }
 
+function processMemory(pids: Iterable<number>): Map<number, ProcessMemory> {
+  return memoryFromSnapshot(snapshot().data, pids);
+}
+
 function ppidMap(): Map<number, number> {
   return new Map(snapshot().data.ppids);
 }
 
-async function resourceSnapshot(): Promise<WindowsSnapshot> {
-  const now = Date.now();
-  if (resourceSnapshotMemo && now - resourceSnapshotMemo.at < SNAPSHOT_TTL_MS) return resourceSnapshotMemo.data;
-  const data = runSnapshotCommandAsync(RUN_TIMEOUT_MS)
-    .then((command) => parseWindowsProcessSnapshot(command.error ? "" : command.stdout));
-  resourceSnapshotMemo = { at: now, data };
+async function resourceSnapshot(fresh = false): Promise<Snapshot> {
+  if (resourceSnapshotFlight) return resourceSnapshotFlight;
+  if (!fresh && resourceSnapshotMemo && Date.now() - resourceSnapshotMemo.at < SNAPSHOT_TTL_MS) return resourceSnapshotMemo;
+  const flight = runSnapshotCommandAsync(RUN_TIMEOUT_MS).then((command): Snapshot => ({
+    at: Date.now(),
+    data: parseWindowsProcessSnapshot(command.error ? "" : command.stdout),
+    cwds: new Map(),
+  }));
+  resourceSnapshotFlight = flight;
   try {
-    return await data;
-  } catch (error) {
-    if (resourceSnapshotMemo?.data === data) resourceSnapshotMemo = null;
-    throw error;
+    const snapshot = await flight;
+    if (resourceSnapshotFlight === flight) resourceSnapshotMemo = snapshot;
+    return snapshot;
+  } finally {
+    if (resourceSnapshotFlight === flight) resourceSnapshotFlight = null;
   }
 }
 
-async function resourcePpidMap(): Promise<Map<number, number>> {
-  return new Map((await resourceSnapshot()).ppids);
+async function resourcePpidMap(fresh = false): Promise<Map<number, number>> {
+  return new Map((await resourceSnapshot(fresh)).data.ppids);
 }
 
 async function resourceProcessMemory(pids: Iterable<number>): Promise<Map<number, ProcessMemory>> {
-  const rows = (await resourceSnapshot()).rows;
-  const map = new Map<number, ProcessMemory>();
-  for (const pid of pids) {
-    const row = rows.get(pid);
-    if (Number.isInteger(pid) && pid > 0 && row) map.set(pid, { rssBytes: row.workingSetBytes, swapBytes: 0 });
-  }
-  return map;
+  return memoryFromSnapshot((await resourceSnapshot()).data, pids);
 }
 
 /**
@@ -309,6 +319,8 @@ async function resourceProcessMemory(pids: Iterable<number>): Promise<Map<number
  */
 function scanFdTargetsUnder(): void {}
 function scanFdTargetsFor(): void {}
+async function resourceScanFdTargetsUnder(): Promise<void> {}
+async function resourceScanFdTargetsFor(): Promise<void> {}
 function pidWritesPath(): boolean {
   return false;
 }
@@ -329,12 +341,16 @@ export const windowsBackend: ProcBackend = {
   listProcesses,
   systemMemory,
   resourceSystemMemory,
+  resourceListProcesses,
+  resourceProcessExited,
   resourcePpidMap,
   resourceProcessMemory,
   processMemory,
   ppidMap,
   scanFdTargetsUnder,
+  resourceScanFdTargetsUnder,
   scanFdTargetsFor,
+  resourceScanFdTargetsFor,
   pidWritesPath,
   pidHoldsPath,
 };

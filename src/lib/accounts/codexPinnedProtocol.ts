@@ -8,6 +8,7 @@ import { fromJSONSchema, type ZodType } from "zod";
 import { CODEX_PROTOCOL_MANIFESTS, SUPPORTED_CODEX_VERSIONS } from "./codexVersions";
 import { CodexAppServerProtocolError } from "./codexAppServerProtocol";
 import { codexSchemaBreaks } from "./codexSchemaCompatibility";
+import { cacheEntryPath } from "@/lib/configDir";
 import { signalDetachedProcessGroup } from "@/lib/processGroup";
 import { hardenedRedact } from "@/lib/view/compactText";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -89,6 +90,20 @@ function strictObjects(value: unknown): unknown {
   if (!value || typeof value !== "object") return value;
   const row = value as Schema;
   const result = Object.fromEntries(Object.entries(row).map(([key, child]) => [key, strictObjects(child)]));
+  // An object with its own fields and inline object branches (an MCP
+  // elicitation: server, thread and turn beside a mode branch) is one object.
+  // Closing the outer shape and each branch separately admits no payload, so
+  // each branch is closed over both field sets and the outer shape stays open.
+  const branches = row.oneOf ? "oneOf" : row.anyOf ? "anyOf" : null;
+  const inline = (branch: unknown): branch is Schema => !!branch && typeof branch === "object" && (branch as Schema).type === "object" && !!(branch as Schema).properties;
+  if (row.type === "object" && row.properties && row.additionalProperties === undefined && branches
+    && (result[branches] as unknown[]).every(inline)) {
+    const required = Array.isArray(row.required) ? row.required : [];
+    result[branches] = (result[branches] as Schema[]).map(branch => ({ ...branch,
+      properties: { ...(result.properties as Record<string, unknown>), ...branch.properties },
+      required: [...new Set([...required, ...(Array.isArray(branch.required) ? branch.required : [])])] }));
+    return result;
+  }
   if (row.type === "object" && row.properties && row.additionalProperties === undefined) result.additionalProperties = false;
   return result;
 }
@@ -309,8 +324,19 @@ function probeGroupAlive(groupId: number): boolean | null {
   }
 }
 
+/** Where the generator may write so that this process can read the result.
+ * In the Docker install `codex` is an nsenter shim: the CLI runs in the host's
+ * mount namespace, where the container's /tmp does not exist and a same-named
+ * host /tmp does. Only the home directory is mounted at the same path in both,
+ * so the bundle is written under the cache root there. */
+export function codexSchemaScratchRoot(env: Readonly<Record<string, string | undefined>> = process.env): string {
+  return env.LLV_DOCKER_NSENTER_SHIMS === "1" ? cacheEntryPath("codex-schema") : os.tmpdir();
+}
+
 export const generateCodexSchemas = async (binary: string, env: NodeJS.ProcessEnv, options: { timeoutMs?: number } = {}): Promise<{ stable: string; experimental: string }> => {
-  const scratch = await fs.promises.mkdtemp(path.join(os.tmpdir(), "delegatus-codex-schema-"));
+  const root = codexSchemaScratchRoot();
+  await fs.promises.mkdir(root, { recursive: true });
+  const scratch = await fs.promises.mkdtemp(path.join(root, "delegatus-codex-schema-"));
   try {
     const result = { stable: "", experimental: "" };
     for (const name of ["stable", "experimental"] as const) {

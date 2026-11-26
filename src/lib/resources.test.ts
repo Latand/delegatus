@@ -11,12 +11,12 @@ import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, op
 import os from "node:os";
 import path from "node:path";
 
-import { procBackend, selectProcBackend } from "@/lib/proc";
+import { procBackend } from "@/lib/proc";
 import { shellQuote } from "@/lib/agent/cli";
 import { createResourceDiagnosticTail, RESOURCE_FAILURE_STDERR_MAX_BYTES } from "@/lib/resourceCollector";
 import type { FileEntry, ResourcesPayload } from "@/lib/types";
 
-import { allowedStructuredHostTarget, applyResourceTargets, buildResourceSnapshot, consumeKillTarget, createResourcesReader, lastResourceBuildDiagnostic, lastResourceTargetRefs, noteSessionTargets, parsePersistedResourceObservation, parseResourcesFixture, resetResourcesForTests, resolveResourceWorkerLaunch, resourceDiagnosticHeader, resourceWorkerFileSnapshot, serializeResourceObservationForStorage, RESOURCE_OBSERVATION_MAX_BYTES, RESOURCE_WORKER_OUTPUT_MAX_BYTES, type StructuredHostKillRef, type StructuredHostRecord } from "./resources";
+import { allowedStructuredHostTarget, applyResourceTargets, buildResourceSnapshot, consumeKillTarget, createResourcesReader, lastResourceBuildDiagnostic, lastResourceTargetRefs, noteSessionTargets, parsePersistedResourceObservation, parseResourcesFixture, readPressureWithDeadline, resetResourcesForTests, resolveResourceWorkerLaunch, resourceDiagnosticHeader, resourcePlatformUsesBoundedPressure, resourceWorkerFileSnapshot, serializeResourceObservationForStorage, RESOURCE_OBSERVATION_MAX_BYTES, RESOURCE_WORKER_OUTPUT_MAX_BYTES, type StructuredHostKillRef, type StructuredHostRecord } from "./resources";
 import { RESOURCE_WORKER_PID_NAMESPACE_ENTRYPOINT } from "./resources";
 
 afterEach(async () => { await stopWorktreeSweepWorker(); });
@@ -1302,74 +1302,105 @@ describe("kill-target allowlist", () => {
 });
 
 describe("resource recurring reads", () => {
-  test.each(["darwin", "win32"] as const)("%s default collector keeps a held OS probe off the event loop", async (platform) => {
-    const fixture = mkdtempSync(path.join(os.tmpdir(), "resource-held-probe-"));
-    const release = path.join(fixture, "release");
-    const command = path.join(fixture, platform === "darwin" ? "vm_stat" : "powershell.exe");
-    const previousPath = process.env.PATH;
-    const previousOverride = process.env.LLV_RESOURCE_COLLECTOR_IN_PROCESS;
-    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
-    const backend = selectProcBackend(platform);
-    const payload: ResourcesPayload = { system: null, sessions: [] };
-    const diagnostic = { fresh: false, status: "complete" as const, durationMs: 0, phases: {
-      systemMemory: 0, readFiles: 0, readHosts: 0, ppidMap: 0, processMemory: 0, attach: 0, serialization: 0,
-    } };
-    writeFileSync(command, `#!/bin/sh\nwhile [ ! -e ${shellQuote(release)} ]; do sleep 0.01; done\nprintf ''\n`);
-    chmodSync(command, 0o755);
-    let markBuildComplete!: () => void;
-    const buildComplete = new Promise<void>((resolve) => { markBuildComplete = resolve; });
-    let reader: ReturnType<typeof createResourcesReader>;
-    process.env.PATH = `${fixture}${path.delimiter}${previousPath ?? ""}`;
-    Object.defineProperty(process, "platform", { ...platformDescriptor, value: platform });
-    delete process.env.LLV_RESOURCE_COLLECTOR_IN_PROCESS;
-    try {
-      reader = createResourcesReader(async () => {
-        try {
-          if (platform === "darwin") await backend.resourceSystemMemory?.();
-          await backend.resourcePpidMap?.();
-          await backend.resourceProcessMemory?.([process.pid]);
-          return payload;
-        } finally {
-          markBuildComplete();
-        }
-      }, () => null, Date.now, () => diagnostic);
-    } finally {
-      Object.defineProperty(process, "platform", platformDescriptor);
-      if (previousOverride === undefined) delete process.env.LLV_RESOURCE_COLLECTOR_IN_PROCESS;
-      else process.env.LLV_RESOURCE_COLLECTOR_IN_PROCESS = previousOverride;
+  test.skipIf(process.platform === "win32").each([
+    { backend: "portable", probe: "vm_stat", fallback: false, serving: false },
+    { backend: "portable", probe: "vm.swapusage", fallback: false, serving: false },
+    { backend: "portable", probe: "ps", fallback: false, serving: false },
+    { backend: "portable", probe: "lsof", fallback: false, serving: false },
+    { backend: "portable", probe: "rss", fallback: false, serving: false },
+    { backend: "portable", probe: "kern.boottime", fallback: false, serving: false },
+    { backend: "windows", probe: "powershell.exe", fallback: false, serving: false },
+    { backend: "portable", probe: "ps", fallback: true, serving: false },
+    { backend: "portable", probe: "lsof", fallback: true, serving: false },
+    { backend: "windows", probe: "powershell.exe", fallback: true, serving: false },
+    { backend: "portable", probe: "lsof-scoped", fallback: true, serving: true },
+    { backend: "portable", probe: "lsof-transcript", fallback: true, serving: true },
+    { backend: "portable", probe: "vm_stat", fallback: false, serving: true },
+  ])("$backend production read keeps a held $probe probe off the event loop (scanner fallback: $fallback, serving: $serving)", async ({ backend, probe, fallback, serving }) => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), "resource-held-probe-"));
+    const fixture = path.join(import.meta.dir, "resources.heldProbe.fixture.ts");
+    const isolatedHome = path.join(directory, "home");
+    const isolatedTemp = path.join(directory, "tmp");
+    mkdirSync(isolatedHome, { recursive: true });
+    mkdirSync(isolatedTemp, { recursive: true });
+    const heldFile = path.join(isolatedTemp, `claude-${process.getuid?.() ?? 0}`, "project", "session", "tasks", "held.output");
+    const claudeHome = path.join(isolatedHome, "claude");
+    const heldTranscript = path.join(claudeHome, "projects", "held-project", "session.jsonl");
+    if (fallback) mkdirSync(path.dirname(heldFile), { recursive: true });
+    if (fallback) writeFileSync(heldFile, "fixture output");
+    if (fallback) {
+      mkdirSync(path.dirname(heldTranscript), { recursive: true });
+      writeFileSync(heldTranscript, [
+        { type: "session_meta", payload: { cwd: "/fixture/project" } },
+        { type: "event_msg", payload: { type: "task_started" } },
+      ].map(record => JSON.stringify(record)).join("\n") + "\n");
     }
-
-    let heartbeat = false;
-    const heartbeatTimer = setTimeout(() => { heartbeat = true; }, 25);
-    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    for (const command of ["vm_stat", "sysctl", "ps", "lsof", "powershell.exe"]) {
+      writeFileSync(path.join(directory, command),
+        `#!/bin/sh\nexec ${shellQuote(process.execPath)} ${shellQuote(fixture)} command ${command} "$@"\n`, { mode: 0o755 });
+    }
+    const child = Bun.spawn([process.execPath, fixture], {
+      env: {
+        ...process.env,
+        HOME: isolatedHome,
+        TMPDIR: isolatedTemp,
+        CLAUDE_CODE_TMPDIR: isolatedTemp,
+        PATH: `${directory}${path.delimiter}${process.env.PATH ?? ""}`,
+        LLV_STATE_DIR: path.join(directory, "state"),
+        LLV_STATE_OWNER: "viewer",
+        LLV_RESOURCE_COLLECTOR_IN_PROCESS: undefined,
+        VIEWER_PROC_BACKEND: backend,
+        PORT: "1",
+        LLV_TEST_PROBE_DIR: directory,
+        LLV_TEST_HELD_PROBE: probe,
+        LLV_TEST_REAL_FILE_SCAN: fallback ? "1" : undefined,
+        LLV_TEST_HELD_FILE_PATH: heldFile,
+        LLV_TEST_HELD_TRANSCRIPT_PATH: heldTranscript,
+        LLV_CLAUDE_HOME: claudeHome,
+        DELEGATUS_CLAUDE_HOME: claudeHome,
+        LLV_TEST_SERVING_RELEASE: serving ? "1" : undefined,
+        LLV_FILE_SCANNER_WORKER_DISABLED: fallback ? "1" : undefined,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const deadline = setTimeout(() => child.kill(), 8_000);
     try {
-      const pending = await reader.read(false, { waitMs: 50 });
-      expect(pending.diagnostic.status).toBe("pending");
-      expect(pending.diagnostic.collectorId).toStartWith("in-process:");
-      expect(heartbeat).toBe(true);
-
-      writeFileSync(release, "release");
-      await Promise.race([
-        buildComplete,
-        new Promise<never>((_, reject) => {
-          watchdog = setTimeout(() => reject(new Error("held OS probe did not complete after release")), 2_000);
-          watchdog.unref();
-        }),
+      const [exit, output, errors] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
       ]);
-      let completed = await reader.read(false, { waitMs: 50 });
-      while (completed.diagnostic.status === "pending") {
-        await new Promise<void>((resolve) => setTimeout(resolve, 10));
-        completed = await reader.read(false, { waitMs: 50 });
-      }
-      expect(completed.diagnostic.status).toBe("complete");
-      expect(completed.payload).toMatchObject({ system: null, sessions: [], sessionsStale: false });
+      expect(exit, errors || output).toBe(0);
+      console.info(output.trim());
     } finally {
-      clearTimeout(heartbeatTimer);
-      if (watchdog) clearTimeout(watchdog);
-      process.env.PATH = previousPath;
-      writeFileSync(release, "release");
-      rmSync(fixture, { recursive: true, force: true });
+      clearTimeout(deadline);
+      if (child.exitCode === null) child.kill();
+      await child.exited;
+      rmSync(directory, { recursive: true, force: true });
     }
+  }, 10_000);
+
+  test("disk pressure deadline fallback is limited to macOS and Windows", () => {
+    expect(resourcePlatformUsesBoundedPressure("darwin")).toBe(true);
+    expect(resourcePlatformUsesBoundedPressure("win32")).toBe(true);
+    expect(resourcePlatformUsesBoundedPressure("linux")).toBe(false);
+  });
+
+  test("Linux pressure reads preserve the primary response when it outlives the deadline", async () => {
+    const primary = deferred<string>();
+    let fallbackCalls = 0;
+    let settled = false;
+    const read = readPressureWithDeadline("linux", performance.now() - 1, () => primary.promise, async () => {
+      fallbackCalls++;
+      return "persisted fallback";
+    }).then(value => { settled = true; return value; });
+    await Bun.sleep(20);
+    expect(settled).toBe(false);
+    expect(fallbackCalls).toBe(0);
+    primary.resolve("primary report");
+    await expect(read).resolves.toBe("primary report");
+    expect(fallbackCalls).toBe(0);
   });
 
   test.each([

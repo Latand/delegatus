@@ -89,7 +89,9 @@ export interface ProcBackend {
   /** Async equivalents for resource collection, whose bounded reads must not
       block the Viewer event loop on cold OS probes. */
   resourceSystemMemory?(): Promise<SystemMemory | null>;
-  resourcePpidMap?(): Promise<Map<number, number>>;
+  resourceListProcesses?(): Promise<ProcSnapshotEntry[]>;
+  resourceProcessExited?(pid: number): Promise<boolean>;
+  resourcePpidMap?(fresh?: boolean): Promise<Map<number, number>>;
   resourceProcessMemory?(pids: Iterable<number>): Promise<Map<number, ProcessMemory>>;
 
   /**
@@ -119,6 +121,9 @@ export interface ProcBackend {
    * closes over it. The thunk is only valid within its visit call.
    */
   scanFdTargetsUnder(underDir: string, visit: (target: string, pid: number, writable: () => boolean) => void): void;
+  /** Async counterpart for resource-path scans that must not wait for lsof on
+      the Viewer event loop. Backends without subprocess probes can omit it. */
+  resourceScanFdTargetsUnder?(underDir: string, visit: (target: string, pid: number, writable: () => boolean) => void): Promise<void>;
 
   /**
    * Visits every open-file fd currently open for any of the given, explicit
@@ -128,6 +133,9 @@ export interface ProcBackend {
    * `lsof` as filename arguments. `writable` is lazy, as above.
    */
   scanFdTargetsFor(paths: string[], visit: (target: string, pid: number, writable: () => boolean) => void): void;
+  /** Async counterpart for bounded resource scans that must not run lsof on
+      the Viewer event loop. Backends without subprocess probes may omit it. */
+  resourceScanFdTargetsFor?(paths: string[], visit: (target: string, pid: number, writable: () => boolean) => void): Promise<void>;
 
   /** True when `pid` currently holds `pathname` open for writing. */
   pidWritesPath(pid: number, pathname: string): boolean;

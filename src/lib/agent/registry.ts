@@ -132,6 +132,7 @@ import {
   registryConversationsForEntryKey, registryConversationKeysForEntryKey, registryHasEntryKeyIndex,
   sqliteRegistryStoreImported, registryLivenessRows, registryRowProjection, type StartupFallbackSweep, type SpawnMarkerBackup, SpawnMarkerBackupChangedError,
   type RegistryDeliveryCompactionChanges, type RegistryRowProjector,
+  type RegistrySnapshotPreparationOptions, type NativeCallerArtifactPreparationOptions,
   type SqliteRegistryReplacement,
   type SqliteRegistrySnapshot,
 } from "./sqliteRegistryStore";
@@ -3687,6 +3688,12 @@ function failInitialSpawnReceiptForDelivery(file: RegistryFile, delivery: HeldDe
   if (delivery.state !== "failed") return;
   const receipt = initialSpawnReceiptOf(file, delivery);
   if (!receipt || ["completed", "failed", "conflicted"].includes(receipt.state)) return;
+  // Deadline admission already proved no journal command was created. Keep
+  // that staged identity live until its reaper settles the original runtime
+  // operation and fences projection cleanup. Other terminal delivery causes
+  // retain the existing immediate receipt behavior.
+  if (receipt.transport === "structured" && stagedLaunchRecovery(receipt)
+    && delivery.error?.startsWith("staged launch publication deadline expired")) return;
   receipt.state = "failed";
   receipt.error = delivery.error ?? "initial prompt delivery failed";
   markFailedLaunchReporting(receipt);
@@ -6876,7 +6883,7 @@ export class AgentRegistry {
   }
 
   /** Production boot and the candidate gate share the cooperative first view. */
-  async prepareReadOnlySnapshot(signal?: AbortSignal, options: { recoveryIndexes?: boolean } = {}): Promise<RegistryFile> {
+  async prepareReadOnlySnapshot(signal?: AbortSignal, options: RegistrySnapshotPreparationOptions = {}): Promise<RegistryFile> {
     signal?.throwIfAborted();
     if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) {
       return (await this.sqliteStore.prepareReadOnlySnapshot(signal, options)).file;
@@ -7587,7 +7594,7 @@ export class AgentRegistry {
     return { snapshot, rootConversationId: liveRootSession({ conversations: Object.values(snapshot.conversations), configuredRootId })?.conversationId ?? null };
   }
 
-  async prepareNativeCallerArtifacts(signal?: AbortSignal, options?: { waitUntilReady?: boolean }): Promise<void> {
+  async prepareNativeCallerArtifacts(signal?: AbortSignal, options?: NativeCallerArtifactPreparationOptions): Promise<void> {
     if (this.sqliteMode === "read" || this.sqliteMode === "sqlite") {
       await this.sqliteStore?.prepareNativeCallerArtifacts(signal, options);
     }

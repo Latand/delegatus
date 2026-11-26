@@ -3303,6 +3303,15 @@ test("a mount point under a merged checkout keeps it as mount-boundary", async (
   expect(fs.existsSync(path.join(dir, "node_modules"))).toBeTrue();
 });
 
+test("an inspection that reports a socket keeps a merged checkout as in use", async () => {
+  const root = repository();
+  const { dir, tip } = lane(root, path.join(caseDir, "socket-held"), "topic/socket-held");
+  const report = await sweepMergedWorktrees(ports({ repositories: [root], prs: [merged(305, "topic/socket-held", tip)],
+    inspect: () => ({ newestMs: 0, entries: 1, hold: "socket" }) }));
+  expect(report.kept).toContainEqual(expect.objectContaining({ path: dir, reason: "in-use" }));
+  expect(fs.existsSync(dir)).toBeTrue();
+});
+
 
 test.each(["fresh", "mount"])("a build cache with %s activity is not trimmed", async kind => {
   const root = repository(); const dir = path.join(path.dirname(root), `${path.basename(root)}-pipeline-trim-quiet`);
