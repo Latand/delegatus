@@ -1,3 +1,4 @@
+import { retiredMembershipIndex } from "./projectMembership";
 import { observeSqlite } from "@/lib/sqliteReadAttribution";
 import { stateLockAttempt } from "./lockWait";
 import type { Database as BunDatabase } from "bun:sqlite";
@@ -162,15 +163,36 @@ function isCorruptionError(error: unknown): boolean {
   return /database disk image is malformed|file is not a database/i.test(message);
 }
 
-function inspect(filename: string, pragma: StateDatabase["check"], readonly: boolean): Verdict {
+function inspect(filename: string, pragma: StateDatabase["check"], readonly: boolean, databaseName: string): Verdict {
   let db: BunDatabase | null = null;
   try {
     const Database = sqliteDatabase();
     db = readonly ? observeSqlite(new Database(filename, { readonly: true }), "state-durability") : observeSqlite(new Database(filename, { readwrite: true }), "state-durability");
+    // JSON string extraction changed across SQLite versions (including NUL
+    // escapes). Discard this obsolete derived index before judging the pages
+    // of the live state database or a staged backup with the current engine.
+    if (databaseName === "state.sqlite" && db.query(
+      "SELECT 1 FROM sqlite_master WHERE type='index' AND tbl_name='state_rows' AND name=?",
+    ).all(retiredMembershipIndex).length) {
+      if (readonly) {
+        assertStateStartupMutation(path.dirname(filename), "retire project membership index");
+        db.close();
+        db = null;
+        db = observeSqlite(new Database(filename, { readwrite: true }), "state-durability");
+      }
+      db.exec("PRAGMA busy_timeout=0");
+      db.exec(`DROP INDEX IF EXISTS ${retiredMembershipIndex}`);
+    }
     db.exec("PRAGMA busy_timeout = 5000");
     const rows = db.query<Record<string, unknown>, []>(`PRAGMA ${pragma}`).all();
     const messages = rows.map((row) => String(Object.values(row)[0]));
     if (messages.length === 1 && messages[0] === "ok") return { verdict: "ok" };
+    if (databaseName === "state.sqlite" && messages.length && messages.every(message =>
+      /^(?:row \d+ missing from index|wrong # of entries in index) state_rows_project_membership$/.test(message))) {
+      // An overlapping old writer can recreate its index between DROP and
+      // the read-only check. Leave the live database in place for a retry.
+      return { verdict: "unknown", detail: "retired project membership index changed during integrity check" };
+    }
     return { verdict: "corrupt", detail: `${pragma}: ${messages.slice(0, 5).join("; ") || "no result"}` };
   } catch (error) {
     const failure = schemaCompileFailure(error);
@@ -357,7 +379,7 @@ export function checkDatabaseAtActivation(
   fs.rmSync(databaseSwapMarker(database.filename), { force: true });
   if (!exists(database.filename)) return { state: "absent" };
   const now = options.now ?? new Date();
-  let verdict = inspect(database.filename, database.check, true);
+  let verdict = inspect(database.filename, database.check, true, database.name);
   let repaired: StorageIncident | null = null;
   if (verdict.verdict === "incompatible") {
     const first = verdict;
@@ -379,7 +401,7 @@ export function checkDatabaseAtActivation(
       console.error(`[state durability] ${database.name}: dropping the triggers its store rebuilds failed: ${errorText(error)}`);
       return incompatible(first);
     }
-    verdict = inspect(database.filename, database.check, true);
+    verdict = inspect(database.filename, database.check, true, database.name);
     if (verdict.verdict === "incompatible") return incompatible(verdict, kept);
     repaired = {
       kind: "database-schema-repaired", database: database.name, at: now.toISOString(), detail: first.detail,
@@ -480,13 +502,13 @@ function prepareNewestGoodBackup(database: StateDatabase, backupDirectory: strin
         throw new SchemaRecoveryError(`${database.name} could not prepare backup ${candidate.name}: ${errorText(error)}. `
           + "Startup stopped before changing live state; the backup and prepared copy are kept for the next start.", { cause: error });
       }
-      let verdict = inspect(restoring, "integrity_check", false);
+      let verdict = inspect(restoring, "integrity_check", false, database.name);
       /* A backup written where a newer SQLite ran is not damaged for holding
          a trigger this one cannot compile; the store rebuilds those. */
       if (verdict.verdict === "incompatible" && database.rebuiltTriggers.includes(verdict.object)) {
         schemaRepair = describeSchemaCompileFailure(candidate.name, verdict);
         dropRebuiltTriggers(restoring, database.rebuiltTriggers, null);
-        verdict = inspect(restoring, "integrity_check", false);
+        verdict = inspect(restoring, "integrity_check", false, database.name);
       }
       if (verdict.verdict === "incompatible") {
         throw new IncompatibleSchemaError(candidate.name, verdict);
@@ -727,7 +749,7 @@ export function recoverSchemaSetAside(
       removeTrio(restoring);
       fs.copyFileSync(candidate.file, restoring);
       if (fs.lstatSync(`${candidate.file}-wal`, { throwIfNoEntry: false })) fs.copyFileSync(`${candidate.file}-wal`, `${restoring}-wal`);
-      const first = inspect(restoring, "integrity_check", false);
+      const first = inspect(restoring, "integrity_check", false, database.name);
       const reason = first.verdict === "incompatible" ? first : recordedReason;
       // An I/O failure proves neither damage nor ineligibility. Starting a
       // store now could populate live state and prevent the next recovery.
@@ -745,7 +767,7 @@ export function recoverSchemaSetAside(
       /* One self-contained file: what the copied WAL held moves into it. */
       const checkpoint = observeSqlite(new (sqliteDatabase())(restoring, { readwrite: true }), "state-durability");
       try { checkpoint.exec("PRAGMA wal_checkpoint(TRUNCATE)"); } finally { checkpoint.close(); }
-      const verdict = inspect(restoring, "integrity_check", false);
+      const verdict = inspect(restoring, "integrity_check", false, database.name);
       if (verdict.verdict !== "ok") throw new Error(verdict.detail);
       for (const suffix of ["-wal", "-shm"]) {
         if (!exists(`${restoring}${suffix}`)) continue;
@@ -891,7 +913,7 @@ export function backupDatabase(
     /* A backup is one self-contained file: no WAL to lose beside it. */
     const copy = observeSqlite(new (sqliteDatabase())(partial, { readwrite: true }), "state-durability");
     try { copy.exec("PRAGMA journal_mode = DELETE"); } finally { copy.close(); }
-    const verdict = inspect(partial, "integrity_check", false);
+    const verdict = inspect(partial, "integrity_check", false, database.name);
     if (verdict.verdict !== "ok") throw new Error(`the copy failed its check: ${verdict.verdict === "corrupt" ? verdict.detail : verdict.detail}`);
     fs.rmSync(`${partial}-shm`, { force: true });
     fs.chmodSync(partial, 0o600);

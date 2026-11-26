@@ -1,12 +1,13 @@
 import fs from "node:fs";
 import { statePath } from "@/lib/configDir";
 import { projectAliasResolver } from "./aliases";
-import { readStateCollectionRevisions, readStateProjectKeys } from "@/lib/state/sqliteStateStore";
+import { createProjectMembershipIndex, readStateCollectionRevisions, readStateProjectKeys } from "@/lib/state/sqliteStateStore";
 
 const store = globalThis as typeof globalThis & {
   __llvProjectKeySources?: Map<string, ReadonlySet<string>>;
   __llvProjectKeyDatabase?: {
     identity: string;
+    membership: ReturnType<typeof createProjectMembershipIndex>;
     hotSignature: string;
     hotProjects: ReadonlySet<string>;
     archiveSignature: string | null;
@@ -34,9 +35,11 @@ export function projectKeyIndexSnapshot(): ReadonlySet<string> {
     identity = `${stat.dev}:${stat.ino}`;
   } catch { /* an uninitialized installation has no durable project rows */ }
   let cached = store.__llvProjectKeyDatabase;
-  if (cached?.identity !== identity) {
+  if (cached?.identity !== identity || !cached.membership) {
+    cached?.membership?.dispose();
     cached = store.__llvProjectKeyDatabase = {
       identity,
+      membership: createProjectMembershipIndex(filename),
       hotSignature: "",
       hotProjects: new Set(),
       archiveSignature: null,
@@ -45,12 +48,12 @@ export function projectKeyIndexSnapshot(): ReadonlySet<string> {
   }
   const hotSignature = hotCollections.map(key => revisions.get(key) ?? "-").join(":");
   if (cached.hotSignature !== hotSignature) {
-    cached.hotProjects = new Set(readStateProjectKeys(filename, hotCollections));
+    cached.hotProjects = new Set(readStateProjectKeys(filename, hotCollections, cached.membership));
     cached.hotSignature = hotSignature;
   }
   const archiveSignature = String(revisions.get("pipelines_archive") ?? "-");
   if (cached.archiveSignature !== archiveSignature) {
-    cached.archiveProjects = new Set(readStateProjectKeys(filename, ["pipelines_archive"]));
+    cached.archiveProjects = new Set(readStateProjectKeys(filename, ["pipelines_archive"], cached.membership));
     cached.archiveSignature = archiveSignature;
   }
   const canonical = projectAliasResolver();

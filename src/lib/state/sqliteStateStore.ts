@@ -1,3 +1,4 @@
+import { membershipCollections, ProjectMembershipIndex, rawProjectKey, retiredMembershipIndex } from "./projectMembership";
 import { installTaskTimes, prepareTaskTimes, taskTimePendingCursor, taskTimesReady } from "./taskTimes";
 import { taskListIndex, taskListIndexCurrent, taskListIndexes } from "./taskListIndexes";
 import { observeRegistryWriter } from "@/lib/agent/registryWriter";
@@ -897,7 +898,7 @@ function openRawDatabase(filename: string): Database {
           && (pipelineControllerReferencesCurrent(db) || !mayRunStateStartupMutation(path.dirname(filename)))
           && pipelineEvidenceIndexReady(db)
           && (pipelineTaskMembershipReady(names) || !mayRunStateStartupMutation(path.dirname(filename)))
-          && !outdatedTaskList.length
+          && !names.has(retiredMembershipIndex) && !outdatedTaskList.length
           && taskDueIndexCurrent(db)
           && db.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get()?.journal_mode === "wal"
           && db.query<{ name: string }, []>("PRAGMA table_info(state_collections)").all().some(row => row.name === "change_floor")
@@ -910,6 +911,7 @@ function openRawDatabase(filename: string): Database {
         db.exec("PRAGMA journal_mode = WAL");
         db.exec("PRAGMA auto_vacuum = INCREMENTAL");
         db.exec("BEGIN IMMEDIATE");
+        db.exec(`DROP INDEX IF EXISTS ${retiredMembershipIndex}`);
         db.exec("DROP INDEX IF EXISTS state_rows_interruption_recipient_v2");
         if (names.has("state_rows")) installTaskTimes(db);
         if (!taskDueIndexCurrent(db)) db.exec("DROP INDEX IF EXISTS state_rows_task_due");
@@ -1747,24 +1749,28 @@ export function readStateCollectionRows(filename: string, collection: string): u
   return readStateCollectionsRows(filename, [collection]).get(collection) ?? null;
 }
 
-/** Return project membership without decoding or materializing persisted rows. */
+export function createProjectMembershipIndex(filename: string): ProjectMembershipIndex {
+  return new ProjectMembershipIndex(filename, () => connectReadonlyDatabase(filename));
+}
+
+/** Unprepared and unrestricted callers read authoritative JSON. Directory
+ * callers can reuse their own revision-tracked projection. */
 export function readStateProjectKeys(
-  filename: string,
-  collections: readonly string[] = ["tasks", "pipelines", "pipelines_archive", "flows"],
+  filename: string, collections: readonly string[] = membershipCollections, index?: ProjectMembershipIndex,
 ): string[] {
-  if (!fs.existsSync(filename)) return [];
-  if (collections.length === 0) return [];
+  if (!fs.existsSync(filename) || !collections.length) return [];
   const db = connectReadonlyDatabase(filename);
   try {
+    const indexed = index?.read(db, collections);
+    if (indexed) return indexed;
     const placeholders = collections.map(() => "?").join(", ");
-    const bindings = [...collections] as [string, ...string[]];
-    return db.query<{ project: string | null }, [string, ...string[]]>(`
-      SELECT DISTINCT json_extract(value_json, '$.project') AS project
-      FROM state_rows
-      WHERE collection IN (${placeholders})
-        AND json_valid(value_json)
-        AND json_type(value_json, '$.project') = 'text'
-    `).all(...bindings).flatMap(row => row.project ? [row.project] : []);
+    const result = db.query<{ project: string | null }, string[]>(`
+      SELECT DISTINCT ${rawProjectKey("value_json")} AS project FROM state_rows WHERE collection IN (${placeholders})
+    `).all(...collections).flatMap(row => row.project ? [row.project] : []);
+    // Preparation is optional. The authoritative scan remains available on
+    // contention, on a legacy schema, and after a database replacement.
+    if (index) void index.prepare().catch(() => {});
+    return result;
   } catch (error) {
     if (/no such table/i.test(error instanceof Error ? error.message : String(error))) return [];
     throw error;
