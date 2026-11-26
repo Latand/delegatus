@@ -42,8 +42,16 @@ export function secretFilename(filename: string): string {
   return filename.slice(filename.lastIndexOf("/") + 1);
 }
 
+const SECRET_TARGET_ARROW = "\u00a0→\u00a0";
+
 /** «file» or «KEY → file», which a line break never splits. */
 export function secretTarget(path: string, key?: string): string {
   const filename = secretFilename(path);
-  return key ? `${key}\u00a0→\u00a0${filename}` : filename;
+  return key ? `${key}${SECRET_TARGET_ARROW}${filename}` : filename;
+}
+
+/** A target `secretTarget` wrote, split back into the variable and the file it goes to. */
+export function secretTargetParts(target: string): { key?: string; filename: string } {
+  const at = target.lastIndexOf(SECRET_TARGET_ARROW);
+  return at < 0 ? { filename: target } : { key: target.slice(0, at), filename: target.slice(at + SECRET_TARGET_ARROW.length) };
 }

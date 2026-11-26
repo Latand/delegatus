@@ -787,6 +787,7 @@ export async function captureSecretRequestCards(browser: Browser, out: string, p
           const card = scope.locator("[data-secret-request]");
           const field = card.locator("input");
           const save = card.locator("[data-secret-save]");
+          const heights = new Map<string, number>();
           const geometry = async (state: string) => {
             await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
             const reading = await card.evaluate(node => {
@@ -811,11 +812,15 @@ export async function captureSecretRequestCards(browser: Browser, out: string, p
                   if (line.left < box.left - 1 || line.right > box.right + 1) clipped++;
                 }
               }
-              return { width: box.width, height: box.height, clipped, overflow: node.scrollWidth - node.clientWidth,
+              /* The header says what it writes to on one line (operator, 2026-11-26). */
+              const titleLines = new Set([...node.querySelectorAll("[data-secret-title] > span")].map(part => Math.round(part.getBoundingClientRect().top))).size;
+              return { width: box.width, height: box.height, clipped, titleLines, overflow: node.scrollWidth - node.clientWidth,
                 top: box.top, declineBottom: decline.bottom, listTop: boundary.top, listBottom: boundary.bottom,
                 actionsVisible: box.top >= boundary.top - 1 && decline.bottom <= Math.min(boundary.bottom, innerHeight) + 1 };
             });
             readings.push({ tag, state, ...reading });
+            expect(reading.titleLines, `${tag} ${state}: header on one line`).toBe(1);
+            heights.set(state, reading.height);
             expect(reading.clipped).toBe(0);
             expect(reading.overflow).toBeLessThanOrEqual(1);
             expect(reading.actionsVisible, JSON.stringify({ tag, state, ...reading })).toBe(true);
@@ -828,6 +833,7 @@ export async function captureSecretRequestCards(browser: Browser, out: string, p
           await scope.locator(`[data-decision-row="${envId}"]`).click();
           await scope.locator(`[data-secret-request="${envId}"]`).waitFor();
           await geometry("env");
+          expect(Math.abs(heights.get("env")! - heights.get("file")!), `${tag}: the env card is as tall as the file card`).toBeLessThanOrEqual(1);
           await frame("03-env");
           await field.fill(dummy);
           await card.locator('button[aria-pressed="false"]').click();
@@ -857,6 +863,10 @@ export async function captureSecretRequestCards(browser: Browser, out: string, p
           } finally { respond.resolve(); }
           await card.getByRole("alert").waitFor();
           expect(await card.locator("[data-secret-destination]").textContent()).toBe(changedPath);
+          /* The alert asks to review the new destination, so the path stands beside it, not under Details. */
+          const changed = card.locator("[role=alert] [data-secret-changed-destination]");
+          expect(await changed.isVisible()).toBe(true);
+          expect(await changed.textContent()).toBe(changedPath);
           expect(await field.inputValue()).toBe("");
           expect((await card.innerHTML()).includes(dummy)).toBe(false);
           await geometry("refused");
@@ -998,14 +1008,18 @@ export async function captureSecretRequestOutcomes(browser: Browser, out: string
           await env.click();
           await scope.locator(`[data-secret-request="${second}"]`).waitFor();
           const together = await scope.locator("[data-secret-title]").evaluate(node => {
-            const text = node.firstChild!;
-            const range = document.createRange();
-            range.setStart(text, text.textContent!.indexOf("REPORT_SERVICE_TOKEN"));
-            range.setEnd(text, text.textContent!.indexOf("→") + 1);
-            return new Set([...range.getClientRects()].map(line => Math.round(line.top))).size;
+            const tops = new Set<number>();
+            const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+            for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+              const range = document.createRange();
+              range.selectNode(text);
+              for (const line of range.getClientRects()) tops.add(Math.round(line.top));
+            }
+            return tops.size;
           });
-          expect(together, `${tag}: "KEY →" shares one line`).toBe(1);
-          expect(await title.textContent()).toContain(t("secretRequest.titleFor", { target: nbsp(target(second)) }));
+          expect(together, `${tag}: "KEY → file" shares one line`).toBe(1);
+          expect(await title.textContent()).toBe(nbsp(target(second)));
+          expect(await scope.locator(`[data-secret-request="${second}"] [data-decision-collapse]`).getAttribute("aria-label")).toContain(t("secretRequest.titleFor", { target: nbsp(target(second)) }));
           const requester = (await scope.locator("[data-secret-request] dl dd").first().textContent()) ?? "";
           expect(requester, `${tag}: requester line`).not.toMatch(/codex|configure|\bintegration\b/);
           const ordinary = scope.locator("[data-decision-row]:not([data-decision-row^='sr_'])").first();
@@ -1057,6 +1071,12 @@ export async function captureSecretRequestOutcomes(browser: Browser, out: string
           expect(new Set(texts).size, `${tag}: two requests read differently: ${JSON.stringify(texts)}`).toBe(2);
           expect(age).toEqual([true, true]);
           for (const row of [first, second]) expect(texts.some(text => text.includes(target(row).split(" ")[0]!))).toBe(true);
+          /* Each row keeps where the secret goes whole; only a long variable name gives way. */
+          const files = await rows.evaluateAll(nodes => nodes.map(node => {
+            const part = node.querySelector("[data-needs-you-title-line] > span:last-child") as HTMLElement;
+            return { text: part.textContent, whole: part.scrollWidth <= part.clientWidth };
+          }));
+          expect(files.sort((a, b) => String(a.text).localeCompare(String(b.text))), `${tag}: target files`).toEqual([{ text: "\u00a0→\u00a0.env", whole: true }, { text: "report-token.txt", whole: true }]);
           await rows.first().scrollIntoViewIfNeeded();
           await wait(page);
           await page.screenshot({ path: path.join(out, `${tag}-${phone ? "c04" : "c07"}-needs-you.png`) });

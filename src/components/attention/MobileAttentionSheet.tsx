@@ -1,6 +1,7 @@
 "use client";
 
 import { openOperatorDecisions } from "@/components/decisions/decisionSurface";
+import { SecretTarget } from "@/components/decisions/SecretTarget";
 
 import { Filter, KeyRound, MessageCircleQuestionMark, GalleryHorizontalEnd, TriangleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -431,7 +432,7 @@ function SecretRow({ entry, age, onOpen }: { entry: Extract<MobileAttentionEntry
       </span>
       <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
         <span data-attention-decision className="shrink-0 text-caption font-bold uppercase tracking-[0.06em] text-accent">{label}</span>
-        <span className="min-w-0 flex-1 truncate text-body font-semibold text-primary" data-needs-you-title-line="">{title}</span>
+        <SecretTarget target={title} className="flex-1 text-body font-semibold text-primary" data-needs-you-title-line="" />
         {age === null ? null : <span data-attention-age className="shrink-0 text-label text-muted">{fmtAgeSeconds(age)}</span>}
       </span>
       <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />

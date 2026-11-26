@@ -8,6 +8,7 @@ import { useLocale, type TFunction } from "@/lib/i18n";
 import type { SecretRefusal } from "@/lib/secretRequests/types";
 import { SECRET_BODY_TYPE, SECRET_REVISION_HEADER, secretFilename, secretTarget, type SecretActionAnswer, type SecretRequestView } from "@/lib/secretRequests/view";
 import { DECISION_PRIMARY_BUTTON, FoldHeader, decisionClock } from "./DecisionCard";
+import { SecretTarget } from "./SecretTarget";
 
 export function secretRequestTitle(t: TFunction, request: SecretRequestView | { target: string }): string {
   return t("secretRequest.titleFor", { target: "target" in request ? request.target : secretTarget(request.destination.path, request.destination.key) });
@@ -147,7 +148,8 @@ export function SecretRequestCard({ request, onCollapse, onUpdate }: {
     <article data-decision-review={request.id} data-secret-request={request.id} className="flex min-w-0 shrink-0 flex-col overflow-hidden rounded-surface border border-accent/40 bg-card shadow-1">
       <FoldHeader title={title} frame="border-b border-border bg-accent-soft/60" row="flex min-w-0 items-start gap-1.5 px-3 py-2 hover:bg-accent-soft" onCollapse={onCollapse}>
         <KeyRound className="mt-0.5 h-4 w-4 shrink-0 text-accent" aria-hidden />
-        <span data-secret-title="" className="min-w-0 flex-1 text-ui font-semibold text-primary [overflow-wrap:anywhere]">{title}</span>
+        {/* The key mark says the kind; the header's accessible name keeps the word. */}
+        <SecretTarget data-secret-title="" target={target} className="flex-1 text-ui font-semibold text-primary" />
         <time dateTime={new Date(request.createdAt).toISOString()} className="mt-0.5 shrink-0 text-caption tabular-nums text-muted">{decisionClock(new Date(request.createdAt).toISOString(), locale)}</time>
       </FoldHeader>
       <div className="flex min-w-0 flex-col gap-2 px-3 pb-1 pt-2 text-ui leading-snug text-primary">
@@ -184,7 +186,12 @@ export function SecretRequestCard({ request, onCollapse, onUpdate }: {
               <Lock className="h-3.5 w-3.5" aria-hidden />
             </span>
           </div>
-          {issue ? <p role="alert" className="m-0 text-label text-danger">{t(`secretRequest.error.${issue}`)}</p> : null}
+          {issue ? <p role="alert" className="m-0 flex min-w-0 flex-col gap-0.5 text-label text-danger">
+            {t(`secretRequest.error.${issue}`)}
+            {/* Asked to review the new destination, the operator sees it here, outside the folded details. */}
+            {issue === "secret_destination_changed"
+              ? <code data-secret-changed-destination="" dir="ltr" className="font-mono text-primary [overflow-wrap:anywhere]">{destination.path}</code> : null}
+          </p> : null}
         </form>
         <details data-secret-details="" className="group text-label text-secondary">
           <summary className={`flex min-h-7 w-fit cursor-pointer select-none list-none items-center gap-1 rounded-control font-semibold text-muted hover:text-primary [&::-webkit-details-marker]:hidden [@media(pointer:coarse)]:min-h-11 ${focus}`}>

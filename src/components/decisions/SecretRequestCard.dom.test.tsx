@@ -136,6 +136,9 @@ test("a refused save brings the new destination into view and decline posts no v
   expect(field().type).toBe("password");
   expect(host.querySelector("[role=alert]")?.textContent).toContain("The destination changed");
   expect(host.querySelector("[data-secret-destination]")?.textContent).toBe("/workspace/changed/.env");
+  const changed = host.querySelector("[role=alert] [data-secret-changed-destination]");
+  expect(changed?.textContent).toBe("/workspace/changed/.env");
+  expect(changed?.closest("details")).toBeNull();
   expect(host.textContent).toContain("Replaces FIXTURE");
   await click(host.querySelector("[data-secret-decline]"));
   expect(host.querySelector("input")).toBeNull();
@@ -168,7 +171,10 @@ test("the card shows one line of reason and folds the rest; a format hint appear
   globalThis.fetch = Object.assign(async () => answer([long]), { preconnect: realFetch.preconnect });
   const host = await render();
   const card = host.querySelector("[data-secret-request]")!;
-  expect(card.querySelector("[data-secret-title]")?.textContent).toBe("Secret · FIXTURE\u00a0→\u00a0.env");
+  /* The key mark says the kind on screen; the header's accessible name keeps the word. */
+  expect(card.querySelector("[data-secret-title]")?.textContent).toBe("FIXTURE\u00a0→\u00a0.env");
+  expect(card.querySelector("[data-decision-collapse]")?.getAttribute("aria-label")).toContain("Secret · FIXTURE\u00a0→\u00a0.env");
+  expect([...card.querySelector("[data-secret-title]")!.children].map(part => part.textContent)).toEqual(["FIXTURE", "\u00a0→\u00a0.env"]);
   expect(card.querySelector("[data-secret-reason]")?.textContent).toBe("First line of the reason.");
   const details = card.querySelector<HTMLDetailsElement>("[data-secret-details]")!;
   expect(details.open).toBe(false);

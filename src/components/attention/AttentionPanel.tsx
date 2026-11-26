@@ -8,6 +8,7 @@ import { useLocale } from "@/lib/i18n";
 import type { DoneItemV1 } from "@/lib/done/types";
 import type { Pipeline } from "@/lib/pipelines/types";
 
+import { SecretTarget } from "../decisions/SecretTarget";
 import { AutoDrainDecision } from "../selfUpdate/AutoDrainDecision";
 import { RoleTag } from "../RoleFrameMark";
 import { fmtAge } from "../utils";
@@ -373,7 +374,7 @@ function SecretRow({ entry, onOpen }: { entry: Extract<MobileAttentionEntry, { k
       >
         <KeyRound className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden />
         <span className="shrink-0 text-[10.5px] font-semibold text-accent">{label}</span>
-        <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-primary" data-needs-you-title-line="">{title}</span>
+        <SecretTarget target={title} className="flex-1 text-[12px] font-semibold text-primary" data-needs-you-title-line="" />
         {since !== null ? <span data-attention-age className="shrink-0 text-[10.5px] text-muted">{fmtAge(since)}</span> : null}
       </button>
     </div>
