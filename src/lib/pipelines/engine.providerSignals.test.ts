@@ -1,11 +1,67 @@
-import { expect, test, tickPipelines, loadPipelines, savePipelines, LIMITED_ACCOUNT, SPARE_ACCOUNT, stageTranscript, readFixtures, stampPipelinePrompt, providerRecoveryHarness, cutChainKit, CHAIN_RESET, otherKindCut, largeToolResult, engineModule, patchPipeline } from "./engine.fixture";
+import { expect, test, tickPipelines, loadPipelines, savePipelines, LIMITED_ACCOUNT, SPARE_ACCOUNT, stageTranscript, readFixtures, stampPipelinePrompt, providerRecoveryHarness, cutChainKit, CHAIN_RESET, otherKindCut, largeToolResult, engineModule, patchPipeline, ProjectAccountRefusedError } from "./engine.fixture";
 import { pipelineStageRead } from "@/lib/mcp/compactAnswers";
-import { pipelineRetirementReader } from "./retirementEvidence";
+
+type RefusalHarness = Awaited<ReturnType<typeof providerRecoveryHarness>>;
+type StageAttempt = ReturnType<typeof loadPipelines>[number]["runs"][number]["attempts"][number];
+const REFUSAL_NOTICE = "This content was flagged for possible cybersecurity risk.";
+
+/** Hosts the refused attempts keep until the controller stops them idle-only. */
+function refusalHosts(f: RefusalHarness) {
+  const fixtures: Record<string, string> = {};
+  const resident = new Set<string>();
+  const stops: number[] = [];
+  let busy = false;
+  f.h.ports.resolveProjectSpawn = engine => ({ kind: "available", account: {
+    engine, accountId: LIMITED_ACCOUNT, kind: "managed", home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" },
+  } });
+  f.h.ports.stageHostResident = async target => resident.has(target.conversationId ?? "");
+  f.h.ports.conversationHostProcess = async id => resident.has(id) ? { state: "alive", pid: 1234 } : { state: "gone", pid: null };
+  f.h.ports.stopStageAgent = async (target, options) => {
+    // Recovery may stop the refused host only while it is idle.
+    expect(options?.onlyIfIdle).toBe(true);
+    if (busy) return { outcome: "deferred" };
+    stops.push(target.attempt);
+    resident.delete(target.conversationId ?? "");
+    return { outcome: "stopped" };
+  };
+  /** The attempt's turn ends on a terminal Codex refusal. */
+  const refuse = (attempt: StageAttempt, errorClass: string, message: string, later: (at: () => string) => Record<string, unknown>[] = () => []) => {
+    resident.add(attempt.conversationId!);
+    f.advance(1_000);
+    const startedAt = f.h.ports.now();
+    f.advance(1_000);
+    const refusal = { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "task_complete", error: {
+      ...(message ? { message } : {}), codex_error_info: errorClass,
+    } } };
+    const at = () => { f.advance(1_000); return f.h.ports.now(); };
+    fixtures[attempt.agentPath!] = stageTranscript(`codex-refusal-${attempt.n}`, [
+      { type: "event_msg", timestamp: startedAt, payload: { type: "task_started" } }, refusal, ...later(at),
+    ]);
+    readFixtures(f.h, fixtures);
+  };
+  /** While the refused host is still busy nothing is stopped or relaunched. */
+  const settle = async (id: string) => {
+    const before = { spawns: f.h.spawnInputs.length, stops: stops.length };
+    busy = true;
+    f.h.setConversationActive(true);
+    await engineModule.recoverPipelineProviderTurn(id, f.h.ports);
+    await tickPipelines([], f.h.ports);
+    expect({ spawns: f.h.spawnInputs.length, stops: stops.length }).toEqual(before);
+    busy = false;
+    f.h.setConversationActive(false);
+    f.advance(30_000);
+    await engineModule.recoverPipelineProviderTurn(id, f.h.ports);
+    for (let tick = 0; tick < 4; tick++) await tickPipelines([], f.h.ports);
+  };
+  return { refuse, settle, stops, resident };
+}
+
+const latest = () => loadPipelines()[0]!.runs[0]!.attempts.at(-1)!;
 
 test.each([
-  ["a fresh attempt", "other", "This content was flagged for possible cybersecurity risk.", false],
+  ["a fresh first attempt", "other", REFUSAL_NOTICE, false],
   ["an attempt launched after resume", "cyber_policy", "", true],
-] as const)("a Codex cybersecurity refusal on %s parks and retires only the idle host", async (_source, errorClass, message, resumed) => {
+] as const)("a Codex cybersecurity refusal on %s retries on Codex once, then moves the stage to Claude Opus", async (_source, errorClass, message, resumed) => {
   const f = await providerRecoveryHarness("codex", errorClass, message);
   const initial = loadPipelines()[0]!;
   if (resumed) {
@@ -23,71 +79,158 @@ test.each([
     await tickPipelines([], f.h.ports);
     expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "failed", error: "pipeline paused" });
   }
-  const original = loadPipelines()[0]!;
-  const stageId = original.cursor!.stageId;
-  const source = original.runs[0]!.attempts.at(-1)!;
+  const hosts = refusalHosts(f);
+  const stageId = initial.cursor!.stageId;
+  const first = latest();
   const launches = resumed ? 2 : 1;
-  expect(source).toMatchObject({ n: launches, state: "running", effectiveRole: { engine: "codex" } });
-  expect(source.conversationId).toBeTruthy();
-  const stops: number[] = [];
-  let resident = true;
-  f.h.ports.stageHostResident = async target => resident && target.conversationId === source.conversationId;
-  f.h.ports.conversationHostProcess = async id => {
-    const alive = resident && id === source.conversationId;
-    return { state: alive ? "alive" : "gone", pid: alive ? 1234 : null };
-  };
-  f.h.ports.stopStageAgent = async (target, options) => {
-    expect(target).toMatchObject({ stageId, attempt: source.n, launchId: source.launchId, conversationId: source.conversationId });
-    expect(options?.onlyIfIdle).toBe(true);
-    const held = await pipelineRetirementReader({ now: f.now() });
-    if (held({ conversations: [target.conversationId!], agentPath: target.agentPath, launchId: target.launchId })) {
-      return { outcome: "deferred" };
-    }
-    stops.push(target.attempt);
-    resident = false;
-    return { outcome: "stopped" };
-  };
-  f.advance(1_000);
-  const startedAt = f.h.ports.now();
-  f.advance(1_000);
-  const file = stageTranscript("codex-cybersecurity-refusal", [
-    { type: "event_msg", timestamp: startedAt, payload: { type: "task_started" } },
-    { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "task_complete", error: {
-      ...(message ? { message } : {}), codex_error_info: errorClass,
-    } } },
+  expect(first).toMatchObject({ n: launches, state: "running", effectiveRole: { engine: "codex" } });
+
+  // 1-2: the first refusal stops the idle host and starts a fresh Codex attempt.
+  hosts.refuse(first, errorClass, message);
+  await hosts.settle(initial.id);
+  const firstRead = pipelineStageRead(loadPipelines()[0]!, stageId, first.n).attempt!;
+  expect(firstRead).toMatchObject({ state: "failed", error: "stage cut by Codex cybersecurity refusal" });
+  expect(firstRead.providerRecoveries!.map(item => [item.action, item.condition])).toEqual([
+    ["wait", "Codex cybersecurity refusal"], ["relaunch", "Codex cybersecurity refusal"],
   ]);
-  readFixtures(f.h, { [source.agentPath!]: file });
+  expect(hosts.stops).toEqual([first.n]);
+  const second = latest();
+  expect(second).toMatchObject({ n: first.n + 1, state: "running", effectiveRole: { engine: "codex", model: "gpt-5.6-sol" } });
+  expect(second.providerWait).toBeUndefined();
+  expect(second.providerRecoveryBudget).toBeUndefined();
+  expect(f.h.spawnInputs).toHaveLength(launches + 1);
+  expect(loadPipelines()[0]!.stages[0]!.effectiveRole.engine).toBe("codex");
 
-  await engineModule.recoverPipelineProviderTurn(original.id, f.h.ports);
-  f.h.setConversationActive(true);
-  await tickPipelines([], f.h.ports);
-  expect(stops).toEqual([]);
-  expect(resident).toBe(true);
-  f.h.setConversationActive(false);
-  await tickPipelines([], f.h.ports);
+  // 3: the second refusal moves the stage to Claude Opus and relaunches there.
+  hosts.refuse(second, errorClass, message);
+  await hosts.settle(initial.id);
+  expect(hosts.stops).toEqual([first.n, second.n]);
+  const moved = loadPipelines()[0]!;
+  const secondRead = pipelineStageRead(moved, stageId, second.n);
+  expect(secondRead.attempt!.providerRecoveries!.map(item => [item.action, item.condition])).toEqual([
+    ["wait", "Codex cybersecurity refusal"], ["switch", "Codex cybersecurity refusal"], ["relaunch", "Codex cybersecurity refusal"],
+  ]);
+  expect(secondRead.attempt!.providerRecoveries![1]!.summary).toBe("moving the stage to Claude opus after a second Codex cybersecurity refusal");
+  expect(secondRead.stage).toMatchObject({ engine: "claude", model: "opus", effort: "high" });
+  expect(moved.graphEdits?.at(-1)).toMatchObject({
+    action: "override-stage", stageId, effect: "pending-next-attempt", appliesFromAttempt: second.n + 1,
+    actor: { kind: "agent", role: "pipeline-controller", conversationId: null },
+    summary: `moved stage ${stageId} to Claude opus high after Codex refused it twice as a cybersecurity risk; applies from attempt ${second.n + 1}`,
+  });
+  const opus = latest();
+  expect(opus).toMatchObject({ n: second.n + 1, state: "running", effectiveRole: { engine: "claude", model: "opus", effort: "high" } });
+  expect(f.h.spawnInputs).toHaveLength(launches + 2);
+  expect(f.h.spawnInputs.at(-1)!.role).toMatchObject({ engine: "claude", model: "opus" });
+  expect({ wait: opus.providerWait, budget: opus.providerRecoveryBudget }).toEqual({ wait: undefined, budget: undefined });
+  expect(f.sends).toEqual([]);
+  expect(moved.state).toBe("running");
+});
 
+test.each(["launch", "provider"] as const)("an Opus attempt that cannot run after two Codex refusals parks with the reason (%s failure)", async failure => {
+  const f = await providerRecoveryHarness("codex", "other", REFUSAL_NOTICE);
+  const hosts = refusalHosts(f);
+  const id = loadPipelines()[0]!.id;
+  const stageId = loadPipelines()[0]!.cursor!.stageId;
+  hosts.refuse(latest(), "other", REFUSAL_NOTICE);
+  await hosts.settle(id);
+  if (failure === "launch") {
+    f.h.ports.spawnAgent = async () => { throw new ProjectAccountRefusedError({ kind: "unavailable", allowedAccountIds: [] }, "claude", "project-fixture"); };
+  }
+  hosts.refuse(latest(), "other", REFUSAL_NOTICE);
+  await hosts.settle(id);
+  const opus = latest();
+  expect(opus).toMatchObject({ n: 3, effectiveRole: { engine: "claude", model: "opus" } });
+  if (failure === "provider") {
+    // Claude ends the Opus turn on its own refusal; nothing moves it further.
+    expect(opus.state).toBe("running");
+    f.h.durableTurns.set(opus.agentPath!, { turn: "terminal", message: { text: "API Error: refused", ts: Date.parse(f.h.ports.now()) + 2_000 },
+      terminalProviderMessage: { text: "API Error: refused", ts: Date.parse(f.h.ports.now()) + 2_000, errorClass: "invalid_request" } });
+    f.advance(3_000);
+    f.h.ports.durableTurnEvidence = async (_engine, transcriptPath) => f.h.durableTurns.get(transcriptPath) ?? null;
+    await engineModule.recoverPipelineProviderTurn(id, f.h.ports);
+    for (let tick = 0; tick < 3; tick++) await tickPipelines([], f.h.ports);
+  }
   const parked = loadPipelines()[0]!;
-  const detail = `stage cut by Codex cybersecurity refusal after 0 tries; last: ${message || errorClass}`;
-  expect(parked).toMatchObject({ state: "needs_decision", stateDetail: detail, worktreeDir: original.worktreeDir, branch: original.branch });
-  expect(pipelineStageRead(parked, stageId, source.n).attempt).toMatchObject({
-    state: "needs_decision",
-    conversationId: source.conversationId,
-    error: detail,
+  // 4: only now the lane parks; the seat sees the reason on the decision.
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.stateDetail).toBe(failure === "launch"
+    ? "no allowed claude account is available for project project-fixture (project project-fixture allows no claude account)"
+    : "stage cut by provider error after 0 tries; last: API Error: refused");
+  expect(parked.stages[0]!.effectiveRole).toMatchObject({ engine: "claude", model: "opus" });
+  expect(pipelineStageRead(parked, stageId, opus.n).attempt).toMatchObject({ state: "needs_decision" });
+  expect(latest().n).toBe(3);
+  // Later attempts of the stage in this lane stay on Opus.
+  f.h.ports.spawnAgent = async (input, reserved) => {
+    await reserved({ launchId: "launch-opus-retry", conversationId: "conversation_opus_retry", accountId: LIMITED_ACCOUNT });
+    f.h.spawnInputs.push(structuredClone(input));
+    return { launchId: "launch-opus-retry", conversationId: "conversation_opus_retry", sessionId: "session-opus-retry", transcript: "/claude/opus-retry.jsonl", paneId: null, accountId: LIMITED_ACCOUNT };
+  };
+  f.h.ports.spawnReceipt = launchId => opus.launchId && launchId === opus.launchId ? {
+    state: "completed", launchId, conversationId: opus.conversationId!,
+    sessionId: opus.sessionId, transcript: opus.agentPath, paneId: null,
+  } : null;
+  const retry = await patchPipeline(id, { action: "retry-stage", expectedStageId: stageId, expectedAttempt: opus.n }, f.h.ports);
+  expect(retry.error).toBeUndefined();
+  await tickPipelines([], f.h.ports);
+  expect(latest()).toMatchObject({ n: 4, effectiveRole: { engine: "claude", model: "opus" } });
+});
+
+test("a second refusal whose move to Claude cannot be made parks the Codex attempt and releases its idle host", async () => {
+  const f = await providerRecoveryHarness("codex", "other", REFUSAL_NOTICE);
+  const hosts = refusalHosts(f);
+  const id = loadPipelines()[0]!.id;
+  const stageId = loadPipelines()[0]!.cursor!.stageId;
+  hosts.refuse(latest(), "other", REFUSAL_NOTICE);
+  await hosts.settle(id);
+  const second = latest();
+  expect(second).toMatchObject({ n: 2, effectiveRole: { engine: "codex" } });
+  // The role registry cannot resolve the Claude configuration.
+  f.h.ports.roleLookup = () => null;
+  hosts.refuse(second, "other", REFUSAL_NOTICE);
+  await hosts.settle(id);
+  const parked = loadPipelines()[0]!;
+  const detail = `stage cut by Codex cybersecurity refusal twice; moving it to Claude Opus failed: Builder role is unavailable in the role registry; last: ${REFUSAL_NOTICE}`;
+  expect(parked).toMatchObject({ state: "needs_decision", stateDetail: detail });
+  expect(parked.stages[0]!.effectiveRole.engine).toBe("codex");
+  expect(parked.graphEdits ?? []).toEqual([]);
+  expect(pipelineStageRead(parked, stageId, second.n).attempt).toMatchObject({
+    state: "needs_decision", error: detail,
     providerRecoveries: [
       { action: "wait", condition: "Codex cybersecurity refusal" },
       { action: "park", condition: "Codex cybersecurity refusal", summary: detail },
     ],
   });
-  expect(stops).toEqual([source.n]);
-  expect(parked.terminalReap?.settledAttempts).toContain(`${stageId}:${source.n}`);
-  expect(f.h.spawnInputs).toHaveLength(launches);
-  expect(f.sends).toEqual([]);
-  f.h.ports.spawnReceipt = launchId => launchId === source.launchId ? {
-    state: "completed", launchId, conversationId: source.conversationId!,
-    sessionId: source.sessionId, transcript: source.agentPath, paneId: null,
+  // The parked refusal's idle host is retired; nothing else launched.
+  expect(hosts.stops).toEqual([1, 2]);
+  expect(parked.terminalReap?.settledAttempts).toContain(`${stageId}:${second.n}`);
+  expect(f.h.spawnInputs).toHaveLength(2);
+  f.h.ports.spawnReceipt = launchId => launchId === second.launchId ? {
+    state: "completed", launchId, conversationId: second.conversationId!,
+    sessionId: second.sessionId, transcript: second.agentPath, paneId: null,
   } : null;
-  const retry = await patchPipeline(original.id, { action: "retry-stage", expectedStageId: stageId, expectedAttempt: source.n }, f.h.ports);
+  const retry = await patchPipeline(id, { action: "retry-stage", expectedStageId: stageId, expectedAttempt: second.n }, f.h.ports);
   expect(retry).toMatchObject({ pipeline: { state: "running", cursor: { stageId, state: "pending" } } });
+});
+
+test("operator work after a Codex refusal keeps the attempt and its host; nothing is relaunched", async () => {
+  const f = await providerRecoveryHarness("codex", "other", REFUSAL_NOTICE);
+  const hosts = refusalHosts(f);
+  const id = loadPipelines()[0]!.id;
+  const source = latest();
+  // The operator answers the refused turn and the agent works on it.
+  hosts.refuse(source, "other", REFUSAL_NOTICE, at => [
+    { type: "event_msg", timestamp: at(), payload: { type: "user_message", message: "Continue without the flagged step" } },
+    { type: "event_msg", timestamp: at(), payload: { type: "task_started" } },
+    { type: "event_msg", timestamp: at(), payload: { type: "agent_message", message: "Continuing the stage" } },
+  ]);
+  await hosts.settle(id);
+  expect(hosts.stops).toEqual([]);
+  expect(hosts.resident.has(source.conversationId!)).toBe(true);
+  expect(f.h.spawnInputs).toHaveLength(1);
+  const lane = loadPipelines()[0]!;
+  expect(lane.stages[0]!.effectiveRole.engine).toBe("codex");
+  expect(latest()).toMatchObject({ n: source.n, effectiveRole: { engine: "codex" } });
+  expect(latest().providerRecoveries?.some(item => item.action === "relaunch" || item.action === "switch") ?? false).toBe(false);
 });
 
 // A parked retry's confirmation wait goes with its chain when the next chain,

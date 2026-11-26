@@ -213,6 +213,16 @@ and native abort prose are bookkeeping; authenticated agent notifications keep
 recovery automatic. Operator stop, pause, close and delivered operator messages
 retain their cancellation fences. Unknown message authorship stays external.
 
+A stage attempt Codex ends with its cybersecurity refusal is relaunched by the
+controller once its host is idle: the controller stops that host, keeps the
+checkout, and starts a fresh attempt. The first refusal of a stage in a lane
+relaunches on Codex. The second moves the stage to the role's Claude
+equivalent at Opus, with the account chosen by the project's normal selection,
+and every later attempt of the stage in that lane stays there. The move is a
+recorded `override-stage` graph edit whose summary names the refusal, and the
+refused attempt's provider recoveries show the switch. The lane parks for a
+decision only when that move cannot be made or the Opus attempt cannot run.
+
 After a Delegatus restart, startup adoption consults the pipeline record before re-hosting a structured conversation: a conversation whose stage attempt has already settled (passed, failed, parked or skipped) is not resumed on the strength of its unfinished-turn claim alone, because no controller would accept its verdict or advance it. Work owed to it — a held delivery, a pending operation, an orchestrator recovery — can still make it eligible, subject to the evidence fences below.
 
 
