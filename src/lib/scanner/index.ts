@@ -2,7 +2,7 @@ import { readBackgroundTaskLedger, pendingBackgroundTasks } from "@/lib/pipeline
 import fs from "node:fs";
 import path from "node:path";
 import { activityFactsFromRecords } from "@/lib/lifecycle/agentActivityEvidence";
-import { activityProcessReader } from "@/lib/lifecycle/agentActivityProcesses";
+import { activityProcessReader, resourceActivityProcessReader } from "@/lib/lifecycle/agentActivityProcesses";
 import { tailRecordsResult } from "./activity";
 import type { FileEntry, ProjectCatalogEntry } from "../types";
 import { agentRegistry, RegistryReadError, resolveConversationAlias } from "../agent/registry";
@@ -26,11 +26,11 @@ import { describeFile } from "./describe";
 import { durableServiceTierIndexForPaths, entryEffort, entryEffortResult, entryServiceTier } from "./effort";
 import { linkEntries } from "./links";
 import { entryModelsResult } from "./model";
-import { agentProcesses, outputHolders } from "./process";
+import { agentProcesses, outputHolders, resourceAgentProcesses, resourceOutputHolders } from "./process";
 import { goalFor, planFor } from "./plan";
 import { pendingQuestionFor } from "./questions";
 import { pendingWakeupFor } from "./wakeup";
-import { assignTranscriptPids } from "./transcripts";
+import { assignTranscriptPids, assignTranscriptPidsAsync } from "./transcripts";
 import { scanRootEntries } from "./roots";
 import { createTranscriptPathCanonicalizer } from "./transcriptIdentity";
 import { observeCodexSubagentTranscripts } from "../runtime/codexSubagentDetection";
@@ -344,12 +344,17 @@ async function listFilesInternal(
     : { files: await discoverFiles(undefined, demote ?? archivedTranscriptPaths(), pin, hosted), projectCatalog: [], complete: true };
   if (options.signal?.aborted) throw new DOMException("file scan cancelled", "AbortError");
   const entries = scan.files;
-  if (options.fresh) agentProcesses(true);
+  if (options.fresh) {
+    if (stagedResourceScope) await resourceAgentProcesses(true);
+    else agentProcesses(true);
+  }
   // The /proc fd scan is only needed to attribute background-task outputs to a
   // live pid. When the shortlist has no such entries, skip the scan entirely;
   // activity() only consults holders on the same claude-tasks/.output path.
   const needsHolders = entries.some((entry) => entry.root === "claude-tasks" && entry.path.endsWith(".output"));
-  const holders = needsHolders ? outputHolders() : NO_HOLDERS;
+  const holders = needsHolders
+    ? stagedResourceScope ? await resourceOutputHolders() : outputHolders()
+    : NO_HOLDERS;
   const durableTiers = await durableServiceTierIndexForPaths(entries.map(entry => entry.path));
   const invalidTails = new Set<string>();
   const hydrateEntry = (entry: FileEntry) => {
@@ -409,12 +414,13 @@ async function listFilesInternal(
   await forEachEntryYielding(entries, (entry) => {
     applyProcessState(entry, holders);
   });
-  assignTranscriptPids(entries);
-  const activityProcesses = activityProcessReader();
+  if (stagedResourceScope) await assignTranscriptPidsAsync(entries);
+  else assignTranscriptPids(entries);
+  const activityProcesses = stagedResourceScope ? resourceActivityProcessReader() : activityProcessReader();
   // After pid assignment: the claude effort source is the live process argv.
   await forEachEntryBatchYielding(entries, async (entry) => {
     if (entry.agentActivity && entry.proc === "running" && entry.pid !== null) {
-      entry.agentActivity.workProcesses = activityProcesses(entry.pid);
+      entry.agentActivity.workProcesses = await activityProcesses(entry.pid);
       entry.agentActivity.turnStartedAt = entry.lastTurn?.endedAt === null ? entry.lastTurn.startedAt : entry.agentActivity.turnStartedAt;
     }
     entry.effort = entryEffort(entry);

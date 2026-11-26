@@ -34,7 +34,7 @@ import { noteRelayOutcome } from "./activity";
 import { offersHandoff, type ExternalRelayRequest, type ExternalRelayDecision, type ExternalRelayAnswer } from "./protocol";
 import type { OwnerInstruction } from "./profile";
 import type { RelayTargetSettings } from "./store";
-import { json } from "./prompt";
+import { json, promptConversationMessage } from "./prompt";
 import { compactToolIndex } from "./toolIndex";
 import { callableReads, callableTools } from "./toolLoop";
 import { readOwnerStepObservation } from "./stepObservation";
@@ -204,10 +204,11 @@ async function ownerPromptWithContext(prepared: PreparedOwnerPrompt, directory: 
 function ownerConversation(request: ExternalRelayRequest, owner: OwnerInstruction) {
   const parentId = request.input.conversation.find(message => message.id === owner.messageId)?.reply_to;
   return request.input.conversation.map(message => {
+    const row = promptConversationMessage(message);
     const reference = message.id === owner.messageId && message.text === owner.text ? "owner_request.text"
       : message.id === parentId && owner.bridgeReport?.reportText === message.text ? "bridge_report.reportText" : null;
-    if (!reference) return message;
-    return { ...message, text: undefined, text_reference: reference };
+    if (!reference || row.text === undefined) return row;
+    return { ...row, text: undefined, text_reference: reference };
   });
 }
 function ownerReplyReference(request: ExternalRelayRequest, owner: OwnerInstruction) {

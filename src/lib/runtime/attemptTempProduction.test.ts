@@ -1633,6 +1633,10 @@ test("scheduled scratch adoption recovers a recorded attempt and holds an ambigu
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     fs.writeFileSync(path.join(directory, "data"), "scratch");
   }
+  // The sibling is ambiguous because something wrote to it within the last day: an ownerless
+  // root idle for 24 hours with no live reference is removed by the unregistered-scratch pass.
+  const recent = new Date(now - 3_600_000);
+  fs.utimesSync(path.join(unknown, "data"), recent, recent); fs.utimesSync(unknown, recent, recent);
   const store = new AttemptTempStore();
   try {
     store.adopt(now - 1); // Simulate the old production ledger's ownerless rows.

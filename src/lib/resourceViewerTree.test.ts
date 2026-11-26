@@ -137,8 +137,24 @@ test("the runtime host is read from its fence only while its start identity stil
 });
 
 const children: ChildProcess[] = [];
-afterEach(() => {
-  for (const child of children.splice(0)) child.kill("SIGKILL");
+async function stopChildren(owned: ChildProcess[]): Promise<void> {
+  const exits = owned.map((child) => child.exitCode !== null || child.signalCode !== null
+    ? Promise.resolve()
+    : new Promise<void>((resolve) => child.once("close", () => resolve())));
+  for (const child of owned) {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  }
+  await Promise.all(exits);
+}
+
+afterEach(async () => {
+  await stopChildren(children.splice(0));
+});
+
+test("test child cleanup waits until its owned process has exited", async () => {
+  const child = spawn("sleep", ["30"], { stdio: "ignore" });
+  await stopChildren([child]);
+  expect(child.signalCode).toBe("SIGKILL");
 });
 
 test("on this machine: a worker child counts, a child running an agent binary does not", async () => {
@@ -148,9 +164,9 @@ test("on this machine: a worker child counts, a child running an agent binary do
   const env = { ...process.env };
   delete env[STRUCTURED_HOST_STAMP_ENV];
   const worker = spawn("sleep", ["30"], { stdio: "ignore", env });
-  /* `codex` is only the script's $0 here, so the command line names an agent
-     binary while running nothing but a shell. */
-  const agent = spawn("bash", ["-c", "sleep 30; true", "codex"], { stdio: "ignore", env });
+  /* Give the sleeper an agent argv[0]. Replacing the shell keeps teardown
+     responsible for a single process. */
+  const agent = spawn("bash", ["-c", "exec -a codex sleep 30"], { stdio: "ignore", env });
   children.push(worker, agent);
   await new Promise((resolve) => setTimeout(resolve, 50));
 
