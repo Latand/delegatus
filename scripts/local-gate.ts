@@ -904,8 +904,10 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
   }
   const selected = requestedStep && steps.find(step => step.name === requestedStep);
   if (requestedStep && !selected) throw new Error(`the publication plan has no independent "${requestedStep}" step for these changes`);
+  const canonicalTools = process.env.LLV_GATE_CANONICAL_TOOLS === "1";
+  const gateScript = canonicalTools ? import.meta.path : "scripts/local-gate.ts";
   if (requestedStep && !admitted) {
-    await runAdmittedChecks(["bash", "scripts/gate-slot.sh", process.execPath, "scripts/local-gate.ts", "check-step", requestedStep, "--admitted"],
+    await runAdmittedChecks(["bash", "scripts/gate-slot.sh", process.execPath, gateScript, "check-step", requestedStep, "--admitted"],
       root, { ...workerEnv, LLV_GATE_RUNNER: "off", LLV_GATE_PLAN_HANDOFF: planHandoff }, deadline);
     return;
   }
@@ -926,7 +928,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
     // The dispatch marker binds this direct cleanup launch to its live parent.
     // Admission accepts it only beside that exact parent identity.
     const env: NodeJS.ProcessEnv = { ...process.env, LLV_OWNED_RUN_PARENT_IDENTITY: parentProof, LLV_GATE_HOOK_DISPATCH: parentProof, LLV_GATE_PLAN_HANDOFF: planHandoff };
-    const entry = publicationPrepare ? path.join(root, "scripts/local-gate.ts") : import.meta.path;
+    const entry = publicationPrepare && !canonicalTools ? path.join(root, gateScript) : import.meta.path;
     if (publicationPrepare) {
       // The outer runner owns cleanup while its child queues for checks. Give
       // admission the live parent evidence it uses to distinguish this runner
@@ -1095,7 +1097,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
       const memoryBytes = imagePreparation && steps.some(step => step.name === "types" || step.name === "Viewer build")
         ? String(publicationMemoryBytes(process.env.NODE_OPTIONS)) : undefined;
       const localChecks = (cancel: AbortSignal) => runAdmittedChecks(
-        ["bash", "scripts/gate-slot.sh", process.execPath, "scripts/local-gate.ts", "pre-push", "--admitted"], root,
+        ["bash", "scripts/gate-slot.sh", process.execPath, gateScript, "pre-push", "--admitted"], root,
         { ...workerEnv, LLV_GATE_RUNNER: "off", LLV_GATE_PUBLICATION_MEMORY_BYTES: memoryBytes, LLV_GATE_PLAN_HANDOFF: planHandoff }, deadline, cancel);
       const privacyHead = git(root, ["rev-parse", "HEAD"]);
       const checks = async (cancel: AbortSignal) => {
@@ -1117,7 +1119,9 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
           throw new AdmittedGateFailed(1, cloudRefusalLine({ category: "environment", reason }));
         }
         let cloudRefusal: string | undefined;
-        const code = await runCloudChecks({ head, tree, base, inputs, bundle, timeoutMs: Math.max(1, (deadline?.at ?? Date.now() + 15 * 60_000) - Date.now()) },
+        const cloudDeadline = deadline?.at ?? Date.now() + 15 * 60_000;
+        const code = await runCloudChecks({ head, tree, base, inputs, bundle, deadlineAt: cloudDeadline,
+          timeoutMs: Math.max(1, cloudDeadline - Date.now()) },
           new AppServerCloudTransport(config, undefined, () => {}), async () => {
             console.error("pre-push: Cloud unavailable after confirmation; running the same checks locally once");
             await localChecks(cancel); return 0;
