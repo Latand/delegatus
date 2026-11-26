@@ -9,7 +9,7 @@ import { text as streamText } from "node:stream/consumers";
 import { withAgentConfigSandbox } from "../src/lib/runtime/agentConfigSandbox";
 import { applyClaudeSpawnPolicy } from "../src/lib/agent/spawnPolicy";
 import { agentCodexPublicationPolicy } from "../src/lib/git/agentPublicationIdentity";
-import { report, attributeBatchTests, compareBatchTests, fileFault, INCOMPLETE_FILE, GATE_SLOT, parseReviewedPrs, batchMessage, touchedTests, noticePrs, git, patchId, MergeBatch, localGateCommands, requiredVerdict, nextRefresh, MAX_REQUIRED_CHECK_POLLS, MAX_TEST_CONFIRMATION_RUNS, commandRunner, type CommandRunner, candidateOf, type Candidate } from "./merge-batch";
+import { report, attributeBatchTests, compareBatchTests, fileFault, INCOMPLETE_FILE, GATE_SLOT, parseReviewedPrs, batchMessage, verifyBatchIdentity, touchedTests, noticePrs, git, patchId, MergeBatch, localGateCommands, requiredVerdict, nextRefresh, MAX_REQUIRED_CHECK_POLLS, MAX_TEST_CONFIRMATION_RUNS, commandRunner, type CommandRunner, candidateOf, type Candidate } from "./merge-batch";
 import type { TestRun, TestSite } from "./local-gate-tests";
 import { isolatedEnvironment } from "./local-gate";
 import { readWorktreeProvenance } from "../src/lib/pipelines/worktreeProvenance";
@@ -22,6 +22,27 @@ import { bindMergerContract } from "../src/lib/pipelines/mergerContract.fixture"
 const site = (name: string, file = "example.test.ts"): TestSite => ({ file, suite: "suite", name, kind: "test", occurrence: 0 });
 const recorded = (failures: TestSite[] = [], passed: TestSite[] = []): TestRun => ({
   failures, passed, completed: [...new Set([...failures, ...passed].map(test => test.file))], elapsedMs: 0,
+});
+
+test("a privacy-policy repository accepts the stage owner identity and refuses personal mailboxes", () => {
+  const root = mkdtempSync(join(tmpdir(), "merge-batch-stage-identity-"));
+  try {
+    git(root, ["init", "-q"]);
+    writeFileSync(join(root, "package.json"), JSON.stringify({ scripts: { "privacy:check": "bun scripts/privacy-publication-gate.ts" } }));
+    const receipt = join(root, "stage-receipt"); mkdirSync(receipt);
+    const mailbox = (local: string, host: string) => [local, host].join("@");
+    const owner = mailbox("142857+fixture-owner", "users.noreply.github.com");
+    const personal = mailbox("fixture-owner", "example.invalid");
+    const machine = mailbox("noreply", "fixture.invalid");
+    const env: NodeJS.ProcessEnv = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: join(root, "missing-global"),
+      GIT_AUTHOR_NAME: "Fixture Owner", GIT_AUTHOR_EMAIL: owner, GIT_COMMITTER_NAME: "Fixture Owner", GIT_COMMITTER_EMAIL: owner,
+      LLV_STAGE_GIT_RECEIPT: receipt };
+    expect(() => verifyBatchIdentity(root, env)).not.toThrow();
+    expect(() => verifyBatchIdentity(root, { ...env, GIT_AUTHOR_EMAIL: personal,
+      GIT_COMMITTER_EMAIL: personal })).toThrow("verified stage owner's GitHub noreply identity");
+    expect(() => verifyBatchIdentity(root, { ...env, LLV_STAGE_GIT_RECEIPT: undefined,
+      GIT_AUTHOR_EMAIL: machine, GIT_COMMITTER_EMAIL: machine })).not.toThrow();
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("batch comparison permits pre-existing failures and judges new tests on the candidate", () => {

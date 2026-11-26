@@ -67,17 +67,30 @@ export function agentHistoryGuardEnv(source: AgentEnvironment, name: string, ema
   [ "\${identity%>*}>" = ${ident} ] || refuse` : "";
   const stripCoauthor = policy.omitCoauthor ? `temporary=$(mktemp "$1.delegatus-XXXXXX") || exit 1
   trap 'rm -f "$temporary"' EXIT
-  awk ' { line[NR]=$0; if ($0 == "") last_blank=NR } END {
+  comment_char=$(git config --get core.commentChar 2>/dev/null || printf '#')
+  case "$comment_char" in auto|"") comment_char='#' ;; esac
+  awk -v comment_char="$comment_char" ' {
+    line[NR]=$0
+    if (!scissors && substr($0, 1, 1) == comment_char && $0 ~ /------------------------ >8 ------------------------/) scissors=NR
+  } END {
+    effective_end=scissors ? scissors-1 : NR
+    while (effective_end>0 && (substr(line[effective_end], 1, 1) == comment_char || line[effective_end] == "")) effective_end--
+    for (i=1; i<=effective_end; i++) if (line[i] == "") last_blank=i
     first=last_blank+1; trailer_block=0
-    for (i=first; i<=NR; i++) if (tolower(line[i]) ~ /^[[:space:]]*co-authored-by[[:space:]]*:/) trailer_block=1
+    for (i=first; i<=effective_end; i++) {
+      if (substr(line[i], 1, 1) != comment_char && tolower(line[i]) ~ /^[[:space:]]*co-authored-by[[:space:]]*:/) trailer_block=1
+    }
     for (i=1; i<=NR; i++) {
       value=tolower(line[i]); gsub(/[[:space:]]+/, " ", value)
-      if (!(trailer_block && i>=first && value ~ /^[[:space:]]*co-authored-by:[[:space:]]*delegatus[[:space:]]*<noreply@delegatus[.]invalid>[[:space:]]*$/)) print line[i]
+      if (!(trailer_block && i>=first && i<=effective_end && substr(line[i], 1, 1) != comment_char && value ~ /^[[:space:]]*co-authored-by:[[:space:]]*delegatus[[:space:]]*<noreply@delegatus[.]invalid>[[:space:]]*$/)) print line[i]
     }
   }' "$1" > "$temporary" || exit 1
   cat "$temporary" > "$1" || exit 1
   rm -f "$temporary"
   trap - EXIT` : "";
+  const commitMsgAction = policy.omitCoauthor
+    ? `if [ "$hook" = commit-msg ] && ! attribution_enabled; then ${stripCoauthor}; fi`
+    : "";
   const trailerAction = policy.settingFile
     ? `if attribution_enabled; then git interpret-trailers --in-place --if-exists addIfDifferent --trailer ${quote(coauthor ?? policy.omitCoauthor ?? "Co-Authored-By: Delegatus <noreply@delegatus.invalid>")} "$1" || exit 1; else ${stripCoauthor}; fi`
     : coauthor ? `git interpret-trailers --in-place --if-exists addIfDifferent --trailer ${quote(coauthor)} "$1" || exit 1` : stripCoauthor;
@@ -116,6 +129,7 @@ if [ "$hook" = prepare-commit-msg ]; then
   if picked=$(git rev-parse --verify -q CHERRY_PICK_HEAD); then check_author "$picked"; fi
   ${trailerAction}
 fi
+${commitMsgAction}
 if [ "$hook" = applypatch-msg ]; then
   # git am owns this message hook; amend the mailbox message before commit
   # creation. --no-verify skips this hook, so reference-transaction below

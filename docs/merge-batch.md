@@ -8,8 +8,10 @@ authority and exclude PRs whose live `merge.state` Delegatus already holds.
 
 Run from the repository with a dedicated `TMPDIR` for this pass. Keep that
 directory for every command; the run record is `$TMPDIR/merge-batch.json`.
-The launched agent must have the machine noreply author and committer identity
-described in [CONTRIBUTING](../CONTRIBUTING.md).
+An independently launched merger must have the machine noreply author and
+committer identity described in [CONTRIBUTING](../CONTRIBUTING.md). A merger
+launched as a Delegatus run stage uses the stage owner's verified GitHub
+noreply identity for both fields; personal mailboxes remain refused.
 
 ```sh
 bun install --frozen-lockfile

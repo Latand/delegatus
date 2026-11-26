@@ -314,6 +314,25 @@ test("a running stage applies both attribution toggle directions and preserves b
   } finally { f.close(); }
 });
 
+test("editor-path amend removes only the Delegatus trailer when attribution is disabled", async () => {
+  const f = await fixture();
+  try {
+    const env = { ...f.source, ...agentPublicationIdentityEnv(await repositoryPublicationSource(f.repo, f.source)) };
+    const claude = "Co-Authored-By: Claude <claude@example.invalid>";
+    await f.run(["commit", "--allow-empty", "-m", `Editor path amend\n\nKeep this body.\n\n${claude}`], env);
+    expect(await f.run(["log", "-1", "--format=%(trailers:only)"])).toContain(DELEGATUS_COAUTHOR);
+
+    updateOperatorSettings({ commitAttribution: false }, "2026-11-26T16:12:00Z");
+    await f.run(["commit", "--amend", "--allow-empty"], { ...env, GIT_EDITOR: "true" });
+
+    const message = await f.run(["log", "-1", "--format=%B"]);
+    expect(message).toContain("Keep this body.");
+    expect(message).toContain(claude);
+    expect(message).not.toContain(DELEGATUS_COAUTHOR);
+    expect(await f.run(["log", "-1", "--format=%(trailers:only)"])).toBe(claude);
+  } finally { f.close(); }
+});
+
 test.each(["commit", "merge", "cherry-pick", "am", "am --no-verify"])("unresolved account guards %s with an actionable refusal", async operation => {
   const f = await fixture();
   try {
