@@ -1,5 +1,6 @@
 "use client";
 
+import { isLegatusProject } from "@/lib/projects/serviceProject";
 import { LayoutGrid, User } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type MutableRefObject, type ReactNode } from "react";
 
@@ -165,7 +166,8 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
   const [query, setQuery] = useState("");
   const [archiveOpen, setArchiveOpen] = useState(false);
   const summaries = useMemo(
-    () => buildProjectSummaries(files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts, workingAgentCounts(files, now)),
+    () => buildProjectSummaries(files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts, workingAgentCounts(files, now))
+      .filter(({ project }) => !isLegatusProject(project)),
     [files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts],
   );
   /* A chosen workspace narrows the list before the pinned, projects and

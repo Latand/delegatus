@@ -1,3 +1,4 @@
+import { isLegatusProject } from "@/lib/projects/serviceProject";
 import { taskDeclaration, acceptTaskSchema, retainAccountingHold } from "./accounting";
 import { textLengthError } from "@/lib/textLimits";
 import { matchesShortId } from "@/lib/shortIds";
@@ -451,6 +452,7 @@ export function createTask(
   }
   let project = normalizeProject(input.project);
   if (!project) return { ok: false, error: "project is required", status: 400 };
+  if (isLegatusProject(project)) return { ok: false, error: "the service project has no board", status: 400 };
   const text = normalizeText(input.text);
   if (!text) return { ok: false, error: "task text is required", status: 400 };
   if (text.length > TASK_TEXT_LIMIT) return textLimitError(text.length);

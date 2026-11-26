@@ -1,3 +1,5 @@
+import { isLegatusProject } from "@/lib/projects/serviceProject";
+import { agendaVersionFor, bindSeatAgendaNotification } from "./seatAgenda";
 import { automaticReplacementHold } from "@/lib/orchestrator/seatTurnFence";
 import { wakeResponseRecoveryKey } from "./seatWakeResponse";
 import { readSeatQuotaObligation, seatRequestControlled } from "./seatQuotaRecovery";
@@ -64,10 +66,10 @@ import { SeatTickPendingJournal } from "./seatTickPendingJournal";
 import { redactBounded, redactMonitorText } from "./redact";
 import { seatMcpHealth, type SeatMcpHealth } from "./seatMcpHealth";
 import { withChildFinalMessages } from "./childFinalMessage";
-import { seatTickNoteRevision, seatTickProposalMessage, seatTickWakePayload } from "./report";
+import { seatTickBullet, seatTickNoteRevision, seatTickProposalMessage, seatTickWakePayload } from "./report";
 import { SEAT_TICK_WAKE_INTERVAL_MS, seatTickCatchUpItemCursor, seatTickDecision, seatTickPolicy, seatTickReportRequest, seatTickWakeCommit, seatTickWakeCommitPlan, seatTurnProgressing } from "./seatTick";
 import { seatTickFenceBoundMs, seatTickFenceLapsesAt, seatTickFenceRetirableOnAge, seatTickFenceSentence, seatTickReportedFence, seatTickWakeFence } from "./seatTickFence";
-import { effectiveSeatTickSettings, readSeatTickSettingsFile, readTurboSettings, seatTickSettingsAfterLapse, writeSeatTickSettings } from "./seatTickSettings";
+import { effectiveSeatTickSettings, seatTickDefaultInterval, readSeatTickSettingsFile, readTurboSettings, seatTickSettingsAfterLapse, writeSeatTickSettings } from "./seatTickSettings";
 import { readSeatTickState, readSeatTickStateFile, seatTickStateForEpoch, writeSeatTickState } from "./seatTickState";
 import {
   defaultSeatTickSources,
@@ -652,8 +654,10 @@ function wakeClientMessageId(
   const fingerprint = context.operatorInstructions
     ? crypto.createHash("sha512").update(JSON.stringify([context.fingerprint, context.operatorInstructions, context.instructionLines, ...(context.instructionReview ? [context.instructionReview] : [])])).digest("hex").slice(0, context.fingerprint.length)
     : context.fingerprint;
+  const agenda = verdict.kind === "wake" ? verdict.items.filter(item => item.kind === "agenda").map(item => item.itemVersion) : [];
+  const agendaSignature = agenda.length ? ":" + crypto.createHash("sha256").update(JSON.stringify(agenda)).digest("hex").slice(0, 16) : "";
   return boundedWakeIdentity(`${seatMessageKeys.tick}${project}:${seatEpoch}:${context.lastWakeAt ?? "first"}:${shape}:${fingerprint}`
-    + wakePromptIdentity(context.monitorPrompt)
+    + agendaSignature + wakePromptIdentity(context.monitorPrompt)
     + releasedWakeIdentity(context.releasedWake ?? null), project, seatEpoch);
 }
 
@@ -1307,7 +1311,7 @@ async function reconcileOutstandingWake(context: {
       try {
         outcome = await dispatchCall.run({ clientMessageId: wake.clientMessageId, token }, () => context.deliver!({
           pid: null, path: authority.path ?? context.seat?.path ?? "", conversationId: wake.conversationId,
-          clientMessageId: wake.clientMessageId, text: wake.text!, images: [], origin: delegatusMessageOrigin("seat-tick", context.project), policy: "context-or-queue" }));
+          clientMessageId: wake.clientMessageId, text: wake.text!, images: [], ...wakeDeliveryPolicy(context.project, wake.commit) }));
         redispatched = deliveryOutcomeLabel(outcome);
         redispatchReason = sendRefusalDetail(outcome);
       } catch (error) {
@@ -1713,6 +1717,12 @@ function needsWorkSources(verdict: SeatTickVerdict): boolean {
   return verdict.kind === "proactive" || verdict.kind === "wake" && verdict.reasons.some(reason => reason.kind === "autonomy-idle");
 }
 
+function wakeDeliveryPolicy(project: string, commit: import("./types").SeatTickWakeCommit) {
+  return commit.urgentLegatus
+    ? { origin: { kind: "agent" as const, role: "legatus", ...commit.urgentLegatus }, policy: "queue" as const }
+    : { origin: delegatusMessageOrigin("seat-tick", project), policy: "context-or-queue" as const };
+}
+
 function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdict, { kind: "wake" | "proactive" }>, issues: readonly ProposalIssue[] = [], snapshotAt = new Date(input.now).toISOString()) {
   const autonomyShown = autonomyActive(input.settings.autonomy, input.now) ? `${input.settings.autonomy!.startedAt}:${input.settings.autonomy!.updatedAt}` : undefined;
   const turboShown = turboShownRevision(input.settings.turbo, input.now);
@@ -1720,8 +1730,10 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
   const monitorPromptUnchanged = noteShown !== null && input.state.noteShown === noteShown;
   const terminalChildren = input.children.filter((child) => child.status === "terminal").map((child) => child.outcomeId ?? child.conversationId);
   const renderedVerdict = verdict.kind === "wake" ? { ...verdict, items: withChildFinalMessages(verdict.items) } : verdict;
-  const payload = verdict.kind === "wake"
-    ? seatTickWakePayload({
+  const urgent = renderedVerdict.kind === "wake" ? renderedVerdict.urgentLegatus : undefined;
+  const payload = urgent && renderedVerdict.kind === "wake"
+    ? { items: renderedVerdict.items, text: `A queued message from Legatus.\n\nItems:\n${renderedVerdict.items.map(item => redactMonitorText(seatTickBullet(item))).join("\n")}` }
+    : verdict.kind === "wake" ? seatTickWakePayload({
       autonomy: input.settings.autonomy,
       autonomyUnchanged: !!autonomyShown && input.state.autonomyShown === autonomyShown,
       turbo: input.settings.turbo,
@@ -1790,15 +1802,15 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
     wakeIntervalMs: input.settings.wakeIntervalMs,
     checkIntervalMs: input.policy.checkIntervalMs,
     fingerprint: input.changeFingerprint,
-    eventsThrough: input.events.at(-1)?.seq ?? input.state.eventsThrough ?? 0,
+    eventsThrough: urgent ? input.state.eventsThrough ?? 0 : input.events.at(-1)?.seq ?? input.state.eventsThrough ?? 0,
     terminalChildren,
-    noteShown,
-    ...(autonomyShown ? { autonomyShown } : {}),
-    ...(turboShown ? { turboShown } : {}),
+    ...(urgent ? {} : { noteShown }),
+    ...(!urgent && autonomyShown ? { autonomyShown } : {}),
+    ...(!urgent && turboShown ? { turboShown } : {}),
     ...(verdict.kind === "wake" && verdict.reasons.some(reason => reason.kind === "autonomy-ended") ? { autonomySummaryFor: pendingAutonomyReports(input.settings, input.now)[0]?.startedAt } : {}),
     bridgeReports: input.reports?.bridgeReports === true,
     reportCoverage: input.reports ? { ...input.reports, acknowledgedOutcomeKeys: input.state.reportsAcknowledged } : undefined,
-    reportRequest: renderedVerdict.kind === "wake" && !renderedVerdict.catchUp
+    reportRequest: !urgent && renderedVerdict.kind === "wake" && !renderedVerdict.catchUp
       ? seatTickReportRequest(input, input.state, renderedVerdict.items) : undefined,
     priorReportKeys: input.state.reportsOwed?.map(entry => entry.key),
     frozenText: text,
@@ -1824,7 +1836,15 @@ async function check(
   const readState = dependencies.readState ?? readSeatTickState;
   const writeState = dependencies.writeState ?? writeSeatTickState;
   const deliver = dependencies.deliver ?? deliverConversationMessage;
-  const ensureCard = dependencies.ensureCard ?? ensureSeatTickCard;
+  const legatus = isLegatusProject(canonical);
+  const ensureCard = legatus ? () => false : dependencies.ensureCard ?? ensureSeatTickCard;
+  const withAgenda = (input: SeatTickCheckInput): SeatTickCheckInput => {
+    if (!input.seat || !sources.seatAgenda) return input;
+    const shown = new Set(input.state.itemsShown);
+    const entries = sources.seatAgenda(canonical, Math.min(input.policy.itemsPerWake + 1, 32))
+      .filter(entry => !shown.has(agendaVersionFor(entry)));
+    return { ...input, seatAgenda: entries };
+  };
   const mcpHealthFor = (seat: { conversationId: string | null; designatedAt?: string | null }, now: number): SeatMcpHealth & { transport?: "stdio" | "http" } => {
     if (!seat.conversationId) return { status: "untracked", detail: "no seat conversation" };
     try {
@@ -2470,9 +2490,10 @@ async function check(
       const deployment = await gatherSeatTickDeployInput(canonical, state, policy, sources);
       let input = deployment ?? await refreshSeatTickEvidence(await gatherSeatTickInput(canonical, state, policy, sources), sources);
       let issues: readonly ProposalIssue[] = [];
+      input = withAgenda(input);
       if (needsWorkSources(seatTickDecision(input).verdict)) {
         issues = await (dependencies.proposalIssues ?? defaultProposalIssues)(canonical, sources);
-        input = await refreshSeatTickEvidence(input, sources);
+        input = withAgenda(await refreshSeatTickEvidence(input, sources));
       }
       const verdict = seatTickDecision(input).verdict;
       if (!input.seat || input.seat.seatEpoch !== wake.seatEpoch || input.seat.conversationId !== wake.conversationId
@@ -2505,6 +2526,8 @@ async function check(
     now: opening,
     wakeIntervalMs: openingInterval,
   });
+
+  await sources.acknowledgeAgenda?.(canonical, settled.itemsShown ?? []);
 
   if (quotaHeld) {
     const quota = readSeatQuotaObligation(canonical);
@@ -2552,7 +2575,7 @@ async function check(
   let input = priorityInput ?? await refreshSeatTickEvidence(gathered, sources);
   input = { ...input, state: seatTickStateForEpoch(input.state, input.seat?.seatEpoch ?? null) };
   // Outcomes are visible even when the seat needs no wake or operator answer.
-  if (!priorityInput) await sources.recordRuleReports?.(input.project, new Date(input.now).toISOString());
+  if (!legatus && !priorityInput) await sources.recordRuleReports?.(input.project, new Date(input.now).toISOString());
   const authDetail = await recoverSeatAuthentication(input, sources, readState, writeState, ensureCard, dependencies.seatAuth ?? {});
   const autoRotateDetail = priorityInput ? null : await runSeatAutoRotation(input, sources, readState, writeState, ensureCard, deliver, dependencies.seatAutoRotation ?? {});
   if (responseHeld) {
@@ -2563,15 +2586,16 @@ async function check(
       detail: [responseDetail ?? "Delivered wake remains unanswered. Ordinary agenda sends remain fenced.", authDetail, autoRotateDetail].filter(Boolean).join("; ") };
     appendRecord(record); return record;
   }
+  input = withAgenda(input);
   let proposalIssues: readonly ProposalIssue[] = [];
   if (needsWorkSources(seatTickDecision(input).verdict)) {
     proposalIssues = await (dependencies.proposalIssues ?? defaultProposalIssues)(input.project, sources);
-    input = await refreshSeatTickEvidence(input, sources);
+    input = withAgenda(await refreshSeatTickEvidence(input, sources));
   }
   if (priorityInput) {
     const refreshed = await gatherSeatTickDeployInput(canonical, input.state, policy, sources, input.reports ?? null);
     if (!refreshed) throw new SeatTickEvidenceRefreshCanceledError(input.state.pullRequestGap);
-    input = refreshed;
+    input = withAgenda(refreshed);
   }
   const at = new Date(input.now).toISOString();
   const mcpHealth = input.seat ? mcpHealthFor(input.seat, input.now) : null;
@@ -2596,7 +2620,7 @@ async function check(
      deploys and one started before a rotation get one too. A failure costs
      the task list of one report, never the check. */
   try {
-    sources.recordDeploySnapshots?.(input.project);
+    if (!legatus) sources.recordDeploySnapshots?.(input.project);
   } catch (error) {
     console.error("[seat tick] deploy snapshot failed", error instanceof Error ? error.name : "unknown");
   }
@@ -2796,7 +2820,7 @@ async function check(
             /* The executor chooses native context on a supported running host,
                or a normal wake when idle, under this one durable key. */
             const message = { pid: null, path: authority.path ?? input.seat.path ?? "", conversationId: authority.conversationId,
-              clientMessageId, text, images: [], origin: delegatusMessageOrigin("seat-tick", input.project), policy: "context-or-queue" as const,
+              clientMessageId, text, images: [], ...wakeDeliveryPolicy(input.project, commit),
               admissionGuard: (reconciled: Parameters<DeliveryAdmissionGuard>[0]) => { responseGuard(); admission.guard(reconciled); },
               recoveryAuthorityGuard: () => { responseGuard(); admission.authorityGuard(); } };
             outcome = token ? await dispatchCall.run({ clientMessageId, token }, () => deliverWake(message)) : await deliverWake(message);
@@ -2984,7 +3008,7 @@ function wakeIntervalFor(project: string, now: number, sources: SeatTickSources)
   try {
     return effectiveSeatTickSettings(sources.settings(project), now, SEAT_TICK_WAKE_INTERVAL_MS).wakeIntervalMs;
   } catch {
-    return SEAT_TICK_WAKE_INTERVAL_MS;
+    return seatTickDefaultInterval(project, SEAT_TICK_WAKE_INTERVAL_MS);
   }
 }
 
@@ -3138,9 +3162,9 @@ export async function reconcileSeatTick(dependencies: SeatTickControllerDependen
   // no SeatTickWork and spends no budget; every project gets a turn this pass.
   const checked = await Promise.all([...projects].sort().map(project => checkSeatTickProject(project, {
     ...dependencies, sources, ownsTraffic: dependencies.ownsTraffic ?? releaseOwnsTraffic,
-    release: dependencies.release === undefined ? releaseControllerForSources(sources) : dependencies.release,
+    release: isLegatusProject(project) ? null : dependencies.release === undefined ? releaseControllerForSources(sources) : dependencies.release,
     curation,
-    maintenance: dependencies.maintenance === undefined ? productionBoardMaintenanceController(sources) : dependencies.maintenance,
+    maintenance: isLegatusProject(project) ? null : dependencies.maintenance === undefined ? productionBoardMaintenanceController(sources) : dependencies.maintenance,
   }, journal)));
   records.push(...checked.filter((record): record is SeatTickRunRecord => record !== null));
   // Curation chooses from refreshed wake stamps after the roster. Waiting for
@@ -3341,6 +3365,14 @@ export function startSeatTick(ports: {
     if (generation !== tickHost.__llvSeatTickGeneration || handoffHeld() || drainHeld()) return;
     await reconcileResumedSeatTick(conversationId, { policy });
   });
+  const agendaChecks = new Set<string>();
+  bindSeatAgendaNotification(project => {
+    if (agendaChecks.has(project) || generation !== tickHost.__llvSeatTickGeneration || handoffHeld() || drainHeld() || ports.sweep) return;
+    // Share release authority, work admission and the per-project fence with scheduled checks.
+    agendaChecks.add(project);
+    void reconcileSeatTick({ policy, curation: null }, [project]).catch(() => console.error("[seat tick] agenda check deferred"))
+      .finally(() => agendaChecks.delete(project));
+  });
   // Read durable stall observations immediately; a restart owes no new interval.
   run();
   return true;
@@ -3353,6 +3385,7 @@ export function seatTickIdle(): boolean {
 /** Test seam: the timer is process-global, so a suite must be able to start
     from an unstarted one without reaching into module internals. */
 export function stopSeatTick(): void {
+  bindSeatAgendaNotification();
   bindResumedSeatTick(null);
   tickHost.__llvSeatTickGeneration = (tickHost.__llvSeatTickGeneration ?? 0) + 1;
   for (const entry of tickHost.__llvSeatTickProjects?.values() ?? []) entry.work?.close();

@@ -51,7 +51,7 @@ export function replaceSeatTickInstructions(settings: Instructions, text: string
  * unknown-author legacy lines in the operator's field until an explicit
  * operator save or a designated seat rewrite replaces them. */
 export function isSeatNote(line: SeatTickInstructionLine): boolean {
-  return line.author?.kind === "manager" || line.author?.kind === "agent";
+  return line.author?.kind === "manager" || line.author?.kind === "legatus" || line.author?.kind === "agent";
 }
 
 export function hasUnknownAuthor(line: SeatTickInstructionLine): boolean {
@@ -129,7 +129,7 @@ export function seatTickInstructionSections(settings: Instructions): string[] {
     let previous = "";
     for (const line of notes) {
       const author = line.author!;
-      const label = author.kind === "manager" && author.seatEpoch !== null ? `Seat epoch ${author.seatEpoch}:` : "Agent session:";
+      const label = author.kind === "legatus" ? "Legatus:" : author.kind === "manager" && author.seatEpoch !== null ? `Seat epoch ${author.seatEpoch}:` : "Agent session:";
       if (label !== previous) rendered.push(label);
       rendered.push(`> ${line.text}`);
       previous = label;

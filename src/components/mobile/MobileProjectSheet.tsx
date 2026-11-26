@@ -20,6 +20,7 @@ import { buildProjectSummaries, OVERVIEW, partitionCrownedSummaries, projectKey,
 import { MobileWorkspaceSwitch, WorkspaceDot, workspaceErrorText, type WorkspaceCounts, type WorkspaceRailState } from "../team/WorkspaceSwitch";
 import { groupAll, workspaceScope } from "../team/workspaceFilter";
 import { workingAgentCounts } from "../workingAgents";
+import { isLegatusProject } from "@/lib/projects/serviceProject";
 import { ResourcesFooter } from "../ResourcesFooter";
 import { BoardRowsSkeleton } from "../skeletons";
 import { fmtAge } from "../utils";
@@ -124,7 +125,8 @@ export function MobileProjectSheet({
 }: MobileProjectSheetProps) {
   const { t } = useLocale();
   const summaries = useMemo(
-    () => buildProjectSummaries(files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts, workingAgentCounts(files, now)),
+    () => buildProjectSummaries(files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts, workingAgentCounts(files, now))
+      .filter(({ project }) => !isLegatusProject(project)),
     [files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts],
   );
   /* A chosen workspace narrows the list before the crowned, rest and archive

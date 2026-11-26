@@ -1,3 +1,4 @@
+import { seatAgendaSchema } from "@/lib/monitor/seatAgendaSchema";
 import { installTaskTimes, prepareTaskTimes, taskTimePendingCursor, taskTimesReady } from "./taskTimes";
 import { taskListIndex, taskListIndexCurrent, taskListIndexes } from "./taskListIndexes";
 import { observeRegistryWriter } from "@/lib/agent/registryWriter";
@@ -793,6 +794,8 @@ const stateSchema = [
     reconciled_sha256 TEXT
   )`,
 ];
+stateSchema.push(...seatAgendaSchema);
+
 const stateSchemaNames = ["task_time_pending", "task_time_insert", "task_time_update", "task_time_delete", ...stateSchema.map(sql => /^CREATE (?:UNIQUE )?(?:TABLE|INDEX|TRIGGER) IF NOT EXISTS (\w+)/.exec(sql)![1]!)];
 
 function taskDueIndexCurrent(db: Database): boolean {
@@ -915,6 +918,9 @@ function openRawDatabase(filename: string): Database {
         if (!taskDueIndexCurrent(db)) db.exec("DROP INDEX IF EXISTS state_rows_task_due");
         if (!names.has("task_time_pending")) db.exec("DROP INDEX IF EXISTS state_rows_task_legacy_stamp");
         for (const index of outdatedTaskList) db.exec(`DROP INDEX IF EXISTS ${index}`);
+        // Replace the pre-episode form projection. Its old trigger would also
+        // insert the stable form id when a completed task is reopened.
+        db.exec("DROP TRIGGER IF EXISTS seat_agenda_form_update");
         for (const sql of stateSchema) db.exec(sql);
         installTaskTimes(db);
         if (!names.has("pipeline_request_receipts")) backfillPipelineRequestReceipts(db);
@@ -1007,7 +1013,7 @@ function withImmediateTransaction<T>(db: Database, busyMessage: string, operatio
   }
 }
 
-async function stateTransactionAsync<T>(filename: string, collection: string, operation: (db: Database) => T, afterCommit?: (result: T) => void): Promise<T> {
+export async function stateTransactionAsync<T>(filename: string, collection: string, operation: (db: Database) => T, afterCommit?: (result: T) => void): Promise<T> {
   return waitForStateLock(`state.transaction.${collection}`, () => withStateWriter(filename, (db) => {
     const result = withImmediateTransaction(db, "state transaction is busy", () => operation(db), collection);
     // Apply the committed baseline before yielding to queued edits. Keep

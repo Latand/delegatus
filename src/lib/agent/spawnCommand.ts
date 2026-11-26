@@ -1,3 +1,6 @@
+import { isLegatusProject } from "@/lib/projects/serviceProject";
+import { localLegatusProject } from "@/lib/orchestrator/legatusSeat";
+import { recordOperatorLaunch } from "@/lib/monitor/seatAgenda";
 import { preflightCodexProtocol } from "@/lib/accounts/codexPinnedProtocol";
 import { hardenedRedact } from "@/lib/view/compactText";
 import { assertProactiveTaskExecution, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
@@ -203,6 +206,7 @@ export interface SpawnCommandDependencies {
 
   /** The activity dashboard's request ledger; never throws. */
   recordOperatorRequest?: typeof recordOperatorRequest;
+  recordOperatorLaunch?: typeof recordOperatorLaunch;
   /** Whether an engine's command resolves and it has a signed-in account
       (#1876). A role-shaped launch onto an engine that is not ready is refused
       before any receipt exists; absent means no check. */
@@ -253,6 +257,7 @@ export const productionSpawnCommandDependencies: SpawnCommandDependencies = {
     .flatMap(pipeline => pipeline.taskIds))],
 
   recordOperatorRequest,
+  recordOperatorLaunch,
   engineReadiness: (engine, project) => engine === "claude" || engine === "codex" || engine === "antigravity" ? engineReadiness(engine, project) : "connected",
 };
 
@@ -398,12 +403,23 @@ export async function executeSpawnRequest(
     return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
   }
 
-  return withSpawnDiagnostics(body?.clientAttemptId, () => executeParsedSpawnRequest(req, body, {
+  const response = await withSpawnDiagnostics(body?.clientAttemptId, () => executeParsedSpawnRequest(req, body, {
     ...dependencies,
     // Preserve the request's egress boundary even when a deferred driver invokes
     // its stored callback from a different asynchronous context.
     defer: work => dependencies.defer(bindSpawnDiagnostics(work)),
   }));
+  if (response.ok && dependencies.recordOperatorLaunch && directOperatorActivityAuthority(req).ok
+    && !body?.src && !body?.parent && !body?.parentConversationId) {
+    try {
+      const launched = await response.clone().json() as SpawnResponse;
+      const project = typeof body.project === "string" ? validExplicitProject(body.project)
+        : typeof body.cwd === "string" ? projectForCwd(body.cwd) : null;
+      if (project && launched.ok && launched.conversationId && !launched.parent
+        && launched.state !== "failed" && launched.state !== "conflict") await dependencies.recordOperatorLaunch(project, launched.conversationId);
+    } catch { console.error("[seat tick] operator launch event could not be recorded"); }
+  }
+  return response;
 }
 
 async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBody, dependencies: SpawnCommandDependencies): Promise<NextResponse<SpawnResponse | ApiError>> {
@@ -588,6 +604,13 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
   if (body.project !== undefined && body.project !== null) {
     explicitProject = typeof body.project === "string" ? validExplicitProject(body.project) : null;
     if (!explicitProject) return NextResponse.json({ error: "project must be a valid project key" }, { status: 400 });
+    if (isLegatusProject(explicitProject)) {
+      const claim = internalServiceClaim(req, { readOnly: true });
+      if (claim.claim !== "valid" || claim.service !== "orchestrator"
+        || explicitProject !== localLegatusProject() || body.role !== "legatus" || body.taskId != null) {
+        return NextResponse.json({ error: "the service project belongs to the Legatus seat" }, { status: 403 });
+      }
+    }
     if (agentInitiated && authenticatedCaller?.kind !== "operator") {
       return NextResponse.json({ error: "explicit project requires an authenticated Viewer operator spawn" }, { status: 403 });
     }

@@ -1,3 +1,6 @@
+import { currentLegatusSeat } from "@/lib/orchestrator/legatusSeat";
+import { orchestratorSeatFor, orchestratorSeatIdentityForConversation } from "@/lib/orchestrator/seats";
+import { queueLegatusMessage, SeatAgendaRefusal } from "@/lib/monitor/seatAgenda";
 import { dispatchConversationMessage } from "@/lib/conversation/messageDispatch";
 import { prepareMessageFiles } from "@/lib/longMessageFile";
 import type { MessageTextAttachment } from "@/lib/messageTextAttachment";
@@ -238,7 +241,11 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
     return NextResponse.json({ error: "pid, path, or conversationId is required" }, { status: 400 });
   }
 
+  const hasAction = Object.prototype.hasOwnProperty.call(body, "action");
   const explicitAction = typeof body.action === "string" ? body.action : "";
+  if (hasAction && (!explicitAction || (explicitAction !== "reconfigure" && !dependencies.conversationActions.includes(explicitAction)))) {
+    return NextResponse.json({ error: "action must be a supported conversation action" }, { status: 400 });
+  }
   if (dependencies.conversationActions.includes(explicitAction)) {
     /* Answering an agent's question is a person acting: in team mode it
        needs a member, and the audit names them (sign-in-and-team §7.1). */
@@ -324,6 +331,35 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
   if (structuredControl) return NextResponse.json(structuredControl.body, { status: structuredControl.status });
   if (body.action === "reconfigure") {
     return NextResponse.json({ ok: false, outcome: "failed", code: NO_STRUCTURED_HOST_CODE, error: NO_STRUCTURED_HOST_ERROR }, { status: 409 });
+  }
+
+  if (caller && currentLegatusSeat(caller) && !hasAction) {
+    const registry = agentRegistry();
+    const byId = conversationId ? registry.conversation(conversationId as `conversation_${string}`) : null;
+    const byPath = filePath ? registry.conversationForPath(filePath) : null;
+    if (byId && byPath && byId.id !== byPath.id) return NextResponse.json({ error: "conflicting delivery targets" }, { status: 409 });
+    const pidEntry = !conversationId && !filePath && hasPid
+      ? operatorFallbackEntry((await dependencies.completedFileScan({ revalidate: false })).snapshot.files, { pid, hasPid, filePath, conversationId })
+      : undefined;
+    const target = byId?.id ?? byPath?.id ?? pidEntry?.conversationId
+      ?? (pidEntry?.path ? registry.conversationForPath(pidEntry.path)?.id : undefined) ?? conversationId;
+    const seat = target ? orchestratorSeatIdentityForConversation(target) : null;
+    if (seat && orchestratorSeatFor(seat.project).active?.conversationId === target) {
+      if (typeof body.text !== "string" || typeof body.clientMessageId !== "string"
+        || !body.clientMessageId.trim() || body.clientMessageId.length > 128
+        || body.image != null || (body.images != null && (!Array.isArray(body.images) || body.images.length))
+        || (body.files != null && (!Array.isArray(body.files) || body.files.length))) {
+        return NextResponse.json({ error: "a seat agenda message requires text and clientMessageId", admission: "refused" }, { status: 400 });
+      }
+      try {
+        const accepted = await queueLegatusMessage({ conversationId: caller, project: seat.project, recipient: target,
+          clientMessageId: body.clientMessageId, text: body.text, urgent: false });
+        return NextResponse.json({ ok: true, target, outcome: accepted.state, operationId: accepted.operationId }, { status: 202 });
+      } catch (error) {
+        if (!(error instanceof SeatAgendaRefusal)) throw error;
+        return NextResponse.json({ error: error.message, admission: "refused" }, { status: 409 });
+      }
+    }
   }
 
   /* A seat's deputy takes no message after its one ask (docs/design/ghost-seat.md

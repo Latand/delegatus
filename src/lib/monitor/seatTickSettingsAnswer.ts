@@ -1,3 +1,4 @@
+import { isLegatusProject } from "@/lib/projects/serviceProject";
 import { turboActive } from "./turbo";
 import { seatTickCheckErrorAlarm, seatTickDeliveryAlarm, type SeatTickCheckErrorAlarm, type SeatTickDeliveryAlarm } from "./seatTickWatchdog";
 import { curationAnswer, readCurationPanel, type CurationAnswer } from "@/lib/memory/curation/answer";
@@ -18,6 +19,7 @@ import { SEAT_TICK_WAKE_INTERVAL_MS, seatTickPolicy, seatTickSettingsCardDetail 
 import {
   defaultSeatTickSettings,
   effectiveSeatTickSettings,
+  seatTickDefaultInterval,
   readSeatTickSettings,
   type SeatTickSettings,
   type SeatTickSettingsActor,
@@ -306,7 +308,7 @@ export function seatTickSettingsAnswer(
         reason: effective.reason, until: effective.until, updatedAt: effective.updatedAt,
         isDefault: effective.isDefault, configured: effective.configured, lapsed: effective.lapsed, monitorPrompt: null },
       defaults: defaultSeatTickSettings(project),
-      defaultWakeIntervalMinutes: Math.round(SEAT_TICK_WAKE_INTERVAL_MS / 60_000),
+      defaultWakeIntervalMinutes: Math.round(seatTickDefaultInterval(project, SEAT_TICK_WAKE_INTERVAL_MS) / 60_000),
       monitorPromptLength: settings.monitorPrompt?.length ?? 0, cardText: null,
       policy: { checkIntervalMinutes, staleAfterMinutes: checkIntervalMinutes === null ? null : checkIntervalMinutes * STALE_CHECKS,
         retryGuardWakes, intervalEligibility: SEAT_TICK_INTERVAL_ELIGIBILITY },
@@ -348,12 +350,12 @@ export function seatTickSettingsAnswer(
       updatedAt: effective.updatedAt,
     },
     defaults: defaultSeatTickSettings(project),
-    defaultWakeIntervalMinutes: Math.round(SEAT_TICK_WAKE_INTERVAL_MS / 60_000),
+    defaultWakeIntervalMinutes: Math.round(seatTickDefaultInterval(project, SEAT_TICK_WAKE_INTERVAL_MS) / 60_000),
     monitorPromptLength: settings.monitorPrompt?.length ?? 0,
     /* The card the board carries while this stands, composed from the same
        helper the check composes it with. Null on the default, where there is
        no card to raise. */
-    cardText: effective.configured && !effective.isDefault
+    cardText: !isLegatusProject(project) && effective.configured && !effective.isDefault
       ? seatTickSettingsCardText({
         project,
         detail: seatTickSettingsCardDetail(effective),

@@ -1,3 +1,5 @@
+import { isLegatusProject } from "@/lib/projects/serviceProject";
+import { agendaVersionFor, type SeatAgendaEntry } from "./seatAgenda";
 import { seatWakeResponseBound } from "./seatWakeResponse";
 import { seatTickFormPage } from "./seatTickForms";
 import { seatTickTaskPage } from "./seatTickReminders";
@@ -1135,8 +1137,66 @@ function sourceGapReport(
  * nothing.
  */
 export function seatTickDecision(input: SeatTickCheckInput): SeatTickDecision {
+  if (isLegatusProject(input.project)) return decideLegatus(input);
+  const urgent = input.seatAgenda?.find(entry => entry.urgent === 1 && entry.sender);
+  const at = new Date(input.now).toISOString();
+  if (urgent?.sender && input.seat) {
+    const wake = agendaWake([urgent], input.policy.itemsPerWake);
+    return { verdict: { ...wake, urgentLegatus: { project: urgent.source_project, conversationId: urgent.sender } },
+      state: { ...input.state, lastCheckAt: at, seatEpoch: input.seat.seatEpoch }, cards: [] };
+  }
   const decision = decide(input);
-  return { ...decision, cards: [...decision.cards, ...settingsCards(input)] };
+  const cards = [...decision.cards, ...settingsCards(input)];
+  const agenda = input.seatAgenda ?? [];
+  if (!agenda.length || !input.seat || !input.settings.enabled) return { ...decision, cards };
+  const agendaVerdict = agendaWake(agenda, input.policy.itemsPerWake);
+  if (decision.verdict.kind === "wake" && !decision.verdict.catchUp) {
+    // Add as many queued Legatus messages as fit; only items carried in this
+    // verdict receive delivery credit. Keep the ordinary page within budget.
+    const available = Math.max(0, input.policy.itemsPerWake - agendaVerdict.items.length);
+    const ordinaryItems = decision.verdict.items.slice(0, available);
+    const items = [...agendaVerdict.items, ...ordinaryItems];
+    return { ...decision, cards, verdict: { ...decision.verdict, items,
+      reasons: [...decision.verdict.reasons, ...agendaVerdict.reasons],
+      deferred: decision.verdict.deferred + Math.max(0, agenda.length - agendaVerdict.items.length)
+        + decision.verdict.items.length - ordinaryItems.length } };
+  }
+  if ((decision.verdict.kind === "quiet" || decision.verdict.kind === "proactive")
+    && seatTickWakeDue(input.state.lastWakeAt ?? input.seat.designatedAt ?? null, input.now, input.settings.wakeIntervalMs)) {
+    return { ...decision, cards, verdict: agendaVerdict };
+  }
+  return { ...decision, cards };
+}
+
+function agendaWake(entries: readonly SeatAgendaEntry[], limit: number): Extract<SeatTickVerdict, { kind: "wake" }> {
+  const items = entries.slice(0, limit).map((entry): SeatTickItem => ({
+    kind: "agenda",
+    id: entry.kind === "legatus-message" ? entry.id : entry.ref,
+    label: entry.kind === "legatus-message" ? `Legatus message: ${JSON.stringify(entry.text)}`
+      : entry.kind === "legatus-question" ? `Form in ${entry.source_project}${entry.task_id ? `, task ${entry.task_id}` : ""}`
+        : `Operator launched an agent in ${entry.source_project}`,
+    itemVersion: agendaVersionFor(entry),
+  }));
+  const reasons = [...new Set(entries.slice(0, limit).map(entry => entry.kind))]
+    .map(kind => ({ kind, detail: kind === "legatus-message" ? "Legatus sent a message for the seat"
+      : kind === "legatus-question" ? "A form started waiting" : "The operator launched an agent" }));
+  return { kind: "wake", items, reasons, deferred: entries.length - items.length, gaps: [],
+    skippedChildren: { stale: 0, unreadable: 0, unchanged: 0 } };
+}
+
+function decideLegatus(input: SeatTickCheckInput): SeatTickDecision {
+  const state = { ...input.state, lastCheckAt: new Date(input.now).toISOString(), seatEpoch: input.seat?.seatEpoch ?? null };
+  if (!input.seat) return { verdict: { kind: "no-seat", detail: "Legatus has no designated seat" }, state, cards: [] };
+  if (seatTurnProgressing(input.seat)) return { verdict: { kind: "skipped", reason: "seat-busy" }, state, cards: [] };
+  if (!input.settings.enabled) return { verdict: { kind: "quiet", detail: "Legatus ticking is off" }, state, cards: [] };
+  const events = input.seatAgenda ?? [];
+  if (events.length) return { verdict: agendaWake(events, input.policy.itemsPerWake), state, cards: [] };
+  if (!seatTickWakeDue(state.lastWakeAt ?? input.seat.designatedAt ?? null, input.now, input.settings.wakeIntervalMs)) {
+    return { verdict: { kind: "quiet", detail: "Legatus tick is waiting for its next wake" }, state, cards: [] };
+  }
+  const verdict = agendaWake([], input.policy.itemsPerWake);
+  verdict.reasons.push({ kind: "interval", detail: "The Legatus interval elapsed" });
+  return { verdict, state, cards: [] };
 }
 
 function decide(input: SeatTickCheckInput): SeatTickDecision {
@@ -2342,6 +2402,7 @@ export function seatTickWakeCommitPlan(
     if (framed === null || framed.includes(`\n${line}\n`)) acknowledgmentLines.push({ key: `shown:${child.stateToken}`, line });
   }
   return {
+    ...(verdict.urgentLegatus ? { urgentLegatus: verdict.urgentLegatus } : {}),
     ...(catchUp ? { catchUp } : {}),
     ...(reportRequest?.outcomeKeys.length ? { reportRequest } : {}),
     ...(context.wakeIntervalMs ? { wakeIntervalMs: context.wakeIntervalMs } : {}),

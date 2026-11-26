@@ -1,5 +1,6 @@
 export const ROLE_IDS = [
   "orchestrator",
+  "legatus",
   "reviewer",
   "verifier",
   "builder",
@@ -55,7 +56,7 @@ export type RoleDefinition = {
   parameters: readonly RoleParameter[];
   promptScaffold: string;
   safetyFences: readonly string[];
-  capabilities: readonly ("read-only" | "production-read" | "production-write" | "spawn")[];
+  capabilities: readonly ("read-only" | "production-read" | "production-write" | "spawn" | "seat-tick-settings" | "seat-messages")[];
   /** Builder and reviewer only: the runtime of each parameter variant,
       shipped values merged with this install's mapping (#1876). */
   variants?: Partial<Record<RoleVariantId, RoleConfig>>;

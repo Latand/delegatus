@@ -1809,6 +1809,8 @@ export const uk: Record<keyof typeof en, Message> = {
 
   // Локалізація каталогу ролей (issue #221 §1). Реєстр лишається англійським —
   // це лише підписи в UI; промпти агентам не змінюються.
+  "roleCopy.legatus.name": "Легат",
+  "roleCopy.legatus.description": "Координує сидіння проєктів на цій інсталяції.",
   "roleCopy.orchestrator.name": "Оркестратор",
   "roleCopy.orchestrator.description": "Координує нових агентів через панель керування Delegatus.",
   "roleCopy.orchestrator.param.mode.label": "Режим",
@@ -6276,6 +6278,9 @@ export const uk: Record<keyof typeof en, Message> = {
   "seatTick.reason.deploySettled": "деплой оркестратора завершився",
   "seatTick.reason.permissionRequest": "чекає запит дозволу",
   "seatTick.reason.workerAsk": "запитання воркера чекає на оркестратора",
+  "seatTick.reason.legatusQuestion": "форма чекає на відповідь",
+  "seatTick.reason.operatorLaunch": "оператор запустив агента",
+  "seatTick.reason.legatusMessage": "Легат надіслав повідомлення",
   "seatTick.reason.diskPressure": "мало місця на диску",
   "seatTick.reason.diskCleaner": "прибирання диска завершено",
   "seatTick.outcome.landed": "доставлено",
@@ -6296,6 +6301,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "seatTick.setBy": "Змінив(ла) {who} · {at} · {conversation}",
   "seatTick.setByNobody": "Запис не називає, хто це змінив.",
   "seatTick.actor.gateway": "власна сесія оператора",
+  "seatTick.actor.legatus": "Легат",
   "seatTick.actor.manager": "призначений оркестратор",
   "seatTick.actor.agent": "сесія агента",
   "seatTick.actor.unidentified": "виклик, якого ніщо не ідентифікувало",
@@ -6626,6 +6632,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "onboarding.agents.role.reviewerTrivial": "Рев'юер, дрібні зміни",
   "onboarding.agents.role.verifier": "Верифікатор",
   "onboarding.agents.role.architect": "Архітектор",
+  "onboarding.agents.role.legatus": "Легат",
   "onboarding.agents.role.orchestrator": "Оркестратор",
   "onboarding.agents.role.cleaner": "Прибиральник",
   "onboarding.agents.role.prodAuditor": "Аудитор продакшену",

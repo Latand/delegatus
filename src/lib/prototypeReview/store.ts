@@ -1,3 +1,4 @@
+import { notifyLegatus } from "@/lib/monitor/seatAgenda";
 import { resolveShortId } from "@/lib/shortIds";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
@@ -210,6 +211,8 @@ async function publishRound(input: PublishPrototypeInput, taskId: string | null,
         return { tasks, result: undefined };
       }));
       committed = true;
+      try { notifyLegatus(); }
+      catch { console.error("[seat tick] form wake notification deferred"); }
       for (const old of removed) await fs.rm(roundDirectory(old),{ recursive: true, force: true });
       return round;
     } finally {

@@ -1,3 +1,5 @@
+import { ensureLegatusProject, localLegatusProject } from "./legatusSeat";
+import { isLegatusProject } from "@/lib/projects/serviceProject";
 import { conversationWorkspaceReach, memberWorkspacePrincipal, type WorkspacePrincipal, type WorkspaceReach } from "@/lib/team/workspacePrincipal";
 import { existingTeamStore } from "@/lib/team/store";
 import { resolveSeatProject } from "./seatProjectIdentity";
@@ -1109,6 +1111,16 @@ export function executeOrchestratorSeatRequest(
   });
 }
 
+function legatusMandate(): string {
+  return loadRoleDefinitionsOrDefaults().find(role => role.id === "legatus")!.promptScaffold;
+}
+
+/** Explicit start uses the local service identity and the regular durable intent. */
+export function executeLegatusSeatRequest(rawBody: Record<string, unknown>, dependencies: SeatCommandDependencies = productionSeatCommandDependencies): Promise<SeatCommandResult> {
+  return executeOrchestratorSeatRequest({ ...rawBody, project: ensureLegatusProject(),
+    mandate: text(rawBody.mandate) || legatusMandate() }, dependencies);
+}
+
 /** An install that predates the guide has run Delegatus before: it is never on a first run. A marker that cannot be read grants nothing. */
 function firstRunMarkerAllows(): boolean {
   try { return readOnboardingMarker()?.reason !== "existing-install"; }
@@ -1137,11 +1149,14 @@ async function runOrchestratorSeatRequest(
      designated under the key its lanes will be written to. */
   recordProjectSuccessions([projectSuccessionFor(canonicalOrchestratorProject(namedProject), text(rawBody.cwd))]);
   const project = canonicalOrchestratorProject(namedProject);
+  const legatus = isLegatusProject(project);
+  if (legatus && project !== localLegatusProject()) return { status: 400, body: { error: "unknown service project", admission: "refused" } };
+  const role = legatus ? "legatus" : "orchestrator";
   /* Upgraded before preflight and before the durable begin, so a new intent
      records the text it delivers; a replay delivers what its intent recorded. */
   const rawMandate = typeof rawBody.mandate === "string" ? rawBody.mandate : "";
   if (!rawMandate.trim()) return { status: 400, body: { error: "mandate is required", admission: "refused" } };
-  const mandate = orchestratorMandateUpgraded(rawMandate);
+  const mandate = legatus ? rawMandate : orchestratorMandateUpgraded(rawMandate);
   const clientRequestId = text(rawBody.clientRequestId);
   if (!CLIENT_REQUEST_ID.test(clientRequestId)) {
     return { status: 400, body: { error: "clientRequestId must be 8-128 URL-safe characters", admission: "refused" } };
@@ -1229,7 +1244,7 @@ async function runOrchestratorSeatRequest(
       project,
       mandate,
       ...seatWorkspaceInput(adopted),
-      roleTable: orchestratorRoleTable(loadRoleDefinitionsOrDefaults()),
+      roleTable: legatus ? null : orchestratorRoleTable(loadRoleDefinitionsOrDefaults()),
       clientRequestId,
       mode: "existing",
       conversationId: target.conversationId,
@@ -1327,7 +1342,7 @@ async function runOrchestratorSeatRequest(
     };
   }
   const resolvedRuntime = resolveSpawnRole({
-    role: "orchestrator",
+    role,
     roleParams: rawBody.roleParams,
     engine: rawBody.engine,
     model: rawBody.model,
@@ -1352,18 +1367,18 @@ async function runOrchestratorSeatRequest(
      agent, and not on an install that predates the guide; the seat store decides
      under its own lock whether this really is the first, and the text must still
      fit the delivery bound with the instruction on it. */
-  const firstRun = !existingConversationId && incumbent === null && triggeredBy?.kind !== "agent" && firstRunMarkerAllows()
+  const firstRun = !legatus && !existingConversationId && incumbent === null && triggeredBy?.kind !== "agent" && firstRunMarkerAllows()
     && preflight.ok && preflight.bytes + preflight.overhead + Buffer.byteLength(`\n\n${ORCHESTRATOR_FIRST_RUN_DIRECTIVE}`) <= MAX_STRUCTURED_TEXT_BYTES;
   const begun = beginOrchestratorSeatIntent({
     project,
     mandate,
     ...seatWorkspaceInput(seatWorkspace(project, admission, triggeredBy, incumbent)),
-    roleTable: orchestratorRoleTable(loadRoleDefinitionsOrDefaults()),
+    roleTable: legatus ? null : orchestratorRoleTable(loadRoleDefinitionsOrDefaults()),
     clientRequestId,
     mode: "spawn",
     engine: resolvedRuntime.value.config.engine,
     model: resolvedRuntime.value.config.model,
-    telegramGrant,
+    telegramGrant: legatus ? false : telegramGrant,
     ...(firstRun ? { firstRun: true } : {}),
     automaticReplacement: admission?.automaticReplacement,
     promptVersion,
@@ -1421,7 +1436,7 @@ async function runOrchestratorSeatRequest(
   const checkedEngine: EngineName | null = launchEngine === "claude" || launchEngine === "codex" ? launchEngine : null;
   const readiness = checkedEngine ? dependencies.engineReadiness?.(checkedEngine, project) ?? "connected" : "connected";
   if (checkedEngine && readiness !== "connected") {
-    const refusal = { role: "orchestrator", engine: checkedEngine, reason: readiness };
+    const refusal = { role, engine: checkedEngine, reason: readiness };
     const error = engineNotConnectedMessage(refusal);
     const terminalized = failOrchestratorSeatIntent(project, clientRequestId, error, dependencies.now());
     return {
@@ -1449,13 +1464,13 @@ async function runOrchestratorSeatRequest(
   const spawnBody: Record<string, unknown> = {
     ...Object.fromEntries(spawnFields.flatMap((field) => (rawBody[field] === undefined ? [] : [[field, rawBody[field]]]))),
     ...spawnRuntime,
-    role: "orchestrator",
-    ...(begun.seat.telegramGrant ? { mcpServers: ["telegram"] } : {}),
-    roleParams: rawBody.roleParams ?? { mode: "standard" },
+    role,
+    ...(!legatus && begun.seat.telegramGrant ? { mcpServers: ["telegram"] } : {}),
+    roleParams: rawBody.roleParams ?? (legatus ? {} : { mode: "standard" }),
     project,
     cwd,
     ["prompt"]: spawnText,
-    title: derivedSpawnTitle("orchestrator", spawnMandate, project),
+    title: legatus ? "Legatus" : derivedSpawnTitle("orchestrator", spawnMandate, project),
     clientAttemptId: clientRequestId,
   };
   const spawnAdmission: SeatLaunchAdmission = { ...admission,
@@ -1755,7 +1770,9 @@ async function runOrchestratorRotation(
   const notes = text(rawBody.handoffNotes).slice(0, HANDOFF_NOTES_CAP);
   const handoff: HandoffParts = {
     header: [
-      `You are replacing orchestrator conversation ${incumbent.conversationId} for project ${project}. Its manager authority is revoked; its session and card remain on the board, linked to yours.`,
+      isLegatusProject(project)
+        ? `You are taking over the Legatus seat from ${incumbent.conversationId}.`
+        : `You are replacing orchestrator conversation ${incumbent.conversationId} for project ${project}. Its manager authority is revoked; its session and card remain on the board, linked to yours.`,
       ...(readable
         ? [
           readable.conversationId === incumbent.conversationId
@@ -1766,7 +1783,7 @@ async function runOrchestratorRotation(
           `No conversation in this seat's lineage holds readable turns — the seat you are replacing has none, and neither does any predecessor on record. There is no handover transcript to read: reconstruct state from the board maintenance report and from the notes in this mandate, and do not go looking for the predecessor's transcript file.`,
         ]),
     ],
-    tasks: HANDOFF_BOARD_REPORT_POINTER,
+    tasks: isLegatusProject(project) ? "Resume the installation agenda with the current project seats." : HANDOFF_BOARD_REPORT_POINTER,
     notes: notes || null,
   };
 
@@ -1775,8 +1792,9 @@ async function runOrchestratorRotation(
      custom mandate has no default-version stamp. */
   const requested = text(rawBody.mandate);
   const base = requested || incumbent.mandate;
-  const core = requested ? splitMandate(requested).core : ORCHESTRATOR_SYSTEM_PROMPT;
-  const promptVersion = !requested || core === ORCHESTRATOR_SYSTEM_PROMPT
+  const legatus = isLegatusProject(project);
+  const core = requested ? splitMandate(requested).core : legatus ? legatusMandate() : ORCHESTRATOR_SYSTEM_PROMPT;
+  const promptVersion = !legatus && (!requested || core === ORCHESTRATOR_SYSTEM_PROMPT)
     ? ORCHESTRATOR_PROMPT_VERSION
     : null;
   /* Awaited ONLY when there is something to summarize. A rotation with nothing

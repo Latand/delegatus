@@ -132,18 +132,36 @@ describe("board store", () => {
   test("concurrent processes preserve every successful project mutation", async () => {
     const file = temporaryFile();
     const modulePath = path.join(import.meta.dir, "store.ts");
-    const writers = Array.from({ length: 40 }, (_, index) => Bun.spawn({
-      cmd: [
-        process.execPath,
-        "-e",
-        `const m = await import(${JSON.stringify(modulePath)}); const result = m.patchBoard(${JSON.stringify(`project-${index}`)}, 0, { manual: [${JSON.stringify(`/path-${index}`)}] }, ${JSON.stringify(file)}); if (!result.ok) process.exit(2);`,
-      ],
-      stdout: "ignore",
-      stderr: "pipe",
-    }));
-
-    expect(await Promise.all(writers.map((writer) => writer.exited))).toEqual(Array(40).fill(0));
-    expect(Object.keys(persistedBoardProjects(file))).toHaveLength(40);
+    const lockPath = path.join(import.meta.dir, "../state/lockWait.ts");
+    const writerCount = 40;
+    // Each Bun process owns runtime threads. Keep concurrent writers within
+    // the gate's task limit while exercising all 40 independent processes.
+    const writersPerBatch = 8;
+    for (let first = 0; first < writerCount; first += writersPerBatch) {
+      const writers = Array.from({ length: writersPerBatch }, (_, offset) => {
+        const index = first + offset;
+        return Bun.spawn({
+          cmd: [
+            process.execPath,
+            "-e",
+            `const { patchBoard } = await import(${JSON.stringify(modulePath)});
+            const { waitForStateLock } = await import(${JSON.stringify(lockPath)});
+            const result = await waitForStateLock("board.command", () => patchBoard(
+              ${JSON.stringify(`project-${index}`)}, 0, { manual: [${JSON.stringify(`/path-${index}`)}] }, ${JSON.stringify(file)}
+            ), { subject: "board" });
+            if (!result.ok) process.exit(2);`,
+          ],
+          stdout: "ignore",
+          stderr: "inherit",
+        });
+      });
+      expect(await Promise.all(writers.map(writer => writer.exited))).toEqual(Array(writersPerBatch).fill(0));
+    }
+    const projects = persistedBoardProjects(file);
+    expect(Object.keys(projects)).toHaveLength(writerCount);
+    for (let index = 0; index < writerCount; index++) {
+      expect(projects[`project-${index}`]).toMatchObject({ revision: 1, prefs: { manual: [`/path-${index}`] } });
+    }
   });
   /* The board's own `board.json.write-lock` queue is gone with the move to
      SQLite (#1870): writers now serialize on the collection lease. A lease whose

@@ -9,6 +9,7 @@ import { roleNameById } from "./builderCopy";
 
 const EMBLEM: Record<FrameRole, LucideIcon> = {
   orchestrator: Waypoints,
+  legatus: Bot,
   architect: DraftingCompass,
   builder: Hammer,
   reviewer: ScanEye,

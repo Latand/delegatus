@@ -258,8 +258,8 @@ export function seatTickSettingsCardText(input: {
     ? `Тікер: ${schedule}${titleUntil ? ` до ${titleUntil}` : ""}`
     : `Tick: ${schedule}${titleUntil ? ` until ${titleUntil}` : ""}`;
   const actor = (kind: string): string => uk
-    ? kind === "manager" ? "призначений оркестратор" : kind === "gateway" ? "власна сесія оператора" : kind === "agent" ? "сесія агента" : "виклик, якого ніщо не ідентифікувало"
-    : kind === "manager" ? "the designated seat" : kind === "gateway" ? "the operator's own session" : kind === "agent" ? "an agent session" : "a caller nothing identified";
+    ? kind === "legatus" ? "Легат" : kind === "manager" ? "призначений оркестратор" : kind === "gateway" ? "власна сесія оператора" : kind === "agent" ? "сесія агента" : "виклик, якого ніщо не ідентифікувало"
+    : kind === "legatus" ? "Legatus" : kind === "manager" ? "the designated seat" : kind === "gateway" ? "the operator's own session" : kind === "agent" ? "an agent session" : "a caller nothing identified";
   const foreign = input.setBy?.project && input.setBy.project !== input.project;
   const who = input.setBy
     ? uk

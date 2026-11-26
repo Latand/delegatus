@@ -15,8 +15,10 @@ import { costumeSvg } from "./roleCostumes";
 describe("role costumes", () => {
   test("every id in ROLE_IDS and the agent with no role resolves to a drawing", () => {
     expect([...FRAME_ROLES]).toEqual([...ROLE_IDS, "neutral"]);
-    const drawings = FRAME_ROLES.map((role) => costumeSvg(role));
-    expect(new Set(drawings).size).toBe(FRAME_ROLES.length);
+    const costumed = FRAME_ROLES.filter(role => role !== "legatus");
+    const drawings = costumed.map(role => costumeSvg(role));
+    expect(new Set(drawings).size).toBe(costumed.length);
+    expect(costumeSvg("legatus")).toBe(costumeSvg("neutral"));
     for (const svg of drawings) {
       expect(svg.startsWith('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">')).toBe(true);
       expect(svg.endsWith("</svg>")).toBe(true);
@@ -27,7 +29,7 @@ describe("role costumes", () => {
   });
 
   test("the twelve approved role costumes and the neutral drawing stay distinct", () => {
-    const approved = ROLE_IDS.filter((role) => role !== "curator");
+    const approved = ROLE_IDS.filter((role) => role !== "curator" && role !== "legatus");
     expect(approved).toHaveLength(12);
     expect(new Set([...approved, "neutral"].map((role) => costumeSvg(role))).size).toBe(13);
   });
@@ -58,7 +60,7 @@ describe("role costumes", () => {
     expect(agent).toContain('fill="#FFFFFF" d="M23.5 45.4H40.5L32 61Z"');
     expect(agent).toContain('M25.2 44.2 31 47.2 25.2 50.4Z');
     /* Every costumed role keeps the clear glasses (the reviewer's loupe replaces its right lens). */
-    for (const role of ROLE_IDS) expect(costumeSvg(role)).toContain('<g fill="#FBEBDD" stroke="#231B1C" stroke-width="3.6"');
+    for (const role of ROLE_IDS.filter(role => role !== "legatus")) expect(costumeSvg(role)).toContain('<g fill="#FBEBDD" stroke="#231B1C" stroke-width="3.6"');
   });
 
   test("all ink sits inside x 3–61, y 2–62 of the 64 grid, so the keyline never meets the edge", async () => {

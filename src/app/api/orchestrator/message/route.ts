@@ -1,3 +1,7 @@
+import { hasRequesterRelayCustody } from "@/lib/externalRelay/ownerAuthority";
+import { queueLegatusMessage, SeatAgendaRefusal } from "@/lib/monitor/seatAgenda";
+import { currentLegatusSeat } from "@/lib/orchestrator/legatusSeat";
+import { callerConversationId } from "@/lib/agent/operatorAuthority";
 import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -6,7 +10,7 @@ import { admitOrchestratorRelay, linkedRelayCaller } from "@/lib/orchestrator/re
 import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
 import { queueSeatMessage, resolveSeatMessageMachine, SeatMessageRefusal } from "@/lib/links/seatMessages";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
-import { acceptNativeRelayHandoff, inheritNativeRelayHandoff } from "@/lib/orchestrator/nativeRelayHandoff";
+import { acceptNativeRelayHandoff, inheritNativeRelayHandoff, nativeRelayConversation } from "@/lib/orchestrator/nativeRelayHandoff";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -36,6 +40,25 @@ async function workspacePOST(req: NextRequest): Promise<NextResponse> {
   }
   const project = canonicalOrchestratorProject(body.project);
   if (!acceptNativeRelayHandoff(req, body)) return NextResponse.json({ error: "native relay caller is unavailable", code: "orchestrator_relay_refused", admission: "refused" }, { status: 403 });
+  let caller: string | null;
+  try { caller = nativeRelayConversation(req) ?? callerConversationId(req); }
+  catch { return NextResponse.json({ error: "relay caller is unavailable", admission: "refused" }, { status: 403 }); }
+  if (currentLegatusSeat(caller) && caller && !hasRequesterRelayCustody(caller)) {
+    if (body.machine !== undefined || body.voiceDelegatus !== undefined || body.requesterRequestId !== undefined
+      || (body.urgent !== undefined && typeof body.urgent !== "boolean")
+      || typeof body.clientMessageId !== "string" || !body.clientMessageId.trim() || body.clientMessageId.length > 128) {
+      return NextResponse.json({ error: "a local seat and clientMessageId are required for the agenda", admission: "refused" }, { status: 400 });
+    }
+    try {
+      return NextResponse.json(await queueLegatusMessage({ conversationId: caller, project,
+        recipient: typeof body.conversationId === "string" ? body.conversationId : undefined,
+        clientMessageId: body.clientMessageId, text: body.text, urgent: body.urgent === true }), { status: 202 });
+    } catch (error) {
+      if (error instanceof SeatAgendaRefusal) return NextResponse.json({ error: error.message, admission: "refused" }, { status: 409 });
+      throw error;
+    }
+  }
+  if (body.urgent !== undefined) return NextResponse.json({ error: "urgent agenda delivery requires the designated Legatus seat", admission: "refused" }, { status: 403 });
   const voice = body.voiceDelegatus as { sessionId?: unknown; proposalId?: unknown } | undefined;
   if (body.voiceDelegatus !== undefined && (!voice || typeof voice.sessionId !== "string" || typeof voice.proposalId !== "string"))
     return NextResponse.json({ code: "voice_admission_refused" }, { status: 400 });

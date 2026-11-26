@@ -1,3 +1,6 @@
+import { legatusMessageReceipt, recoverLegatusMessage } from "@/lib/monitor/seatAgenda";
+import { currentLegatusSeat, localLegatusProject } from "@/lib/orchestrator/legatusSeat";
+import { isLegatusProject } from "@/lib/projects/serviceProject";
 import { publicProvisioningPipeline } from "@/lib/pipelines/provisioningRecord";
 import { prototypeStageForConversation, prototypeProjectReceiptScope, PROTOTYPE_RECEIPT_SCOPE_HEADER } from "@/lib/prototypeReview/world";
 import { existingTeamStore } from "@/lib/team/store";
@@ -189,6 +192,8 @@ import {
   writeSeatTickSettings,
   type SeatTickNoteLineEdits,
   type SeatTickSettings,
+  legatusSettingsActor,
+  seatTickDefaultInterval,
   type SeatTickSettingsActor,
   type SeatTickSettingsChange,
 } from "@/lib/monitor/seatTickSettings";
@@ -2092,7 +2097,8 @@ function sendAcceptance(outcome: Record<string, unknown>) {
  */
 async function messageReceipt(args: McpToolArgs): Promise<McpToolPayload> {
   const operationId = required(args, "operationId");
-  const receipt = operationId.startsWith("seatmsg_") ? seatMessageReceipt(operationId) : await resolveSendReceipt(operationId);
+  const receipt = operationId.startsWith("agenda_") ? legatusMessageReceipt(operationId)
+    : operationId.startsWith("seatmsg_") ? seatMessageReceipt(operationId) : await resolveSendReceipt(operationId);
   if (!receipt) {
     throw new McpToolRefusal(
       "No accepted send is recorded under that operationId. Copy operationId from the send acknowledgement; launchId, pipelineId and clientRequestId belong to other receipt families. For uncertain sends recover with the original send tool, key and arguments; a missing receipt does not prove that the send had no effect.",
@@ -4986,6 +4992,10 @@ function orchestratorDispatchRefusal(error: unknown): McpDispatchNotExecutedErro
 /** Resolve names through the directory shared with voice and transcript search. */
 function resolveOrchestratorToolProject(named: string, dependencies: ViewerMcpDomainDependencies, requireActiveSeat = true): string {
   try {
+    if (isLegatusProject(named)) {
+      if (named === localLegatusProject() && (!requireActiveSeat || orchestratorSeatFor(named).active)) return named;
+      throw new ProjectNameRefusal("unknown service project or seat", { code: "project_not_found" });
+    }
     recordSeatProjectSuccessions(seatLaunchCwd, true);
     return resolveNamedProject(named, namedProjectDirectory(dependencies), requireActiveSeat);
   }
@@ -5353,7 +5363,8 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   const callerSeat = attribution.conversationId
     ? seats.find((candidate) => candidate.conversationId === attribution.conversationId)
     : undefined;
-  const callerProject = callerSeat?.project
+  const legatus = attribution.via ? null : legatusSettingsActor(attribution.conversationId);
+  const callerProject = legatus?.project ?? callerSeat?.project
     ?? (dependencies.callerProject ? dependencies.callerProject() : productionCallerProject());
   const requested = text(args.project) || callerProject;
   if (!requested) {
@@ -5362,6 +5373,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   // Explicit input was resolved by the binding before its receipt was claimed.
   const project = text(args.project) || canonicalOrchestratorProject(requested);
   if (args.pipelineStageRuntime !== undefined) {
+    if (legatus && legatus.project !== project && args.pipelineStageRuntime !== null) throw new Error("Legatus can change another seat’s wake interval and on/off setting");
     const runtimeActor = projectRuntimeAuthority({ ...args, project }, dependencies);
     const extra = Object.keys(args).filter(key => !["project", "pipelineStageRuntime", "clientRequestId", "verbose", "full", "nativeCallerProof"].includes(key));
     if (extra.length) throw new Error("change pipelineStageRuntime separately from seat tick settings");
@@ -5426,7 +5438,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   let replacedInherited: import("@/lib/monitor/seatTickInstructions").SeatTickInstructionLine[] | undefined;
   if (Object.keys(change).length > 0) {
     const activeSeat = own === project ? designatedSeat : null;
-    const actor: SeatTickSettingsActor = {
+    const actor: SeatTickSettingsActor = legatus ?? {
       kind: attribution.kind,
       conversationId: attribution.conversationId,
       project: own,
@@ -5443,7 +5455,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     // A temporarily unavailable manager grant cannot make a recorded seat's
     // words operator-authored. The designation still proves its authorship.
     let instructionActor = actor;
-    if (attribution.kind === "gateway" || attribution.kind === "manager") {
+    if (!legatus && (attribution.kind === "gateway" || attribution.kind === "manager")) {
       const designatedWriter = writerSeat;
       if (designatedWriter) {
         instructionActor = { ...actor, kind: "manager", project: canonicalOrchestratorProject(designatedWriter.project), seatEpoch: designatedWriter.seatEpoch };
@@ -5497,6 +5509,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   const curationRead = changed && !verbose ? null : await readSeatCuration(project, settings, readSettings, context);
   if (curationRead) settings = curationRead.settings;
   const { monitorPrompt: storedPrompt, reason: storedReason, instructionLines: storedInstructions, ...settingsWithoutPrompt } = settings;
+  if (!verbose) delete settingsWithoutPrompt.legatusScheduleHistory;
   delete settingsWithoutPrompt.maintenance;
   delete settingsWithoutPrompt.curation;
   delete settingsWithoutPrompt.autoRotate;
@@ -5578,7 +5591,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     ...(verbose || curation.partial || settings.curation || curation.lastRun || curation.live || curation.runsError ? { curation } : {}),
     maintenance: boardMaintenanceAnswer(project, effective, { verbose }),
     ...(typeof args.problemId === "string" ? { problem: readMemoryProblem(project, args.problemId) } : {}),
-    defaultWakeIntervalMinutes: Math.round(SEAT_TICK_WAKE_INTERVAL_MS / 60_000),
+    defaultWakeIntervalMinutes: Math.round(seatTickDefaultInterval(project, SEAT_TICK_WAKE_INTERVAL_MS) / 60_000),
     /* Why the tick is mute, when it is (#1746). A seat that is enabled, on a
        twenty-minute interval and receiving nothing was reading a settings
        answer that said everything was fine: the fence lived in the accounting
@@ -6236,6 +6249,20 @@ async function sendMessageToOrchestrator(
   requiredMessageText(args);
   const key = requestId(args);
   const bound = context?.binding;
+  const relayCaller = attributionOf(dependencies);
+  const legatus = relayCaller.via ? null : currentLegatusSeat(relayCaller.conversationId);
+  if (legatus || bound?.sendPayload?.origin?.role === "legatus") {
+    const clientMessageId = bound?.downstreamKey ?? orchestratorSendDownstreamKey(key);
+    const body = { project, conversationId: bound?.target.identity, clientMessageId,
+      text: bound?.sendPayload?.text ?? requiredMessageText(args), urgent: args.urgent === true };
+    return withNativeRelayHandoff(body, nativeOrchestratorRelayCaller(), headers =>
+      dispatchControl(control)("/api/orchestrator/message", body, { ...callerCapabilityHeaders(), ...headers })).catch(error => {
+      if (error instanceof McpDispatchVerdictError && error.details.admission === "refused") {
+        throw new McpDispatchNotExecutedError(error.message, error.details);
+      }
+      throw error;
+    });
+  }
   const machine = bound?.target.identity?.startsWith("machine:") ? bound.target.identity.slice(8) : text(args.machine);
   if (machine) {
     const link = resolveRemoteSeatMachine(machine, project, dependencies, !!bound?.target.identity?.startsWith("machine:"));
@@ -6277,6 +6304,9 @@ async function sendMessageToOrchestrator(
   let seat = orchestratorSeatFor(project).active;
   let recipient = bound ? bound.target.identity : seat?.conversationId;
   let created = false;
+  if (!recipient && isLegatusProject(project)) {
+    throw new McpDispatchNotExecutedError("Legatus has no designated seat");
+  }
   if (!recipient) {
     try {
       const outcome = await dispatchControl(control)("/api/orchestrator/seat", {
@@ -8687,6 +8717,17 @@ async function bindOrchestratorSendCore(args: McpToolArgs, dependencies: ViewerM
   const message = requiredMessageText(args);
   const caller = recoveryCaller(dependencies);
   const attribution = attributionOf(dependencies);
+  const legatus = attribution.via ? null : currentLegatusSeat(attribution.conversationId);
+  if (legatus) {
+    if (text(args.machine)) throw new McpToolRefusal("Legatus agenda messages address a local project seat", { code: "orchestrator_relay_refused" });
+    const named = required(args, "project");
+    const project = forRecovery ? null : resolveOrchestratorToolProject(named, dependencies);
+    const recipient = project ? orchestratorSeatFor(project).active?.conversationId ?? null : null;
+    if (project && (!recipient || isLegatusProject(project))) throw new McpToolRefusal("choose an active project seat", { code: "orchestrator_relay_refused" });
+    return { caller, target: { project, identity: recipient }, downstreamKey: orchestratorSendDownstreamKey(requestId(args)),
+      sendPayload: { text: message, origin: { kind: "agent", role: "legatus", project: legatus.project, conversationId: attribution.conversationId! } } };
+  }
+  if (args.urgent === true) throw new McpToolRefusal("urgent agenda delivery requires the designated Legatus seat", { code: "orchestrator_relay_refused" });
   const handoff = attribution.conversationId && !attribution.via ? ownerRelayHandoff(message, attribution.conversationId) : null;
   const relayPayload = handoff?.payload;
   const owner = attribution.kind === "agent" || relayPayload?.requesterRequestId ? relayPayload : null;
@@ -8754,7 +8795,7 @@ function requireOrchestratorRelayCaller(dependencies: ViewerMcpDomainDependencie
   if (caller.kind === "gateway" || ownerRelayCaller(dependencies)) return;
   if (caller.conversationId && !caller.via) {
     const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
-    if (seats.some((seat) => seat.conversationId === caller.conversationId)) return;
+    if (currentLegatusSeat(caller.conversationId) || seats.some((seat) => seat.conversationId === caller.conversationId)) return;
   }
   throw new McpToolRefusal("only a designated orchestrator seat, the voice gateway or a verified owner relay may relay to an orchestrator; continue the requested work with your tools, or explain the failure and the owner's next action", {
     code: "orchestrator_relay_refused", retryable: false,
@@ -8891,6 +8932,16 @@ async function recoverSend(
       ids: {}, facts: { ...found, nextAction: "retry-same-key" }, seatMessageFenced: true,
     };
     return found && "operationId" in found ? { outcome: "accepted", evidence: "delivery-record", reason: null, ids: { operationId: found.operationId }, facts: found }
+      : { outcome: "unknown", evidence: "none", reason: RECOVERY_ABSENT_REASON, ids: {} };
+  }
+  const legatusRelay = binding.toolName === "send_message_to_orchestrator" && binding.sendPayload?.origin?.role === "legatus";
+  const agendaReceipt = (legatusRelay || binding.toolName === "send_message") && binding.caller.conversationId
+    ? recoverLegatusMessage(binding.caller.conversationId, binding.downstreamKey) : null;
+  if (legatusRelay || agendaReceipt) {
+    const found = agendaReceipt;
+    return found && (!legatusRelay || canonicalProject(found.project) === canonicalProject(binding.target.project ?? ""))
+      ? { outcome: found.state === "delivered" ? "settled" : "accepted", evidence: "delivery-record", reason: null,
+        ids: { operationId: found.operationId }, facts: found }
       : { outcome: "unknown", evidence: "none", reason: RECOVERY_ABSENT_REASON, ids: {} };
   }
   if (!binding.target.identity) {

@@ -1,3 +1,4 @@
+import { isLegatusProject } from "@/lib/projects/serviceProject";
 /** Maximum automatic claims of one admitted message across recovery and migration. */
 export const DELIVERY_ATTEMPT_LIMIT = 12;
 
@@ -42,7 +43,7 @@ const PROJECT_KEY_PATTERN = /^-?[A-Za-z0-9][A-Za-z0-9._-]{0,126}$/;
 export function validExplicitProject(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const project = value.trim();
-  return PROJECT_KEY_PATTERN.test(project) ? project : null;
+  return PROJECT_KEY_PATTERN.test(project) || (isLegatusProject(project) && PROJECT_KEY_PATTERN.test(project.slice("legatus:".length))) ? project : null;
 }
 
 export function normalizeProjectOwnership(value: unknown): ConversationProjectOwnership | null {
