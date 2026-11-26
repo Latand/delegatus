@@ -5538,14 +5538,21 @@ test.each(["declared", "mismatch", "oversize", "unavailable", "marker", "documen
   } finally { await server.close(); }
 });
 
-test("an unreadable history photo does not suppress a sticker-only trigger", async () => {
+const nonTextTriggers = [
+  { name: "sticker", fields: { kind: "sticker", sticker_emoji: "⭐️", sticker_format: "tgs", media_description: "A star spins slowly." },
+    rendered: { kind: "sticker", sticker_format: "tgs", media_description: "sticker ⭐️: A star spins slowly." } },
+  { name: "quote", fields: { quote: { text: "A star spins slowly." } },
+    rendered: { quoted_part_of_replied_to_message: { text: "A star spins slowly." } } },
+  { name: "external-context", fields: { external_reply_context: "A star spins slowly." },
+    rendered: { untrusted_external_reply_context_from_another_chat: "A star spins slowly." } },
+] as const;
+for (const { name, fields, rendered } of nonTextTriggers) test(`an unreadable history photo does not suppress a ${name} trigger`, async () => {
   const request = richRequest();
-  request.request_id = "unreadable-history-photo-sticker-trigger";
+  request.request_id = `unreadable-history-photo-${name}-trigger`;
   request.features!.push("requester_context", "relay_media_in", "relay_history_media");
   request.input.request_text = null;
   const sample = request.input.conversation[0]!;
-  const trigger = { ...sample, text: "", kind: "sticker" as const, sticker_emoji: "⭐️", sticker_format: "tgs" as const,
-    media_description: "A star spins slowly." };
+  const trigger = { ...sample, text: "", ...fields };
   const historyPhoto = { ...sample, id: "older-photo", text: "", media: [{ ref: "missing-history-photo", kind: "photo" as const,
     availability: "missing" as const, mime_type: "image/jpeg", byte_size: 12, expires_at: "2099-01-01T00:00:00Z" }] };
   request.input.respond_to = trigger.id;
@@ -5557,7 +5564,7 @@ test("an unreadable history photo does not suppress a sticker-only trigger", asy
   });
   const paired = relay(`${server.origin}/v1`);
   updateRelayStore(store => ({ ...store, relays: [paired] }));
-  const marker = path.join(root, "sticker-trigger-prompt");
+  const marker = path.join(root, `${name}-trigger-prompt`);
   const fake = stub(`const a=process.argv.slice(2), prompt=await Bun.stdin.text();
     await Bun.write(${JSON.stringify(marker)},prompt);
     await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Seen',reply_to:null}));`);
@@ -5566,8 +5573,7 @@ test("an unreadable history photo does not suppress a sticker-only trigger", asy
     expect(result).toMatchObject({ outcome: "answered", answer: { text: "Seen" } });
     expect(completions).toHaveLength(1);
     const prompt = fs.readFileSync(marker, "utf8");
-    expect(prompt).toContain("sticker ⭐️: A star spins slowly.");
-    expect(prompt).toContain('"sticker_format":"tgs"');
-    expect(prompt).not.toContain("Media could not be read");
+    const rows = JSON.parse(prompt.match(/<conversation>\n([^\n]+)\n<\/conversation>/)![1]!);
+    expect(rows.find((row: { id: string }) => row.id === trigger.id)).toMatchObject(rendered);
   } finally { await server.close(); }
 });
