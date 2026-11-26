@@ -21,11 +21,6 @@ function isPendingCorrection(rule: RuleView): boolean {
   return rule.operatorCorrection === true && rule.awaitingCuration === true && (rule.state === "active" || rule.reason === "budget");
 }
 
-/** Local evidence stays local; cursors are bound to the scope's revision. */
-export function readCuration(pass: CuratorPass, scope?: undefined, cursor?: string, now?: number): Promise<Extract<Awaited<ReturnType<typeof readRuleCuration>>, { scopes: unknown }>>;
-export function readCuration(pass: CuratorPass, scope: "imports", cursor?: string, now?: number): Promise<{ pass: string; candidates: Awaited<ReturnType<typeof readImportBatch>> }>;
-export function readCuration(pass: CuratorPass, scope: "decisions", cursor?: string, now?: number): Promise<ReturnType<typeof decisionPage>>;
-export function readCuration(pass: CuratorPass, scope?: string, cursor?: string, now?: number): ReturnType<typeof readRuleCuration>;
 function decisionPage(pass: CuratorPass, cursor?: string) {
   const refs = roleMemoryEnabled() ? pass.decisionEvidence ?? [] : [];
   let offset = 0;
@@ -48,6 +43,11 @@ function decisionPage(pass: CuratorPass, cursor?: string) {
   }
   return { pass: pass.id, decisions, cursor: offset < refs.length ? `${pass.id}:${offset}` : null };
 }
+/** Local evidence and revision-bound scope cursors. */
+export function readCuration(pass: CuratorPass, scope?: undefined, cursor?: string, now?: number): Promise<Extract<Awaited<ReturnType<typeof readRuleCuration>>, { scopes: unknown }>>;
+export function readCuration(pass: CuratorPass, scope: "imports", cursor?: string, now?: number): Promise<{ pass: string; candidates: Awaited<ReturnType<typeof readImportBatch>> }>;
+export function readCuration(pass: CuratorPass, scope: "decisions", cursor?: string, now?: number): Promise<ReturnType<typeof decisionPage>>;
+export function readCuration(pass: CuratorPass, scope?: string, cursor?: string, now?: number): ReturnType<typeof readRuleCuration>;
 export async function readCuration(pass: CuratorPass, scope?: string, cursor?: string, now = Date.now()) {
   if (scope === "imports") return { pass: pass.id, candidates: await withViewerOperation("memory.import.curation", () => readImportBatch(pass)) };
   if (scope === "decisions") return decisionPage(pass, cursor);

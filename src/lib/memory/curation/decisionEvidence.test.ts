@@ -151,7 +151,7 @@ test("a saved task answer uses the current task project and the operator's custo
   const original = form(1);
   const round = { ...original, id: `pr_${"2".repeat(32)}`, taskId, questions: original.questions!.map(q => ({ ...q, other: true })) };
   saveTasks([{ id: taskId, project: taskProject, status: "inbox", placement: "unplaced", text: "Review existing layout",
-    assignments: [], sources: [], createdAt: at(), updatedAt: at(), prototypeReviews: [round] }]);
+    assignments: [], createdAt: at(), updatedAt: at(), prototypeReviews: [round] }]);
   setSystemTime(START + 1);
   expect(decidePrototype({ kind: "operator-in-process", authorize() {} }, taskId, {
     reviewId: round.id, chosen: [], comment: "", originalReply: "Use my custom answer.",

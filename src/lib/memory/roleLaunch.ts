@@ -59,7 +59,7 @@ export function memoryStartIdentity(registry: AgentRegistry, conversationId: str
 export async function learnedRulesForLaunchProfile(profile: Pick<LaunchProfile, "cleanMemory" | "learnedRules"> & Partial<Pick<LaunchProfile, "title" | "goal">> | null | undefined, start?: MemoryEngineStart): Promise<string | undefined> {
   const block = await launchMemory(profile, start);
   if (profile?.learnedRules?.roleId !== "legatus" || profile.cleanMemory || !roleMemoryEnabled()) return block;
-  const guidance = "For each form, search_memory with the form's project and subject. Open a relevant rule before citing it. Decide each form using your judgment. When a remembered rule guided the choice, cite at most one rule and keep the reason to one line.";
+  const guidance = "For each form, search_memory with the form's project and subject. Decide each form using your judgment. If a remembered rule guided the choice, cite at most one active rule you received or opened and keep the reason to one line.";
   return [block, guidance].filter(Boolean).join("\n\n");
 }
 
