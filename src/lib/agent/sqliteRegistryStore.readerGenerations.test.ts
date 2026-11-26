@@ -195,6 +195,29 @@ test("a preparation after a few commits replays them and assembles no new view o
   expect(reader.readOnlySnapshot().file).toBe(held.at(-1)!);
 });
 
+test("preparing a snapshot after a peer write seeks the journal bounds without scanning retained changes", async () => {
+  const { dataset, reader, writer, receipt } = fixture();
+  const initial = await reader.prepareReadOnlySnapshot();
+  writer.mutate(file => { file.receipts[receipt]!.clientAttemptId = "journal-bounds"; }, false);
+  const queries = spyOn(Database.prototype, "query");
+  let bounds: string[];
+  try {
+    const next = await reader.prepareReadOnlySnapshot();
+    expect(next.file.receipts[receipt]!.clientAttemptId).toBe("journal-bounds");
+    expect(initial.file.receipts[receipt]!.clientAttemptId).not.toBe("journal-bounds");
+    bounds = queries.mock.calls.map(([sql]) => sql)
+      .filter(sql => /FROM registry_changes/i.test(sql) && /(?:MIN|MAX)\(seq\)/i.test(sql));
+  } finally { queries.mockRestore(); }
+  const db = new Database(dataset.filename, { readonly: true });
+  try {
+    expect(bounds.length).toBeGreaterThan(0);
+    for (const sql of new Set(bounds)) {
+      const plan = db.query<{ detail: string }, []>(`EXPLAIN QUERY PLAN ${sql}`).all();
+      expect(plan.map(row => row.detail).filter(detail => /SCAN registry_changes/i.test(detail))).toEqual([]);
+    }
+  } finally { db.close(); }
+});
+
 test("a preparation after more commits than one step replays takes the cooperative path", async () => {
   const { reader, writer, judge, receipt, completeLoads } = fixture();
   await reader.prepareReadOnlySnapshot();
