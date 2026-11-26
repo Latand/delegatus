@@ -1275,6 +1275,7 @@ export async function registerViewerRuntime(): Promise<void> {
     },
     onFenceRequested: async (request) => {
       await quiesceStartup();
+      await (await import("@/lib/pipelines/provisioningJob")).stopProvisioningJobsForDemotion();
       await releaseHosts();
       const { checkpointHotStateRollbackMirrorsInWorker } = await import("@/lib/state/durability");
       const revisions = await viewerLoopMonitor.run("state.rollback-checkpoint", () => checkpointHotStateRollbackMirrorsInWorker(hotStateDirectory));
@@ -1291,9 +1292,15 @@ export async function registerViewerRuntime(): Promise<void> {
       const { ensureLegacyCollectionsImported } = await import("@/lib/state/legacyCollections");
       if (!isCurrent() || readHotStateAuthority(hotStateDirectory)?.epoch !== authority.epoch) return;
       await ensureLegacyCollectionsImported();
+      const currentAuthority = () => {
+        const current = readHotStateAuthority(hotStateDirectory);
+        return isCurrent() && current?.mode === "sqlite" && current.releaseRevision === revision && current.epoch === authority.epoch;
+      };
+      (await import("@/lib/pipelines/provisioningJob")).resumeProvisioningJobsAfterFenceWithdrawal(currentAuthority);
     },
     resumeWorktreeRecovery: worktreeRecovery.start,
     onDemoted: async ({ fenced }) => {
+      await (await import("@/lib/pipelines/provisioningJob")).stopProvisioningJobsForDemotion();
       (await import("@/lib/projects/cloudEnvironmentController")).stopCloudEnvironmentController();
       try {
         const relays = await import("@/lib/externalRelay/poller");

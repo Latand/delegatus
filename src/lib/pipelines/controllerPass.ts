@@ -10,8 +10,9 @@ import { tickPipelines, defaultPipelinePorts, type PipelinePorts } from "./engin
 import { pipelineControllerJobLanes, reportProvisioningPhase, takePipelineControllerJobChanges } from "./controllerJobs";
 import { withControllerPipelineScope } from "./controllerScope";
 import { requestPipelineTick } from "./controllerSignal";
+import { advanceProvisioningJob, hasSupersededProvisioningJob, provisioningDueAt, reconcileExcludedProvisioning } from "./provisioningJob";
 import { pipelineStopReadLanes, runControllerStopReadLane } from "./controllerStopRead";
-import { controllerAttemptWindow, controllerPipelineVersion, deferPipelineControllerWork, acknowledgePipelineControllerWork, findControllerPipeline, recordPipelineControllerSelection, selectPipelineControllerWork, pipelineControllerReady, PipelineStoreError } from "./store";
+import { acknowledgeExcludedProvisioning, controllerAttemptWindow, controllerPipelineVersion, deferPipelineControllerWork, acknowledgePipelineControllerWork, findControllerPipeline, recordPipelineControllerSelection, selectExcludedProvisioning, selectPipelineControllerWork, pipelineControllerReady, PipelineStoreError } from "./store";
 
 export const PIPELINE_CONTROLLER_ATTEMPTS_PER_LANE = 16;
 const owner = globalThis as typeof globalThis & { __llvPipelineControllerPass?: Promise<{ changed: boolean; pendingWork: number; readyWork: boolean }> };
@@ -27,15 +28,25 @@ export function tickPipelinesController(entries: FileEntry[], suppliedPorts?: Pi
     // Capture changes, deadlines and ownership only after this checkpoint.
     await yieldToRuntime();
     const jobChanged = takePipelineControllerJobChanges();
-    const now = suppliedPorts ? Date.parse(suppliedPorts.now()) : Date.now();
+    const now = suppliedPorts?.provisionClock?.wallMs() ?? (suppliedPorts ? Date.parse(suppliedPorts.now()) : Date.now());
     const admitted = await awaitLeasedOperation("admitQueuedPipelineCreations", () => admitQueuedPipelineCreations());
-    const work = await awaitLeasedOperation("selectPipelineControllerWork", () => selectPipelineControllerWork(now, pendingLanes()));
-    if (!work.length) return { changed: jobChanged || admitted.length > 0, pendingWork: pendingLanes().length, readyWork: false };
+    const excluded = pendingLanes();
+    const slot = await awaitLeasedOperation("selectExcludedProvisioning", () => selectExcludedProvisioning(now, excluded));
+    const work = await awaitLeasedOperation("selectPipelineControllerWork", () => selectPipelineControllerWork(now, excluded, slot ? 3 : 4));
+    if (!slot && !work.length) return { changed: jobChanged || admitted.length > 0, pendingWork: pendingLanes().length, readyWork: false };
     let changed = jobChanged || admitted.length > 0;
     const ports = suppliedPorts ?? defaultPipelinePorts();
+    if (slot) {
+      const row = await awaitLeasedOperation("findControllerPipeline", () => findControllerPipeline(slot.row_key));
+      if (row) {
+        changed = await awaitLeasedOperation("reconcileExcludedProvisioning", () => reconcileExcludedProvisioning(row, ports)) || changed;
+      }
+      await awaitLeasedOperation("acknowledgeExcludedProvisioning", () => acknowledgeExcludedProvisioning(slot, now + 5_000));
+      ports.scheduleTick?.(5_000);
+    }
     for (const item of work) {
       assertOperationLease();
-      if (pipelineStopReadLanes().includes(item.row_key)) continue;
+      if (pendingLanes().includes(item.row_key)) continue;
       const laneChanged = await runControllerStopReadLane(item.row_key, ports, async lanePorts => {
         let changed = false;
         try {
@@ -45,6 +56,9 @@ export function tickPipelinesController(entries: FileEntry[], suppliedPorts?: Pi
           const selectedAt = Date.now();
           const version = await awaitLeasedOperation("controllerPipelineVersion", () => controllerPipelineVersion(item.row_key));
           const lane = await awaitLeasedOperation("findControllerPipeline", () => findControllerPipeline(item.row_key));
+          if (lane && hasSupersededProvisioningJob(lane)) {
+            advanceProvisioningJob(lane, lanePorts, { parked: () => {} });
+          }
           if (lane?.state === "provisioning") reportProvisioningPhase(item.row_key, { phase: "scheduler-selected" }, new Date(selectedAt).toISOString());
           const { window, current } = await awaitLeasedOperation("controllerAttemptWindow", () => controllerAttemptWindow(item.row_key, item.attempt_cursor, lane?.cursor?.stageId ?? ""));
           if (await awaitLeasedOperation("controllerPipelineVersion", () => controllerPipelineVersion(item.row_key)) !== version) throw new StateSnapshotChangedError();
@@ -73,6 +87,8 @@ export function tickPipelinesController(entries: FileEntry[], suppliedPorts?: Pi
             && isCpuPressureDetail(fresh.stateDetail, "stage start") ? CPU_STAGE_POLL_MS : 30_000);
           const provisionRetry = Date.parse(fresh?.provisioningWait?.retryAfter ?? "");
           if (provisionRetry > now) due = Math.min(due, provisionRetry);
+          const jobDue = fresh ? provisioningDueAt(fresh) : undefined;
+          if (jobDue !== undefined) due = Math.min(due, jobDue);
           for (const ref of refs) {
             const run = fresh?.runs[ref.run], attempt = run?.attempts[ref.attempt];
             if (run?.stageId !== ref.stageId || !attempt || attempt.n !== ref.n) continue;
@@ -96,8 +112,10 @@ export function tickPipelinesController(entries: FileEntry[], suppliedPorts?: Pi
       changed ||= laneChanged ?? false;
       await yieldToRuntime();
     }
-    return { changed, pendingWork: pendingLanes().length,
-      readyWork: await awaitLeasedOperation("pipelineControllerReady", () => pipelineControllerReady(now, pendingLanes())) };
+    const pending = pendingLanes();
+    return { changed, pendingWork: pending.length,
+      readyWork: await awaitLeasedOperation("pipelineControllerReady", async () =>
+        await pipelineControllerReady(now, pending) || Boolean(await selectExcludedProvisioning(now, pending))) };
   })).catch(error => {
     if (error instanceof StateSnapshotChangedError) return { changed: false, pendingWork: pendingLanes().length, readyWork: true };
     if (!(error instanceof PipelineStoreError)) throw error;

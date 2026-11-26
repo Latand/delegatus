@@ -24,7 +24,7 @@ import { DEFERRED_TEXT_ACCESSOR_BYTES, deferLongText } from "./deferredText";
 import { cacheCounter } from "../cacheTelemetry";
 import { readAttribution } from "../readAttribution";
 import { installPipelineControllerSchedule, pipelineControllerScheduleIndexes, selectPipelineTickWork, type PipelineTickWork } from "./pipelineControllerSchedule";
-import { installPipelineControllerIndex, type PipelineControllerSelection } from "./pipelineControllerIndex";
+import { installPipelineControllerIndex, installProvisioningSlotIndex, installProvisioningWaitIndex, type PipelineControllerSelection } from "./pipelineControllerIndex";
 import { installPipelineControllerReferences, pipelineControllerReferenceIndexesCurrent, pipelineControllerReferencesCurrent, pipelineControllerReferencesReady, type PipelineAttemptReference } from "./pipelineControllerReferences";
 import { installPipelineEvidenceIndex, installPipelineTaskMembership, pipelineEvidenceIndexReady, pipelineEvidenceSchemaReady, pipelineTaskMembershipReady } from "./pipelineEvidenceIndex";
 import { databaseFileIdentity, databaseSwapMarker, databaseSwapInProgress, DatabaseReplacedError, openCurrentDatabase } from "./currentDatabase";
@@ -290,6 +290,7 @@ export interface CompanionPatch<C> {
 
 export interface StateBoundedTransaction<T> {
   get(key: string): T | null;
+  provisioningWaitHead(resource: string): string | undefined;
   /** Read linked-task watermark through this transaction's admitted writer. */
   maxTaskProjectStamp(projects: readonly string[], prefix: string): string | null;
   /** Indexed pipeline lookup by id across the active and archive collections. */
@@ -889,6 +890,8 @@ function openRawDatabase(filename: string): Database {
           "pipeline_controller_work", "pipeline_controller_work_order", "pipeline_controller_work_insert",
           "pipeline_controller_work_update", "pipeline_controller_work_delete", "pipeline_tick_delete", "pipeline_tick_priority_cursor"].every(name => names.has(name))
           && pipelineControllerScheduleIndexes.ready(names)
+          && (names.has("pipeline_provision_wait_update") || !mayRunStateStartupMutation(path.dirname(filename)))
+          && (names.has("pipeline_provision_slot_update") || !mayRunStateStartupMutation(path.dirname(filename)))
           && pipelineControllerReferencesReady(db, names)
           && pipelineControllerReferenceIndexesCurrent(db)
           && (pipelineControllerReferencesCurrent(db) || !mayRunStateStartupMutation(path.dirname(filename)))
@@ -924,9 +927,11 @@ function openRawDatabase(filename: string): Database {
           db.exec("ALTER TABLE state_imports ADD COLUMN reconciled_sha256 TEXT");
         }
         installPipelineControllerIndex(db, path.dirname(filename));
+        const provisioningUpgrade = installProvisioningWaitIndex(db, path.dirname(filename));
+        installProvisioningSlotIndex(db, path.dirname(filename));
         // Only a policy upgrade resets the scheduler. Missing indexes repair
         // in place without changing existing queue clocks or cursors.
-        installPipelineControllerSchedule(db, path.dirname(filename), !pipelineControllerReferencesCurrent(db));
+        installPipelineControllerSchedule(db, path.dirname(filename), provisioningUpgrade || !pipelineControllerReferencesCurrent(db));
         installPipelineControllerReferences(db, path.dirname(filename));
         installPipelineEvidenceIndex(db, path.dirname(filename));
         installPipelineTaskMembership(db, names);
@@ -2415,6 +2420,30 @@ export class SqliteStateCollection<T> {
     return selectPipelineTickWork(sharedStateReadonlyDatabase(this.filename), now, excluded, limit);
   }
 
+  dueExcludedProvisioning(now: number, excluded: readonly string[]): PipelineTickWork | null {
+    if (!excluded.length) return null;
+    return sharedStateReadonlyDatabase(this.filename).query<PipelineTickWork, [number, string]>(`
+      SELECT w.* FROM pipeline_provision_slot s
+      JOIN pipeline_tick_work w USING(row_key)
+      WHERE s.due_at<=? AND s.row_key IN (SELECT value FROM json_each(?))
+      ORDER BY s.due_at,s.row_key LIMIT 1
+    `).get(now, JSON.stringify(excluded));
+  }
+
+  async acknowledgeExcludedProvisioning(work: PipelineTickWork, retryAt: number): Promise<void> {
+    await stateTransactionAsync(this.filename, "pipelines.controller-schedule", db => {
+      db.query(`UPDATE pipeline_provision_slot SET due_at=MAX(due_at,?)
+        WHERE row_key=? AND EXISTS (SELECT 1 FROM pipeline_tick_work WHERE row_key=? AND generation=?)`)
+        .run(retryAt, work.row_key, work.row_key, work.generation);
+    });
+  }
+
+  provisioningCacheOwnerKeys(identity: string): string[] {
+    return sharedStateReadonlyDatabase(this.filename).query<{ row_key: string }, [string]>(`
+      SELECT row_key FROM pipeline_provision_slot WHERE cache_identity=? ORDER BY row_key LIMIT 2
+    `).all(identity).map(row => row.row_key);
+  }
+
   pipelineAttemptWindow(key: string, after: number, limit: number): PipelineAttemptReference[] {
     if (!Number.isInteger(limit) || limit < 1 || limit > 16) throw new Error("invalid controller attempt budget");
     const tail = sharedStateReadonlyDatabase(this.filename).query<PipelineAttemptReference, [string, number, number]>(`SELECT * FROM pipeline_attempt_refs
@@ -2562,13 +2591,39 @@ export class SqliteStateCollection<T> {
       hosts/running selectors share immutable candidates; other selectors keep
       detached copies, limited to the controller's attempt window when scoped.
       Actuation still belongs to the caller's existing admission fences. */
-  async pipelineControllerSelection(kind: PipelineControllerSelection, throughOrder = Number.MAX_SAFE_INTEGER, keys?: readonly string[]): Promise<T[]> {
+  async pipelineControllerSelection(kind: PipelineControllerSelection, throughOrder = Number.MAX_SAFE_INTEGER, keys?: readonly string[],
+    due?: { now: number; limit: number }): Promise<T[]> {
     if (this.options.collection !== "pipelines") throw new Error("pipeline selection requires the pipeline collection");
     const identity = databaseFileIdentity(this.filename), authority = this.options.decodeAuthority?.();
     const db = keys ? sharedStateReadonlyDatabase(this.filename) : connectReadonlyDatabase(this.filename);
     try {
       if (!keys) db.exec("BEGIN");
       const records: T[] = [];
+      if (due) {
+        const cursor = db.query<{ row_order: number; row_key: string }, []>("SELECT row_order,row_key FROM pipeline_tick_cursor WHERE id=1").get();
+        for (const wrap of [false, true]) {
+          if (records.length === due.limit) break;
+          const rows = db.query<Pick<CollectionRow, "row_key" | "row_revision">, SQLQueryBindings[]>(`
+            SELECT w.row_key,r.row_revision FROM pipeline_controller_work w
+            JOIN state_rows r ON r.collection='pipelines' AND r.row_key=w.row_key
+            WHERE w.kind=? AND w.row_order<=?
+            AND (w.row_order,w.row_key) ${wrap ? "<=" : ">"} (?,?)
+            ${keys ? "AND w.row_key IN (SELECT value FROM json_each(?))" : ""}
+            AND COALESCE(json_extract(r.value_json,'$.provisioningJob.retryAt'),
+              CASE WHEN json_extract(r.value_json,'$.provisioningJob.admittedAdd') IS NULL
+              THEN (julianday(json_extract(r.value_json,'$.provisioningWait.retryAfter')) - 2440587.5) * 86400000 END, 0) <= ?
+            ORDER BY w.row_order,w.row_key LIMIT ?
+          `).all(kind, throughOrder, cursor?.row_order ?? -1, cursor?.row_key ?? "", ...(keys ? [JSON.stringify(keys)] : []),
+            due.now, due.limit - records.length);
+          for (const row of rows) {
+            const decoded = this.controllerRow(row.row_key, row.row_revision, db, identity, authority);
+            if (decoded) records.push((this.options.cloneController ?? this.options.clone)(decoded));
+          }
+        }
+        if (!keys) db.exec("COMMIT");
+        if (databaseFileIdentity(this.filename) !== identity || this.options.decodeAuthority?.() !== authority) throw new StateSnapshotChangedError();
+        return records;
+      }
       let order = -1, key = "";
       for (;;) {
         const rows = withViewerOperation("pipelines.controller-select", () => (keys ? sharedStateReadonlyDatabase(this.filename) : db).query<
@@ -2958,6 +3013,13 @@ export class SqliteStateCollection<T> {
           const consume = () => { if (--remaining < 0) throw new Error("state patch row budget exceeded"); };
           const changed = new Map<string, "upsert" | "delete">();
           const result = operation({
+            provisioningWaitHead: resource => {
+              if (this.options.collection !== "pipelines") throw new Error("provisioning waits require pipelines");
+              consume();
+              return db.query<{ row_key: string }, [string]>(`
+                SELECT row_key FROM pipeline_provision_wait WHERE resource=?
+                ORDER BY sequence,row_order,row_key LIMIT 1`).get(resource)?.row_key;
+            },
             maxTaskProjectStamp: (projects, prefix) => {
               if (this.options.collection !== "tasks") throw new Error("task watermark lookup requires tasks");
               return this.maxTaskProjectStamp(projects, prefix, db);
