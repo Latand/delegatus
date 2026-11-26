@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import type { Browser, Page } from "playwright-core";
+import type { Browser, Page, Route } from "playwright-core";
+import { isolationCatalogReplies } from "./composerIsolationCatalog.fixture";
 
 import type { IsolationMix, IsolationWindow } from "./composerIsolation.fixture";
 import { installTypingProbe, type TypingWindow } from "./composerTypingProbe.fixture";
@@ -12,7 +13,7 @@ import { taskIconNodes } from "@/lib/tasks/taskIconNodes";
 const ORIGIN = "https://composer-fixture.test";
 const hash = (s: Uint8Array | string) => createHash("sha256").update(s).digest("hex");
 
-async function routeAssets(page: Page, entry: string, assets: Awaited<ReturnType<typeof buildEvidenceAssets>>) {
+async function routeAssets(page: Page, entry: string, assets: Awaited<ReturnType<typeof buildEvidenceAssets>>, catalog: (route: Route) => Promise<void>) {
   await page.route("**/*", async route => {
     const url = new URL(route.request().url());
     if (url.origin !== ORIGIN) return route.abort();
@@ -20,6 +21,7 @@ async function routeAssets(page: Page, entry: string, assets: Awaited<ReturnType
       case "/": return route.fulfill({ contentType: "text/html", body: assets.html });
       case "/app.js": return route.fulfill({ contentType: "text/javascript", path: entry });
       case "/style.css": return route.fulfill({ contentType: "text/css", body: assets.css });
+      case "/api/files": return catalog(route);
       case "/api/task-icons": return route.fulfill({ json: { icons: await taskIconNodes((url.searchParams.get("names") ?? "").split(",").filter(Boolean)) } });
       case "/brand/delegatus-mark.svg": return route.fulfill({ path: path.resolve("public/brand/delegatus-mark.svg"), contentType: "image/svg+xml" });
       default: return route.fulfill({ status: 404, body: "" });
@@ -85,7 +87,14 @@ export async function measureComposerIsolation(browser: Browser, hostSample: () 
             construct(target, args, newTarget) { return Reflect.construct(target, args.length ? args : [fixtureNow()], newTarget); },
           });
         }, Date.parse("2026-11-25T12:00:00Z"));
-        await routeAssets(page, entry, assets);
+        const catalogRoute: { current?: ReturnType<typeof isolationCatalogReplies> } = {};
+        await routeAssets(page, entry, assets, route => {
+          const transport = catalogRoute.current;
+          if (!transport) throw Error("catalog route was used before admission");
+          const headers = route.request().headers();
+          const delta = headers["x-llv-board-protocol"] === "2" && headers["x-llv-board-scope"] === "fixture.global";
+          return route.fulfill(transport.reply(Number(headers["x-isolation-revision"]), headers["if-none-match"], delta));
+        });
         const cdp = await context.newCDPSession(page);
         await cdp.send("Emulation.setTimezoneOverride", { timezoneId: "UTC" });
         await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
@@ -114,6 +123,14 @@ export async function measureComposerIsolation(browser: Browser, hostSample: () 
         const corpus = await page.evaluate(() => ({ ...(window as IsolationWindow).composerIsolation.census(),
           font: getComputedStyle(document.activeElement!).fontFamily, nodes: document.querySelectorAll("*").length, cards: document.querySelectorAll("[data-kanban-board] .card[data-id]").length }));
         const seedDigest = await page.evaluate(() => (window as IsolationWindow).composerIsolation.seedDigest());
+        const wire = await page.evaluate(() => (window as IsolationWindow).composerIsolation.catalogSeed());
+        const transport = isolationCatalogReplies(wire.body, wire.targetPath, cell.mix === "catalog");
+        catalogRoute.current = transport;
+        await page.evaluate(() => (window as IsolationWindow).composerIsolation.routeCatalog());
+        const certifySize = (target: string) => page.evaluate(path =>
+          (window as IsolationWindow & { __isolationCertifiedSize(path: string): number | undefined }).__isolationCertifiedSize(path), target);
+        const initialSize = structure && cell.mix === "catalog" ? await certifySize(wire.targetPath) : undefined;
+        if (structure && cell.mix === "catalog" && initialSize === undefined) throw Error("catalog target has no admitted row");
         if (corpus.admittedRows !== corpus.files) throw Error("partial catalog in the measured view");
         if (corpus.reads.catalog === 0 || corpus.reads.board === 0 || corpus.reads.snapshots === 0) throw Error("missing fixture bootstrap read");
         if (corpus.sessions !== 1710) throw Error("expected 1710 runtime conversations: " + JSON.stringify(corpus));
@@ -125,6 +142,7 @@ export async function measureComposerIsolation(browser: Browser, hostSample: () 
         await keys(page, mode === "smoke" ? "key " : "type ".repeat(4));
         await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
         const text = "type ".repeat(24).slice(0, structure ? 37 : mode === "smoke" ? 12 : 120);
+        const wireBefore = { ...transport.counts };
         const startedUtc = new Date().toISOString();
         const hostBefore = hostSample();
         await page.evaluate(({ mix, rate, text, structure }) => (window as TypingWindow).isolationTyping.start(mix,rate,text,structure), { ...cell,text,structure });
@@ -138,6 +156,15 @@ export async function measureComposerIsolation(browser: Browser, hostSample: () 
         const sorted = [...reading.samples].sort((a,b)=>a-b);
         const p95 = sorted[Math.ceil(sorted.length * 0.95) - 1]!;
         const finalReads = await page.evaluate(() => (window as IsolationWindow).composerIsolation.census().reads);
+        const wireAfter = { ...transport.counts };
+        if (initialSize !== undefined) {
+          await page.waitForFunction(({ target, initial }) => {
+            const read = (window as IsolationWindow & { __isolationCertifiedSize(path: string): number | undefined }).__isolationCertifiedSize;
+            return (read(target) ?? -1) > initial;
+          }, { target: wire.targetPath, initial: initialSize }, { timeout: 5000 });
+        }
+        const catalogResponses = { ...transport.counts, wireBefore, wireAfter, initialSize, acceptedSize: initialSize === undefined ? undefined : await certifySize(wire.targetPath) };
+        if (cell.mix === "catalog" && reading.events && !catalogResponses.delta) throw Error("catalog revision did not deliver its delta");
         const ownReceiptMs = structure && cell.mix === "foreign" ? await page.evaluate(() => {
           const root = document.activeElement?.closest("[data-kanban-seat], main");
           if (!root) throw Error("missing focused seat");
@@ -153,7 +180,7 @@ export async function measureComposerIsolation(browser: Browser, hostSample: () 
             (window as IsolationWindow).composerIsolation.ownReceipt();
           });
         }) : null;
-        const result = { name, width, pair, side, mode, startedUtc, hostBefore, hostAfter, seedDigest, finalReads, driverDispatchMs, cpuThrottle: 4, browser: browser.version(), ownReceiptMs, ...cell, corpus, bundle, stylesheet:hash(assets.css), p95,
+        const result = { name, width, pair, side, mode, catalogResponses, startedUtc, hostBefore, hostAfter, seedDigest, finalReads, driverDispatchMs, cpuThrottle: 4, browser: browser.version(), ownReceiptMs, ...cell, corpus, bundle, stylesheet:hash(assets.css), p95,
           p50:sorted[Math.ceil(sorted.length/2)-1], max:sorted.at(-1), ...reading };
         fs.writeFileSync(file, JSON.stringify(result, null, 2)+"\n");
         if (structure && (cell.mix === "miss" || cell.mix === "foreign")) {

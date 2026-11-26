@@ -10,6 +10,9 @@ const components: Record<string, [string, string]> = {
 /** Instrument only the replay bundle. The ordinary bundle used for latency contains no probes. */
 export function instrumentComposerIsolation(source: string, filename: string): string {
   const filenameOnly = filename.split(/[\\/]/).at(-1);
+  if (filenameOnly === "useFiles.ts") {
+    return source + "\nglobalThis.__isolationCertifiedSize = path => filesClientCache.read().files.find(row => row.path === path)?.size;\n";
+  }
   if (!filenameOnly || (!components[filenameOnly] && filenameOnly !== "KanbanSeat.tsx" && filenameOnly !== "runtimeFilesStatus.ts")) return source;
   function insert(marker: string, code: string) {
     if (source.split(marker).length !== 2) throw Error(`isolation instrumentation needs one ${marker} in ${filenameOnly}`);
@@ -56,15 +59,17 @@ function __isolationProfile(children) {
 ` + register();
   }
   if (filenameOnly === "runtimeFilesStatus.ts") {
+    insert("let revision = 0;", "let __isolationLastFiles;");
     const visit = 'if (file.project === "atlas") { ' + count("projectRowVisits") + ' }';
     insert("for (const file of data.files) {", visit);
     insert("data.files.map((file) => {", visit);
     insert("let changed = false;\n    const priorArray = arrays.get(data.files);",
       'if (priorArray?.revision !== revision) { '+count("mappedArrays")+' }');
     insert("projected.set(data, { revision, value: result });", `
-      if (window.isolationCounters && result.files !== (priorArray?.value ?? data.files)) {
+      const previous = __isolationLastFiles;
+      __isolationLastFiles = result.files;
+      if (window.isolationCounters && previous && result.files !== previous) {
         window.isolationCounters.publishedArrays++;
-        const previous = priorArray?.value ?? data.files;
         for (let i=0; i<result.files.length; i++) {
           if (result.files[i] === previous[i]) continue;
           window.isolationCounters.replacedRows++;

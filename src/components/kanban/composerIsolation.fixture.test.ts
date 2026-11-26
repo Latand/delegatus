@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
 import { applyEvent, installSnapshot, type RuntimeEnvelope } from "@/components/runtime/runtimeModel";
+import { applyBoardDelta, type BoardDelta } from "@/lib/boardDelta";
+import { isolationCatalogReplies } from "./composerIsolationCatalog.fixture";
 import type { FileEntry } from "@/lib/types";
 import { installIsolationStream, isolationCorpus } from "./composerIsolation.fixture";
 
@@ -27,6 +29,9 @@ test("the timing streams update the intended conversations and replay all six en
   expect(stream.census()).toMatchObject({ sessions:1710, projectSessions:1500, otherSessions:210, openId:"seat" });
   expect(files.find(f => f.path === corpus.subagentPath)?.parent).toBe(store.sessions[corpus.missingId]!.artifactPath);
   expect(files.some(f => f.conversationId === corpus.missingId)).toBe(false);
+  expect(files.find(f => f.path === corpus.subagentPath)).toMatchObject({ root:"claude-projects", engine:"claude", kind:"subagent" });
+  expect(store.sessions[corpus.missingId]?.hostKind).toBe("claude-broker");
+  expect(files.find(f => f.migratedTo === sibling.path)?.path).toBe(sibling.path + ".previous");
   for (let i=0; i<6; i++) stream.event("mixed",i);
   expect(envelopes.map(e => e.kind)).toEqual(["turn-started","delta","delta","turn-started","turn-ended","turn-ended"]);
   expect(envelopes.map(e => e.seq)).toEqual([1,2,3,4,5,6]);
@@ -42,4 +47,23 @@ test("the timing streams update the intended conversations and replay all six en
   stream.ownReceipt();
   expect(store.sessions.seat!.recentReceipts[0]?.status).toBe("rejected");
   expect(store.sessions.sibling!.recentReceipts).toHaveLength(0);
+});
+
+test("the routed catalog returns 304 and changes one real row across two missed revisions", () => {
+  const body = { boardProtocol:2, boardScope:"fixture.global", tasks:[], files:[
+    {path:"/fixture/open",size:2,mtime:5}, {path:"/fixture/foreign",size:9,mtime:10},
+  ] };
+  const wire = isolationCatalogReplies(JSON.stringify(body),"/fixture/foreign",true);
+  const first = wire.reply(1);
+  const raw = JSON.parse(first.body) as typeof body;
+  expect(wire.reply(1,first.headers.etag).status).toBe(304);
+  const changed = wire.reply(3,first.headers.etag,true);
+  expect(changed.headers["x-llv-files-delta-base"]).toBe(first.headers.etag);
+  const deltas = (JSON.parse(changed.body) as { deltas: BoardDelta[] }).deltas;
+  expect(deltas).toHaveLength(2);
+  const next = deltas.reduce((value,delta) => applyBoardDelta(value,delta) as typeof body, raw);
+  expect(next.files[0]).toBe(raw.files[0]);
+  expect(next.files[1]).toEqual({path:"/fixture/foreign",size:11,mtime:12});
+  expect(next.tasks).toBe(raw.tasks);
+  expect(JSON.parse(wire.reply(3,first.headers.etag,false).body)).toEqual(next);
 });

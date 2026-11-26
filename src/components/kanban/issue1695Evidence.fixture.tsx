@@ -4734,7 +4734,19 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     });
   }
   if (url.pathname === "/api/files") {
-    if (isolationStream) isolationStream.reads.catalog++;
+    if (isolationStream) {
+      if (method === "HEAD") {
+        isolationStream.reads.presence++;
+        return new Response(null, { status: 204 });
+      }
+      isolationStream.reads.catalog++;
+      const revision = isolationStream.routedRevision();
+      if (revision !== null) {
+        const headers = new Headers(init?.headers);
+        headers.set("x-isolation-revision", String(revision));
+        return serverFetch(input, { ...init, headers });
+      }
+    }
     if (COLD_BOARD && method === "HEAD") return new Response(null, { status: 204 });
     if (COLD_BOARD && url.searchParams.get("view") === "storage-health") return json({ state: "ok", since: null, freeBytes: 1024 ** 3, registryIssues: [] });
     launchAdvance();
@@ -4789,7 +4801,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       ? { files: [orchestrator, ...directFiles], flows: [], pipelines: [], tasks: [], conversationAliases: { "old-direct-subject": "direct-subject" },
         projectCatalog: [{ project: PROJECT, conversations: directFiles.length + 1, smt: now }] } : {};
     isolationStream?.admitCatalog(scoped.files);
-    const body = JSON.stringify({ ...scoped, ...retiredBoard, ...((DECISIONS || REPORT_PREVIEW || FIRST_RUN_FORM) && seatDecisionNotices().length ? { seatDecisions: seatDecisionNotices() } : {}), workflows: [], systemHealth: { ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) }, ...(workLinks ? { workLinks } : {}) });
+    const body = JSON.stringify({ ...scoped, ...retiredBoard, ...(isolationStream ? { boardProtocol:2, boardScope:"fixture.global" } : {}), ...((DECISIONS || REPORT_PREVIEW || FIRST_RUN_FORM) && seatDecisionNotices().length ? { seatDecisions: seatDecisionNotices() } : {}), workflows: [], systemHealth: { ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) }, ...(workLinks ? { workLinks } : {}) });
     if (COLD_BOARD) {
       const headers = new Headers(init?.headers);
       const required = headers.get("x-llv-files-generation");
@@ -4808,6 +4820,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         "x-llv-files-generation": required ? "1" : "0", "x-llv-files-target-generation": "1",
         "x-llv-files-projection-cache": required ? "miss" : "bootstrap",
       } });
+    }
+    if (isolationStream) {
+      isolationStream.saveCatalog(body);
+      return new Response(body, { headers: { "content-type":"application/json", ETag:'"isolation-1"', "x-llv-board-protocol":"2" } });
     }
     if (evidence.filesDelayMs) await new Promise((resolve) => setTimeout(resolve, evidence.filesDelayMs));
     if (pollTransport) return pollResponse(body, init);
