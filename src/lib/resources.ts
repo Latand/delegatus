@@ -2744,12 +2744,15 @@ export async function readResourcesWithDiagnostic(fresh = false, options: Resour
     readDiskPressure,
     () => readDiskPressureInHelper({ readOnly: true }),
   );
+  const { currentMemoryPressure } = await import("@/lib/state/memoryPressure");
+  const memoryPressure = currentMemoryPressure();
   return {
     ...read,
     payload: {
       ...read.payload,
       agentState: readAgentStateMetrics(agentRegistry()),
       diskPressure: pressure,
+      ...(memoryPressure ? { memoryPressure } : {}),
       worktreeSweep: worktreeSweepStatus(),
       tempSweep: tempSweepStatus(),
       releaseRetention: releaseRetentionStatus(),
