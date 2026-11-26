@@ -186,8 +186,8 @@ test("an owner gets one assigned card and one owner directive on the inferred pr
     const result = await runClaimedRequest(paired, request, undefined, { leaseWorker: false });
     if (result?.outcome !== "answered" || !result.answer.buttons?.length) process.exitCode = 1;
   `], { stdin: new Blob([JSON.stringify({ paired, request, now, taskState })]), stdout: "pipe", stderr: "pipe" });
-  const [exit, , stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-  if (exit !== 0) throw new Error(`Restarted relay exited with ${exit}\n${stderr}`);
+  const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  if (exit !== 0) throw new Error(`Restarted relay exited with ${exit}\n${stdout}\n${stderr}`);
   expect(completions.at(-1)).toMatchObject({ answer: { buttons: [[{ url: expectedLink }]] } });
   expect(newTasks()).toHaveLength(1);
 });
@@ -202,7 +202,7 @@ test("a live trusted requester reaches only the granted project as an owner requ
   expect(directives).toMatchObject([{ conversationId: "conversation_atlas", origin: { kind: "operator" } }]);
 });
 
-test("seat delivery refusal leaves one card and a new claim retries the same directive", async () => {
+test("seat delivery retries a temporary refusal with one durable directive identity", async () => {
   let initial: StructuredMessageRequest | undefined;
   send.mockImplementationOnce(async message => {
     initial = message;
@@ -210,15 +210,38 @@ test("seat delivery refusal leaves one card and a new claim retries the same dir
   });
   const original = claim();
   const pending = await reply(original);
-  expect(pending.text).toContain("unconfirmed");
+  expect(pending.text).toContain("submitted");
   expect(newTasks()).toHaveLength(1);
   if (!initial) throw new Error("Expected the first directive delivery attempt");
-  const completed = await reply({ ...original, request_id: "retry-directive" });
-  expect(completed.buttons).toEqual(pending.buttons);
+  const completed = await reply({ ...original, request_id: "duplicate-after-delivery" });
+  expect(completed.text).toContain("submitted");
   expect(newTasks()).toHaveLength(1);
   expect(directives).toHaveLength(1);
   expect(directives[0]?.clientMessageId).toBe(initial.clientMessageId);
   expect(directives[0]?.text).toBe(initial.text);
+});
+
+test("committed delivery resumes after choice expiry with its original directive identity", async () => {
+  let originalDirective: StructuredMessageRequest | undefined;
+  send.mockImplementationOnce(async message => {
+    originalDirective = message;
+    return { ok: false, structured: true, status: 503, outcome: "failed", error: "Fixture refusal" };
+  }).mockImplementationOnce(async () => ({ ok: false, structured: true, status: 503, outcome: "failed", error: "Fixture refusal" }));
+  const original = claim(owner, "Fix the build output", "expired-delivery");
+  const offered = await reply(original);
+  const selection = button(offered, "Atlas");
+  const selected = await reply({ ...original, request_id: "select-atlas", button_choice: selection });
+  expect(selected.text).toContain("unconfirmed");
+  expect(newTasks()).toMatchObject([{ project: atlas }]);
+  expect(directives).toEqual([]);
+  if (!originalDirective) throw new Error("Expected the refused directive to be recorded");
+  now = Date.parse(selection.expires_at);
+  const retried = await reply({ ...original, request_id: "retry-after-expiry", button_choice: selection });
+  expect(retried.text).toContain("https://board.example.invalid/#task=");
+  expect(newTasks()).toHaveLength(1);
+  expect(directives).toHaveLength(1);
+  expect(directives[0]?.clientMessageId).toBe(originalDirective.clientMessageId);
+  expect(directives[0]?.text).toBe(originalDirective.text);
 });
 
 test("a claimed private task consumes live authorization after the heartbeat, with no access for a guest or anonymous author", async () => {
@@ -270,6 +293,15 @@ test("an expired or revoked choice leaves the board and seat untouched", async (
   expect(directives).toEqual([]);
 });
 
+test("an explicit Ukrainian task directive creates one project card and owner directive", async () => {
+  const explicit = claim(owner, "Постав задачу для Atlas: онови документацію", "uk-task");
+  expect(dmTaskTrigger(requestSchema.parse(explicit))?.text).toBe("Постав задачу для Atlas: онови документацію");
+  const explicitAnswer = await reply(explicit);
+  expect(explicitAnswer.buttons?.[0]?.[0]?.url).toContain("#task=");
+  expect(newTasks()).toMatchObject([{ project: atlas }]);
+  expect(directives).toHaveLength(1);
+});
+
 test("legacy, group, guest and ordinary chat claims keep the existing path, and unnegotiated ambiguity asks in plain text", async () => {
   const original = claim(owner, "Fix the build output");
   const { type: _type, ...legacyChat } = original.chat;
@@ -278,6 +310,7 @@ test("legacy, group, guest and ordinary chat claims keep the existing path, and 
     { ...original, chat: { ...original.chat, type: "group" } },
     { ...original, delivery: "guest", input: { ...original.input, format: undefined } },
     claim(owner, "How are things with Atlas?"),
+    claim(owner, "Update me on Atlas"),
   ]) expect(dmTaskTrigger(requestSchema.parse(ordinary))).toBeNull();
   expect(relayClaimCapabilities(paired).features).toContain(feature);
   expect(relayClaimCapabilities({ features: [] }).features).not.toContain(feature);
@@ -292,6 +325,7 @@ test("legacy, group, guest and ordinary chat claims keep the existing path, and 
   expect(newTasks()).toEqual([]);
   const direct = await reply({ ...claim(owner, "Fix Atlas build output", "confident"), features: ["relay_rich_messages"] });
   expect(direct.buttons?.[0]?.[0]?.url).toContain("#task=");
+  expect(direct.text).toContain("https://board.example.invalid/#task=");
 });
 
 test("the wire rejects malformed opt-in and callback claims and leaves legacy tolerant parsing intact", () => {

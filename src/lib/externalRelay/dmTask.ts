@@ -50,7 +50,7 @@ function readReceipt(file: string): Receipt | null {
 
 // Require a task command or an imperative request for project work. Ordinary
 // conversation goes through the existing relay path.
-const taskRequest = /^(?:\/task(?:\s|$)|(?:(?:please|будь ласка|пожалуйста)[,\s]+)?(?:create (?:a |the )?task|add (?:a |the )?task|file (?:a |an )?(?:task|issue|bug)|fix|implement|investigate|refactor|update|створи|створіть|додай|додайте|виправ|виправте|реалізуй|перевір|закинь|создай|добавь|исправь|реализуй|проверь|заведи)(?=$|[^\p{L}\p{N}_]))/iu;
+const taskRequest = /^(?:\/task(?:\s|$)|(?:(?:please|будь ласка|пожалуйста)[,\s]+)?(?:create (?:a |the )?task|add (?:a |the )?task|file (?:a |an )?(?:task|issue|bug)|fix|implement|investigate|refactor|(?:update|обнови|онови)(?!\s+me\b)|створи|створіть|додай|додайте|виправ|виправте|реалізуй|перевір|закинь|постав\s+задачу|створи\s+задачу|создай|добавь|исправь|реализуй|проверь|заведи)(?=$|[^\p{L}\p{N}_]))/iu;
 
 export function dmTaskTrigger(request: ExternalRelayRequest) {
   if (request.delivery === "guest" || request.chat?.type !== "private") return null;
@@ -167,11 +167,12 @@ export async function answerDmTask(
       const current = live();
       return current !== null && (current.project === null || current.project === project);
     };
-    const chosenOption = choice && prior?.choice && choice.message_id === promptId
+    const committed = prior?.phase === "created" || prior?.phase === "submitted";
+    const chosenOption = choice && !committed && prior?.choice && choice.message_id === promptId
       && choice.expires_at === prior.choice.expiresAt && Date.parse(choice.expires_at) > Date.now()
       ? prior.choice.projects.find(option => option.value === choice.value) : undefined;
     const choiceProject = canonicalRelayProject(chosenOption?.project ?? null);
-    if (choice && (!choiceProject || prior?.phase !== "choice" && canonicalRelayProject(prior?.project ?? null) !== choiceProject)) return answer(copy.expired);
+    if (choice && !committed && (!choiceProject || prior?.phase !== "choice" && canonicalRelayProject(prior?.project ?? null) !== choiceProject)) return answer(copy.expired);
     let project = prior?.phase !== "choice" ? prior?.project : choiceProject;
     if (!project) {
       const directory = namedProjectDirectory({ includeActiveSeats: false, authorizedSeats: seats });
@@ -224,12 +225,12 @@ export async function answerDmTask(
     type CreateResult = "created" | "denied" | "expired" | "missing" | "noSeat" | "blocked";
     const result = await withTaskPreparation(() => waitForStateLock("relay.dm-task.create", () => mutateTasksFile<CreateResult>(state => {
       if (!projectAllowed(selected)) return { state: undefined, result: "denied" };
-      if (choice && !canUseChoice()) return { state: undefined, result: "expired" };
+      if (choice && !alreadyCreated && !canUseChoice()) return { state: undefined, result: "expired" };
       const existing = readMutationTask(state.tasks, taskId);
       if (existing) return { state: undefined, result: existing.project === selected ? "created" : "missing" };
       if (alreadyCreated || state.recentCreates.some(receipt => receipt.clientRequestId === key))
         return { state: undefined, result: "missing" };
-      if (!canUseChoice()) return { state: undefined, result: "expired" };
+      if (!alreadyCreated && !canUseChoice()) return { state: undefined, result: "expired" };
       if (!seats().some(seat => seat.project === selected)) return { state: undefined, result: "noSeat" };
       // Recheck after the task-store admission wait, in the actual write path.
       if (!projectAllowed(selected)) return { state: undefined, result: "denied" };
@@ -246,12 +247,16 @@ export async function answerDmTask(
     if (!alreadyCreated) writeRelayFile(file, { ...next, phase: "created" });
     if (!projectAllowed(selected)) return leaseHeld() ? answer(copy.denied) : null;
     const instruction = bridgeDirectiveBody(`Owner request via the Telegram relay. Work on the existing board task ${taskId}.\n\nRequest: ${JSON.stringify(text)}`);
-    const submitted = prior.phase === "submitted" || await submitDirective(selected, key, instruction, () => projectAllowed(selected))
-      .catch(() => false);
+    let submitted = prior.phase === "submitted";
+    // A durable receipt makes this safe to retry with the same operation
+    // identity when admission fails transiently before the claim completes.
+    for (let attempt = 0; !submitted && attempt < 2; attempt++)
+      submitted = await submitDirective(selected, key, instruction, () => projectAllowed(selected)).catch(() => false);
     if (submitted && prior.phase !== "submitted") writeRelayFile(file, { ...next, phase: "submitted" });
     if (!projectAllowed(selected)) return leaseHeld() ? answer(copy.denied) : null;
     const message = submitted ? copy.created : copy.pending;
-    return caps.rows && caps.perRow && caps.totalButtons ? answer(message, { buttons: [[{ text: copy.open, url: url.href }]] })
+    return caps.rows && caps.perRow && caps.totalButtons
+      ? answer(`${message}\n${url.href}`, { buttons: [[{ text: copy.open, url: url.href }]] })
       : answer(`${message}\n${url.href}`);
   }, deadline);
 }
