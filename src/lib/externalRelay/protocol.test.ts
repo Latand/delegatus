@@ -62,6 +62,33 @@ test("sticker rows retain optional details within the service limits", () => {
   expect(JSON.stringify(future.data?.input.conversation)).toBe(JSON.stringify(parse(row).data?.input.conversation));
 });
 
+test("reply metadata is optional and each malformed field is discarded independently", () => {
+  const row = sampleRequest.input.conversation[0];
+  const parse = (message: unknown) => requestSchema.parse({
+    ...sampleRequest, input: { ...sampleRequest.input, conversation: [message] },
+  }).input.conversation[0]!;
+  const longest = "😀".repeat(12000);
+  const quote = { text: longest, position: 0 };
+  expect(parse({ ...row, quote, external_reply_context: longest })).toStrictEqual({ ...row, quote, external_reply_context: longest });
+  const withoutPosition = { ...row, quote: { text: "Q" }, external_reply_context: "" };
+  expect(parse(withoutPosition)).toStrictEqual(withoutPosition);
+  const firstAboveSafeInteger = { ...row, quote: { text: "Q", position: 9007199254740992 } };
+  expect(parse(firstAboveSafeInteger)).toStrictEqual(firstAboveSafeInteger);
+  expect(parse(row)).toStrictEqual(row);
+
+  for (const invalid of [null, "quote", {}, { text: 1 }, { text: "" }, { text: longest + "!" },
+    { text: "Q", position: -1 }, { text: "Q", position: 0.5 }, { text: "Q", position: "0" }]) {
+    const { quote: parsedQuote, ...message } = parse({ ...row, quote: invalid, external_reply_context: longest });
+    expect(parsedQuote).toBeUndefined();
+    expect(message).toStrictEqual({ ...row, external_reply_context: longest });
+  }
+  for (const invalid of [null, 1, {}, longest + "!"]) {
+    const { external_reply_context, ...message } = parse({ ...row, quote, external_reply_context: invalid });
+    expect(external_reply_context).toBeUndefined();
+    expect(message).toStrictEqual({ ...row, quote });
+  }
+});
+
 test("F4 descriptor features survive parsing and owner I10 schemas survive unchanged", () => {
   const descriptor = { protocol: "delegatus-relay", versions: [1], name: "Test", description: "Test",
     api_base: "https://relay.example/v1", kinds: ["answer"], liveness: sampleRequest.liveness,

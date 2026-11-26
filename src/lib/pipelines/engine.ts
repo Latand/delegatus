@@ -170,7 +170,9 @@ import { laneMovedSince } from "./laneMovement";
 import { pipelineRepoPreflightError, pipelineRepoPreflightStatus } from "./preflight";
 import { creationIssueLinks } from "@/lib/forge/issueDelivery";
 import { preparePipelineRepository, readRepositoryInitialization } from "./initializeRepository";
-import { classifyProviderCondition, CODEX_WORKSPACE_REQUIREMENTS_FAILURE, type ProviderCondition } from "./providerConditions";
+import { classifyProviderCondition, CODEX_CYBERSECURITY_REFUSAL, CODEX_WORKSPACE_REQUIREMENTS_FAILURE, type ProviderCondition } from "./providerConditions";
+import { equivalentConfig } from "@/lib/roles/equivalents";
+import { clampEffortToScale } from "@/lib/agent/efforts";
 import { isStagePromptContext, renderCutRetryInput, renderDecisionInput, renderOutOfMemoryRetryInput } from "./prompts";
 import { composeStageInput } from "./stageInput";
 import { composeCloudStageInput } from "./cloudStageInput";
@@ -194,7 +196,7 @@ import { matchesShortId, resolveShortId, shortId } from "@/lib/shortIds";
 import { pipelineStageRuntimeProfile, type PipelineStageRuntimeProfile } from "./stageSandbox";
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
 import { firstRunsElsewhere, TASK_RUNS_ELSEWHERE } from "@/lib/links/linked";
-import { pipelineAttemptMayBeWorking, pipelineAttemptReleased, pipelineHostHasLiveWork, pipelinePublicationHoldsHost } from "./hostRetirement";
+import { parkedProviderError, pipelineAttemptMayBeWorking, pipelineAttemptReleased, pipelineHostHasLiveWork, pipelinePublicationHoldsHost, providerRecoveryTurnMatches } from "./hostRetirement";
 import { recordedAttemptReceipts, recordedHostHeld } from "@/lib/recordedChecks/store";
 import { recordedReportReceipts } from "@/lib/recordedChecks/reportGate";
 import { pipelineRecordRevalidator } from "./revalidation";
@@ -204,7 +206,7 @@ import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/proje
 import { mergeOnReviewEnabled } from "@/lib/projects/settings";
 import { ensurePipelineForTask, isTaskSpawnPipelineParams, type TaskPipelineSpawnParams, type TaskSpawnPipelineParams } from "./taskBinding";
 import { assignmentHoldsIdentity } from "@/lib/tasks/membership";
-import { MAX_DECISION_ANSWER_CHARS } from "./types";
+import { MAX_DECISION_ANSWER_CHARS, PIPELINE_CONTROLLER_ROLE } from "./types";
 import { lanePullRequest, mergeAdmission, mergeEligible, nudgeAutoMerge } from "@/lib/forge/autoMerge";
 import { forgeCacheView, nudgeForgeSweep } from "@/lib/forge/cache";
 import { cachedKindOf, canonicalRepository, pipelineRepository } from "@/lib/forge/resolve";
@@ -3926,6 +3928,81 @@ function workspaceRequirementsFailure(condition: ProviderCondition): boolean {
   return condition.kind === "transient" && condition.label === CODEX_WORKSPACE_REQUIREMENTS_FAILURE;
 }
 
+function codexCybersecurityRefusal(condition: ProviderCondition): boolean {
+  return condition.kind === "other" && condition.label === CODEX_CYBERSECURITY_REFUSAL;
+}
+
+/** The engine's own hand on a runtime move it makes without an operator request. */
+const PIPELINE_CONTROLLER_ACTOR: PauseResumeActor = { kind: "agent", role: PIPELINE_CONTROLLER_ROLE, conversationId: null };
+
+/** Cybersecurity refusals Codex gave this stage, in attempts up to and
+    including `attempt`. Each refused turn opens one wait, so an attempt the
+    agent kept working in after a refusal counts every refusal it received.
+    Manual retries count too: the stage's history in this lane decides when it
+    leaves Codex. */
+function codexRefusalsOfStage(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): number {
+  return (runFor(pipeline, stage.id)?.attempts ?? []).filter(item => !item.historical && item.n <= attempt.n
+    && item.effectiveRole.engine === "codex")
+    .reduce((count, item) => count + (item.providerRecoveries ?? [])
+      .filter(entry => entry.action === "wait" && codexCybersecurityRefusal(entry.condition)).length, 0);
+}
+
+/** Rewrite the stage onto the role's Claude equivalent at Opus. Every later
+    attempt of the stage binds it. A Codex account pin is dropped so the
+    project's normal Claude selection applies. Returns a refusal reason. */
+function moveRefusedStageToClaudeOpus(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts): string | null {
+  const from = attempt.effectiveRole;
+  const row = stage.role ? { roleId: stage.role.roleId } : undefined;
+  // A role that leaves model or effort to its default maps by the role row alone.
+  const equivalent = equivalentConfig({ engine: from.engine, model: from.model ?? "", effort: from.effort ?? "high" }, "claude", row);
+  const effort = (equivalent.engine === "claude" ? clampEffortToScale("claude", "opus", equivalent.effort) : null)
+    ?? clampEffortToScale("claude", "opus", from.effort ?? "high") ?? "high";
+  const resolved = resolvePipelineRole({ role: stage.role, engine: "claude", model: "opus", effort,
+    access: isReadOnlyLockedRole(stage.role?.roleId) ? undefined : stage.access }, stage.kind, ports.roleLookup, pipeline.project);
+  if (!resolved.role) return resolved.error ?? "the role has no Claude configuration";
+  if (resolved.role.engine !== "claude" || !isEffectiveRole(resolved.role)) return "the role has no Claude configuration";
+  const cloudError = cloudStageConfigurationError({ ...stage, model: resolved.role.model, effectiveRole: resolved.role });
+  if (cloudError) return cloudError;
+  const reach = stageEditReach(pipeline, stage.id);
+  const pinned = stage.account?.trim();
+  stage.effectiveRole = resolved.role;
+  stage.engine = resolved.role.engine;
+  stage.model = resolved.role.model;
+  stage.effort = resolved.role.effort;
+  delete stage.serviceTier;
+  if (resolved.role.preferredServiceTier) stage.preferredServiceTier = resolved.role.preferredServiceTier;
+  else delete stage.preferredServiceTier;
+  stage.access = resolved.role.access;
+  if (pinned) delete stage.account;
+  recordGraphEdit(pipeline, ports, PIPELINE_CONTROLLER_ACTOR, {
+    action: "override-stage", stageId: stage.id, ...reach, ...(pinned ? { accountOverride: null } : {}),
+    cause: "codex-cybersecurity-refusal",
+    summary: `moved stage ${stage.id} to Claude ${resolved.role.model} ${resolved.role.effort} after Codex refused it twice as a cybersecurity risk${pinned ? "; the Codex account pin was cleared" : ""}${reach.effect === "pending-next-attempt" ? `; applies from attempt ${reach.appliesFromAttempt}` : ""}`,
+  });
+  return null;
+}
+
+/** The first refusal relaunches the stage on Codex; the second moves the stage
+    to Claude Opus and relaunches it there. Each relaunch first stops the
+    refused attempt's idle host. Only a move that cannot be made parks. */
+async function recoverCodexCybersecurityRefusal(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
+  condition: ProviderCondition, ports: PipelinePorts, persist: () => void | Promise<void>): Promise<boolean> {
+  const wait = attempt.providerWait!;
+  if (codexRefusalsOfStage(pipeline, stage, attempt) >= 2) {
+    const refused = moveRefusedStageToClaudeOpus(pipeline, stage, attempt, ports);
+    if (refused) {
+      await parkProviderCut(pipeline, attempt, `stage cut by ${condition.label} twice; moving it to Claude Opus failed: ${redactBounded(refused, 300)}; last: ${wait.text}`, ports);
+      await persist();
+      return true;
+    }
+    recordProviderRecovery(attempt, "switch", condition, `moving the stage to Claude ${stage.effectiveRole.model} after a second ${condition.label}`, ports.now());
+    // The definition change is durable before the host stop; a restart
+    // re-enters through the engine mismatch below and relaunches on Claude.
+    await persist();
+  }
+  return await relaunchCutStage(pipeline, stage, attempt, condition, ports, persist, null);
+}
+
 function shouldOpenProviderWait(wait: PipelineStageAttempt["providerWait"], notice: { ts: number; condition: ProviderCondition }): boolean {
   return !wait || notice.ts > wait.turnTs
     // A previous Viewer can have saved the cut before parking it as unknown.
@@ -4036,6 +4113,9 @@ async function recoverProviderCut(
   const sameConversationOnly = workspaceRequirementsFailure(condition);
   if (stage.effectiveRole.engine !== attempt.effectiveRole.engine) {
     return await relaunchCutStage(pipeline, stage, attempt, condition, ports, persist, null);
+  }
+  if (codexCybersecurityRefusal(condition) && attempt.effectiveRole.engine === "codex" && !wait.actionAt) {
+    return await recoverCodexCybersecurityRefusal(pipeline, stage, attempt, condition, ports, persist);
   }
   const engine = attempt.effectiveRole.engine;
   const pinned = attemptAccountPin(stage, attempt)?.trim();
@@ -4393,7 +4473,10 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
     await park(pipeline, "stage host died without output twice; automatic relaunch exhausted", attempt);
     return true;
   }
-  const providerLimit = condition.kind === "usage_limit" || condition.kind === "auth_required" || condition.kind === "transient";
+  // A refusal ended a terminal turn: like a limit, its host is stopped only
+  // while idle, and newer stage activity cancels the relaunch.
+  const providerLimit = condition.kind === "usage_limit" || condition.kind === "auth_required" || condition.kind === "transient"
+    || codexCybersecurityRefusal(condition);
   const confirmProviderCut = async () => {
     if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return false;
     if (!providerLimit) return true;
@@ -4454,10 +4537,14 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
     retry.input = input;
     retry.usageLimitedAccounts = attempt.usageLimitedAccounts;
     retry.providerFallbackRetries = attempt.providerFallbackRetries;
-    retry.providerRecoveryBudget = { ...attempt.providerRecoveryBudget, engine: attempt.effectiveRole.engine,
+    // A refusal is counted from the stage history; the fresh turn owes no
+    // spent provider budget, on Codex or on the Claude move.
+    if (!codexCybersecurityRefusal(condition)) retry.providerRecoveryBudget = { ...attempt.providerRecoveryBudget, engine: attempt.effectiveRole.engine,
       ...(target ? { triedAccounts: [...new Set([...(attempt.providerRecoveryBudget?.triedAccounts ?? []), target])] } : {}), tries: (attempt.providerRecoveryBudget?.tries ?? attempt.providerWait?.tries ?? 0) + 1,
       startedAt: providerBackoffStartedAt(attempt, now) };
-    if (!configuredRetry && attempt.providerWait && condition.kind !== "host_death" && retry.effectiveRole.engine === attempt.effectiveRole.engine) {
+    // A refusal relaunches as a fresh turn; a carried wait would read as its own cut.
+    if (!configuredRetry && attempt.providerWait && condition.kind !== "host_death" && !codexCybersecurityRefusal(condition)
+      && retry.effectiveRole.engine === attempt.effectiveRole.engine) {
       retry.providerWait = { ...attempt.providerWait, turnTs: 0, tries: attempt.providerWait.tries + 1, actionAt: now,
         resumeAt: now,
         ...(modelCapacity(condition) && attempt.providerWait.accountId
@@ -15362,7 +15449,7 @@ function recordGraphEdit(
   pipeline: Pipeline,
   ports: PipelinePorts,
   actor: PauseResumeActor | null,
-  edit: Pick<PipelineGraphEdit, "action" | "stageId" | "effect" | "appliesFromAttempt" | "accountOverride" | "summary">,
+  edit: Pick<PipelineGraphEdit, "action" | "stageId" | "effect" | "appliesFromAttempt" | "accountOverride" | "summary" | "cause">,
 ): PipelineGraphEdit {
   const edits = pipeline.graphEdits ?? [];
   const recorded: PipelineGraphEdit = {
@@ -16806,10 +16893,64 @@ export function decisionAnswerActorRefusal(
   return null;
 }
 
-/** Accepting an answer reserves work; publication continuations first verify
+/** Release the provider-cut writer before a manual action reserves its successor. */
+async function releaseParkedProviderHost(
+  pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, action: "retry-stage" | "resolve-decision",
+  ports: PipelinePorts, persist: () => Promise<void>,
+): Promise<PipelinePatchResult | null> {
+  const { n, launchId, conversationId, agentPath, providerWait } = attempt;
+  const refuse = (reason: string): PipelinePatchResult => ({ status: 409, error: `${reason}. Read the stage's current activity before repeating ${action}` });
+  if (!conversationId || !agentPath || !providerWait || !ports.sourcePathAllowed(agentPath)) {
+    return refuse("The provider-cut attempt's host identity could not be verified");
+  }
+  const target = { stageId: stage.id, attempt: n, launchId, conversationId, agentPath, paneId: null };
+  const workHeld = (requireDeliveryProof = true) => {
+    const outstanding = ports.conversationDeliveryOutstanding?.(conversationId);
+    return (requireDeliveryProof ? outstanding !== false : outstanding === true) || recordedHostHeld(conversationId);
+  };
+  const workRefusal = () => refuse("The provider-cut attempt has pending delivery or recorded work");
+  const resident = await ports.stageHostResident(target);
+  // A resident host needs positive delivery evidence before an idle stop.
+  if (workHeld(resident)) return workRefusal();
+  if (!resident) return null;
+
+  const read = () => ports.durableTurnEvidence(attempt.effectiveRole.engine, agentPath, undefined,
+    attemptEvidenceFloor(attempt), undefined, providerWait.turnTs);
+  const currentCut = (evidence: StageTurnEvidence | null) => ports.sourcePathAllowed(agentPath)
+    && providerRecoveryTurnMatches(attempt, evidence, unixMs(ports.now())) && stageTurnEvidenceCurrent(evidence) === true;
+  const evidence = await read();
+  if (workHeld()) return workRefusal();
+  if (!currentCut(evidence)) return refuse("The provider cut is no longer the verified terminal turn");
+
+  // The runtime rechecks the cut, host generation, writer, and idle state
+  // before signalling. The owned key reconciles a queued stop on a later call.
+  const stopped = await ports.stopStageAgent(target, {
+    onlyIfIdle: true, requireIdleEvidence: true, operationId: terminalIdleStopKey(target),
+    providerRecovery: { pipelineId: pipeline.id, stageId: stage.id, attempt: n,
+      turnTs: providerWait.turnTs, controlGeneration: pipeline.controlGeneration ?? null },
+  });
+  if (stopped.outcome === "unresolved") {
+    rememberUnresolvedTermination(attempt, stopped, ports.now());
+    await persist();
+  }
+  if (stopped.outcome === "deferred") return { status: 409,
+    error: `The provider-cut attempt's host could not be verified idle. Wait for its turn, tools, permissions, questions, and deliveries to settle before repeating ${action}` };
+  if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {
+    return refuse("The provider-cut attempt's host has not confirmed termination");
+  }
+
+  const latest = await read();
+  const stillResident = await ports.stageHostResident(target);
+  if (workHeld()) return workRefusal();
+  if (stillResident || !currentCut(latest)) return refuse("The provider-cut attempt's host or transcript changed during termination");
+  return null;
+}
+
+/** Accepting an answer reserves work. Publication continuations first verify
     that the old producer has finished its repair turn. */
 async function resolveDecision(
   pipeline: Pipeline, req: PatchPipelineRequest, actor: PauseResumeActor | null, ports: PipelinePorts,
+  persist: () => Promise<void>,
   producerEvidence?: RepairProducerEvidence,
 ): Promise<PipelinePatchResult> {
   const refusal = decisionAnswerActorRefusal(pipeline, actor, req.clientRequestId);
@@ -16857,7 +16998,8 @@ async function resolveDecision(
   if (budgetRefusal) return budgetRefusal;
   const custodyDecision = pipeline.state === "needs_decision" && passedStageCustodyPark(pipeline, attempt);
   const publicationDecision = pipeline.state === "needs_decision" && (passedStagePublicationPark(pipeline, attempt) || custodyDecision);
-  if (stage?.kind !== "run" || !attempt || (!attempt.completedAt && !custodyDecision) || (!publicationDecision
+  const providerError = attempt && parkedProviderError(pipeline, attempt);
+  if (stage?.kind !== "run" || !attempt || (!attempt.completedAt && !custodyDecision) || (!publicationDecision && !providerError
     && (attempt.state !== "needs_decision" || attempt.verdict?.status !== "needs_decision"))) {
     return { error: "resolve-decision requires a run attempt settled with a needs_decision verdict", status: 409 };
   }
@@ -16879,10 +17021,15 @@ async function resolveDecision(
     const repairRefusal = publicationRepairProducerRefusal(pipeline, attempt, producerEvidence, ports);
     if (repairRefusal) return { error: repairRefusal, status: 409 };
   }
+  if (providerError) {
+    const hostRefusal = await releaseParkedProviderHost(pipeline, stage, attempt, "resolve-decision", ports, persist);
+    if (hostRefusal) return hostRefusal;
+    delete attempt.providerWait?.stageRetry;
+  }
   const decision: PipelineDecisionAnswer = {
     clientRequestId: req.clientRequestId, expectedRevision: answeredRevision,
     stageId: stage.id, attempt: attempt.n, nextAttempt: runFor(pipeline, stage.id)!.attempts.length + 1,
-    question: publicationDecision ? pipeline.stateDetail! : attempt.output ?? attempt.report?.summary ?? "", answer: req.answer,
+    question: providerError ?? (publicationDecision ? pipeline.stateDetail! : attempt.output ?? attempt.report?.summary ?? ""), answer: req.answer,
     actor: structuredClone(actor!), at: ports.now(),
   };
   // Custody refused before completion. Retire it only after the producer checks
@@ -17588,7 +17735,7 @@ async function applyPipelinePatch(
       return { pipeline };
     }
     if (req.action === "resolve-decision") {
-      const result = await resolveDecision(pipeline, req, actor, ports, decisionProducerEvidence);
+      const result = await resolveDecision(pipeline, req, actor, ports, persist, decisionProducerEvidence);
       if (result.pipeline && !result.replayed) await persist();
       return result;
     }
@@ -18351,8 +18498,9 @@ async function applyPipelinePatch(
         await persist();
         return { pipeline };
       }
+      const providerError = stage?.kind === "run" && attempt && parkedProviderError(pipeline, attempt);
       const parkedRunningReceipt = (state: string, receipt: { error?: string | null } | null | undefined, settlementWasPending = false): boolean =>
-        state === "path-pending" && !settledAttempt && !explicitReceiptRetry && !settlementWasPending && attempt !== null && stage?.kind === "run"
+        state === "path-pending" && !providerError && !settledAttempt && !explicitReceiptRetry && !settlementWasPending && attempt !== null && stage?.kind === "run"
         && attempt.launchId === retryLaunchId && !!attempt.agentPath && !!attempt.conversationId && !!attempt.completedAt
         && attempt.state === "needs_decision" && !attempt.report && !isStructuredSpawnPark(pipeline, attempt) && !stagedLaunchRecovery(receipt);
       /* Settlement is authoritative for launch admission, including retained
@@ -18432,7 +18580,7 @@ async function applyPipelinePatch(
            never produced a turn keeps the spawn recovery rules above. */
         if (
           state === "path-pending"
-          && parkedRunningReceipt(state, receipt, settlementWasPending)
+          && (providerError && !stagedLaunchRecovery(receipt) || parkedRunningReceipt(state, receipt, settlementWasPending))
         ) {
           return { conflict: null, claimRequired: false };
         }
@@ -18532,7 +18680,7 @@ async function applyPipelinePatch(
           return { error: "the parked attempt recorded a stage report while its host was stopping", status: 409 };
         }
       }
-      if (attempt && !completedRetry) await cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled by operator retry");
+      if (attempt && !completedRetry && !providerError) await cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled by operator retry");
       const beforeStop = completedRetryRefusal();
       if (beforeStop) return beforeStop;
       if (completedRetry && stage && attempt) {
@@ -18576,7 +18724,11 @@ async function applyPipelinePatch(
          The conversation can still have a live successor that owns the writer;
          inspect it after every awaited retry preparation and immediately before
          the synchronous reset. */
-      if (!completedRetry && (attempt?.state === "failed" || attempt?.state === "needs_decision")
+      if (providerError && stage && attempt) {
+        const hostRefusal = await releaseParkedProviderHost(pipeline, stage, attempt, "retry-stage", ports, persist);
+        if (hostRefusal) return hostRefusal;
+        delete attempt.providerWait?.stageRetry;
+      } else if (!completedRetry && (attempt?.state === "failed" || attempt?.state === "needs_decision")
         && attempt.conversationId && (await ports.conversationHostProcess?.(attempt.conversationId))?.state === "alive") {
         return { error: "the failed attempt still has a live stage host; retry was cancelled", status: 409 };
       }
@@ -19427,8 +19579,13 @@ async function resolveStageCompletionTarget(
       || forkSuccessors.has(target) || handoffSuccessors.has(target) || backgroundParks.has(target)));
   if (live.length === 0) {
     const settled = runStages.at(-1)!;
+    const providerError = settled.pipeline.cursor?.stageId === settled.stageId
+      && currentAttempt(settled.pipeline, settled.stageId) === settled.attempt
+      && parkedProviderError(settled.pipeline, settled.attempt);
     return { refusal: {
-      error: `stage ${settled.stageId} attempt ${settled.attempt.n} already settled as ${settled.attempt.state}; its completion can no longer be reported`,
+      error: providerError
+        ? `stage ${settled.stageId} attempt ${settled.attempt.n} settled after a provider error. Ask the pipeline owner to use retry-stage or resolve-decision once its host is idle`
+        : `stage ${settled.stageId} attempt ${settled.attempt.n} already settled as ${settled.attempt.state}; its completion can no longer be reported`,
       status: 409,
       code: "STAGE_REPORT_SETTLED",
       slots: slots(runStages),

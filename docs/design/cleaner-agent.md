@@ -144,6 +144,57 @@ conversation runs there (`:620-622`), no pipeline worktree overlaps it (`:762-77
 holds no `.delegatus-keep` (`:746`). Removal is journal-then-rename-then-recheck
 (`:410-445`).
 
+The same sweep considers private `agyc-*`, `agent-scratch-*` and `delegatus-local-gate-*`
+roots in temporary storage. Agent trees need a registry cwd with ended ownership
+recorded after the directory was created. Gate trees need the allocation journal, a matching
+directory identity and proof that the gate process and its supervisor ended. Both use
+the existing freshness, tree-preservation and live-process checks, including argv.
+Missing owner evidence and explicit gate retention keep the directory held. A gate trash
+whose interrupted removal already took the allocation record is finished from the
+journal, whose snapshot lists that record.
+
+Every candidate this sweep names (all of the above and `llv-*`) is also compared by
+device and inode before quarantine and again at removal (`src/lib/processFileIdentity.ts`).
+The identities come from each readable process's cwd, root, executable, descriptors,
+mappings and named paths, resolved under that process's own root. This finds a holder in
+another mount namespace or behind a bind mount that spells the path differently. A file
+with a second hard link counts only through a directory of the tree, so a package cache
+shared with a running process does not pin the tree. Processes of another user,
+container root included, stay unreadable. Registered attempt roots keep their own
+reference proof.
+
+A named path includes every absolute piece of a `:`-joined value, so a tree named
+only inside `PATH`, `LD_LIBRARY_PATH` or a volume argument such as `/tree:/data` is
+referenced.
+
+For the stray, agent and gate classes Docker's mount inventory covers the container
+processes that stay unreadable. Before quarantine and again on the quarantined tree,
+the attempt sweeps' rule (`containerMountHold`) holds a tree as `container_reference`
+when a running container mounts it or anything inside it, or mounts an ancestor at
+another destination; an ancestor the container sees at its own path holds nothing by
+itself. An inventory that cannot be read holds these classes as
+`container_inventory_unknown`, and the pass reports the cause once. A host without a
+`docker` command has nothing to ask. `llv-*` names get no container check here.
+
+A process of this user that refuses inspection (non-dumpable: `ssh-agent`, `gpg-agent`,
+`scdaemon`, or any program that clears its dumpable flag) shows only its command line.
+The scan keeps it with the paths that line names, so a tree named there is held for every
+class above and by the attempt ledger's reference proof. Its working directory, open
+files, mappings and environment cannot be read: a tree of the `llv-*`, agent or gate
+class that such a process uses only through those is not protected.
+
+The same sweep also takes **strays**: a private directory of this uid, of any name,
+directly in `/tmp` or `/var/tmp`, older than 12 h by its newest write, outside the
+keep-list (which holds `delegatus-gate-record-*`, the journal that proves a gate sandbox
+free), with no reference as above and no socket inside. Because of the blindness
+above, no stray is removed while a refusing process outside the known daemon list
+(`UNINSPECTABLE_DAEMONS`) runs, or while any refusing process, listed or not, names a
+path under `/tmp` or `/var/tmp`. Both hold every candidate as `process-scan-unverified`;
+a stray the command line names is held as `process_reference`.
+
+An interrupted removal that a later pass finishes gets one row in the sweep journal for
+the original path, marked `replay`, with the bytes that were left.
+
 Cannot prove, and holds or skips instead:
 
 - **Names it did not choose.** `delegatus-test-comparison-*` (`scripts/local-gate-tests.ts:483`),

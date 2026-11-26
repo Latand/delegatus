@@ -78,7 +78,7 @@ import { isStructuredHostKind, runtimeHostKindForEngine, runtimeSettingsCapabili
 import { bindAntigravityHostPersistence, bindClaudeHostPersistence, bindCodexHostPersistence, bindCopilotHostPersistence, stopTerminalStructuredOrphan, type StructuredOrphanStopDependencies } from "./registry";
 import { AntigravityAcpHost, type AntigravityAcpHostOptions } from "./antigravityAcpHost";
 import { CopilotAcpHost, type CopilotAcpHostOptions } from "./copilotAcpHost";
-import { publishStructuredDeliveryHost, releaseStructuredDeliveryHost, structuredDeliveryLastError, structuredDeliveryHostForConversation, retainUnpublishedStructuredLaunchHost, StructuredDeliveryControllerUnavailableError } from "./structuredDeliveryController";
+import { publishStructuredDeliveryHost, releaseStructuredDeliveryHost, settleHostlessSessionProjections, structuredDeliveryLastError, structuredDeliveryHostForConversation, retainUnpublishedStructuredLaunchHost, StructuredDeliveryControllerUnavailableError } from "./structuredDeliveryController";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { runtimeImageCapability } from "./runtimeImageStore";
 import { publishFilesRevision } from "./filesRevision";
@@ -193,9 +193,10 @@ function githubConfigDirectory(sourceEnv: NodeJS.ProcessEnv): string {
     the read-only declared-output fence. A legacy boolean preserves the old
     read-only host profile for non-pipeline callers and stored sessions.
 
-    Every pipeline stage (an explicit profile, either sandbox) runs with
-    `TMPDIR` in its own scratch directory under `statePath("scratch")`, on the
-    disk the state lives on. Attempt settlement queues its retirement; live
+    Every structured launch (pipeline stages, spawned agents, seats, and the
+    same launches re-hosted after a restart) runs with `TMPDIR`, `TMP` and
+    `TEMP` in its own scratch directory under `statePath("scratch")`, on the
+    disk the state lives on, never on a tmpfs `/tmp`. Attempt settlement queues its retirement; live
     process references and declared evidence hold it (#1957). A
     reviewer's export of the head it reviews, about a gigabyte with its
     dependencies, used to land in the shared temp filesystem and stay there
@@ -263,7 +264,7 @@ export function materializeStructuredHostAccess(
       return {
         env: {
           ...baseEnv,
-          TMPDIR: temporaryDirectory,
+          TMPDIR: temporaryDirectory, TMP: temporaryDirectory, TEMP: temporaryDirectory,
           CLAUDE_CODE_TMPDIR: sourceEnv.CLAUDE_CODE_TMPDIR || sourceEnv.TMPDIR || os.tmpdir(),
         },
         codex: { sandbox: "danger-full-access" },
@@ -288,7 +289,7 @@ export function materializeStructuredHostAccess(
     return {
       env: {
         ...baseEnv,
-        TMPDIR: temporaryDirectory,
+        TMPDIR: temporaryDirectory, TMP: temporaryDirectory, TEMP: temporaryDirectory,
         ...(!ownerRelayHandoffOnly ? { GH_CONFIG_DIR: githubConfigDirectory(sourceEnv) } : {}),
       },
       codex,
@@ -441,6 +442,19 @@ export class StructuredInitialMessageTimeoutError extends Error {
     super(message);
     this.name = "StructuredInitialMessageTimeoutError";
   }
+}
+
+const STAGED_LAUNCH_DEADLINE_CODE = "STAGED_LAUNCH_DEADLINE";
+const STAGED_LAUNCH_AUTHORITY_LOST_CODE = "STAGED_LAUNCH_AUTHORITY_LOST";
+function stagedLaunchDeadlineError(): Error {
+  return Object.assign(new Error("staged launch publication deadline expired before the first prompt"), {
+    code: STAGED_LAUNCH_DEADLINE_CODE,
+  });
+}
+function stagedLaunchAuthorityLostError(): Error {
+  return Object.assign(new Error("staged launch lost ownership before its first prompt"), {
+    code: STAGED_LAUNCH_AUTHORITY_LOST_CODE,
+  });
 }
 
 export class StructuredTranscriptMaterializationError extends Error {
@@ -709,7 +723,48 @@ async function failStructuredLaunchAndReap(
     },
   });
   if (!failure.claimed) {
-    return { claimed: false, receipt: failure.receipt ?? registry.spawnReceipt(launchId) ?? null };
+    const receipt = failure.receipt ?? registry.spawnReceipt(launchId) ?? null;
+    if (receipt?.state === "failed" || receipt?.state === "completed") {
+      // Another admission path may already have written the terminal spawn
+      // receipt. Its exact launch marker still fences an idle projection that
+      // the winning path could not reap; release only while that marker holds.
+      if (receipt.state === "failed" && receipt.transport === "structured" && receipt.key) {
+        const entry = startupHostSnapshot(registry, receipt.key).entries[sessionKeyId(receipt.key)];
+        if (entry?.structuredHostOperationId === launchId) {
+          try {
+            await (options.releaseHost ?? releaseStructuredDeliveryHost)(receipt.key);
+            const latest = registry.spawnReceipt(launchId);
+            const currentEntry = startupHostSnapshot(registry, receipt.key).entries[sessionKeyId(receipt.key)];
+            if (latest?.state === "failed" && latest.conversationId === receipt.conversationId
+              && currentEntry?.structuredHostOperationId !== launchId) {
+              await settleHostlessSessionProjections(receipt.conversationId, launchId);
+            }
+          } catch (error) {
+            spawnDiagnosticErrorFor(receipt.clientAttemptId, "[spawn] terminal launch projection release failed", {
+              launchId, error: structuredSpawnFailureReason(error),
+            });
+          }
+        }
+      }
+      if (receipt.state === "failed") {
+        // A failed receipt can be written before its journal operation settles.
+        // A concurrent completed receipt belongs to the successful caller; its
+        // normal reconciliation owns the operation transition.
+        let operation: RuntimeOperationResult | null = null;
+        let message: RuntimeOperationResult | null = null;
+        let runtime: RuntimeSnapshot | null = null;
+        let messageEvidenceAvailable = true;
+        try { operation = await client.operationStatus(launchId); }
+        catch { /* Keep the terminal operation unresolved without read proof. */ }
+        try { message = await client.operationStatus(`spawn_message_${launchId}`, { currentRetryLeaf: true }); }
+        catch { messageEvidenceAvailable = false; }
+        try { runtime = await client.snapshot(); }
+        catch { /* The settlement helper retains uncertainty without a snapshot. */ }
+        await settleTerminalStructuredSpawnOperation(launchId, registry, client, operation, message, runtime,
+          options.assertActive ?? (() => {}), messageEvidenceAvailable);
+      }
+    }
+    return { claimed: false, receipt };
   }
   const spawnStatus = options.spawnStatus;
   if ((spawnStatus === null && options.failUnreadOperation)
@@ -760,6 +815,12 @@ async function failStructuredLaunchAndReap(
             error: structuredSpawnFailureReason(error),
           });
         }
+      }
+    }
+    if (cleanup.releaseRegisteredHost && failure.receipt?.state === "failed") {
+      const latest = registry.spawnReceipt(launchId);
+      if (latest?.state === "failed" && latest.conversationId === failure.receipt.conversationId) {
+        await settleHostlessSessionProjections(latest.conversationId, launchId);
       }
     }
   }
@@ -1815,6 +1876,12 @@ export interface StructuredSpawnInput {
       runtime admission returns, before the host starts, and once the host is
       set up, before it is published, by this call or by its staged probe. */
   authorize?: () => void | Promise<void>;
+  /** Guard durable first-message admission during staged recovery. */
+  firstMessageAdmissionGuard?: () => void | Promise<void>;
+  firstMessageAdmissionGuardAsync?: () => Promise<void>;
+  /** Synchronous launch fence repeated by the runtime client at socket write. */
+  firstMessageBeforeWrite?: () => void;
+  firstMessageAdmissionDeadline?: number;
   /** Recovery must leave unbound durable work to the next serving owner. */
   admissionActive?: () => void;
   /** Bounded no-write retry budget for setup custody, independent of the
@@ -2001,6 +2068,7 @@ export interface StructuredSpawnDependencies {
     key: SessionKey,
     host: SpawnedStructuredHost,
     ownsOperation?: () => Promise<boolean>,
+    stagedLaunchId?: string,
   ): Promise<() => Promise<void>>;
   deliverFirst?(input: StructuredSpawnInput, artifactPath: string): Promise<void | "held">;
   processIdentity?(): ProcessIdentity;
@@ -2822,11 +2890,16 @@ async function defaultDeliverFirst(input: StructuredSpawnInput, artifactPath: st
     client: () => input.client,
     registry: () => input.registry,
     enabled: () => true,
+    ...(input.firstMessageAdmissionGuard ? { admissionGuard: input.firstMessageAdmissionGuard } : {}),
+    ...(input.firstMessageAdmissionGuardAsync ? { admissionGuardAsync: input.firstMessageAdmissionGuardAsync } : {}),
     authorizeDispatch: input.authorize,
+    authorizeBeforeWrite: input.firstMessageBeforeWrite,
+    admissionDeadline: input.firstMessageAdmissionDeadline,
   });
   if (!delivered?.ok) {
     const message = delivered?.error ?? "structured spawn first-message delivery was unavailable";
     if (message === ROLE_MEMORY_CHANGED_MESSAGE) throw new RoleMemoryChanged();
+    if (delivered?.status === 408) throw stagedLaunchDeadlineError();
     if (delivered?.transportUncertain) throw new StructuredInitialMessageTimeoutError(message);
     throw new Error(message);
   }
@@ -2987,8 +3060,8 @@ function stagedRecoveryFailureReason(error: unknown): string {
 type StagedContinuation = {
   host: SpawnedStructuredHost;
   owns: () => Promise<boolean>;
-  publish: () => Promise<void>;
-  deliver: () => Promise<void | "held">;
+  publish: (eligible?: () => boolean) => Promise<void>;
+  deliver: (eligible?: () => boolean, deadlineExpired?: () => boolean, admissionDeadline?: number) => Promise<void | "held">;
 };
 const stagedStore = process as typeof process & {
   __llvStagedContinuations?: Map<string, StagedContinuation>;
@@ -3023,7 +3096,8 @@ export async function recoverStagedStructuredLaunch(
   if (inFlight) return inFlight;
   const work = async (): Promise<SpawnReceipt> => {
     const read = () => registry.spawnReceipt(launchId)!;
-    const receipt = read();
+    const initial = registry.spawnRecoverySnapshot([launchId]);
+    const receipt = initial.receipts[launchId];
     if (!receipt) throw new Error("unknown staged launch receipt");
     let recovery = stagedLaunchRecovery(receipt);
     const now = options.now ?? Date.now;
@@ -3036,7 +3110,25 @@ export async function recoverStagedStructuredLaunch(
        the one that must end, whoever holds its host (#2028). */
     const unadvanceable = unadvanceableStagedLaunch(receipt, recovery, pipelineMember, now());
     if (unadvanceable) {
-      const failed = await failStagedResume(launchId, registry, client, unadvanceable, { ...options.reap, assertActive: options.assertActive });
+      const key = receipt.key ? sessionKeyId(receipt.key) : null;
+      const entry = key ? initial.entries[key] : null;
+      const failed = await failStagedResume(launchId, registry, client, unadvanceable, {
+        ...options.reap,
+        assertActive: options.assertActive,
+        recoveryFence: (file, current) => {
+          const writer = key ? file.entries[key] : null;
+          const originalProcess = entry?.structuredHost?.process;
+          const process = writer?.structuredHost?.process;
+          return current.state === "path-pending" && current.error === receipt.error
+            && current.conversationId === receipt.conversationId && current.artifactPath === receipt.artifactPath
+            && (current.key ? sessionKeyId(current.key) : null) === key
+            && (!current.admissionOwner || processIdentityStatus(current.admissionOwner) === "dead")
+            && writer?.structuredHostOperationId === entry?.structuredHostOperationId
+            && writer?.claimOwner === entry?.claimOwner && writer?.claimEpoch === entry?.claimEpoch
+            && (originalProcess ? !!process && sameRecordedProcessIdentity(process, originalProcess) : !process)
+            && (options.reap?.recoveryFence?.(file, current) ?? true);
+        },
+      });
       return failed.receipt ?? read();
     }
     if (lostStagedLaunch(registry.readOnlySnapshot(), receipt, now())) {
@@ -3092,15 +3184,19 @@ export async function recoverStagedStructuredLaunch(
       options.assertActive?.();
       return latest?.state === "path-pending" && latest.conversationId === receipt.conversationId
         && latest.error === observedError
-        && (latest.key ? receipt.key && sessionKeyId(latest.key) === sessionKeyId(receipt.key) : !receipt.key)
+        && (latest.key ? !!receipt.key && sessionKeyId(latest.key) === sessionKeyId(receipt.key) : !receipt.key)
         && entry?.claimOwner === writer?.claimOwner && entry?.claimEpoch === writer?.claimEpoch
         && (ownsHost ? entry?.structuredHost?.writerClaimEpoch === writer!.claimEpoch : entry?.status === writer?.status)
         && options.eligible?.() !== false;
     };
     const current = () => {
-      const snapshot = registry.readOnlySnapshot();
+      const snapshot = registry.spawnRecoverySnapshot([launchId]);
       return matches(snapshot.receipts[launchId], receipt.key ? snapshot.entries[sessionKeyId(receipt.key)] : null);
     };
+    const publicationDeadline = recovery.startedAt + (receipt.purpose === "resume-successor"
+      ? RESUME_PUBLICATION_BOUND_MS : STAGED_RECOVERY_BUDGET_MS);
+    const deadlineExpired = () => now() >= publicationDeadline;
+    const canPublishOrDispatch = () => !deadlineExpired() && current();
     const persist = async (value: StagedLaunchRecovery) => {
       // Compare the recovery record and writer inside the transaction: another
       // observer's uncertainty or a replacement writer must win over this read.
@@ -3189,13 +3285,14 @@ export async function recoverStagedStructuredLaunch(
       } catch (error) {
         return stop(stagedRecoveryFailureReason(error));
       }
-      if (continuation) await continuation.publish();
+      if (!canPublishOrDispatch()) return read();
+      if (continuation) await continuation.publish(canPublishOrDispatch);
       else await publishStructuredDeliveryHost({ key: receipt.key, host: host as SpawnedStructuredHost }, async () => {
-        if (!current()) return false;
+        if (!canPublishOrDispatch()) return false;
         curatorAuthorize();
         return true;
-      });
-      if (!current() || (continuation && !await continuation.owns())) return read();
+      }, undefined, launchId);
+      if ((continuation && !await continuation.owns()) || !canPublishOrDispatch()) return read();
       curatorAuthorize();
       if (continuation) {
         // Persist uncertainty immediately before dispatch. A crash at this
@@ -3203,7 +3300,11 @@ export async function recoverStagedStructuredLaunch(
         recovery = { ...recovery, phase: "uncertain" };
         if (!await persist(recovery) || !current()) return read();
         curatorAuthorize();
-        const outcome = await continuation.deliver();
+        if (!canPublishOrDispatch()) {
+          if (current()) await persist({ ...recovery, phase: "unpublished", reason: "publication budget expired before the first prompt" });
+          return read();
+        }
+        const outcome = await continuation.deliver(canPublishOrDispatch, deadlineExpired, publicationDeadline);
         if (current()) {
           recovery = outcome === "held"
             ? { ...recovery, phase: "unpublished", reason: "first message held before dispatch" }
@@ -3220,7 +3321,7 @@ export async function recoverStagedStructuredLaunch(
           && (typeof roleMemoryRevision !== "string" || !/^[a-f0-9]{64}$/.test(roleMemoryRevision))) {
           return stop("original launch role-memory revision is invalid");
         }
-        if (!current()) return read();
+        if (!canPublishOrDispatch()) return read();
         curatorAuthorize();
         const origin = spawnMessageOrigin(receipt, registry);
         // Payload lookup and validation cannot publish a message. Keep their
@@ -3228,14 +3329,37 @@ export async function recoverStagedStructuredLaunch(
         recovery = { ...recovery, phase: "uncertain" };
         if (!await persist(recovery) || !current()) return read();
         curatorAuthorize();
+        if (!canPublishOrDispatch()) {
+          if (current()) await persist({ ...recovery, phase: "unpublished", reason: "publication budget expired before the first prompt" });
+          return read();
+        }
         const result = await enqueueStructuredMessage({ path: receipt.artifactPath, conversationId: receipt.conversationId,
           clientMessageId: `spawn_${launchId}`, operationId: `spawn_message_${launchId}`, launchId, text: effect.prompt, imageRefs: images,
           ...(typeof roleMemoryRevision === "string" ? { roleMemoryRevision } : {}),
-          ...(origin ? { origin } : {}), admissionGuard: () => { options.assertActive?.(); curatorAuthorize(); },
-        }, { client: () => client, registry: () => registry, enabled: () => true });
+          ...(origin ? { origin } : {}), admissionGuard: () => {
+            options.assertActive?.();
+            curatorAuthorize();
+            if (!canPublishOrDispatch()) throw new Error("staged launch lost ownership before its first prompt");
+          },
+        }, { client: () => client, registry: () => registry, enabled: () => true,
+          authorizeDispatch: () => {
+            options.assertActive?.();
+            curatorAuthorize();
+            if (deadlineExpired()) throw stagedLaunchDeadlineError();
+            if (!current()) throw stagedLaunchAuthorityLostError();
+          },
+          authorizeBeforeWrite: () => {
+            options.assertActive?.();
+            curatorAuthorize();
+            if (deadlineExpired()) throw stagedLaunchDeadlineError();
+            if (!current()) throw stagedLaunchAuthorityLostError();
+          },
+          admissionDeadline: publicationDeadline,
+        });
         if (!result?.ok) {
           const reason = result?.error ?? "original first-message admission failed";
           if (reason === "Role-memory privacy changed; retrying before dispatch") throw new RoleMemoryChanged();
+          if (result?.status === 408) throw stagedLaunchDeadlineError();
           if (result?.transportUncertain) throw new StructuredInitialMessageTimeoutError(reason);
           if (result?.status === 503) throw Object.assign(new Error(reason), { status: 503 });
           throw new Error(reason);
@@ -3246,6 +3370,17 @@ export async function recoverStagedStructuredLaunch(
       }
       return read();
     } catch (error) {
+      if ((error as { code?: string } | null)?.code === STAGED_LAUNCH_AUTHORITY_LOST_CODE) return read();
+      if ((error as { code?: string } | null)?.code === STAGED_LAUNCH_DEADLINE_CODE) {
+        const failed = await failStagedResume(launchId, registry, client,
+          "staged launch publication deadline expired before the first prompt", {
+            ...options.reap, assertActive: options.assertActive,
+            recoveryFence: (file, latest) => deadlineExpired()
+              && matches(latest, receipt.key ? file.entries[sessionKeyId(receipt.key)] : null)
+              && (options.reap?.recoveryFence?.(file, latest) ?? true),
+          });
+        return failed.receipt ?? read();
+      }
       if (!current()) return read();
       const privacyDeferral = roleMemoryDeferralReason(error);
       if (privacyDeferral) {
@@ -3309,7 +3444,7 @@ export async function spawnStructuredConversation(
   }
   const bindHost = dependencies.bindHost ?? defaultBindHost;
   const publishHost = dependencies.publishHost
-    ?? ((key, host, ownsOperation) => publishStructuredDeliveryHost({ key, host }, ownsOperation));
+    ?? ((key, host, ownsOperation, stagedLaunchId) => publishStructuredDeliveryHost({ key, host }, ownsOperation, undefined, stagedLaunchId));
   const deliverFirst = dependencies.deliverFirst ?? defaultDeliverFirst;
   const processIdentity = dependencies.processIdentity ?? (() => captureProcessIdentity(process.pid));
   const now = dependencies.now ?? Date.now;
@@ -3329,6 +3464,7 @@ export async function spawnStructuredConversation(
   let key: SessionKey | null = null;
   let forgetUnpublishedHost = () => {};
   let launchReleased = false;
+  let publicationWriter: Pick<AgentRegistryEntry, "claimOwner" | "claimEpoch"> | null = null;
   let admissionDeferred = false;
   let adoptionClaim: AgentRegistryEntry | null = null;
   let adoptionClaimTransferred = false;
@@ -3660,6 +3796,7 @@ export async function spawnStructuredConversation(
       ? staged.entry
       : (await input.registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, input.registry.claimStructuredHost.bind(input.registry, key, processIdentity(), { allowUnhosted: true })));
     if (!claimed?.claimOwner) throw new Error("structured spawn host claim is unavailable");
+    publicationWriter = claimed;
     adoptionClaimTransferred = adoptionClaim !== null;
     binding.stopPersistence = await withinDurableSetup(
       bindHost(input.registry, key, host, claimed.claimOwner, claimed.claimEpoch),
@@ -3670,40 +3807,48 @@ export async function spawnStructuredConversation(
     /* Still unpublished: a refusal here enters the failure path below, which
        retires the host this launch started and fails its receipt. */
     await input.authorize?.();
-    const ownsLaunch = async () => {
-      if (durableSetupTimedOut || launchReleased) return false;
+    const ownsLaunch = () => {
+      if (durableSetupTimedOut || launchReleased || (durableSetupTimer && now() >= durableSetupDeadline)) return false;
       const snapshot = input.registry.spawnRecoverySnapshot([input.receipt.launchId]);
       const current = snapshot.receipts[input.receipt.launchId];
       const entry = snapshot.entries[sessionKeyId(key!)];
-      return Boolean(current
-        && current.state !== "completed"
-        && current.state !== "failed"
-        && current.state !== "conflicted"
-        && entry?.structuredHostOperationId === input.receipt.launchId);
+      return current?.state === "path-pending" && current.conversationId === input.receipt.conversationId
+        && !!current.key && sessionKeyId(current.key) === sessionKeyId(key!)
+        && current.artifactPath === identity.path && entry?.artifactPath === identity.path
+        && entry.structuredHostOperationId === input.receipt.launchId
+        && entry.claimOwner === claimed.claimOwner && entry.claimEpoch === claimed.claimEpoch;
     };
     /* The registration awaits the host and the journal after the check above,
        so it asks the account fence again at each of its own boundaries. A
        refusal there leaves the host unregistered and is raised once the
        registration returns, into the same failure path as any other. */
-    const publishAuthorized = async (): Promise<() => Promise<void>> => {
+    const publishAuthorized = async (eligible: () => boolean = () => true): Promise<() => Promise<void>> => {
       let refusal: { error: unknown } | null = null;
       const unregister = await publishHost(key!, host!, async () => {
-        if (refusal || !await ownsLaunch()) return false;
+        if (refusal || !ownsLaunch() || !eligible()) return false;
         try {
           await input.authorize?.();
         } catch (error) {
           refusal = { error };
           return false;
         }
-        return true;
-      });
+        return ownsLaunch() && eligible();
+      }, operationId);
       const refused = refusal as { error: unknown } | null;
       if (refused) throw refused.error;
       return unregister;
     };
     const recovery: StagedLaunchRecovery = { phase: "unpublished", startedAt: now(), checks: 0, nextTryAt: now(), reason: "host publication pending" };
+    const publicationDeadline = recovery.startedAt + (input.receipt.purpose === "resume-successor"
+      ? RESUME_PUBLICATION_BOUND_MS : STAGED_RECOVERY_BUDGET_MS);
+    const launchDeadlineExpired = () => now() >= publicationDeadline;
     await writeStagedRecovery(input.registry, operationId, recovery);
-    const deliverCurrentFirst = async (deliver: typeof deliverFirst = deliverFirst): Promise<void | "held"> => {
+    const deliverCurrentFirst = async (
+      eligible: () => boolean = () => true,
+      deliver: typeof deliverFirst = deliverFirst,
+      deadlineExpired: () => boolean = launchDeadlineExpired,
+      admissionDeadline = publicationDeadline,
+    ): Promise<void | "held"> => {
       await input.authorize?.();
       let deliveryInput = input;
       if (input.preparePrompt) {
@@ -3713,21 +3858,31 @@ export async function spawnStructuredConversation(
         });
       }
       const revision = deliveryInput.roleMemoryRevision;
-      const authorizeDispatch = async () => {
-        await input.authorize?.();
+      const authorizeAdmission = () => {
+        if (deadlineExpired()) throw stagedLaunchDeadlineError();
+        if (!ownsLaunch() || !eligible()) throw stagedLaunchAuthorityLostError();
         if (revision && roleMemoryRevisionToken() !== revision) throw new RoleMemoryChanged();
       };
-      return await deliver({ ...deliveryInput, authorize: authorizeDispatch }, identity.path);
+      const authorizeAdmissionAsync = async () => {
+        await input.authorize?.();
+        authorizeAdmission();
+      };
+      const authorizeDispatch = authorizeAdmissionAsync;
+      return await deliver({ ...deliveryInput, authorize: authorizeDispatch,
+        firstMessageAdmissionGuard: authorizeAdmission,
+        firstMessageAdmissionGuardAsync: authorizeAdmissionAsync,
+        firstMessageBeforeWrite: authorizeAdmission,
+        firstMessageAdmissionDeadline: admissionDeadline }, identity.path);
     };
     const continuation: StagedContinuation = {
       host,
-      owns: async () => await ownsLaunch() && input.registry.ownsStructuredHostClaim(key!, claimed.claimOwner!, claimed.claimEpoch),
-      publish: async () => {
+      owns: async () => ownsLaunch() && input.registry.ownsStructuredHostClaim(key!, claimed.claimOwner!, claimed.claimEpoch),
+      publish: async (eligible) => {
         await input.authorize?.();
-        binding.unregister = await publishAuthorized();
-        forgetUnpublishedHost();
+        binding.unregister = await publishAuthorized(eligible);
+        if (eligible?.() !== false && ownsLaunch()) forgetUnpublishedHost();
       },
-      deliver: deliverCurrentFirst,
+      deliver: (eligible, deadlineExpired, admissionDeadline) => deliverCurrentFirst(eligible, deliverFirst, deadlineExpired, admissionDeadline),
     };
     stagedContinuations.set(operationId, continuation);
     forgetUnpublishedHost = retainUnpublishedStructuredLaunchHost({ key, host, registry: input.registry,
@@ -3739,7 +3894,7 @@ export async function spawnStructuredConversation(
     });
     binding.unregister = await withinDurableSetup(publishAuthorized());
     forgetUnpublishedHost();
-    if (!await ownsLaunch()) throw new Error("staged launch was released before publication completed");
+    if (!ownsLaunch()) throw new Error("staged launch was released before publication completed");
     await writeStagedRecovery(input.registry, operationId, { ...recovery, phase: "uncertain", reason: "first-message acknowledgement pending" });
     let initialMessage: void | "held";
     let uncertainFirstMessage = false;
@@ -3767,7 +3922,7 @@ export async function spawnStructuredConversation(
         await writeStagedRecovery(input.registry, operationId, { ...recovery, reason: "first message held before dispatch" });
         // The injected delivery seam reports the hold; recovery retries via
         // the real durable queue while refreshing the prompt and revision.
-        continuation.deliver = () => deliverCurrentFirst(defaultDeliverFirst);
+        continuation.deliver = (eligible, deadlineExpired, admissionDeadline) => deliverCurrentFirst(eligible, defaultDeliverFirst, deadlineExpired, admissionDeadline);
       }
       clearDurableSetupTimeout();
       (await input.registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredSpawnAdmissionOwner" }, input.registry.releaseStructuredSpawnAdmissionOwner.bind(input.registry, input.receipt.launchId, input.receipt.admissionOwner ?? processIdentity())));
@@ -3891,6 +4046,14 @@ export async function spawnStructuredConversation(
               && sameRecordedProcessIdentity(foregroundAdmissionOwner, current.admissionOwner)) });
           if (failed.claimed) await input.client.transitionOperation(operationId, "failed", { reason }).catch(() => {});
           throw error;
+        }
+        const currentWriter = key && publicationWriter ? input.registry.hostEntry(key) : null;
+        if (currentWriter?.structuredHostOperationId === operationId && publicationWriter && currentWriter.claimOwner
+          && (currentWriter.claimOwner !== publicationWriter.claimOwner || currentWriter.claimEpoch !== publicationWriter.claimEpoch)) {
+          stagedContinuations.delete(operationId);
+          forgetUnpublishedHost();
+          binding.stopPersistence();
+          throw new Error("staged launch writer was replaced during publication", { cause: error });
         }
         const recovery = stagedLaunchRecovery(pending);
         if (host && key && recovery && !durableSetupTimedOut && isTransientStagedLaunchFailure(error)) {

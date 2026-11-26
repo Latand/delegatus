@@ -357,11 +357,21 @@ test("disk-pressure cache misses observe independently of a held sweep", async (
   expect(fs.readFileSync(path.join(root, "requests"), "utf8")).toBe("disk-pressure\n");
 }, 20_000);
 
-for (const kind of ["temp", "disk-pressure"] as const) {
+test("memory readings coalesce on the disk reader's lease while a worktree sweep runs apart", async () => {
+  const { root, worker } = fixture();
+  const first = worker.memory();
+  expect(worker.memory()).toBe(first);
+  const disk = worker.diskPressure();
+  expect(await first).toEqual({ ram: { usedBytes: 1, totalBytes: 2 }, swap: { usedBytes: 0, totalBytes: 0 }, tmp: null });
+  expect((await disk).volumes.length).toBeGreaterThan(0);
+  expect(fs.readFileSync(path.join(root, "requests"), "utf8")).toBe("memory\ndisk-pressure\n");
+}, 30_000);
+
+for (const kind of ["temp", "disk-pressure", "memory"] as const) {
   for (const flag of ["--malformed", "--wrong-kind", "--exit", "--oversize", "--hang"]) test(`${kind} refuses ${flag} under the shared lease`, async () => {
     const { root, worker } = fixture(flag, 2_000);
     await worker.run("dry-run");
-    await expect(kind === "temp" ? worker.temp() : worker.diskPressure()).rejects.toThrow();
+    await expect(kind === "temp" ? worker.temp() : kind === "memory" ? worker.memory() : worker.diskPressure()).rejects.toThrow();
     if (flag === "--hang") expect(() => process.kill(Number(fs.readFileSync(path.join(root, "busy-pid"), "utf8")), 0)).toThrow();
     expect(fs.readFileSync(path.join(root, "tree/nested/file"), "utf8")).toBe("original");
     expect((await worker.run("dry-run")).errors).toEqual([]);
@@ -405,6 +415,10 @@ test("production readers never scan processes or probe volumes on the calling lo
     const pressure = await readDiskPressure();
     expect(pressure.volumes.length).toBeGreaterThan(0);
     expect((await readDiskPressure()).at).toBe(pressure.at);
+    const { readMemoryReadingOffThread } = await import("./worktreeSweepWorker");
+    const memory = await readMemoryReadingOffThread();
+    expect(memory!.ram.totalBytes).toBeGreaterThan(0);
+    expect(memory).toHaveProperty("tmp");
     expect(probe).not.toHaveBeenCalled();
     expect(processScans).toBe(0);
   } finally { scan.mockRestore(); probe.mockRestore(); }

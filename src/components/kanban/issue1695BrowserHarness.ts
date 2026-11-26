@@ -2315,7 +2315,8 @@ const SETTINGS_FRAMES: SettingsFrame[] = [
   { surface: "window", name: "over-onboarding", scene: "privacy-notice", steps: async (page) => {
     await page.evaluate(() => window.dispatchEvent(new CustomEvent("llv:open-onboarding", { detail: { mode: "guide", step: null } })));
     await page.locator("[data-onboarding-dialog]").waitFor();
-    await page.locator("[data-telemetry-notice] button").first().click();
+    /* While the guide is open the notice is the guide's own line (docs/design/onboarding-v2.md §12.2). */
+    await page.locator("[data-onboarding-dialog] [data-telemetry-guide-notice] button").first().click();
   }, defining: "[data-telemetry-settings]" },
   { surface: "window", name: "memory", scene: "telegram-rest", section: "memory", defining: "[data-memory-page]" },
   { surface: "window", name: "roles", scene: "telegram-rest", section: "roles", defining: "[data-header-menu-workers]" },

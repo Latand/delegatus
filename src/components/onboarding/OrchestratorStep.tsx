@@ -22,7 +22,8 @@ import { SeatSchematic } from "./TourSchematics";
  * Step 3, Orchestrator (#2166 §3.3): the step the guide ends on. It says in
  * one sentence and three lines what the orchestrator does, names the project
  * and the runtime it will start on, each with Change, and owns the one filled
- * button, "Create the orchestrator".
+ * button, "Create the orchestrator". A project or an engine it lacks is said
+ * in that row, with the way to its step in place of Change.
  *
  * Create spawns nothing here. It hands the project's own create draft a
  * request with `confirm`, and the draft presses its own Confirm once it is
@@ -100,7 +101,7 @@ export function OrchestratorStep(props: {
   return <StepBody key={`${runtime.engine}:${runtime.model}:${runtime.effort}`} {...props} launchKey="ready" runtime={runtime} roles={role.catalog} keepRoles={role.keep} />;
 }
 
-function StepBody({ project, connected, checkMinutes, onGoEngines, onGoProject, onCreate, onReadFirst, onOpenSeat, onCreateAction, onGoAgents, newcomer = false, launchKey, runtime, roles, keepRoles }: Parameters<typeof OrchestratorStep>[0] & {
+function StepBody({ project, connected, enginesSettled, checkMinutes, onGoEngines, onGoProject, onCreate, onReadFirst, onOpenSeat, onCreateAction, onGoAgents, newcomer = false, launchKey, runtime, roles, keepRoles }: Parameters<typeof OrchestratorStep>[0] & {
   launchKey: "ready" | null;
   runtime: { engine: Engine; model: string; effort: string };
   roles: RoleCatalog | null;
@@ -124,7 +125,9 @@ function StepBody({ project, connected, checkMinutes, onGoEngines, onGoProject, 
   const [changing, setChanging] = useState(false);
   const { status } = useOrchestratorSeat(project?.project ?? null, project?.cwd ?? undefined);
   const held = project ? seatHeld(status) : false;
-  const noEngine = launchKey !== null && !connected.claude && !connected.codex;
+  /* Neither engine can run: the runtime below is only the draft's starting value, so the step shows none of it (the
+     row, the plan it would spend, the estimate) and names what is missing instead. */
+  const noEngine = enginesSettled && !connected.claude && !connected.codex;
   const engine: Engine = launch.engine === "codex" ? "codex" : "claude";
   const request = (): OrchestratorDraftLaunch => ({
     engine,
@@ -186,18 +189,19 @@ function StepBody({ project, connected, checkMinutes, onGoEngines, onGoProject, 
   const cheaperModel = CODEX_GPT61_SOL_MODEL;
   const cheaperCost = engine === "claude" ? estimate(cheaperModel, "codex") : null;
 
-  const fact = (label: string, value: React.ReactNode, onChange: () => void, testId: string, expanded?: boolean) => (
+  /* With `go`, the row's action reads that label and leads to the step `testId` names, in place of Change. */
+  const fact = (label: string, value: React.ReactNode, onChange: () => void, testId: string, expanded?: boolean, go?: string) => (
     <div className="flex min-w-0 items-baseline gap-3 py-2 max-[859px]:flex-wrap max-[859px]:gap-x-2 max-[859px]:gap-y-0.5">
       <span className="w-[92px] shrink-0 text-label font-semibold text-muted max-[859px]:w-auto max-[859px]:flex-1">{label}</span>
       <span className="min-w-0 flex-1 text-ui text-primary max-[859px]:order-3 max-[859px]:basis-full">{value}</span>
       <button
         type="button"
-        data-onboarding-orchestrator-change={testId}
+        {...(go ? { "data-onboarding-orchestrator-go": testId } : { "data-onboarding-orchestrator-change": testId })}
         aria-expanded={expanded}
         onClick={onChange}
         className="shrink-0 rounded-[6px] text-ui font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:inline-flex max-sm:min-h-11 max-sm:items-center"
       >
-        {t(expanded ? "orchPanel.runsOnDone" : "orchPanel.runsOnChange")}
+        {go ?? t(expanded ? "orchPanel.runsOnDone" : "orchPanel.runsOnChange")}
       </button>
     </div>
   );
@@ -211,21 +215,18 @@ function StepBody({ project, connected, checkMinutes, onGoEngines, onGoProject, 
     </p>
   );
 
+  /* A prerequisite the step lacks is said in its own row, where the value would stand, and the row's action leads to its step. */
+  const missing = (text: string, marker: { "data-onboarding-orchestrator-no-project": "" } | { "data-onboarding-orchestrator-no-engine": "" }) => (
+    <span className="inline-flex min-w-0 items-center gap-1.5 text-warning" {...marker}>
+      <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+      <span className="min-w-0">{text}</span>
+    </span>
+  );
+
   let action: React.ReactNode;
   if (!project) {
-    action = (
-      <div className="flex flex-col items-start gap-2 max-sm:items-stretch">
-        {warning(t("onboarding.orchestrator.noProject"))}
-        <button type="button" data-onboarding-orchestrator-go="project" onClick={onGoProject} className={secondary}>{t("onboarding.orchestrator.goProject")}</button>
-      </div>
-    );
-  } else if (noEngine) {
-    action = (
-      <div className="flex flex-col items-start gap-2 max-sm:items-stretch">
-        {warning(t("onboarding.orchestrator.noEngine"))}
-        <button type="button" data-onboarding-orchestrator-go="engines" onClick={onGoEngines} className={secondary}>{t("onboarding.orchestrator.goEngines")}</button>
-      </div>
-    );
+    /* The Project row says it, with the way to Project, on the first screen at every width. */
+    action = null;
   } else if (held) {
     action = (
       <div className="flex flex-col items-start gap-2 max-sm:items-stretch">
@@ -233,6 +234,9 @@ function StepBody({ project, connected, checkMinutes, onGoEngines, onGoProject, 
         <button type="button" data-onboarding-orchestrator-open="" onClick={onOpenSeat} className={secondary}>{t("onboarding.orchestrator.openIt")}</button>
       </div>
     );
+  } else if (noEngine) {
+    /* The "Runs on" row says it, with the way to Engines, on the first screen at every width. */
+    action = null;
   } else if (signedOut) {
     action = (
       <div className="flex flex-col items-start gap-2 max-sm:items-stretch">
@@ -277,19 +281,31 @@ function StepBody({ project, connected, checkMinutes, onGoEngines, onGoProject, 
       {/* Below 860 px the facts come first: what it will run on is the question, the picture is not. */}
       <div className="flex flex-col gap-2 max-[859px]:order-1">
         <div className="flex flex-col divide-y divide-border rounded-[10px] border border-border px-3">
-          {fact(
+          {project ? fact(
             t("onboarding.orchestrator.project"),
-            project ? (
-              <>
-                {project.name}
-                {project.cwd ? <span className="ml-1.5 font-mono text-[11px] text-muted">{project.cwd}</span> : null}
-              </>
-            ) : <span className="text-muted">—</span>,
+            <>
+              {project.name}
+              {project.cwd ? <span className="ml-1.5 font-mono text-[11px] text-muted">{project.cwd}</span> : null}
+            </>,
             onGoProject,
             "project",
+          ) : fact(
+            t("onboarding.orchestrator.project"),
+            missing(t("onboarding.orchestrator.noProject"), { "data-onboarding-orchestrator-no-project": "" }),
+            onGoProject,
+            "project",
+            undefined,
+            t("onboarding.orchestrator.goProject"),
           )}
           <div>
-            {fact(
+            {noEngine ? fact(
+              t("orchPanel.runsOn"),
+              missing(t("onboarding.orchestrator.noEngine"), { "data-onboarding-orchestrator-no-engine": "" }),
+              onGoEngines,
+              "engines",
+              undefined,
+              t("onboarding.orchestrator.goEngines"),
+            ) : fact(
               t("orchPanel.runsOn"),
               <span className="inline-flex min-w-0 items-center gap-1.5" data-onboarding-orchestrator-runs-on="">
                 <EngineMark engine={launch.engine} size={12} />
@@ -307,7 +323,7 @@ function StepBody({ project, connected, checkMinutes, onGoEngines, onGoProject, 
                 </button>
               </div>
             ) : null}
-            {changing ? (
+            {changing && !noEngine ? (
               <div className="border-t border-border py-2 max-sm:[&_button]:min-h-11 max-sm:[&_select]:min-h-11">
                 <AgentLaunchControls draft={launch} stacked />
               </div>
@@ -323,16 +339,16 @@ function StepBody({ project, connected, checkMinutes, onGoEngines, onGoProject, 
         {moveError ? <p role="alert" data-onboarding-orchestrator-move-error="" className="text-ui text-danger">{t("onboarding.agents.saveFailed", { reason: moveError })}</p> : null}
       </div>
       <div className="flex flex-col gap-1.5 text-caption leading-[1.5] text-secondary max-[859px]:order-2">
-        <p>{t("onboarding.orchestrator.costNote", { engine: launchEngineLabel(launch.engine), check: checkMinutes })}</p>
+        {noEngine ? null : <p data-onboarding-orchestrator-plan="">{t("onboarding.orchestrator.costNote", { engine: launchEngineLabel(launch.engine), check: checkMinutes })}</p>}
         <p data-onboarding-permissions="">{t("onboarding.orchestrator.permissions")}</p>
-        {newcomer ? <p data-onboarding-cost="">{cost === null ? t("onboarding.orchestrator.unpriced") : t("onboarding.orchestrator.estimate", { cost: costFormat.format(cost) })}</p> : null}
+        {newcomer && !noEngine ? <p data-onboarding-cost="">{cost === null ? t("onboarding.orchestrator.unpriced") : t("onboarding.orchestrator.estimate", { cost: costFormat.format(cost) })}</p> : null}
         {newcomer && !held && launchKey !== null && connected.codex && cost !== null && cheaperCost !== null && cheaperCost < cost ? (
           <button type="button" data-onboarding-cheaper="" className="self-start rounded-[6px] text-left text-ui font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:min-h-11" onClick={() => { launch.setEngine("codex"); launch.setModel(cheaperModel); }}>
             {t("onboarding.orchestrator.cheaper", { model: `${launchEngineLabel("codex")} · ${ENGINE_MODELS.codex.find((option) => option.id === cheaperModel)?.label ?? modelDisplayName("codex", cheaperModel)}` })}
           </button>
         ) : null}
       </div>
-      <div className="flex flex-col max-[859px]:order-4">{action}</div>
+      {action ? <div className="flex flex-col max-[859px]:order-4">{action}</div> : null}
     </div>
   );
 }
