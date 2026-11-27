@@ -142,3 +142,19 @@ test("a lane's owner follows §5.1's table", () => {
   expect(laneState(checks).owner).toBe("waiting");
   expect(laneState(lane("open", "needs_decision")).owner).toBe("you");
 });
+
+test("a message stuck in delivery is named as what it is, owes no answer, and yields to an ask beside it", () => {
+  const verifier = { path: "/fixture/verifier.jsonl", durableLineage: { kind: "spawn", role: "verifier", memberships: [] } };
+  const delivery = { subject: "conversation", kind: "delivery", key: "delivery-1", file: verifier, reason: { kind: "delivery", id: "delivery-1", header: null }, since: NOW / 1000 - 600 };
+  const stuck = cardState(card([], { reasons: [delivery] as never, needsYou: false, motion: motion("working") }), NOW / 1000)!;
+  expect(stuck.owner).toBe("waiting");
+  expect(stuck.subject.kind).toBe("fault");
+  expect(cardStateText(en, stuck, clock)).toBe("Message not delivered · Verifier");
+  expect(cardStateText(uk, stuck, clock)).toBe("Повідомлення не доставлено · Верифікатор");
+  expect(cardAnswers(stuck)).toBe(false);
+  const question = { subject: "conversation", kind: "question", key: "ask-1", file: verifier, reason: { kind: "question", id: "ask-1", header: "Unit" }, since: NOW / 1000 - 300 };
+  const both = cardState(card([], { reasons: [delivery, question] as never, needsYou: true }), NOW / 1000)!;
+  expect(both.owner).toBe("you");
+  expect(both.subject.kind === "conversation" && both.subject.need.kind).toBe("question");
+  expect(cardAnswers(both)).toBe(true);
+});

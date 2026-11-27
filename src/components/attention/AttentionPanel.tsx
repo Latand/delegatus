@@ -19,6 +19,7 @@ import {
   needsYouEntryRole,
   needsYouEntrySince,
   needsYouRowText,
+  formRowAsk,
   needsYouSections,
 } from "./needsYouPanel";
 import { NeedsYouAskText } from "./NeedsYouAskText";
@@ -363,7 +364,7 @@ function PrototypeRow({ entry, onOpen }: { entry: Extract<MobileAttentionEntry, 
           {since !== null ? <span data-attention-age className="shrink-0 font-normal text-muted">· {fmtAge(since)}</span> : null}
         </span>
         <span className="line-clamp-2 w-full text-[12px] font-semibold text-primary [overflow-wrap:anywhere]" data-needs-you-title-line="">{entry.notice.title}</span>
-        <NeedsYouAskText ask={{ question, options, recommended, sentence: undelivered ? t("proto.notice.open") : line }} />
+        <NeedsYouAskText ask={formRowAsk({ question, options, recommended, sentence: undelivered ? t("proto.notice.open") : line }, entry.notice)} />
       </button>
     </div>
   );

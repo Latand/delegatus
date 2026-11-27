@@ -158,11 +158,22 @@ export function isFocusedNeedsYouEntry(entry: MobileAttentionEntry, focus: { pat
 /** A review round that waits for answers (a worker's question the seat
     escalated through a form) states what is being decided: the waiting
     round's title is the question, since the form's own questions are
-    answered in the form. */
+    answered in the form. A round titled as its form says nothing new, so it
+    draws no question line. The sentence is the project read's; the rows show
+    the kind's word in its place (`formRowAsk`). */
 export function prototypeNoticeAsk(t: TFunction, notice: PrototypeReviewNotice): OperatorAsk {
   if (notice.undelivered) return { question: null, options: [], recommended: null, sentence: t("proto.notice.open") };
   const questions = notice.asks === "questions";
-  return { question: questions && notice.roundTitle ? notice.roundTitle : null, options: [], recommended: null, sentence: t(questions ? "needs.ask.prototypeQuestions" : "needs.ask.prototype") };
+  const round = questions ? notice.roundTitle?.trim() : "";
+  return { question: round && round !== notice.title.trim() ? round : null, options: [], recommended: null, sentence: t(questions ? "needs.ask.prototypeQuestions" : "needs.ask.prototype") };
+}
+
+/** What a waiting form's row draws under its title, so the list stays
+    minimal: its kind's word above the title already says what to do, so the
+    row repeats no instruction; a decision whose message keeps failing keeps
+    its one action. */
+export function formRowAsk(ask: OperatorAsk, notice: Pick<PrototypeReviewNotice, "undelivered">): OperatorAsk {
+  return notice.undelivered ? ask : { ...ask, sentence: "" };
 }
 
 /** What a row asks of the operator (docs/design/attention-auto-resolve.md):

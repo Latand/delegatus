@@ -21826,7 +21826,8 @@ describe("attention auto resolve", () => {
               /* The seat's escalation: the wait draws no row; its decision form's row asks. */
               check(frame, !rowIds.includes(ids.escalated ?? ""), "the escalated wait still draws a row of its own");
               const form = after.rows.find((row) => row.id === `prototype:${ids.escalationRound}`);
-              check(frame, Boolean(form && form.sentence === translate(lang, "needs.ask.prototypeQuestions")),
+              /* A form's row repeats no instruction: its kind's word says what to do. */
+              check(frame, Boolean(form && form.sentence === null),
                 `the escalated wait's form row reads ${JSON.stringify(form)}`);
               /* What is being decided: the waiting round's title is the row's question, uncut. */
               const decided = lang === "en" ? "Instalment provider: the partner bank or the faster service?" : "Провайдер розстрочки: банк-партнер чи швидший сервіс?";
@@ -21835,9 +21836,9 @@ describe("attention auto resolve", () => {
               const diagnose = after.rows.find((row) => row.id === "lane-diagnose");
               check(frame, Boolean(diagnose && diagnose.question?.includes(lang === "en" ? "only mark them?" : "лише позначати їх?") && diagnose.sentence && !diagnose.sentence.includes("diagnose ·")),
                 `the stage row reads ${JSON.stringify(diagnose)}`);
-              /* Every remaining row says what to do in a sentence, whole, on screen. */
+              /* Every remaining row but a form's says what to do in a sentence, whole, on screen. */
               for (const row of after.rows) {
-                check(frame, Boolean(row.sentence && row.sentence.length > 30), `${row.id}: no sentence (${row.sentence})`);
+                if (!row.id?.startsWith("prototype:")) check(frame, Boolean(row.sentence && row.sentence.length > 30), `${row.id}: no sentence (${row.sentence})`);
                 check(frame, !row.cut, `${row.id}: its words are cut`);
                 check(frame, row.inside && row.buttonsVisible, `${row.id}: a row or button leaves the screen`);
                 if (opened.phone) check(frame, row.openerHeight >= 44, `${row.id}: a ${row.openerHeight}px target`);
@@ -26855,6 +26856,24 @@ describe("«Needs you» counts the forms that wait", () => {
               } : null,
             };
           });
+          /* The seat's state word says «needs you» only while a form of its project waits; the column heads
+             count their waiting cards as a ⚠ mark and a number, with no words that echo «Needs you». */
+          const heads = await page.evaluate(() => ({
+            seat: document.querySelector("[data-orchestrator-panel] [data-orchestrator-badge]")?.textContent?.trim() ?? null,
+            columns: [...document.querySelectorAll<HTMLElement>(".kb .column .col-head")].map((head) => {
+              const needs = head.querySelector<HTMLElement>(".needs");
+              return {
+                status: head.closest<HTMLElement>(".column")?.dataset.status ?? null,
+                text: head.innerText,
+                needs: needs ? { count: needs.dataset.count ?? null, mark: getComputedStyle(needs, "::before").content, number: getComputedStyle(needs, "::after").content } : null,
+              };
+            }),
+          }));
+          if (heads.seat !== null) check((heads.seat === t("orchPanel.badgeNeedsYou")) === (forms > 0), `the seat's word reads «${heads.seat}» with ${forms} forms waiting`);
+          for (const head of heads.columns) {
+            check(!/чекають на вас|чекає на вас|needs? you\b/i.test(head.text), `the ${head.status} column head reads «${head.text}»`);
+            if (head.needs) check(head.needs.mark.includes("⚠") && (head.needs.number === `"${head.needs.count}"` || head.needs.number.includes("attr(data-count)")), `the ${head.status} column's waits draw ${head.needs.mark} ${head.needs.number}`);
+          }
           await page.screenshot({ path: path.join(out, `${frame}-closed.png`) });
 
           /* Opened from the button: docked beside the board where it has room, else under the button. */
@@ -26887,6 +26906,12 @@ describe("«Needs you» counts the forms that wait", () => {
               dismiss: panel.querySelectorAll("[data-needs-you-dismiss], [data-needs-you-dismiss-all], [data-needs-you-dismiss-section]").length,
               done: document.querySelectorAll("[data-done-section]").length,
               empty: panel.querySelector("[data-needs-you-empty]")?.textContent ?? null,
+              /* A form's row: its kind and age, its title, and its question only when it says more than the title. */
+              sentences: panel.querySelectorAll("[data-needs-you-row] [data-needs-you-sentence]").length,
+              echoes: rows.filter((row) => {
+                const question = row.querySelector("[data-needs-you-question]")?.textContent?.trim();
+                return Boolean(question && question === row.querySelector("[data-needs-you-title-line]")?.textContent?.trim());
+              }).length,
               scrolls: body.scrollHeight > body.clientHeight + 1,
               overflow: document.documentElement.scrollWidth > innerWidth,
             };
@@ -26897,6 +26922,7 @@ describe("«Needs you» counts the forms that wait", () => {
           check(open.sections.reduce((sum, section) => sum + Number(section[1]), 0) === forms, `the sections count ${JSON.stringify(open.sections)}`);
           check(open.kinds.every((kind) => kind === "prototype"), `rows of kinds ${JSON.stringify(open.kinds)}`);
           check(open.dismiss === 0 && open.done === 0, "no «Dismiss» and no «Готово»");
+          check(open.sentences === 0 && open.echoes === 0, `${open.sentences} rows repeat an instruction and ${open.echoes} repeat their title`);
           check(open.empty === (forms ? null : t("attention.empty")), `the empty line reads «${open.empty}»`);
           check(open.firstWhole !== false, "the first row is whole");
           check(!open.overflow, "the page scrolls sideways with the panel open");

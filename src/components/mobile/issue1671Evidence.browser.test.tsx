@@ -8512,6 +8512,45 @@ describe("«Needs you» on the phone counts the forms that wait", () => {
           });
           check(bar.drawn === forms > 0, `the badge is drawn ${bar.drawn}`);
           check(!bar.overflow, "the page scrolls sideways");
+          /* The Overview's tabs: a tab's ⚠ counts the cards of its column that hold a waiting form, and a
+             message stuck in delivery (tg-bot's «Мердж #88») is named on its card as what it is, with no
+             «Answer», behind every card that waits. */
+          const overview = await page.evaluate(() => {
+            const tabs = [...document.querySelectorAll<HTMLElement>("[data-phone-kanban-tab]")].map((tab) => ({
+              tab: tab.getAttribute("data-phone-kanban-tab"),
+              needs: tab.querySelector("[data-phone-tab-needs]")?.getAttribute("data-phone-tab-needs") ?? null,
+            }));
+            const active = document.querySelector("[data-phone-kanban]")?.getAttribute("data-phone-kanban-active") ?? null;
+            const column = active ? document.querySelector<HTMLElement>(`[data-phone-kanban-column="${active}"]`) : null;
+            const cards = [...(column?.querySelectorAll<HTMLElement>("[data-phone-card]") ?? [])];
+            const forms = cards.filter((card) => card.querySelector('[data-card-state-subject="form"]'));
+            const stuckIndex = cards.findIndex((card) => (card.querySelector("[data-phone-card-title]")?.textContent ?? "") === "Мердж #88");
+            const stuck = stuckIndex < 0 ? null : cards[stuckIndex]!;
+            const holder = stuck?.closest("[data-phone-card-frame]") ?? stuck;
+            const lastWait = Math.max(-1, ...cards.map((card, index) => (card.querySelector('[data-card-state="you"]') ? index : -1)));
+            return {
+              tabs,
+              active,
+              forms: forms.length,
+              stuck: stuck ? {
+                subject: stuck.querySelector("[data-card-state]")?.getAttribute("data-card-state-subject") ?? null,
+                line: stuck.querySelector("[data-card-state]")?.textContent ?? null,
+                answer: Boolean(holder?.querySelector("[data-phone-card-answer]")),
+                index: stuckIndex,
+                lastWait,
+              } : null,
+            };
+          });
+          const activeTab = overview.tabs.find((tab) => tab.tab === overview.active);
+          check(forms > 0 || overview.tabs.every((tab) => tab.needs === null), `with nothing waiting a tab carries ⚠: ${JSON.stringify(overview.tabs)}`);
+          check((activeTab?.needs ?? null) === (overview.forms ? String(overview.forms) : null), `the ${overview.active} tab's ⚠ reads ${activeTab?.needs ?? "nothing"} beside ${overview.forms} cards with a waiting form`);
+          if (overview.stuck) {
+            const stuck = overview.stuck;
+            check(stuck.subject === "fault" && (stuck.line ?? "").startsWith(t("cardState.fault.delivery")) && !(stuck.line ?? "").includes(t("cardState.you.plain")), `the stuck delivery's card reads «${stuck.line}» (${stuck.subject})`);
+            check(!stuck.answer, "the stuck delivery's card offers «Answer»");
+            check(stuck.index > stuck.lastWait, `the stuck delivery's card stands at ${stuck.index}, before a waiting card at ${stuck.lastWait}`);
+          } else if (overview.active === "assigned") check(false, "tg-bot's «Мердж #88» is not on the In progress tab");
+          await page.screenshot({ path: path.join(out, `${frame}-overview.png`) });
           let sheet: Record<string, unknown> | null = null;
           if (forms) {
             check(bar.count === String(forms) && bar.text === String(forms), `the badge reads ${bar.text}`);
@@ -8544,6 +8583,13 @@ describe("«Needs you» on the phone counts the forms that wait", () => {
                 dismiss: root.querySelectorAll("[data-needs-you-dismiss], [data-needs-you-dismiss-all], [data-needs-you-dismiss-section]").length,
                 placeholders: root.querySelectorAll("[data-mobile2-attention-list] .invisible").length,
                 done: root.querySelectorAll("[data-done-section]").length,
+                /* A form's row: its kind, its title and its age; its question only when it says more than the title. */
+                sentences: root.querySelectorAll("[data-needs-you-row] [data-needs-you-sentence]").length,
+                echoes: rows.filter((row) => {
+                  const question = row.querySelector("[data-needs-you-question]")?.textContent?.trim();
+                  return Boolean(question && question === row.querySelector("[data-needs-you-title-line]")?.textContent?.trim());
+                }).length,
+                titlesCut: rows.filter((row) => { const title = row.querySelector<HTMLElement>("[data-needs-you-title-line]"); return Boolean(title && title.scrollHeight > title.clientHeight + 1); }).length,
                 firstWhole: whole(visible[0]),
                 lastWhole: whole(rows.at(-1)),
                 scrolls: body.scrollHeight > body.clientHeight + 1,
@@ -8555,6 +8601,8 @@ describe("«Needs you» on the phone counts the forms that wait", () => {
             check(opened.titleWhole, "the sheet head is whole");
             check(opened.rows === forms && opened.otherRows === 0, `the sheet lists ${opened.rows} forms and ${opened.otherRows} other rows`);
             check(opened.dismiss === 0 && opened.placeholders === 0 && opened.done === 0, "no «Dismiss», no unseen «Dismiss» and no «Готово»");
+            check(opened.sentences === 0 && opened.echoes === 0, `${opened.sentences} rows repeat an instruction and ${opened.echoes} repeat their title`);
+            check(opened.titlesCut === 0, `${opened.titlesCut} row titles are cut`);
             check(opened.firstWhole !== false, "the first row is whole");
             check(opened.right <= width + 0.5, `the sheet reaches ${opened.right}`);
             await page.screenshot({ path: path.join(out, `${frame}-sheet.png`) });

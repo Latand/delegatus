@@ -186,7 +186,10 @@ test("member clock reuse preserves attention and activity boundaries in both tim
     }
   }
   expect(build(view)).toEqual(buildKanbanModel(view));
-  expect(build({ ...view, now: NOW + 1800 }).columns.assigned.cards.find(card => card.id === "task:t733")?.needsYou).toBe(true);
+  /* A stuck delivery stays the card's reason inside its window and owes the operator no answer. */
+  const stuck = build({ ...view, now: NOW + 1800 }).columns.assigned.cards.find(card => card.id === "task:t733");
+  expect(stuck?.reasons.map(reason => reason.kind)).toEqual(["delivery"]);
+  expect(stuck?.needsYou).toBe(false);
   expect(build({ ...view, now: NOW + 7201 }).columns.assigned.cards.find(card => card.id === "task:t731")?.needsYou).toBe(false);
 });
 
