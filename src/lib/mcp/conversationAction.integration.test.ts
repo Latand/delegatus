@@ -22,7 +22,7 @@ for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_STATE_DIR",
 }
 process.env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
 
-const { captureProcessIdentity } = await import("@/lib/processIdentity");
+const { captureProcessIdentity, processIdentityStatus } = await import("@/lib/processIdentity");
 const { AgentRegistry, agentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { applyConversationAction } = await import("@/lib/conversation/actions");
 const { callerConversationId } = await import("@/lib/agent/operatorAuthority");
@@ -60,22 +60,49 @@ async function eventually(check: () => boolean | Promise<boolean>): Promise<void
   throw new Error("conversation control did not settle");
 }
 
-test.each(["kill", "interrupt", "answer", "kill-after-migration", "kill-after-writer-contention", "migration-retires-writer"])("MCP %s reaches a live structured host through the Viewer without an agent runtime socket", async (firstAction) => {
+test.each(["kill", "interrupt", "answer", "kill-after-migration", "kill-after-writer-contention", "kill-at-writer-deadline",
+  "kill-during-resume-setup", "kill-during-reclaimed-setup", "migration-retires-writer"])("MCP %s reaches a live structured host through the Viewer without an agent runtime socket", async (firstAction) => {
   const retireWriter = firstAction === "migration-retires-writer";
-  const migrated = retireWriter || firstAction.startsWith("kill-after-");
-  const contended = firstAction === "kill-after-writer-contention";
-  const fixtureSessionId = ["11111111", "1111", "4111", "8111",
-    retireWriter ? "000000000003" : contended ? "000000000002" : "000000000001"].join("-");
+  const writerDeadline = firstAction === "kill-at-writer-deadline";
+  const migrated = retireWriter || writerDeadline || firstAction.startsWith("kill-after-");
+  const contended = writerDeadline || firstAction === "kill-after-writer-contention";
+  const reclaimedSetup = firstAction === "kill-during-reclaimed-setup";
+  const resumeSetup = reclaimedSetup || firstAction === "kill-during-resume-setup";
+  const sessionSuffix = ({
+    "kill-after-migration": "000000000001",
+    "kill-after-writer-contention": "000000000002",
+    "migration-retires-writer": "000000000003",
+    "kill-at-writer-deadline": "000000000004",
+    "kill-during-resume-setup": "000000000005",
+    "kill-during-reclaimed-setup": "000000000006",
+  } as Record<string, string | undefined>)[firstAction];
+  const fixtureSessionId = sessionSuffix ? ["11111111", "1111", "4111", "8111", sessionSuffix].join("-") : undefined;
+  const privateRegistry = fixtureSessionId !== undefined;
   const registryPath = path.join(sandbox, `${firstAction}-registry.sqlite`);
-  const registry = migrated ? new AgentRegistry(path.join(sandbox, `${firstAction}-registry.json`), undefined, undefined,
+  const registry = privateRegistry ? new AgentRegistry(path.join(sandbox, `${firstAction}-registry.json`), undefined, undefined,
     { sqliteMode: "sqlite", sqliteFilename: registryPath, sqliteWriterDeadlineMs: 150 }) : agentRegistry();
-  if (migrated) setAgentRegistryForTests(registry);
+  if (privateRegistry) setAgentRegistryForTests(registry);
+  let queueNow: number | undefined;
+  const now = () => queueNow ?? Date.now();
+  let expireOnWriterRefusalAt: number | undefined;
+  if (writerDeadline) {
+    const writeWithWait = registry.deliveryWriteOrBusy.bind(registry);
+    registry.deliveryWriteOrBusy = async (correlation, write) => {
+      try {
+        return await writeWithWait(correlation, write);
+      } catch (error) {
+        // Deliver the real lock refusal at the settlement deadline.
+        if (correlation.label === "registry.terminateInactiveStructuredHost") queueNow = expireOnWriterRefusalAt;
+        throw error;
+      }
+    };
+  }
   const caller = registry.beginSpawn("claude", sandbox, { cwd: sandbox, title: "Conversation control caller" });
   process.env.LLV_SPAWN_CAPABILITY = registry.rotateSpawnCapabilityForReceipt(caller.launchId);
   const target = registry.beginSpawnRequest({ engine: "claude", cwd: sandbox, transport: "structured",
     ...(migrated ? { accountId: "account-a" } : {}), launchProfile: { title: "Conversation control target" } });
   if (target.kind !== "created") throw new Error("fixture target was not created");
-  const journal = new RuntimeJournal(path.join(sandbox, `${firstAction}-runtime.sqlite`), { structuredHosts: true });
+  const journal = new RuntimeJournal(path.join(sandbox, `${firstAction}-runtime.sqlite`), { structuredHosts: true, now });
   const socketPath = testEndpoint(sandbox, "runtime");
   const socket = serveRuntimeHost(socketPath, new RuntimeHost(journal));
   if (!socket.listening) await once(socket, "listening");
@@ -114,7 +141,7 @@ test.each(["kill", "interrupt", "answer", "kill-after-migration", "kill-after-wr
   `;
   const host = await ClaudeStreamBrokerHost.start({
     cwd: sandbox,
-    ...(migrated ? { sessionId: fixtureSessionId } : {}),
+    ...(fixtureSessionId ? { sessionId: fixtureSessionId } : {}),
     readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
     readTranscript: () => [],
     eventStore: new FileRuntimeEventStore(path.join(sandbox, "events")),
@@ -134,20 +161,23 @@ test.each(["kill", "interrupt", "answer", "kill-after-migration", "kill-after-wr
   fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
   fs.writeFileSync(transcriptPath, "{}\n");
   const health = await host.health();
+  const processIdentity = captureProcessIdentity(child!.pid!);
   registry.settleSpawn(target.receipt.launchId, {
-    key, artifactPath: transcriptPath, cwd: sandbox, accountId: migrated ? "account-a" : null, status: "live", host: null,
+    key, artifactPath: transcriptPath, cwd: sandbox, accountId: migrated ? "account-a" : null,
+    status: resumeSetup ? "unhosted" : "live", host: null,
     structuredHost: {
       kind: "claude-broker", endpoint: health.endpoint!,
-      process: captureProcessIdentity(child!.pid!),
+      process: resumeSetup ? null : processIdentity,
       eventCursor: health.eventCursor, protocolVersion: health.protocolVersion,
       writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [],
     },
-    claimEpoch: 1, claimOwner: "structured-host:fixture", pendingAction: null,
+    claimEpoch: 1, claimOwner: resumeSetup ? null : "structured-host:fixture", pendingAction: null,
   });
   const stopPersistence = firstAction === "answer"
     ? await bindClaudeHostPersistence(registry, key, host, "structured-host:fixture", 1)
     : async () => {};
-  await bindStructuredDeliveryQueue([{ key, host }], { registry, client: runtimeClient });
+  await bindStructuredDeliveryQueue(resumeSetup ? [] : [{ key, host }], { registry, client: runtimeClient,
+    queueTiming: { now } });
   // This closure is the Viewer's runtime connection. MCP still sees no socket.
   setConversationHostDependenciesForTests({
     applyConversationAction: request => applyConversationAction(request, {
@@ -188,6 +218,9 @@ test.each(["kill", "interrupt", "answer", "kill-after-migration", "kill-after-wr
   let writerHeld = false;
   let successorKey: typeof key | undefined;
   try {
+    const setupOwner = captureProcessIdentity(process.pid);
+    const setupClaim = resumeSetup ? registry.claimStructuredHost(key, setupOwner, { allowUnhosted: true }) : null;
+    if (resumeSetup) expect(setupClaim).toMatchObject({ claimEpoch: 2, structuredHost: { process: null, writerClaimEpoch: 2 } });
     expect(runtimeHostClient()).toBeNull();
     expect(childExited).toBe(false);
     await host.send({ id: "running-turn", text: "Hold this turn open" });
@@ -282,6 +315,35 @@ test.each(["kill", "interrupt", "answer", "kill-after-migration", "kill-after-wr
     const killed = await call("kill");
     expect(killed).toMatchObject({ ok: true });
     expect(killed.error).not.toBe("structured runtime host is unavailable");
+    if (setupClaim) {
+      expect(killed.receipt?.status).toBe("queued");
+      await eventually(async () => {
+        const receipt = (await runtimeClient.operationStatus(killed.operationId))?.receipt;
+        return receipt?.status === "queued" && receipt.reason === "waiting for the admitted structured host termination target";
+      });
+      const admittedAt = journal.operationResult(killed.operationId)!.receipt.admittedAt!;
+      expect(childExited).toBe(false);
+      if (reclaimedSetup) {
+        expect(registry.releaseStructuredHostClaim(key, setupClaim.claimOwner!, setupClaim.claimEpoch)).toBe(true);
+        const replacement = registry.claimStructuredHost(key, setupOwner, { allowUnhosted: true })!;
+        expect(replacement.claimEpoch).toBe(setupClaim.claimEpoch + 1);
+        expect(registry.setStructuredHostClaimed(key, { ...setupClaim.structuredHost!, process: processIdentity }, "live",
+          setupClaim.claimOwner!, setupClaim.claimEpoch)).toBeNull();
+        expect(registry.setStructuredHostClaimed(key, { ...replacement.structuredHost!, process: processIdentity }, "live",
+          replacement.claimOwner!, replacement.claimEpoch)).not.toBeNull();
+        await eventually(async () => {
+          const receipt = (await runtimeClient.operationStatus(killed.operationId))?.receipt;
+          return receipt?.status === "queued" && receipt.reason === "structured kill target changed since admission";
+        });
+        queueNow = Date.parse(admittedAt) + CONTROL_SETTLEMENT_WINDOW_MS;
+        await eventually(async () => (await runtimeClient.operationStatus(killed.operationId))?.receipt.status === "failed");
+        expect(processIdentityStatus(processIdentity)).toBe("alive");
+        expect(registry.hostEntry(key)).toMatchObject({ claimEpoch: replacement.claimEpoch, structuredHost: { process: processIdentity } });
+        return;
+      }
+      expect(registry.setStructuredHostClaimed(key, { ...setupClaim.structuredHost!, process: processIdentity }, "live",
+        setupClaim.claimOwner!, setupClaim.claimEpoch)).not.toBeNull();
+    }
     if (contended) {
       expect(killed.receipt?.status).toBe("queued");
       await eventually(async () => {
@@ -289,16 +351,32 @@ test.each(["kill", "interrupt", "answer", "kill-after-migration", "kill-after-wr
         return receipt?.status === "queued" && receipt.reason?.includes("write lock is held") === true;
       });
       expect(childExited).toBe(false);
+      if (writerDeadline) {
+        const { admittedAt } = journal.operationResult(killed.operationId)!.receipt;
+        expireOnWriterRefusalAt = Date.parse(admittedAt!) + CONTROL_SETTLEMENT_WINDOW_MS;
+        await eventually(async () => {
+          const receipt = (await runtimeClient.operationStatus(killed.operationId))?.receipt;
+          return receipt?.status === "failed" || receipt?.status === "uncertain";
+        });
+        expect((await runtimeClient.operationStatus(killed.operationId))?.receipt).toMatchObject({
+          status: "failed",
+          reason: expect.stringContaining("last wait: the delivery record's write lock is held"),
+          at: new Date(expireOnWriterRefusalAt).toISOString(),
+        });
+        expect(writer?.inTransaction).toBe(true);
+        expect(processIdentityStatus(processIdentity)).toBe("alive");
+        return;
+      }
       writer!.exec("ROLLBACK");
       writerHeld = false;
     }
     await eventually(async () => (await runtimeClient.operationStatus(killed.operationId))?.receipt.status === "delivered");
     expect(childExited).toBe(true);
-    if (migrated) {
+    if (migrated || resumeSetup) {
       const receipt = (await runtimeClient.operationStatus(killed.operationId))!.receipt;
       expect(receipt.operationId).toBe(killed.operationId);
       expect(Date.parse(receipt.at) - Date.parse(receipt.admittedAt!)).toBeLessThan(CONTROL_SETTLEMENT_WINDOW_MS);
-      expect(registry.hostEntry(successorKey!)?.status).toBe("dead");
+      if (successorKey) expect(registry.hostEntry(successorKey)?.status).toBe("dead");
     }
     expect(registry.readOnlySnapshot().entries[`claude:${key.sessionId}`]?.status).toBe("dead");
     expect(requests.map(request => request.body.action)).toEqual(firstAction === "interrupt" ? ["resume", "interrupt", "compact", "kill"] : firstAction === "answer" ? ["answer", "answer", "kill"] : ["kill"]);
@@ -320,7 +398,7 @@ test.each(["kill", "interrupt", "answer", "kill-after-migration", "kill-after-wr
     await host.release();
     await new Promise<void>(resolve => socket.close(() => resolve()));
     journal.close();
-    if (migrated) {
+    if (privateRegistry) {
       setAgentRegistryForTests(null);
       registry.close();
     }

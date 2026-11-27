@@ -446,7 +446,7 @@ function controlSettlementDeadlineAt(receipt: StructuredOperationStatus | null):
 function expiredControlSettlement(
   effect: ControlEffect | CompactEffect | StructuredReconfigureEffect,
   receipt: StructuredOperationStatus | null,
-  now = Date.now(),
+  now: number,
 ): { status: "failed" | "uncertain"; reason: string } | null {
   if (!receipt) return null;
   const deadlineAt = controlSettlementDeadlineAt(receipt);
@@ -965,7 +965,8 @@ export class StructuredDeliveryQueue {
       onlyIfIdle?: import("./contracts").RuntimeIdleKillFence,
       authority?: { operationId: string; claim: RuntimeRetirementClaim },
       providerRecovery?: import("./contracts").RuntimeProviderRecoveryRef,
-      explicit?: { target: RuntimeKillTarget; operationId: string; deadlineAt: number | null; canActuate(): boolean },
+      explicit?: { target: RuntimeKillTarget; operationId: string; deadlineAt: number | null;
+        canActuate(): boolean; onFirstEffect(): void },
     ) => Promise<boolean> = async () => false,
     private readonly retrySoon: () => void = () => {},
     private readonly recoverHost: StructuredHostRecovery | null = null,
@@ -1883,7 +1884,7 @@ export class StructuredDeliveryQueue {
       /* An account pick is an intent, and it waits for the next engagement however long that is (#1846):
          the settlement window is for a control that got stuck, which a switch nobody has engaged is not. */
       const expired = isRuntimeControlEffect(effect) && !isParkableSwitch(effect, durable.value)
-        ? expiredControlSettlement(effect, durable.value)
+        ? expiredControlSettlement(effect, durable.value, this.timing.now())
         : null;
       if (expired) {
         if (isReconfigureEffect(effect)) {
@@ -3362,7 +3363,7 @@ export class StructuredDeliveryQueue {
       this.settleProgress(effect.operationId, durable.value.status, durable.value.reason);
       return true;
     }
-    const expired = expiredControlSettlement(effect, durable.value);
+    const expired = expiredControlSettlement(effect, durable.value, this.timing.now());
     if (expired) {
       return await this.transitionUnlessSettled(effect.operationId, expired.status, { reason: expired.reason }, undefined, owned);
     }
@@ -3900,7 +3901,7 @@ export class StructuredDeliveryQueue {
     owned: () => boolean,
   ): Promise<ControlDrainResult> {
     const deadlineAt = controlSettlementDeadlineAt(receipt);
-    const canActuate = () => owned() && (deadlineAt === null || Date.now() < deadlineAt);
+    const canActuate = () => owned() && (deadlineAt === null || this.timing.now() < deadlineAt);
     const transition = (status: StructuredDeliveryTransition, details?: RuntimeTransitionDetails) =>
       this.transitionUnlessSettled(effect.operationId, status, details, undefined, owned);
     const refusal = await this.killRefusal(effect.conversationId);
@@ -3910,6 +3911,7 @@ export class StructuredDeliveryQueue {
     }
     if (!canActuate() || !await transition("delivering")) return { blocked: true, terminated: false };
     let reason: string | undefined;
+    let terminationStarted = false;
     try {
       if (effect.pendingSendIds?.length && canActuate()) {
         if (!this.port.fencePendingSends) throw new Error("pending delivery fence is unavailable");
@@ -3924,16 +3926,22 @@ export class StructuredDeliveryQueue {
         try {
           const stopped = await withHostStopOrigin({ path: "kill-action", operationId: effect.operationId },
             () => this.terminateHost(effect.conversationId, { engine: sessionKey.engine, sessionId: target.sessionId },
-              undefined, undefined, undefined, { target, operationId: effect.operationId, deadlineAt, canActuate }));
+              undefined, undefined, undefined, { target, operationId: effect.operationId, deadlineAt, canActuate,
+                onFirstEffect: () => { terminationStarted = true; } }));
           if (!stopped) reason ??= "waiting for the admitted structured host termination target";
         } catch (error) {
           reason ??= failureReason(error);
         }
       }
     }
-    if (!canActuate()) return { blocked: true, terminated: false };
-    if (reason) {
-      await transition("queued", { reason });
+    // A lock refusal can arrive at the deadline. Keep the wait durable when
+    // the pass ended without a stop effect. A pass that began a stop and ran
+    // out of time still needs the journal's uncertain settlement.
+    const beforeDeadline = canActuate();
+    if (reason || !beforeDeadline) {
+      if (beforeDeadline || !terminationStarted) {
+        await transition("queued", { reason: reason ?? receipt?.reason });
+      }
       return { blocked: true, terminated: false };
     }
     const settled = await transition("delivered");

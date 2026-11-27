@@ -1422,6 +1422,13 @@ export async function bindStructuredDeliveryQueue(
         if ((entry?.claimEpoch ?? null) !== explicit.target.claimEpoch) return false;
         const recorded = recordedScopeProcess(entry?.structuredHost);
         const admitted = explicit.target.process;
+        // A resume publishes its claim before setup publishes the process.
+        // Bind that later process to the already admitted claim and writer
+        // epoch; a reclaimed claim still fails the epoch check above.
+        if (!admitted && recorded) {
+          return explicit.target.claimEpoch !== null
+            && entry?.structuredHost?.writerClaimEpoch === explicit.target.claimEpoch;
+        }
         return recorded && admitted
           ? sameRecordedProcessIdentity(recorded, admitted) && recorded.bootEpoch === admitted.bootEpoch
           : recorded === admitted;
@@ -1636,6 +1643,7 @@ export async function bindStructuredDeliveryQueue(
           scope: targetScope,
           registryCustody: retirementCustody,
           authorize,
+          onFirstEffect: explicit?.onFirstEffect,
           ...(onlyIfIdle ? { authorizeAsync: async () => await durableAuthority()
             ? null : { status: 409 as const, error: "idle-retirement-authority-lost" } } : {}),
           // The automatic path uses the signal ladder's synchronous authority
