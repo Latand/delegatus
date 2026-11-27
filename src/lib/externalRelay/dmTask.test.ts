@@ -528,30 +528,26 @@ test("an accepted DM retries on the release poller cadence while claims stay emp
   // The startup pass leaves the original directive pending for the next
   // tick. Drive the registered timer directly with a frozen clock.
   send.mockImplementationOnce(async () => ({ ok: false, structured: true, status: 503, outcome: "failed", error: "Startup refusal" }));
-  const realInterval = globalThis.setInterval;
-  let retry: (() => void) | undefined;
-  const timer = spyOn(globalThis, "setInterval").mockImplementation((callback, delay, ...args) => {
-    if (delay === 60_000) retry = () => callback(...args);
-    return realInterval(callback, delay, ...args);
-  });
+  const timer = spyOn(globalThis, "setInterval");
   const recovery = spyOn(DmTaskDeliveryRecovery.prototype, "run");
   try {
     ensureExternalRelayPollers();
+    const retry = timer.mock.calls.find(([, delay]) => delay === 60_000)?.[0];
+    if (typeof retry !== "function") throw new Error("Expected a relay recovery timer");
     expect(recovery).toHaveBeenCalledTimes(1);
     await recovery.mock.results[0]!.value;
     await emptyPolls.promise;
     expect(send).toHaveBeenCalledTimes(3);
     expect(directives).toEqual([]);
-    expect(retry).toBeDefined();
     now += 60_000;
-    retry!();
+    retry();
     expect(recovery).toHaveBeenCalledTimes(2);
     await recovery.mock.results[1]!.value;
     expect(directives).toHaveLength(1);
     expect(directives[0]?.clientMessageId).toBe(send.mock.calls[0]![0].clientMessageId);
     expect(directives[0]?.text).toContain(card!.id);
     expect(dmFiles("dm-task-pending")).toEqual([]);
-    retry!();
+    retry();
     await recovery.mock.results[2]!.value;
     expect(directives).toHaveLength(1);
     expect(completions).toHaveLength(1);
