@@ -36,6 +36,8 @@ function stageNames(pipeline: Pipeline, stageId: string): Pick<BlockingStage, "p
 }
 export interface QuietBlockers {
   busyReason?: BusyReason | null;
+  /** Setup owners must settle before restart, including an explicit deploy-now. */
+  launchSetup?: true;
   turnList?: BlockingTurn[];
   stageList?: BlockingStage[];
   /** Journal rows that claim an open turn while every owner they name is released. */
@@ -154,6 +156,8 @@ export interface OwnerCensusReading {
 export type OwnerRead = <T>(reference: OwnerReference, read: () => Promise<T>) => Promise<T>;
 
 export interface QuietPorts {
+  /** Fresh registry custody for an operator update about to stop the Viewer. */
+  launchSetupPending?(): boolean;
   /** Admission identities, excluding completion and controller activity. */
   admissionStarts?(): readonly string[];
   /** Synchronous durable admission/start evidence; changing it invalidates an awaited probe. */
@@ -479,6 +483,7 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
       if (verdict === "released") proven.delete(owner.id);
       else if (verdict === "holds" && owner.role === "host" && !proven.has(owner.id)) proven.set(owner.id, reason);
       if (verdict === "released") continue;
+      if (owner.role === "setup") blockers.launchSetup = true;
       const kept = reason === "turn-unread" ? proven.get(owner.id) : undefined;
       if (kept) {
         holding.set(owner.id, { item: owner, reason: kept, unresolved: false });
@@ -574,6 +579,7 @@ export function registryAdmissionEvidence(registry: RegistryFile): [records: Non
   const receiptOwners = Object.values(registry.receipts).map((receipt) => [
     receipt.launchId, receipt.conversationId, receipt.state, receipt.artifactPath,
     receipt.admissionOwner, receipt.verifiedHost?.agent, receipt.pane?.panePid,
+    receipt.hostSetup,
   ]).sort((left, right) => String(left[0]).localeCompare(String(right[0])));
   return [records, receiptOwners];
 }

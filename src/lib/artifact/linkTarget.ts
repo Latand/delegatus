@@ -46,7 +46,11 @@ function decode(raw: string): string {
 }
 
 function isLocalPath(value: string): boolean {
-  return value.startsWith("/") || value === "~" || value.startsWith("~/");
+  return value.startsWith("/") || pathWin32Absolute(value) || value === "~" || value.startsWith("~/");
+}
+
+function pathWin32Absolute(value: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\\\");
 }
 
 /** A `#f=` payload the conversation router resolves: a transcript file (a
@@ -63,7 +67,7 @@ const LINE_SUFFIX_RE = /:(\d+)(?::(\d+)|-\d+)?$/;
 /** Whether the last segment of `path` (a `:line` suffix aside) ends in a file
     extension — the mark of a complete file name. */
 function endsInExtension(path: string): boolean {
-  const name = path.replace(LINE_SUFFIX_RE, "").split("/").pop() ?? "";
+  const name = path.replace(LINE_SUFFIX_RE, "").split(/[\\/]/).pop() ?? "";
   return /[^.]\.[A-Za-z0-9]+$/.test(name);
 }
 

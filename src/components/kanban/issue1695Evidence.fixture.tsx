@@ -92,6 +92,7 @@ import { WorkspacePage } from "@/components/team/WorkspacePage";
 import { FIXTURE_WORKSPACE_IDS, workspacesFixture } from "@/components/team/workspacesEvidence.fixture";
 import { WORKSPACE_STORAGE_KEY } from "@/components/team/workspacesClient";
 import { pushSoundCaption } from "@/lib/audio/captions";
+import { secretTarget } from "@/lib/secretRequests/view";
 import { readObstacles } from "@/components/soundCaptionPlacement";
 
 /*
@@ -3971,6 +3972,31 @@ if (PROTO) {
    frames, a taskless round with no review window to open them in. `&decisions=long`
    gives the first seat question a ninety-character title and a long recommended option. */
 const DECISIONS = params.get("decisions");
+let secretRequests: import("@/lib/secretRequests/view").SecretRequestView[] = [];
+if (DECISIONS === "secrets") {
+  const common = {
+    project: PROJECT, state: "pending", expiresAt: Date.parse(iso(-55 * MIN)), format: "token", minLength: 12,
+    requester: { title: L("Integration stage", "Етап налаштування інтеграції"), engine: "codex", role: "stage",
+      stage: { id: "configure", pipelineId: "integration" },
+      seatTitle: L("Project orchestrator", "Оркестратор проєкту") },
+    purpose: L("Authenticate the scheduled report service. The deployment reads this credential before sending reports.",
+      "Під’єднати сервіс планових звітів. Під час розгортання сервіс зчитує цей секрет перед надсиланням звітів."),
+  } as const;
+  secretRequests = [
+    { ...common, id: `sr_${"1".repeat(32)}`, createdAt: Date.parse(iso(10)), destinationRevision: "a".repeat(64),
+      destination: { kind: "file", path: "/workspace/atlas/integrations/report-service/local/report-token.txt", effect: "file-create", git: "ignored" } },
+    { ...common, id: `sr_${"2".repeat(32)}`, createdAt: Date.parse(iso(20)), destinationRevision: "b".repeat(64),
+      destination: { kind: "env", path: "/workspace/atlas/integrations/report-service/.env", key: "REPORT_SERVICE_TOKEN", effect: "env-add", git: "ignored" } },
+  ];
+  window.addEventListener("fixture-secret-closed", (event) => {
+    secretRequests = secretRequests.filter(({ id }) => id !== (event as CustomEvent<string>).detail);
+  });
+  window.addEventListener("fixture-secret-destination-changed", () => {
+    const previous = secretRequests[1]!;
+    secretRequests[1] = { ...previous, destinationRevision: "c".repeat(64), destination: { ...previous.destination,
+      path: "/workspace/atlas/integrations/report-service/local/.env", effect: "env-replace" } };
+  });
+}
 const decisionPosts: unknown[] = [];
 const seatRounds: PrototypeRoundView[] = [];
 const SEAT_ASK_ID = `pr_${"d".repeat(32)}`;
@@ -3996,6 +4022,10 @@ if (DECISIONS) {
       { id: "variant", text: L("Which variant do we build?", "Який варіант будуємо?"), options: [{ label: L("1 — List by project", "1 — Список за проєктами"), recommended: true }, { label: L("2 — Summary and «Show»", "2 — Підсумок і «Показати»") }] },
       { id: "phone", text: L("On the phone: a bottom sheet or a centred window?", "На телефоні: шторка знизу чи вікно по центру?"), options: [{ label: L("Bottom sheet", "Шторка знизу"), recommended: true }, { label: L("Centred window", "Вікно по центру") }] },
     ] }];
+  if (DECISIONS === "secrets") {
+    seatRounds.splice(1);
+    delete protoRounds["t-search"];
+  }
   if (DECISIONS === "seat-frames") seatRounds[1]!.variants = [
     { number: 1, name: L("Account A for every lane", "Акаунт A на всі лейни"), description: "", videos: [], frames: [{ image: frame(265, "account A · 1440"), caption: L("Night", "Ніч"), width: 1440 }] },
     { number: 2, name: L("Split by engine", "Розподіл за рушієм"), description: "", videos: [], frames: [{ image: frame(32, "split · 1440"), caption: L("Night", "Ніч"), width: 1440 }] },
@@ -4517,6 +4547,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 
   if (SCENARIO === "spend-credits" && url.pathname.startsWith("/api/accounts")) return serverFetch(input, init);
   if (SCENARIO === "account-row" && /^\/api\/(?:accounts|transfer\/accounts|account-project-bindings|limits\/history)/.test(url.pathname)) return serverFetch(input, init);
+  if (DECISIONS === "secrets" && url.pathname.startsWith("/api/secret-requests/")) return serverFetch(input, init);
   const method = (init?.method ?? "GET").toUpperCase();
   if (FIRST_RUN) {
     const answered = firstRunAnswer(url, method, init);
@@ -4660,7 +4691,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     }
     const review = url.searchParams.get("review");
     const round = review ? [...seatRounds, ...Object.values(protoRounds).flat()].find((entry) => entry.id === review) ?? null : undefined;
-    return json({ project: PROJECT, decisions: fixtureDecisions(), ...(round === undefined ? {} : { round }) });
+    return json({ project: PROJECT, decisions: fixtureDecisions(), ...(DECISIONS === "secrets" ? { secretRequests } : {}),
+      ...(round === undefined ? {} : { round }) });
   }
   if (url.pathname === "/api/prototype-reviews/telegram" && init?.method === "POST") {
     const body = JSON.parse(String(init.body)); protoTelegramPosts.push(body);
@@ -4870,7 +4902,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const retiredBoard = SCENARIO === "retired-review" && params.get("surface") === "direct-board"
       ? { files: [orchestrator, ...directFiles], flows: [], pipelines: [], tasks: [], conversationAliases: { "old-direct-subject": "direct-subject" },
         projectCatalog: [{ project: PROJECT, conversations: directFiles.length + 1, smt: now }] } : {};
-    const body = JSON.stringify({ ...scoped, ...retiredBoard, ...((DECISIONS || REPORT_PREVIEW || FIRST_RUN_FORM) && seatDecisionNotices().length ? { seatDecisions: seatDecisionNotices() } : {}), workflows: [], systemHealth: { ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) }, ...(workLinks ? { workLinks } : {}) });
+    const body = JSON.stringify({ ...scoped, ...retiredBoard, ...((DECISIONS || REPORT_PREVIEW || FIRST_RUN_FORM) && seatDecisionNotices().length ? { seatDecisions: seatDecisionNotices() } : {}),
+      ...(DECISIONS === "secrets" ? { secretRequestNotices: secretRequests.map(({ id, project, createdAt, expiresAt, destination }) => ({ id, project, createdAt, expiresAt, target: secretTarget(destination.path, destination.key) })) } : {}), workflows: [], systemHealth: { ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) }, ...(workLinks ? { workLinks } : {}) });
     if (COLD_BOARD) {
       const headers = new Headers(init?.headers);
       const required = headers.get("x-llv-files-generation");

@@ -13,7 +13,7 @@ const roots: string[] = [];
 test("hidden component admission covers every containing root and only directory passages", () => {
   const project = path.resolve("/fixture/.private-home/project");
   const evidence = path.resolve("/fixture/.private-state/evidence");
-  const allowed: AllowedRoots = { home: path.dirname(project), projects: [project], evidence: [evidence], fenced: [] };
+  const allowed: AllowedRoots = { home: path.dirname(project), projects: [project], evidence: [evidence], evidenceReports: [evidence], fenced: [] };
   for (const root of [project, evidence]) {
     for (const tail of ["shot.png", ".artifacts/cap/frame.png", ".worktrees/wt/shot.png", ".claude/worktrees/wt/shot.png", "worktrees/wt/shot.png"]) {
       const candidate = path.join(root, tail);

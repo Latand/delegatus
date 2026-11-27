@@ -284,3 +284,31 @@ test("an empty ignore keeps its existing invalid-format behavior", async () => {
     expect(sent[1]).not.toHaveProperty("answer");
   } finally { await service.close(); }
 });
+
+for (const status of [415, 422] as const) test(`format downgrade ${status} retains DM task fallback text`, async () => {
+  const sent: ExternalRelayCompletion[] = [];
+  const attempts = new Map<string, number>();
+  const service = await startTestRelay((_request, body) => {
+    sent.push(body as ExternalRelayCompletion);
+    const count = (attempts.get(_request.url ?? "") ?? 0) + 1;
+    attempts.set(_request.url ?? "", count);
+    return count === 1 ? { status, body: { error: { code: status === 422 ? "invalid_format" : "unsupported_format" } } } : { body: {} };
+  });
+  const relay = { api_base: `${service.origin}/v1`, credential: "fixture", limits: { max_response_bytes: 1048576 } } as PairedRelay;
+  try {
+    const fallbacks = [
+      { id: "link", text: "Task created.\nhttps://board.example.invalid/#task=fixture",
+        parts: { buttons: [[{ text: "Open", url: "https://board.example.invalid/#task=fixture" }]] } },
+      { id: "choice", text: "Which project should receive this task? Choose a project and resend the request with that project name.",
+        parts: { choice_buttons: { message_id: "prompt", expires_at: new Date(Date.now() + 60_000).toISOString(), rows: [[{ text: "Atlas", value: "a".repeat(64) }]] } } },
+    ];
+    for (const fallback of fallbacks) {
+      const before = sent.length;
+      const result = await completeRelayRequest(relay, `dm_${fallback.id}_${status}`, { lease_id: "fixture", outcome: "answered", duration_ms: 1,
+        answer: { action: "reply", text: fallback.text, reply_to: "message", format: "rich_markdown", buttons: [], ...fallback.parts } },
+      () => Date.now() + 5000);
+      expect(result.delivery).toBe("accepted");
+      expect(sent[before + 1]).toMatchObject({ answer: { format: "plain", text: fallback.text } });
+    }
+  } finally { await service.close(); }
+});

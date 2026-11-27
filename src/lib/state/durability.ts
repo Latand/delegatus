@@ -1159,6 +1159,7 @@ export interface BackupWorkerResponse {
   worktreeRecoveryFinished?: true;
   worktreeRecovery?: { folded: number; leftAlone: number };
   checkpoint?: import("./hotStateAuthority").HotStateCheckpoint["revisions"];
+  checkpointFailure?: string;
 }
 
 /** The worker's side: one pass over the request, answered as one JSON line. */
@@ -1225,6 +1226,7 @@ export async function checkStateDatabasesInWorker(stateDirectory: string, onData
     run in the leased worker while the Viewer remains able to acknowledge. */
 export async function checkpointHotStateRollbackMirrorsInWorker(stateDirectory: string, timeoutMs = 10_000) {
   const response = await runDurabilityWorker({ stateDirectory, lastRevisions: [], operation: "checkpoint" }, { timeoutMs });
+  if (response.checkpointFailure) throw new Error(response.checkpointFailure);
   if (!response.checkpoint) throw new Error("the checkpoint worker returned no revisions");
   return response.checkpoint;
 }

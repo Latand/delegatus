@@ -50,6 +50,7 @@ export type FilesResponseWorkerRequest = {
   headers: Array<[string, string]>;
   snapshot?: FileCatalogScan;
   snapshotFile?: string;
+  secretRequestNotices?: import("@/lib/secretRequests/view").SecretRequestNotice[];
   /** Hash of the board scope; asks for a delta from its previous build. */
   deltaScope?: string;
   /** The parent's certified base, which may differ from a discarded build. */

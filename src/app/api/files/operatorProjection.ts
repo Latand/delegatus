@@ -4,6 +4,7 @@ import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
+import { NextRequest } from "next/server";
 
 import { agentRegistry } from "@/lib/agent/registry";
 import { SEAT_DECISIONS_COLLECTION } from "@/lib/prototypeReview/seatRounds";
@@ -20,6 +21,9 @@ import { BoardHistory } from "@/lib/boardHistory";
 import { readStateCollectionRevision, readStateCollectionRevisions } from "@/lib/state/sqliteStateStore";
 import { ensureEmptyTaskBoardVisibilityMigration } from "@/lib/tasks/boardVisibilityMigration";
 import { markBoardViewed } from "@/lib/links/boardPresence";
+import { keysOwnerGate } from "@/lib/keys/access";
+import { secretRequestNotices } from "@/lib/secretRequests/operatorRead";
+import type { SecretRequestNotice } from "@/lib/secretRequests/view";
 import { buildFilesResponse } from "./response";
 import { cachedFileScan, fileScanBootstrapEpoch } from "@/lib/scanner/scanCache";
 import { readSummaryBootstrap, type SummaryBootstrap } from "@/lib/scanner/summaryBootstrap";
@@ -234,8 +238,10 @@ function projectionScopeKey(
   summary = false,
   agent = false,
   board = false,
+  secrets = false,
 ): string {
-  return JSON.stringify([pinnedPath ?? null, ...(summary ? ["summary"] : []), ...(agent ? ["agent"] : []), ...(board ? ["board-v2"] : [])]);
+  return JSON.stringify([pinnedPath ?? null, ...(summary ? ["summary"] : []), ...(agent ? ["agent"] : []),
+    ...(board ? ["board-v2"] : []), ...(secrets ? ["owner-secret-requests"] : [])]);
 }
 
 function projectionKey(baseKey: string): string {
@@ -404,6 +410,7 @@ async function projectionFor(
   scan: CachedScan,
   summary: boolean,
   board = false,
+  notices?: SecretRequestNotice[],
 ): Promise<ProjectionResult> {
   const cached = projectionCache().get(scopeKey);
   if (cached?.key === key && !projectionCacheStore.__llvFilesWorkerWriteFailedSince) return { representation: cached.representation, cacheStatus: "hit" };
@@ -433,6 +440,7 @@ async function projectionFor(
       let encoded: ReturnType<BoardEncoder["encode"]> | undefined;
       const response = await buildFilesResponse(new Request(request.url, { headers }), {
         listFilesWithProjectCatalog: async () => ownedSnapshot,
+        secretRequestNotices: notices,
         ...(board ? { encode: (data: import("@/lib/types").FilesResponse) => {
           encoded = boardEncoder().encode(createHash("sha1").update(scopeKey).digest("hex"), epoch, data as unknown as Record<string, unknown>, Date.now(),
             previous ? { etag: previous.etag, readBody: () => previous.body } : undefined);
@@ -470,6 +478,7 @@ async function projectionFor(
             type: "project",
             url: request.url,
             headers: [...headers.entries()],
+            ...(notices ? { secretRequestNotices: notices } : {}),
             ...(fromFile ? { snapshotFile: persistedSnapshot } : { snapshot }),
             ...(board ? { boardEpoch: epoch } : {}),
             ...(summary ? { deltaScope: createHash("sha1").update(scopeKey).digest("hex") } : {}),
@@ -728,10 +737,14 @@ async function getFiles(request: Request, skipBootstrap = false, afterResponse: 
   if (url.searchParams.get("view") === "storage-health") {
     return Response.json({ ...currentWriteHealth(), registryIssues: await withViewerOperation("files.health", pipelineRegistryHealthAsync) }, { headers: { "Cache-Control": "no-store" } });
   }
+  const browser = request instanceof NextRequest ? request : new NextRequest(request.url, { headers: request.headers });
+  const notices = skipBootstrap || keysOwnerGate(browser) ? undefined : await secretRequestNotices();
+  const hasNotices = Boolean(notices?.length);
+  const vary = `accept-encoding, cookie, authorization, sec-fetch-site, ${FILES_DELTA_ACCEPT_HEADER}, ${BOARD_PROTOCOL_HEADER}`;
   const selectedProject = url.searchParams.get("project")?.trim() || undefined;
   markBoardViewed(selectedProject);
   const pinnedPath = url.searchParams.get("path")?.trim() || undefined;
-  if (!skipBootstrap && url.searchParams.get("view") === "summary" && !pinnedPath
+  if (!skipBootstrap && !hasNotices && url.searchParams.get("view") === "summary" && !pinnedPath
     && !request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER)
     && requiredRevision === undefined && requiredGeneration === undefined) {
     const response = await bootstrapResponse(request, afterResponse);
@@ -763,16 +776,16 @@ async function getFiles(request: Request, skipBootstrap = false, afterResponse: 
   const summary = url.searchParams.get("view") === "summary";
   const agent = request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER);
   const board = summary && request.headers.get(BOARD_PROTOCOL_HEADER) === "2";
-  const scopeKey = performanceSpans.sync("files.key", () => projectionScopeKey(pinnedPath, summary, agent, board));
+  const scopeKey = performanceSpans.sync("files.key", () => projectionScopeKey(pinnedPath, summary, agent, board, hasNotices));
   const waiting = projectionCache().get(scopeKey)?.representation;
-  if (requiredGeneration !== undefined && scan.generation < scan.targetGeneration && previousEtag
+  if (!hasNotices && requiredGeneration !== undefined && scan.generation < scan.targetGeneration && previousEtag
     && currentWriteHealth().state === "ok" && waiting && withCurrentWriteHealth(waiting).etag === previousEtag) {
     const response = new Response(null, {
       status: 304,
       headers: {
         ETag: previousEtag,
         ...(board ? { [BOARD_PROTOCOL_HEADER]: "2" } : {}),
-        vary: `accept-encoding, ${FILES_DELTA_ACCEPT_HEADER}, ${BOARD_PROTOCOL_HEADER}`,
+        vary,
         "server-timing": `files-generation-wait;dur=0.0;desc="generation ${scan.generation} of ${scan.targetGeneration}"`,
       },
     });
@@ -781,13 +794,17 @@ async function getFiles(request: Request, skipBootstrap = false, afterResponse: 
   }
 
   const baseKey = performanceSpans.sync("files.key", () => projectionBaseKey(scan, pinnedPath));
-  const key = projectionKey(baseKey);
+  const key = projectionKey(baseKey) + (hasNotices ? `:${JSON.stringify(notices)}` : "");
   /* The persisted body is the operator's. */
-  if (!summary && !agent) warmPersistedProjection(scopeKey, pinnedPath, scan.epoch ?? "0");
+  if (!summary && !agent && !hasNotices) warmPersistedProjection(scopeKey, pinnedPath, scan.epoch ?? "0");
   const cached = projectionCache().get(scopeKey)?.representation;
   const projected: ProjectionResult = filesystemExhausted() && cached
     ? { representation: cached, cacheStatus: "stale" }
-    : await projectionFor(scopeKey, key, request, scan, summary, board);
+    : await projectionFor(scopeKey, key, request, scan, summary, board, hasNotices ? notices : undefined);
+  if (hasNotices) {
+    const refusal = keysOwnerGate(browser);
+    if (refusal) return refusal;
+  }
   const refreshed = withCurrentWriteHealth(projected.representation);
   if (refreshed.etag !== projected.representation.etag && summary && !board) boardHistory().record(scopeKey,
     projected.representation.etag, refreshed.etag,
@@ -802,7 +819,7 @@ async function getFiles(request: Request, skipBootstrap = false, afterResponse: 
     ETag: projected.representation.etag,
     ...(notModified ? {} : { "content-type": projected.representation.contentType }),
     "x-llv-files-projection-cache": projected.cacheStatus,
-    vary: `accept-encoding, ${FILES_DELTA_ACCEPT_HEADER}, ${BOARD_PROTOCOL_HEADER}`,
+    vary,
     ...(board ? { [BOARD_PROTOCOL_HEADER]: "2" } : {}),
     /* The live scan's generation goes out as `x-llv-files-generation`; this
        is the one the body was built from, older when the answer is stale. */

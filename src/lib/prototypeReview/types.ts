@@ -218,6 +218,7 @@ export interface OperatorDecisionView extends PrototypeRoundRead {
 export interface OperatorDecisionsRead {
   project: string;
   decisions: OperatorDecisionView[];
+  secretRequests?: import("@/lib/secretRequests/view").SecretRequestView[];
   /** The one round a read asked for by id, open or answered: the record the
       seat's feed draws where it asked. Null when the project holds no such round. */
   round?: OperatorDecisionView | null;
