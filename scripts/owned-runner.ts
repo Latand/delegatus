@@ -443,11 +443,19 @@ if (args[0] === "--namespace-guardian") {
     writeEnvelope(path.join(path.dirname(filename), `${report.kind}.json`), finalReport);
     writeEnvelope(filename, finalReport);
   }
-  if (!taskError && fs.existsSync(taskFile)) {
+  if (!taskError && tasks) {
     try {
-      const { cgroup } = JSON.parse(fs.readFileSync(taskFile, "utf8")) as { cgroup?: string };
-      const events = cgroup && path.join("/sys/fs/cgroup", cgroup, "cgroup.events");
-      if (events && fs.existsSync(events) && /^populated 0$/m.test(fs.readFileSync(events, "utf8"))) writeCompletionReceipt();
+      // --wait returned after the stop job. --collect can already have
+      // removed the exact cgroup observed in sampleTasks. An unreadable
+      // group or a missing events file in an existing group proves nothing.
+      const events = path.join(tasks.directory, "cgroup.events");
+      let empty: boolean;
+      try { empty = /^populated 0$/m.test(fs.readFileSync(events, "utf8")); }
+      catch (error) {
+        empty = code === 124 && (error as NodeJS.ErrnoException).code === "ENOENT"
+          && fs.statSync(tasks.directory, { throwIfNoEntry: false }) === undefined;
+      }
+      if (empty) writeCompletionReceipt();
     } catch { /* A missing/invalid cgroup observation cannot authorize cleanup. */ }
   }
   fs.rmSync(directory, { recursive: true, force: true });

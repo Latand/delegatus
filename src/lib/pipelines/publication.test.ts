@@ -164,6 +164,7 @@ test.each([
   "PRIVACY GATE: FAIL",
   "owned runner: surviving owned processes: fixture",
   "owned runner: budget cleanup failed: child tree could not be stopped",
+  "owned runner: sandbox cleanup failed EACCES",
   "owned test child guardian: surviving owned processes: fixture",
   "owned test child guardian could not end an owned process",
   "owned runner guardian exceeded cleanup deadline",

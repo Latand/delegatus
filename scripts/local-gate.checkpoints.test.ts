@@ -190,7 +190,7 @@ serviceTest("head checkpoints invalidate environment and ignored inputs, and ref
   expect(f.samples()).toEqual({ a: 5, b: 5 });
 }, 60_000);
 
-serviceTest("head checkpoints invalidate installed dependency bytes and the merge base", () => {
+serviceTest("installed dependency bytes invalidate head checkpoints independently of the comparison base", () => {
   const f = fixture();
   const dependency = path.join(f.repo, "node_modules", "fixture", "index.js");
   mkdirSync(path.dirname(dependency), { recursive: true });
@@ -212,8 +212,8 @@ serviceTest("head checkpoints invalidate installed dependency bytes and the merg
   writeFileSync(dependency, "export default 2;\n");
   expect(run()).not.toContain(checkpoint);
   expect(f.samples()).toEqual({ a: 2, b: 2 });
-  expect(run(head)).not.toContain(checkpoint);
-  expect(f.samples()).toEqual({ a: 3, b: 3 });
+  expect(run(head).match(new RegExp(checkpoint, "g"))).toHaveLength(2);
+  expect(f.samples()).toEqual({ a: 2, b: 2 });
   expect(run(head).match(new RegExp(checkpoint, "g"))).toHaveLength(2);
 }, 60_000);
 
@@ -262,19 +262,88 @@ serviceTest("a hung file still hits its individual limit on a retry with a warm 
   f.git("add", "."); f.git("commit", "-m", "Hung file fixture");
   const base = f.git("rev-parse", "origin/main");
   const driver = path.join(f.root, "hung-driver.ts");
-  writeFileSync(driver, `import { touchedTests } from ${JSON.stringify(path.join(import.meta.dir, "local-gate-tests.ts"))};
-const result = await touchedTests(${JSON.stringify(f.repo)}, ${JSON.stringify(base)}, ["a.test.ts", "b.test.ts"],
-  { budgets: { fileMs: 5000, runMs: 60_000 } });
-process.exitCode = result.introduced.length ? 1 : 0;
+  writeFileSync(driver, `import { touchedTests, comparatorEnding } from ${JSON.stringify(path.join(import.meta.dir, "local-gate-tests.ts"))};
+try {
+  await touchedTests(${JSON.stringify(f.repo)}, ${JSON.stringify(base)}, ["a.test.ts", "b.test.ts"],
+    { budgets: { fileMs: 5000, runMs: 60_000 } });
+} catch (error) {
+  const ending = comparatorEnding(error);
+  console.error(ending.line);
+  process.exitCode = ending.code;
+}
 `);
-  const run = () => spawnSync(process.execPath, [driver], { cwd: f.repo, encoding: "utf8", timeout: 25_000 });
+  const run = () => spawnSync(process.execPath, [driver], { cwd: f.repo, env: f.env, encoding: "utf8", timeout: 25_000 });
   for (const attempt of [1, 2]) {
     const result = run();
-    expect(result.status, result.stdout + result.stderr).toBe(1);
-    expect(result.stdout).toContain("NEW b.test.ts: <runner error> runner did not finish (124)");
+    expect(result.status, result.stdout + result.stderr).toBe(75);
+    expect(result.stderr).toContain("head: b.test.ts: runner did not finish (124); file budget exhausted");
+    expect(result.stdout).not.toContain("baseline selected");
     expect(f.samples()).toEqual({ a: 1, b: attempt });
-    if (attempt === 2) expect(result.stdout).toContain("reused complete green head file a.test.ts");
+    if (attempt === 2) {
+      expect(result.stdout).toContain("reused complete green head file a.test.ts");
+      expect(result.stdout).toContain("head will use one worker after an owned file deadline");
+    }
   }
+}, 60_000);
+
+serviceTest("a completed baseline sample survives a peer deadline and a fresh comparator", () => {
+  const f = fixture();
+  const files = ["a.test.ts", "b.test.ts"];
+  const markers = JSON.stringify(f.root);
+  for (const file of files) {
+    const name = file[0]!;
+    writeFileSync(path.join(f.repo, file), `import { test, expect } from "bun:test";
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+import { basename } from "node:path";
+const dir = ${markers}, base = basename(process.cwd()) === "baseline";
+const name = ${JSON.stringify(name)}, ready = dir + "/listener-ready", busy = dir + "/busy";
+appendFileSync(dir + "/samples.txt", (base ? "base-" : "head-") + name + "\\n");
+test("existing failure", async () => {
+  if (base && !existsSync(busy) && name === "a") {
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("ready") });
+    try {
+      writeFileSync(ready, String(server.port));
+      while (!existsSync(busy)) await Bun.sleep(10);
+    } finally { await server.stop(true); }
+  } else if (base && !existsSync(busy) && name === "b") {
+    while (!existsSync(ready)) await Bun.sleep(10);
+    writeFileSync(busy, "joined");
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60_000);
+  }
+  expect(false).toBe(true);
+});`);
+  }
+  f.git("add", "."); f.git("commit", "-m", "Contended baseline fixture");
+  const base = f.git("rev-parse", "HEAD");
+  f.git("update-ref", "refs/remotes/origin/main", base);
+  f.git("commit", "--allow-empty", "-m", "Reviewed fixture");
+  const driver = path.join(f.root, "baseline-resume.ts");
+  writeFileSync(driver, `import { touchedTests, comparatorEnding } from ${JSON.stringify(path.join(import.meta.dir, "local-gate-tests.ts"))};
+try {
+  const verdict = await touchedTests(${JSON.stringify(f.repo)}, process.argv[2], ${JSON.stringify(files)},
+    { budgets: { fileMs: 5000, runMs: Number(process.argv[3]) } });
+  process.exitCode = verdict.introduced.length ? 1 : 0;
+} catch (error) {
+  const ending = comparatorEnding(error);
+  console.error(ending.line);
+  process.exitCode = ending.code;
+}
+`);
+  const run = (comparison: string, aggregate: number) => spawnSync(process.execPath, [driver, comparison, String(aggregate)],
+    { cwd: f.repo, env: f.env, encoding: "utf8", timeout: 25_000 });
+  const first = run(base, 45_000);
+  expect(first.status, first.stdout + first.stderr).toBe(75);
+  expect(f.samples()).toEqual({ "head-a": 1, "head-b": 1, "base-a": 1, "base-b": 1 });
+  const retry = run(base, 60_000);
+  expect(retry.status, retry.stdout + retry.stderr).toBe(0);
+  expect(retry.stdout).toContain("reused baseline for a.test.ts");
+  expect(retry.stdout).toContain("baseline will use one worker after an owned file deadline");
+  expect(retry.stdout).toContain("0 new failures, 2 pre-existing failures");
+  expect(f.samples()).toEqual({ "head-a": 1, "head-b": 1, "base-a": 1, "base-b": 2 });
+  const moved = run(f.git("rev-parse", "HEAD"), 60_000);
+  expect(moved.status, moved.stdout + moved.stderr).toBe(0);
+  expect(moved.stdout).not.toContain("reused baseline");
+  expect(f.samples()).toEqual({ "head-a": 2, "head-b": 2, "base-a": 2, "base-b": 3 });
 }, 60_000);
 
 serviceTest.each([false, true])("a phase cutoff leaves the file incomplete (observed refusal: %s)", refused => {

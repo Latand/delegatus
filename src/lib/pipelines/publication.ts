@@ -11,7 +11,7 @@ export function decisiveRefusal(line: string, allowFrozenInstall = false): boole
     && !(allowFrozenInstall && member[1] === "frozen install");
   return line.startsWith("(fail) ") || (line.startsWith("NEW ") && !RUNNER_DEADLINE.test(line)) || !!otherCheckFailed
     || publicationPrivacyRefusal(line)
-    || /surviving owned processes:|stop them before pushing again|budget cleanup failed:|owned test child guardian(?:: surviving owned processes:| could not end an owned process)|owned runner guardian exceeded cleanup deadline/.test(line);
+    || /surviving owned processes:|stop them before pushing again|budget cleanup failed:|owned runner: sandbox cleanup failed|owned test child guardian(?:: surviving owned processes:| could not end an owned process)|owned runner guardian exceeded cleanup deadline/.test(line);
 }
 
 export function publicationTransportLine(output: string): string | undefined {
