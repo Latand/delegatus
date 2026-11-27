@@ -20575,38 +20575,95 @@ describe("the orchestrator's parallel self in the seat's feed", () => {
 });
 
 describe("task limit spend: a scale on the card's state line, the numbers in its popover", () => {
-  /*
-   * docs/design/task-limit-spend.md §7.2, variant 2 as approved: each provider
-   * that did work on a task draws its engine mark and a four-cell scale at the
-   * end of the card's state line, with no digits; the popover lists each
-   * provider's weekly estimate (≈, ≥, <1%), each account's figure beside its
-   * week so far, the 5-hour share while it lasts and the ±30 % note. The phone's
-   * card face carries the marks passively and reads them into its label; the
-   * task screen lists the numbers as one section. States: one provider, two,
-   * several accounts of one provider, tiny, large with a lower bound, no limit
-   * readings, still counting (nothing drawn), and the answer a non-owner gets.
-   *
-   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chromium> bun test src/components/kanban/kanbanBoard.browser.test.tsx -t 'task limit spend'
-   *
-   * Frames go to TASK_SPEND_PNG_DIR (default `.artifacts/task-spend/`) with
-   * `readings.json` beside them; nothing is written into the tree.
-   */
   const CASES = {
-    "t-upload": { state: "one provider", marks: [["codex", "num", 1]], pop: [/Codex ≈1%/] },
-    "t-search": { state: "two providers", marks: [["claude", "num", 1], ["codex", "num", 1]], pop: [/Claude ≈3%/, /Codex ≈2%/, /0[.,]4%/, /5-(hour|годин)/] },
-    "t-export": { state: "several accounts", marks: [["claude", "tiny", 0], ["codex", "num", 2]], pop: [/Claude <1%/, /Codex ≈7%/, /A · Pro/, /B · Plus/, /D · Pro/] },
-    "t-links": { state: "tiny", marks: [["claude", "tiny", 0]], pop: [/Claude <1%/, /0[.,]3%/] },
-    "t-interrupt": { state: "large, lower bound", marks: [["claude", "floor", 2], ["codex", "num", 4]], pop: [/Claude ≥12%/, /Codex ≈34%/, /(task|задача) ≥ ?12%/] },
-    "t-disk": { state: "no limit readings", marks: [["claude", "norate", null], ["codex", "num", 1]], pop: [/Claude — /, /41/, /Codex ≈1%/] },
+    "t-upload": { state: "one provider", marks: [["codex", "num", 1]], pop: [/23m tokens|23\sмлн токенів/, /≈1.1%/, /plan budget|бюджетом плану/] },
+    "t-search": { state: "two providers", marks: [["claude", "num", 1], ["codex", "num", 1]], pop: [/193m tokens|193\sмлн токенів/, /≈2.1%/, /≈1%/, /≈1.2%/, /≈0.4%/, /usage rate|темпом/, /226/] },
+    "t-export": { state: "several accounts", marks: [["claude", "tiny", 0], ["codex", "num", 2]], pop: [/≈0.4%/, /≈4.2%/, /≈2.1%/, /≈1%/] },
+    "t-links": { state: "tiny", marks: [["claude", "tiny", 0]], pop: [/≈0[.,]3%/] },
+    "t-interrupt": { state: "large, estimate with incomplete history", marks: [["claude", "floor", 2], ["codex", "num", 4]], pop: [/≥12.4%/, /≈21.3%/, /≈12.9%/] },
+    "t-disk": { state: "plan unreported", marks: [["claude", "tokens", null], ["codex", "num", 1]], pop: [/Claude 41/, /(reported account plan is needed|потрібен план акаунта)/, /≈1%/] },
   } as const;
+  const popReading = (page: Page, id: string) => page.evaluate((id) => {
+    const pop = document.querySelector<HTMLElement>(`[data-spend-pop="${id}"]`)!.closest<HTMLElement>("[role=tooltip]")!;
+    const r = pop.getBoundingClientRect();
+    const lines = [...pop.querySelectorAll<HTMLElement>(".pop-title, .pop-main, .meter-note, .pop-note")].map((el) => el.innerText.replace(/\s+/g, " ").trim());
+    const clipped = [...pop.querySelectorAll<HTMLElement>(".pop-main, .meter-note, .pop-note")].filter((el) => el.scrollWidth > el.clientWidth + 1).length;
+    const labels = [...pop.querySelectorAll<HTMLElement>("[data-spend-account]")].map((el) => ({ text: el.textContent ?? "", lines: new Set([...el.getClientRects()].map((b) => Math.round(b.top))).size, height: el.getBoundingClientRect().height }));
+    const textRects = [...pop.querySelectorAll<HTMLElement>(".pop-main, .meter-note, .pop-note")].flatMap((el) => { const range = document.createRange(); range.selectNodeContents(el); return [...range.getClientRects()]; });
+    const outside = [...[...pop.querySelectorAll<HTMLElement>(".pop-main, .meter-note, .pop-note")].map((el) => el.getBoundingClientRect()), ...textRects].filter((b) =>
+      b.left < r.left - 0.5 || b.right > r.right + 0.5 || b.top < r.top - 0.5 || b.bottom > r.bottom + 0.5).length;
+    const host = document.querySelector<HTMLElement>(`[data-kanban-card="task:${id}"]`);
+    const timelineRects = [...(host?.querySelectorAll<HTMLElement>("[data-chronology-entry]") ?? [])].flatMap((row) => {
+      const range = document.createRange(); range.selectNodeContents(row); return [...range.getClientRects()];
+    });
+    const overlapsTimeline = timelineRects.some((b) => b.left < r.right - 0.5 && r.left < b.right - 0.5 && b.top < r.bottom - 0.5 && r.top < b.bottom - 0.5);
+    const title = host?.querySelector<HTMLElement>("h3.title .title-trigger .clamp");
+    const titleRects = title ? (() => { const range = document.createRange(); range.selectNodeContents(title); return [...range.getClientRects()]; })() : [];
+    const overlapsTitle = titleRects.some((b) => b.left < r.right - 0.5 && r.left < b.right - 0.5 && b.top < r.bottom - 0.5 && r.top < b.bottom - 0.5);
+    const numX: number[] = [];
+    /* Text of anything but the popover and its own card that the bubble covers, by text range. */
+    const foreign: string[] = [];
+    const foreignCards: string[] = [];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    const probe = document.createRange();
+    /* Text a scrolling or clipping ancestor hides is not on screen, so it is not covered. */
+    const shown = (from: Element, b: DOMRect) => {
+      let box = { left: b.left, right: b.right, top: b.top, bottom: b.bottom };
+      for (let el: Element | null = from; el && el !== document.documentElement; el = el.parentElement) {
+        const style = getComputedStyle(el);
+        if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+        const c = el.getBoundingClientRect();
+        if (style.overflowX !== "visible") box = { ...box, left: Math.max(box.left, c.left), right: Math.min(box.right, c.right) };
+        if (style.overflowY !== "visible") box = { ...box, top: Math.max(box.top, c.top), bottom: Math.min(box.bottom, c.bottom) };
+        if (box.right - box.left <= 0.5 || box.bottom - box.top <= 0.5) return null;
+      }
+      return box;
+    };
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!node.nodeValue?.trim() || pop.contains(node) || host?.contains(node) || !node.parentElement) continue;
+      probe.selectNodeContents(node);
+      const hit = [...probe.getClientRects()].some((rect) => {
+        if (rect.width <= 0 || rect.height <= 0) return false;
+        const b = shown(node.parentElement!, rect);
+        return b !== null && b.left < r.right - 0.5 && r.left < b.right - 0.5 && b.top < r.bottom - 0.5 && r.top < b.bottom - 0.5;
+      });
+      /* Another card's title and anything outside the cards (the sidebar, the seat) must stay readable; other text of a neighbouring card is reported only. */
+      if (hit) (node.parentElement.closest(".title, h3") || !node.parentElement.closest("[data-kanban-card]") ? foreign : foreignCards).push(node.nodeValue.trim().slice(0, 40));
+    }
+    /* How far the bubble stands from its own card (0 when they overlap or touch), whether it stays in the board and out of the seat, and the card's own text it cuts at its edge. */
+    const cardRect = host?.getBoundingClientRect();
+    const gap = cardRect ? Math.max(0, cardRect.left - r.right, r.left - cardRect.right, cardRect.top - r.bottom, r.top - cardRect.bottom) : null;
+    const board = host?.closest("[data-kanban-board]")?.getBoundingClientRect();
+    const inBoard = board ? r.left >= board.left - 0.5 && r.right <= board.right + 0.5 && r.top >= board.top - 0.5 && r.bottom <= board.bottom + 0.5 : null;
+    const inSeat = [...document.querySelectorAll<HTMLElement>("[data-kanban-seat]")].some((el) => { const b = el.getBoundingClientRect(); return b.left < r.right - 0.5 && r.left < b.right - 0.5 && b.top < r.bottom - 0.5 && r.top < b.bottom - 0.5; });
+    const cut: string[] = [];
+    if (host) {
+      const own = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+      const piece = document.createRange();
+      for (let node = own.nextNode(); node; node = own.nextNode()) {
+        if (!node.nodeValue?.trim() || !node.parentElement) continue;
+        piece.selectNodeContents(node);
+        for (const rect of piece.getClientRects()) {
+          if (rect.width <= 0 || rect.height <= 0) continue;
+          const b = shown(node.parentElement, rect);
+          if (!b) continue;
+          const hit = b.left < r.right - 0.5 && r.left < b.right - 0.5 && b.top < r.bottom - 0.5 && r.top < b.bottom - 0.5;
+          const whole = b.left >= r.left - 0.5 && b.right <= r.right + 0.5 && b.top >= r.top - 0.5 && b.bottom <= r.bottom + 0.5;
+          if (hit && !whole) cut.push(node.nodeValue.trim().slice(0, 40));
+        }
+      }
+    }
+    return { box: { left: r.left, right: r.right, top: r.top, bottom: r.bottom, height: r.height }, viewport: { width: innerWidth, height: innerHeight }, lines, clipped, labels, outside, overlapsTimeline, overlapsTitle, numX, foreign, foreignCards, gap, inBoard, inSeat, cut, bg: getComputedStyle(pop).backgroundColor };
+  }, id);
   const COUNTING = "t-merge-a";
-  const WIDTHS = [1440, 1280, 820, 390] as const;
+  const WIDTHS = [1440, 1280, 820, 390, 320, 360, 440] as const;
 
-  browserTest("every state at 1440, 1280, 820 and 390, en and uk, light and dark", async () => {
+  browserTest("every state at desktop and phone widths, en and uk, light and dark", async () => {
     const out = path.resolve(process.env.TASK_SPEND_PNG_DIR ?? ".artifacts/task-spend");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
-    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"],
+      env: { ...process.env, TMPDIR: "/dev/shm" } });
     const failures: string[] = [];
     const readings: unknown[] = [];
     /* The marks of one card: each provider's engine, kind and filled cells, and how the line fits. */
@@ -20634,24 +20691,9 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
         own,
       };
     }, selector);
-    const popReading = (page: Page, id: string) => page.evaluate((id) => {
-      const pop = document.querySelector<HTMLElement>(`[data-spend-pop="${id}"]`)!.closest<HTMLElement>("[role=tooltip]")!;
-      const r = pop.getBoundingClientRect();
-      const lines = [...pop.querySelectorAll<HTMLElement>(".pop-title, .pop-main, .meter, .meter-note, .pop-note")].map((el) => el.innerText.replace(/\s+/g, " ").trim());
-      /* No line is cut: an account label, whatever its length, is printed whole. */
-      const clipped = [...pop.querySelectorAll<HTMLElement>(".meter-label, .meter-value, .pop-main")].filter((el) => el.scrollWidth > el.clientWidth + 1).length;
-      const labels = [...pop.querySelectorAll<HTMLElement>(".meter-label")].map((el) => ({ text: el.textContent ?? "", lines: new Set([...el.getClientRects()].map((b) => Math.round(b.top))).size, height: el.getBoundingClientRect().height }));
-      /* Every account line, its label's text, its value and its bar stay inside the bubble. */
-      const textRects = [...pop.querySelectorAll<HTMLElement>(".meter-label")].flatMap((el) => { const range = document.createRange(); range.selectNodeContents(el); return [...range.getClientRects()]; });
-      const outside = [...[...pop.querySelectorAll<HTMLElement>(".meter, .meter-figure, .meter-value, .meter-bar")].map((el) => el.getBoundingClientRect()), ...textRects].filter((b) =>
-        b.left < r.left - 0.5 || b.right > r.right + 0.5 || b.top < r.top - 0.5 || b.bottom > r.bottom + 0.5).length;
-      /* The task figure's digits start at one x on every account line. */
-      const numX = [...pop.querySelectorAll<HTMLElement>(".meter-num")].map((el) => Math.round(el.getBoundingClientRect().left));
-      return { box: { left: r.left, right: r.right, top: r.top, bottom: r.bottom }, viewport: { width: innerWidth, height: innerHeight }, lines, clipped, labels, outside, numX, bg: getComputedStyle(pop).backgroundColor };
-    }, id);
     try {
       for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of WIDTHS) {
-        const phone = width === 390;
+        const phone = width <= 440;
         const label = `${lang}-${theme}-${width}`;
         const height = phone ? 844 : 900;
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?spend=1`, { width, height }, theme, lang, "reduce", phone);
@@ -20682,7 +20724,7 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
               if (!marks) { failures.push(`${label} ${id}: no marks`); continue; }
               const got = marks.providers.map((p) => [p.engine, p.kind, p.cells]);
               if (JSON.stringify(got) !== JSON.stringify(expected.marks)) failures.push(`${label} ${id}: marks ${JSON.stringify(got)} ≠ ${JSON.stringify(expected.marks)}`);
-              if (marks.digits) failures.push(`${label} ${id}: the card's marks carry digits`);
+              if (marks.digits !== (id === "t-disk")) failures.push(`${label} ${id}: the card's token mark does not match the expected state`);
               if (marks.overlapsWords) failures.push(`${label} ${id}: the marks overlap the state sentence`);
               if (!marks.insideCard) failures.push(`${label} ${id}: the marks leave the card ${JSON.stringify(marks.own)}`);
               if (marks.role !== "button" || !marks.label) failures.push(`${label} ${id}: the marks are no labelled control`);
@@ -20693,11 +20735,13 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
               readings.push({ label, id, popover: pop });
               const text = pop.lines.join("\n");
               for (const want of expected.pop) if (!want.test(text)) failures.push(`${label} ${id}: the popover lacks ${want}:\n${text}`);
-              if (!/±30%/.test(text)) failures.push(`${label} ${id}: no ±30% note`);
+              if (!/(±30%|plan budget|бюджетом плану)/.test(text) || !/API/.test(text)) failures.push(`${label} ${id}: missing estimate basis or API total`);
               if (pop.clipped) failures.push(`${label} ${id}: ${pop.clipped} popover lines are cut`);
               if (pop.outside) failures.push(`${label} ${id}: ${pop.outside} account lines or bars leave the bubble`);
+              /* The card's own title may sit under the bubble when that is the only place that covers no other card's text (the placement judges it last). */
+              if (width >= 1000 && pop.foreign.length) failures.push(`${label} ${id}: the popover covers text of other cards or the sidebar: ${pop.foreign.join(" | ")}`);
               /* The fixture's 80-character label cannot share a line with its figure: it is printed whole, on lines of its own. */
-              if (id === "t-interrupt" && !pop.labels.some((l) => l.text.length > 80 && text.includes(l.text.replace(/\s+/g, " ")))) failures.push(`${label} ${id}: the 80-character account label is not printed whole: ${JSON.stringify(pop.labels)}`);
+              if (pop.lines.length > 12) failures.push(`${label} ${id}: the compact popover renders ${pop.lines.length} rows`);
               if (new Set(pop.numX).size > 1) failures.push(`${label} ${id}: account figures start at ${pop.numX.join(", ")}`);
               if (pop.box.left < 0 || pop.box.top < 0 || pop.box.right > pop.viewport.width || pop.box.bottom > pop.viewport.height) failures.push(`${label} ${id}: the popover leaves the window ${JSON.stringify(pop.box)}`);
               const cardBox = (await host.boundingBox())!;
@@ -20730,35 +20774,37 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
                 const got = marks.providers.map((p) => [p.engine, p.kind, p.cells]);
                 if (JSON.stringify(got) !== JSON.stringify(CASES[id].marks)) failures.push(`${label} ${id}: phone marks ${JSON.stringify(got)}`);
                 if (marks.role !== null || marks.hidden !== "true") failures.push(`${label} ${id}: the phone face's marks are not passive`);
-                if (marks.overlapsWords || !marks.insideCard || marks.digits) failures.push(`${label} ${id}: phone marks ${JSON.stringify(marks)}`);
+                if (marks.overlapsWords || !marks.insideCard || marks.digits !== (id === "t-disk")) failures.push(`${label} ${id}: phone marks ${JSON.stringify(marks)}`);
                 if (!faceLabel?.includes(translate(lang, "taskSpend.aria", { parts: "" }).trim())) failures.push(`${label} ${id}: the face's label does not read the spend: ${faceLabel}`);
               }
             }
-            /* The task screen's section, for two tasks: two providers, and the lower bound. */
-            for (const [tab, id] of [["assigned", "t-search"], ["done", "t-interrupt"], ["assigned", "t-disk"]] as const) {
+            /* The task screen covers two providers, a lower bound and an unreported plan. */
+            for (const [tab, id] of [["assigned", "t-search"], ["done", "t-interrupt"], ["assigned", "t-disk"], ["assigned", "t-links"]] as const) {
               await page.locator(`[data-phone-kanban-tab="${tab}"]`).click();
-              await page.locator(`[data-phone-card="task:${id}"]`).click();
+              await page.locator(`[data-phone-card="task:${id}"] [data-phone-card-title]`).click();
               const section = page.locator(`[data-phone-task-spend="${id}"]`);
               await section.waitFor({ timeout: 10_000 });
               await section.scrollIntoViewIfNeeded();
               const box = (await section.boundingBox())!;
               if (box.x < 0 || box.x + box.width > width || box.y < 0 || box.y + box.height > height) failures.push(`${label} ${id}: the Limits section is not whole on screen ${JSON.stringify(box)}`);
               const text = (await section.innerText()).replace(/[ \t]+/g, " ");
-              /* As in the popover: every account label whole, inside the section, and the digits at one x. */
+              /* The phone task screen gives each account a complete estimate line. */
               const fit = await section.evaluate((el) => {
                 const r = el.getBoundingClientRect();
-                const cut = [...el.querySelectorAll<HTMLElement>(".meter-label, .meter-value, .pop-main")].filter((node) => node.scrollWidth > node.clientWidth + 1).length;
-                const rects = [...el.querySelectorAll<HTMLElement>(".meter-label")].flatMap((node) => { const range = document.createRange(); range.selectNodeContents(node); return [...range.getClientRects()]; });
-                const outside = [...[...el.querySelectorAll<HTMLElement>(".meter, .meter-figure, .meter-value, .meter-bar")].map((node) => node.getBoundingClientRect()), ...rects].filter((b) => b.left < r.left - 0.5 || b.right > r.right + 0.5).length;
-                const numX = [...el.querySelectorAll<HTMLElement>(".meter-num")].map((node) => Math.round(node.getBoundingClientRect().left));
-                return { cut, outside, numX, labels: [...el.querySelectorAll<HTMLElement>(".meter-label")].map((node) => node.textContent ?? "") };
+                const cut = [...el.querySelectorAll<HTMLElement>(".pop-main, .meter-note, .pop-note")].filter((node) => node.scrollWidth > node.clientWidth + 1).length;
+                const rects = [...el.querySelectorAll<HTMLElement>("[data-spend-account]")].flatMap((node) => { const range = document.createRange(); range.selectNodeContents(node); return [...range.getClientRects()]; });
+                const outside = [...[...el.querySelectorAll<HTMLElement>(".pop-main, .meter-note, .pop-note, [data-spend-account]")].map((node) => node.getBoundingClientRect()), ...rects].filter((b) => b.left < r.left - 0.5 || b.right > r.right + 0.5).length;
+                const numX: number[] = [];
+                return { cut, outside, numX, labels: [...el.querySelectorAll<HTMLElement>("[data-spend-account]")].map((node) => node.textContent ?? "") };
               });
               readings.push({ label, id, section: text, fit });
               if (fit.cut) failures.push(`${label} ${id}: ${fit.cut} Limits lines are cut`);
               if (fit.outside) failures.push(`${label} ${id}: ${fit.outside} account lines leave the Limits section`);
               if (new Set(fit.numX).size > 1) failures.push(`${label} ${id}: Limits figures start at ${fit.numX.join(", ")}`);
-              if (id === "t-interrupt" && !fit.labels.some((l) => l.length > 80)) failures.push(`${label} ${id}: the 80-character account label is not whole in the Limits section: ${JSON.stringify(fit.labels)}`);
+              if (id === "t-interrupt" && !fit.labels.some((l) => l.includes("Research workstation in the second office"))) failures.push(`${label} ${id}: the full account detail is not present in the Limits section: ${JSON.stringify(fit.labels)}`);
               for (const want of CASES[id].pop) if (!want.test(text)) failures.push(`${label} ${id}: the Limits section lacks ${want}`);
+              if (id === "t-interrupt" && !/Research workstation in the second office/.test(text)) failures.push(`${label} ${id}: the phone Limits section omits account detail`);
+              if (id === "t-links" && !/≈0[.,]3%/.test(text)) failures.push(`${label} ${id}: the phone Limits section omits the account estimate`);
               await page.screenshot({ path: path.join(out, `${label}-task-${id}.png`) });
               await page.goBack();
               await page.locator(`[data-phone-kanban-tab="${tab}"]`).waitFor({ timeout: 10_000 });
@@ -20786,6 +20832,147 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
       await browser.close();
       server.stop();
       fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify({ capturedAt: new Date().toISOString(), readings, failures }, null, 2)}\n`);
+    }
+    expect(failures).toEqual([]);
+  }, 900_000);
+
+  /* The states the estimate meets, with realistic figures (`?spend=critic`): the popover and the phone's Limits section are compact, print
+     each figure once, give a guest the share with its basis, and cover no text that is not the card's own. */
+  browserTest("critic states: compact popover and Limits section, a guest's share, no covered neighbours, at 1440, 1000 and 390 in en and uk, light and dark", async () => {
+    const out = path.resolve(process.env.TASK_SPEND_PNG_DIR ?? ".artifacts/task-spend");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: "/dev/shm" } });
+    const failures: string[] = [];
+    const readings: unknown[] = [];
+    const STATES = {
+      "t-upload": "plan-share", "t-search": "mixed-models", "t-export": "unknown-model", "t-disk": "plan-unreported", "t-interrupt": "large-floor",
+    } as const;
+    const shape = (page: Page, scope: string) => page.evaluate((scope) => {
+      const root = document.querySelector<HTMLElement>(scope)!;
+      const rows = [...root.querySelectorAll<HTMLElement>("[data-spend-account]")].map((el) => {
+        const range = document.createRange(); range.selectNodeContents(el);
+        const rects = [...range.getClientRects()];
+        return { text: el.innerText.replace(/\s+/g, " ").trim(), lines: new Set(rects.map((b) => Math.round(b.top))).size, top: el.getBoundingClientRect().top, bottom: el.getBoundingClientRect().bottom };
+      });
+      const providers = [...root.querySelectorAll<HTMLElement>("[data-spend-provider]")].map((el) => ({ engine: el.dataset.spendProvider!, kind: el.dataset.kind!, text: el.innerText.replace(/\s+/g, " ").trim(), basis: el.querySelector(".pop-basis")?.textContent ?? null, reasons: el.querySelectorAll("[data-spend-reason]").length }));
+      const brokenIds = [...root.querySelectorAll<HTMLElement>(".model-id")].filter((el) => { const range = document.createRange(); range.selectNodeContents(el); return new Set([...range.getClientRects()].map((b) => Math.round(b.top))).size > 1; }).map((el) => el.textContent ?? "");
+      return { rows, providers, brokenIds, height: root.getBoundingClientRect().height, text: root.innerText.replace(/\s+/g, " ").trim() };
+    }, scope);
+    const judge = (label: string, id: string, got: Awaited<ReturnType<typeof shape>>, guest: boolean) => {
+      if (/30m|cache/i.test(got.text)) failures.push(`${label} ${id}: a pricing assumption is printed: ${got.text}`);
+      if (/\d\.\d\d%|\d,\d\d%/.test(got.text)) failures.push(`${label} ${id}: a range prints two decimals: ${got.text}`);
+      if (/Estimate.*Estimate|Оцінка.*Оцінка[^а-я]/.test(got.text) && got.providers.length === 1) failures.push(`${label} ${id}: the basis is printed twice`);
+      for (const p of got.providers) {
+        const figure = /(\d+(?:[.,]\d+)?\s?(?:m|млн|bn|млрд))\s(?:tokens|токенів)/.exec(p.text);
+        if (figure && p.text.split(figure[0]).length - 1 > 1) failures.push(`${label} ${id}: ${p.engine} prints ${figure[0]} more than once: ${p.text}`);
+        if (guest && p.kind !== "tokens" && !(p.basis && /≈/.test(p.basis) && /%/.test(p.basis))) failures.push(`${label} ${id}: a guest's ${p.engine} has no share and basis: ${p.text}`);
+      }
+      if (/≈\s\$|≈\s\d/.test(got.text)) failures.push(`${label} ${id}: the ≈ sign is spaced from its figure in one place and not another: ${got.text}`);
+      if (/Budget \$|Бюджет \$/.test(got.text)) failures.push(`${label} ${id}: the budget line reads like a plan price: ${got.text}`);
+      if (/\$900/.test(got.text) && !/(Plan week ≈\$900–\$2,300 at API prices|Тиждень плану ≈\$900–\$2\D300 за цінами API) \(/.test(got.text)) failures.push(`${label} ${id}: the budget line does not name its unit: ${got.text}`);
+      if (got.brokenIds.length) failures.push(`${label} ${id}: a model id breaks across lines: ${got.brokenIds.join(", ")}`);
+      for (const p of got.providers) {
+        if (p.kind === "tokens" && p.reasons < 1) failures.push(`${label} ${id}: ${p.engine} has tokens and no share and prints no reason: ${p.text}`);
+        if (p.kind === "floor" && (/≈\d/.test(p.text.replace(/≈\$\d[\d,.]*/g, "")) || !/≥\d/.test(p.text))) failures.push(`${label} ${id}: a floor provider's lines do not print «≥» alone: ${p.text}`);
+      }
+      if (guest && got.rows.length) failures.push(`${label} ${id}: account lines reached a guest`);
+      for (const row of got.rows) if (row.lines > 2) failures.push(`${label} ${id}: an account takes ${row.lines} lines: ${row.text}`);
+    };
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        for (const width of [1440, 1000] as const) {
+          const label = `${lang}-${theme}-${width}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?spend=critic`, { width, height: width === 1000 ? 700 : 900 }, theme, lang, "reduce");
+          try {
+            await page.locator('[data-spend="t-search"]').waitFor({ state: "attached", timeout: 30_000 });
+            if (await page.locator(`${card("t-links")} .spend`).count()) failures.push(`${label}: a task whose tokens are unknown draws marks`);
+            for (const [id, name] of Object.entries(STATES)) {
+              const host = page.locator(card(id));
+              if (!(await host.isVisible())) {
+                const status = await host.evaluate((element) => element.closest<HTMLElement>(".column")?.dataset.status ?? "");
+                await page.locator(`.tabs-nav [data-tab="${status}"]`).first().click();
+              }
+              /* A card on the window's bottom edge leaves a bubble no room but over its neighbour, so the card is read from the middle. */
+              await host.evaluate((element) => element.scrollIntoView({ block: "center", inline: "nearest" }));
+              await page.locator(`[data-spend="${id}"]`).hover();
+              await page.locator(`[data-spend-pop="${id}"]`).waitFor({ timeout: 5_000 });
+              const pop = await popReading(page, id);
+              const got = await shape(page, `[data-spend-pop="${id}"]`);
+              readings.push({ label, id, name, popover: pop, shape: got });
+              judge(label, id, got, false);
+              if (pop.foreign.length) failures.push(`${label} ${id}: the popover covers another card's title or text outside the cards: ${pop.foreign.join(" | ")}`);
+              if (pop.foreignCards.length) failures.push(`${label} ${id}: the popover covers text of another card: ${pop.foreignCards.join(" | ")}`);
+              if (pop.gap === null || pop.gap > 1) failures.push(`${label} ${id}: the popover stands ${pop.gap}px from its own card`);
+              if (pop.inBoard === false) failures.push(`${label} ${id}: the popover leaves the board (the sidebar's side)`);
+              if (pop.inSeat) failures.push(`${label} ${id}: the popover stands over the seat pane`);
+              if (pop.cut.length) failures.push(`${label} ${id}: the popover leaves fragments of its own card's text at its edge: ${pop.cut.join(" | ")}`);
+              if (pop.box.left < 0 || pop.box.top < 0 || pop.box.right > pop.viewport.width || pop.box.bottom > pop.viewport.height) failures.push(`${label} ${id}: the popover leaves the window`);
+              if (id === "t-search" && width === 1440 && lang === "en" && pop.box.height > 240) failures.push(`${label} ${id}: the compact popover is ${pop.box.height}px tall`);
+              await page.screenshot({ path: path.join(out, `${label}-${name}-popover.png`) });
+              await page.mouse.move(0, 0);
+              await page.locator(`[data-spend-pop="${id}"]`).waitFor({ state: "detached", timeout: 5_000 });
+            }
+          } finally { if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join("; ")}`); await context.close(); }
+        }
+        /* A member who is not the owner: each provider's share and basis, no account. */
+        for (const width of [1440, 390] as const) {
+          const label = `guest-${lang}-${theme}-${width}`;
+          const phone = width <= 440;
+          const { context, page } = await openFixture(browser, `${server.base}?spend=criticguest`, { width, height: phone ? 844 : 900 }, theme, lang, "reduce", phone);
+          try {
+            if (!phone) {
+              await page.locator('[data-spend="t-search"]').hover();
+              await page.locator('[data-spend-pop="t-search"]').waitFor({ timeout: 30_000 });
+              const got = await shape(page, '[data-spend-pop="t-search"]');
+              const pop = await popReading(page, "t-search");
+              readings.push({ label, popover: pop, shape: got });
+              judge(label, "t-search", got, true);
+              await page.screenshot({ path: path.join(out, `${label}-mixed-models-popover.png`) });
+            } else {
+              await page.locator('[data-phone-kanban-tab="assigned"]').click();
+              await page.locator('[data-phone-card="task:t-search"] [data-phone-card-title]').click();
+              const section = page.locator('[data-phone-task-spend="t-search"]');
+              await section.waitFor({ timeout: 10_000 });
+              await section.scrollIntoViewIfNeeded();
+              const got = await shape(page, '[data-phone-task-spend="t-search"]');
+              readings.push({ label, shape: got });
+              judge(label, "t-search", got, true);
+              await page.screenshot({ path: path.join(out, `${label}-mixed-models-task-section.png`) });
+            }
+          } finally { await context.close(); }
+        }
+      }
+      /* The phone's task screen. */
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        const label = `${lang}-${theme}-390`;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?spend=critic`, { width: 390, height: 844 }, theme, lang, "reduce", true);
+        try {
+          await page.locator('[data-phone-kanban-tab="assigned"]').click();
+          await page.locator('[data-phone-card="task:t-search"] .spend').waitFor({ timeout: 30_000 });
+          if (await page.locator('[data-phone-card="task:t-links"] .spend').count()) failures.push(`${label}: a task whose tokens are unknown draws marks on the phone`);
+          for (const [tab, id] of [["assigned", "t-search"], ["assigned", "t-upload"], ["assigned", "t-export"], ["assigned", "t-disk"], ["done", "t-interrupt"]] as const) {
+            await page.locator(`[data-phone-kanban-tab="${tab}"]`).click();
+            await page.locator(`[data-phone-card="task:${id}"] [data-phone-card-title]`).click();
+            const section = page.locator(`[data-phone-task-spend="${id}"]`);
+            await section.waitFor({ timeout: 10_000 });
+            await section.scrollIntoViewIfNeeded();
+            const box = (await section.boundingBox())!;
+            if (box.x < 0 || box.x + box.width > 390 || box.y < 0 || box.y + box.height > 844) failures.push(`${label} ${id}: the Limits section is not whole on screen ${JSON.stringify(box)}`);
+            const got = await shape(page, `[data-phone-task-spend="${id}"]`);
+            readings.push({ label, id, shape: got });
+            judge(label, id, got, false);
+            for (let at = 1; at < got.rows.length; at += 1) if (got.rows[at]!.top - got.rows[at - 1]!.bottom < 3 && got.rows[at]!.top >= got.rows[at - 1]!.bottom - 1) failures.push(`${label} ${id}: accounts run together with no gap`);
+            await page.screenshot({ path: path.join(out, `${label}-${STATES[id]}-task-section.png`) });
+            await page.goBack();
+            await page.locator(`[data-phone-kanban-tab="${tab}"]`).waitFor({ timeout: 10_000 });
+          }
+        } finally { if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join("; ")}`); await context.close(); }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+      fs.writeFileSync(path.join(out, "critic-readings.json"), `${JSON.stringify({ capturedAt: new Date().toISOString(), readings, failures }, null, 2)}\n`);
     }
     expect(failures).toEqual([]);
   }, 900_000);
