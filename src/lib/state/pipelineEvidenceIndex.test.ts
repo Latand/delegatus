@@ -53,6 +53,68 @@ test("compact evidence validates changed rows across raw writes, deletion, rollb
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test("progress-only pipeline upserts leave stage-authority witnesses untouched", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "stage-authority-progress-"));
+  const filename = path.join(root, "state.sqlite");
+  const payload = (progress: number, branch = "main") => JSON.stringify({
+    id: "pipeline-one", repoDir: "/repo", worktreeDir: "/repo/worktrees/one", branch, state: "running",
+    delivery: { target: { repository: "owner/repo", branch: "refs/heads/main" }, active: true, ownerId: "owner", epoch: 1, publish: "enabled" },
+    progress, retained: "x".repeat(20_000),
+  });
+  const seed = { collection: "pipelines", schemaVersion: 1, migrationId: "one", key: (row: { id: string }) => row.id,
+    loadRecords: () => [JSON.parse(payload(0))] };
+  try {
+    initializeStateCollections(filename, [seed]);
+    const db = new Database(filename);
+    try {
+      const witnesses = () => db.query<{ key: string; revision: number; lane_id: string; operation: string; fields: string | null }, []>(
+        "SELECT key,revision,lane_id,operation,fields FROM pipeline_stage_authority ORDER BY key",
+      ).all();
+      const clock = () => db.query("SELECT revision FROM pipeline_authority_clock WHERE id=1").get();
+      const beforeRows = witnesses();
+      const beforeClock = clock();
+      const upsert = db.query(`INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active)
+        VALUES ('pipelines','pipeline-one',?,0,2,1)
+        ON CONFLICT(collection,row_key) DO UPDATE SET value_json=excluded.value_json,row_revision=excluded.row_revision`);
+      upsert.run(payload(1));
+      expect(clock()).toEqual(beforeClock);
+      expect(witnesses()).toEqual(beforeRows);
+
+      upsert.run(payload(2, "release"));
+      expect(clock()).not.toEqual(beforeClock);
+      expect(witnesses().find((row: { key: string }) => row.key === JSON.stringify(["branch-name", "release"]))).toBeDefined();
+      expect(db.query("SELECT count(*) AS count FROM pipeline_stage_authority WHERE key LIKE '%replaced%'").get()).toEqual({ count: 0 });
+    } finally { db.close(); }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("batched authority extraction retains escaped strings and numeric spelling", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "stage-authority-raw-values-"));
+  const filename = path.join(root, "state.sqlite");
+  const payload = JSON.stringify({ id: "pipeline-one", repoDir: "/repo", worktreeDir: "/repo/worktrees/one", branch: "main",
+    state: "running", delivery: { target: { repository: "owner/repo", branch: "refs/heads/main" }, active: true,
+      ownerId: "owner", epoch: 1, publish: "enabled" } });
+  const seed = { collection: "pipelines", schemaVersion: 1, migrationId: "one", key: (row: { id: string }) => row.id,
+    loadRecords: () => [JSON.parse(payload)] };
+  try {
+    initializeStateCollections(filename, [seed]);
+    const db = new Database(filename);
+    try {
+      const write = db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key='pipeline-one'");
+      const revision = () => db.query<{ revision: number }, []>("SELECT revision FROM pipeline_authority_clock WHERE id=1").get()!.revision;
+      let before = revision();
+      write.run(payload.replace('"branch":"main"', '"branch":"\\ud800"'));
+      expect(revision()).toBeGreaterThan(before);
+      before = revision();
+      write.run(payload.replace('"branch":"main"', '"branch":"\\ud801"'));
+      expect(revision()).toBeGreaterThan(before);
+      before = revision();
+      write.run(payload.replace('"epoch":1', '"epoch":1.0'));
+      expect(revision()).toBeGreaterThan(before);
+    } finally { db.close(); }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 /* Each startup admission asks for the revision two or three times. Opening
    the state database and checking the index schema cost about 16 ms each on a
    production copy; the schema check now runs once per schema version, and the

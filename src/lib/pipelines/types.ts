@@ -637,7 +637,7 @@ export type PipelineStageAttempt = {
   /** Ownership preparation failures retain capped automatic retry backoff,
       including across controller restarts. Identity binds it to this accepted
       attempt and publication; a different operation cannot inherit its wait. */
-  settlementPreparationWait?: PipelineBoundedWait & { identity: string; reason?: string };
+  settlementPreparationWait?: PipelineBoundedWait & { identity: string; reason?: string; resumeState?: "committing" | "passed" | "skipped" };
   /** Runtime-host generation this attempt's agent was launched under (#1747).
       A release succession mints a new epoch and replaces every engine process
       it hosted, so an attempt still carrying the previous epoch is the only
