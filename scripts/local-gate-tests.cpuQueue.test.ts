@@ -65,7 +65,7 @@ test("synthetic workflow ticket", () => {
   } finally { outer.close(); }
 }, 30000);
 
-const runnerModes = process.platform === "linux" ? ["default", "portable"] as const : ["default"] as const;
+const runnerModes: ("default" | "portable")[] = process.platform === "linux" ? ["default", "portable"] : ["default"];
 test.each(runnerModes)("a touched test reaches its execution deadline without a verdict with the %s runner", async mode => {
   const portable = mode === "portable" ? portableFixture("unreachable") : undefined;
   if (portable) directories.push(portable.root);
