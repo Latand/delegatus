@@ -63,6 +63,7 @@ Object.assign(globalThis, {
     if (url.includes("/api/orchestrator/seat")) return Promise.resolve(new Response("{}", { status: 404 }));
     if (url.includes("/api/accounts/copilot")) return json({ cli: { present: false, reason: null }, active: "", accounts: [] });
     if (url.includes("/api/accounts/antigravity") && agyBody !== null) return json(agyBody);
+    if (url.includes("/api/accounts/cli") && cliBody !== null) return json(cliBody);
     /* A case may hold the accounts read open by answering with a promise of its own. */
     if (url.endsWith("/api/accounts") || url.includes("/api/accounts?")) return accountsBody instanceof Promise ? accountsBody as Promise<Response> : json(accountsBody);
     return json({ claude: { active: "", accounts: [] }, codex: { active: "", accounts: [] } });
@@ -93,6 +94,9 @@ let botStatus: unknown = { connected: false, bot: null, receiving: "stopped", la
 
 /* What `/api/accounts/antigravity` answers; null leaves it to the unrouted fallback, which carries no Antigravity section. */
 let agyBody: unknown = null;
+
+/* What the step's "Check again" (`/api/accounts/cli`) answers; null leaves it to the unrouted fallback. */
+let cliBody: unknown = null;
 
 /* What `/api/accounts` answers; the orchestrator step's cases set it. */
 const signedIn = (id: string, label: string) => ({ id, label, kind: "legacy", authPresent: true, loginPending: false, loginState: "authenticated", deviceAuth: null, auth: { state: "authenticated" } });
@@ -2098,6 +2102,41 @@ test("Continue with these settles Accounts, opens Project, and the welcome does 
     expect(currentOf(host)).toBe("engines");
     expect(welcomeOf(host)).toBeNull();
   } finally {
+    done();
+  }
+});
+
+test("the guide hands each program's version and path from the accounts read to its popover, and Check again replaces them", async () => {
+  answerAccounts({
+    claude: { active: "", cli: "found", accounts: [] }, codex: { active: "", cli: "found", accounts: [] }, copilot: { active: "", accounts: [] },
+    cliInstalls: { claude: { path: "~/.local/bin/claude", version: "2.1.4" }, codex: { path: null, version: null } },
+  });
+  cliBody = { claude: "found", codex: "found", antigravity: "missing", cliInstalls: { claude: { path: "~/.local/bin/claude", version: "2.2.0" }, codex: { path: "~/.bun/bin/codex", version: "0.171.0" } } };
+  const { host, done } = openGuide({ selfOpened: true });
+  const popoverOf = (program: string) => {
+    const dot = host.querySelector<HTMLElement>(`[data-onboarding-programs] > [data-onboarding-engine=${program}] [data-settings-dot]`)!;
+    flushSync(() => dot.click());
+    const text = document.querySelector("[data-settings-dot-popover]")?.textContent?.replaceAll("\u00a0", " ");
+    flushSync(() => dot.click());
+    return text;
+  };
+  try {
+    await until(() => welcomeOf(host) === "signed-out");
+    /* The cover's rows read the same install facts as the step's. */
+    expect(popoverOf("claude")).toBe("Version 2.1.4 at ~/.local/bin/claude");
+    /* A check that learned nothing of a program leaves its row the sentence it had. */
+    expect(popoverOf("codex")).toBe("No account is signed in yet.");
+    flushSync(() => (host.querySelector("[data-onboarding-welcome-accounts]") as HTMLElement).click());
+    expect(currentOf(host)).toBe("engines");
+    expect(popoverOf("claude")).toBe("Version 2.1.4 at ~/.local/bin/claude");
+    /* Copilot's own read says it is not installed, which is what the step's Check again stands there for. */
+    await until(() => host.querySelector("[data-onboarding-recheck]") !== null);
+    flushSync(() => (host.querySelector("[data-onboarding-recheck]") as HTMLElement).click());
+    await until(() => host.querySelector("[data-onboarding-programs] > [data-onboarding-engine=claude] [data-settings-dot]")?.getAttribute("aria-label")?.includes("2.2.0") === true);
+    expect(popoverOf("claude")).toBe("Version 2.2.0 at ~/.local/bin/claude");
+    expect(popoverOf("codex")).toBe("Version 0.171.0 at ~/.bun/bin/codex");
+  } finally {
+    cliBody = null;
     done();
   }
 });

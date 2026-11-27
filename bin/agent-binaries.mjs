@@ -2,16 +2,31 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+/**
+ * The folders a Windows install leaves an agent's native launcher in, before
+ * PATH. Antigravity's PowerShell installer writes `%LOCALAPPDATA%\agy\bin\agy.exe`
+ * and adds that folder to the user's PATH, which a process that is already
+ * running never sees: the folder is probed by name, from `LOCALAPPDATA` and
+ * from its usual place under the home.
+ */
+export function windowsAgentBinaryCandidates(name, { home = os.homedir(), localAppData = process.env.LOCALAPPDATA ?? "" } = {}) {
+  const local = path.join(home, "AppData", "Local");
+  return [
+    path.join(home, ".local", "bin", `${name}.exe`),
+    path.join(home, ".bun", "bin", `${name}.exe`),
+    path.join(local, "Programs", name, `${name}.exe`),
+    ...(name === "agy" ? [...new Set([localAppData.trim() || local, local])].map((dir) => path.join(dir, "agy", "bin", "agy.exe")) : []),
+  ];
+}
+
 /** Shared by the launcher and agent launch seams; no login or agent execution. */
 export function agentBinaryCandidates(name, {
   home = os.homedir(), platform = process.platform, envPath = process.env.PATH ?? "",
-  includeSystem = true,
+  includeSystem = true, localAppData = process.env.LOCALAPPDATA ?? "",
 } = {}) {
   if (platform === "win32") {
     return [
-      path.join(home, ".local", "bin", `${name}.exe`),
-      path.join(home, ".bun", "bin", `${name}.exe`),
-      path.join(home, "AppData", "Local", "Programs", name, `${name}.exe`),
+      ...windowsAgentBinaryCandidates(name, { home, localAppData }),
       ...envPath.split(";").filter(Boolean).map((dir) => path.join(dir, `${name}.exe`)),
     ];
   }

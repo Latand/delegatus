@@ -6,7 +6,8 @@ import { listAntigravityAccounts } from "@/lib/accounts/antigravity";
 import { listClaudeAccounts } from "@/lib/accounts/claude";
 import { listCodexAccounts } from "@/lib/accounts/codex";
 import { allowedAccountIdsForProject } from "@/lib/accounts/projectBindings";
-import { resolveAntigravityBinary, resolveBinary } from "@/lib/agent/cli";
+import { resolveAntigravityBinary, resolveBinary, resolveCopilotBinary, resolveHostBinary } from "@/lib/agent/cli";
+import { homeDirectory } from "@/lib/platformHome";
 
 /**
  * Whether an engine can run a launch here (#1876, design §4.5): its command
@@ -116,30 +117,94 @@ export function cliResolvable(binary: string, envPath = process.env.PATH ?? ""):
 
 export type CliPresence = "found" | "missing";
 
+/** Where a program's command was found and the version it names; either is null when the check could not say. */
+export type CliInstall = { path: string | null; version: string | null };
+
+/** The programs the Accounts step lists: the three engines and Copilot. */
+export type CliProgram = EngineName | "copilot";
+
 const CLI_PROBE_TIMEOUT_MS = 3_000;
 const CLI_PROBE_TTL_MS = 60_000;
-const cliCache = new Map<EngineName, { at: number; value: Promise<CliPresence> }>();
+const cliCache = new Map<CliProgram, { at: number; value: Promise<CliInstall & { presence: CliPresence }> }>();
+
+const VERSION = /\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?/;
+
+/** The version a `--version` answer names: its first dotted triple, as "2.1.4 (Claude Code)" and "codex-cli 0.170.0" carry it. */
+export function versionFromOutput(output: string): string | null {
+  return VERSION.exec(output.slice(0, 4096))?.[0].slice(0, 40) ?? null;
+}
 
 /** Runs `<bin> --version` once, bounded at 3 s. Only a binary the OS cannot
-    start counts as missing; a slow or failing one is installed. */
-export function probeCli(binary: string, timeoutMs = CLI_PROBE_TIMEOUT_MS): Promise<CliPresence> {
+    start counts as missing; a slow or failing one is installed. The version is
+    read from a run that ended cleanly, so a crash report is never quoted as one. */
+export function probeCliVersion(binary: string, timeoutMs = CLI_PROBE_TIMEOUT_MS): Promise<{ presence: CliPresence; version: string | null }> {
   return new Promise((resolve) => {
     try {
-      execFile(binary, ["--version"], { timeout: timeoutMs, windowsHide: true }, (error) => {
+      execFile(binary, ["--version"], { timeout: timeoutMs, windowsHide: true }, (error, stdout, stderr) => {
         const code = (error as NodeJS.ErrnoException | null)?.code;
-        resolve(code === "ENOENT" || code === "EACCES" ? "missing" : "found");
+        if (code === "ENOENT" || code === "EACCES") resolve({ presence: "missing", version: null });
+        else resolve({ presence: "found", version: error ? null : versionFromOutput(String(stdout)) ?? versionFromOutput(String(stderr)) });
       });
     } catch {
-      resolve("missing");
+      resolve({ presence: "missing", version: null });
     }
   });
 }
 
-/** Cached per engine for a minute; `fresh` is the step's "Check again". */
-export function engineCliPresence(engine: EngineName, { fresh = false }: { fresh?: boolean } = {}): Promise<CliPresence> {
-  const cached = cliCache.get(engine);
+/** Whether the command starts, from the same bounded run. */
+export function probeCli(binary: string, timeoutMs = CLI_PROBE_TIMEOUT_MS): Promise<CliPresence> {
+  return probeCliVersion(binary, timeoutMs).then((probe) => probe.presence);
+}
+
+/** A resolved command as a row names it: under the home it reads `~/…`, so the
+    answer carries no user name. A bare name, found through PATH alone, names no place. */
+export function cliDisplayPath(binary: string, home: string = homeDirectory()): string | null {
+  if (!path.isAbsolute(binary)) return null;
+  const inside = path.relative(home, binary);
+  return inside && !inside.startsWith("..") && !path.isAbsolute(inside) ? `~${path.sep}${inside}` : binary;
+}
+
+const COMMAND: Record<CliProgram, string> = { claude: "claude", codex: "codex", antigravity: "agy", copilot: "copilot" };
+
+function binaryForProgram(program: CliProgram): string {
+  return program === "copilot" ? resolveCopilotBinary() : binaryForEngine(program);
+}
+
+/** In the container a command runs through a shim that exists only there, so
+    the row names the place on the host when the mounted home shows one. */
+function shownPath(program: CliProgram, binary: string): string | null {
+  const shimmed = process.env.LLV_DOCKER_NSENTER_SHIMS === "1" && binary === `/usr/local/bin/${COMMAND[program]}`;
+  return cliDisplayPath(shimmed ? resolveHostBinary(COMMAND[program]) : binary);
+}
+
+/** One check of a program's command: whether it starts, where it was found and
+    its version, from a single `--version` run. Cached per program for a minute;
+    `fresh` is the step's "Check again". */
+export function cliReport(program: CliProgram, { fresh = false }: { fresh?: boolean } = {}): Promise<CliInstall & { presence: CliPresence }> {
+  const cached = cliCache.get(program);
   if (!fresh && cached && Date.now() - cached.at < CLI_PROBE_TTL_MS) return cached.value;
-  const value = probeCli(binaryForEngine(engine));
-  cliCache.set(engine, { at: Date.now(), value });
+  const binary = binaryForProgram(program);
+  const value = probeCliVersion(binary).then(({ presence, version }) => ({ presence, version, path: presence === "found" ? shownPath(program, binary) : null }));
+  cliCache.set(program, { at: Date.now(), value });
   return value;
+}
+
+/** Cached per engine for a minute; `fresh` is the step's "Check again". */
+export function engineCliPresence(engine: EngineName, options: { fresh?: boolean } = {}): Promise<CliPresence> {
+  return cliReport(engine, options).then((report) => report.presence);
+}
+
+export const CLI_PROGRAMS: readonly CliProgram[] = ["claude", "codex", "antigravity", "copilot"];
+
+export type CliReports = Record<CliProgram, CliInstall & { presence: CliPresence }>;
+
+/** One check of all four programs, each from its own cached `--version` run. */
+export async function cliReports(options: { fresh?: boolean } = {}): Promise<CliReports> {
+  const reports = await Promise.all(CLI_PROGRAMS.map((program) => cliReport(program, options)));
+  return Object.fromEntries(CLI_PROGRAMS.map((program, index) => [program, reports[index]])) as CliReports;
+}
+
+/** What the guide's status popovers read of each program: where it was found and its version. */
+export function cliInstalls(reports: CliReports): Record<CliProgram, CliInstall> {
+  return Object.fromEntries(CLI_PROGRAMS.map((program) => [program, { path: reports[program].path, version: reports[program].version }])) as Record<CliProgram, CliInstall>;
 }

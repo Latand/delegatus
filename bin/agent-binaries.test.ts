@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { agentBinaryCandidates, agentStartupMessage, findAgentBinary } from "./agent-binaries.mjs";
+import { agentBinaryCandidates, agentStartupMessage, findAgentBinary, windowsAgentBinaryCandidates } from "./agent-binaries.mjs";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "dlg-binaries-"));
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -64,6 +64,33 @@ test("finds executable in a user app bundle, rejects directories and non-executa
 test("Windows candidates keep native exe launchers and never return npm cmd wrappers", () => {
   const candidates = agentBinaryCandidates("claude", { home: root, platform: "win32", envPath: "" });
   expect(candidates.every((file) => file.endsWith(".exe"))).toBe(true);
+});
+
+test("Windows finds agy where the vendor's PowerShell installer writes it, from LOCALAPPDATA or under the home", () => {
+  const home = path.join(root, "windows-home");
+  const redirected = path.join(root, "redirected-local");
+  const windows = { home, platform: "win32", envPath: "" };
+  /* Nothing installed: the folder is searched and holds no file. */
+  expect(agentBinaryCandidates("agy", { ...windows, localAppData: "" })).toContain(path.join(home, "AppData", "Local", "agy", "bin", "agy.exe"));
+  expect(findAgentBinary("agy", { ...windows, localAppData: "" })).toBeNull();
+  /* A directory by the launcher's name is no launcher. */
+  fs.mkdirSync(path.join(redirected, "agy", "bin", "agy.exe"), { recursive: true });
+  expect(findAgentBinary("agy", { ...windows, localAppData: redirected })).toBeNull();
+  fs.rmdirSync(path.join(redirected, "agy", "bin", "agy.exe"));
+
+  const underHome = path.join(home, "AppData", "Local", "agy", "bin", "agy.exe");
+  executable(underHome);
+  expect(findAgentBinary("agy", { ...windows, localAppData: "" })).toBe(underHome);
+  /* A redirected LOCALAPPDATA is read first; the usual place under the home stays a fallback. */
+  expect(findAgentBinary("agy", { ...windows, localAppData: redirected })).toBe(underHome);
+  const underLocal = path.join(redirected, "agy", "bin", "agy.exe");
+  executable(underLocal);
+  expect(findAgentBinary("agy", { ...windows, localAppData: redirected })).toBe(underLocal);
+  expect(windowsAgentBinaryCandidates("agy", { home, localAppData: path.join(home, "AppData", "Local") }).filter((file) => file === underHome)).toHaveLength(1);
+
+  /* The folder is Antigravity's own: no other program is looked for there, and no other system gains it. */
+  expect(agentBinaryCandidates("claude", { ...windows, localAppData: redirected }).join("\n")).not.toContain(path.join("agy", "bin"));
+  expect(agentBinaryCandidates("agy", { home, platform: "linux", envPath: "", localAppData: redirected }).join("\n")).not.toContain("agy.exe");
 });
 
 test("installed launcher runs with Bun alone and no Node on PATH", () => {

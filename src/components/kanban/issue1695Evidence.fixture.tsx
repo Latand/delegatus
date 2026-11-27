@@ -4406,6 +4406,15 @@ const FIRST_RUN_ACCOUNTS = {
     codex: frEngine("found", [frSignedIn(frPersonal, "Pro", 9), accountRow("team", frWork, "Plus", 34, 210)]),
   },
 }[FIRST_RUN_ENGINES];
+/* What the check learned of each installed program, as `cliInstalls` carries it: where its command was found and its
+   version. A program that is not installed has neither. */
+const frInstall = (found: boolean, path: string, version: string) => found ? { path, version } : { path: null, version: null };
+const FIRST_RUN_INSTALLS = {
+  claude: frInstall(FIRST_RUN_ACCOUNTS.claude.cli === "found", "~/.local/bin/claude", "2.1.4"),
+  codex: frInstall(FIRST_RUN_ACCOUNTS.codex.cli === "found", "~/.npm-global/bin/codex", "0.170.0"),
+  antigravity: frInstall(FIRST_RUN_AGY.cli === "found", "~/.local/bin/agy", "1.5.17"),
+  copilot: frInstall(FIRST_RUN_COPILOT.cli.present, "~/.bun/bin/copilot", "1.0.87"),
+};
 /* The factory catalog as `GET /api/roles` answers it, so the Roles row counts what a fresh install would move. */
 const frRoles = () => ({
   schemaVersion: 2, revision: "rev-evidence",
@@ -4462,8 +4471,8 @@ function firstRunAnswer(url: URL, method: string, init?: RequestInit): Response 
     if (method === "PUT") Object.assign(firstVisitTelemetry, JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
     return json(firstVisitTelemetry);
   }
-  if (path === "/api/accounts" && method === "GET") return json(FIRST_RUN_ACCOUNTS);
-  if (path === "/api/accounts/cli") return json({ claude: FIRST_RUN_ACCOUNTS.claude.cli, codex: FIRST_RUN_ACCOUNTS.codex.cli, ...(FIRST_RUN_PROGRAMS ? { antigravity: FIRST_RUN_AGY.cli } : {}) });
+  if (path === "/api/accounts" && method === "GET") return json({ ...FIRST_RUN_ACCOUNTS, cliInstalls: FIRST_RUN_INSTALLS });
+  if (path === "/api/accounts/cli") return json({ claude: FIRST_RUN_ACCOUNTS.claude.cli, codex: FIRST_RUN_ACCOUNTS.codex.cli, ...(FIRST_RUN_PROGRAMS ? { antigravity: FIRST_RUN_AGY.cli } : {}), cliInstalls: FIRST_RUN_INSTALLS });
   if (path === "/api/accounts/copilot" && method === "GET") return json(FIRST_RUN_COPILOT);
   if (path === "/api/roles") return json(frRoles());
   if (path === "/api/telegram/bot") return json({ bot: TELEGRAM_BOT_STATUS });

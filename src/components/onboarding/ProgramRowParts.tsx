@@ -24,6 +24,22 @@ export type ProgramId = "claude" | "codex" | "antigravity" | "copilot";
 export const PROGRAM_IDS: readonly ProgramId[] = ["claude", "codex", "antigravity", "copilot"];
 export const PROGRAM_NAME: Record<ProgramId, string> = { claude: "Claude Code", codex: "Codex", antigravity: "Antigravity", copilot: "Copilot" };
 
+/** What the last check learned of an installed program: where its command was found and the version it names. */
+export type ProgramInstall = { path: string | null; version: string | null };
+export type ProgramInstalls = Partial<Record<ProgramId, ProgramInstall>>;
+
+/** Reads the `cliInstalls` block of `/api/accounts` and of its re-probe; anything else is no answer. */
+export function programInstalls(value: unknown): ProgramInstalls {
+  if (!value || typeof value !== "object") return {};
+  const text = (field: unknown) => typeof field === "string" && field.trim() ? field.trim() : null;
+  const installs: ProgramInstalls = {};
+  for (const program of PROGRAM_IDS) {
+    const entry = (value as Record<string, unknown>)[program];
+    if (entry && typeof entry === "object") installs[program] = { path: text((entry as { path?: unknown }).path), version: text((entry as { version?: unknown }).version) };
+  }
+  return installs;
+}
+
 /** A state's words take the tone of the dot that leads them. */
 export const TONE_INK: Record<DotTone, string> = { ok: "text-success", warn: "text-warning", off: "text-secondary" };
 
@@ -101,9 +117,11 @@ const DOT_HIT = "h-11 w-11 justify-center -ml-[18.5px] -mr-[10px] -mt-5 pt-5 sm:
  * popover some 130 px, which two short lines do not fit, so the dot's words
  * open in the row itself, in its `data-program-dot-note` place under the state
  * line, and cover nothing. A press toggles them; Escape and a press elsewhere
- * close them.
+ * close them. They stand right under the line they belong to, so `shown` is
+ * what that line leaves out; the label a screen reader hears keeps the whole
+ * note.
  */
-function InlineDot({ tone, note, label }: { tone: DotTone; note: string; label: string }) {
+function InlineDot({ tone, note, shown, label }: { tone: DotTone; note: string; shown: string; label: string }) {
   const trigger = useRef<HTMLButtonElement | null>(null);
   const [place, setPlace] = useState<Element | null>(null);
   const open = place !== null;
@@ -144,8 +162,17 @@ function InlineDot({ tone, note, label }: { tone: DotTone; note: string; label: 
       >
         <span aria-hidden className={`block h-[7px] w-[7px] rounded-full ${DOT_CLASS[tone]}`} />
       </button>
-      {place ? createPortal(<span role="status" data-settings-dot-popover="" data-program-dot-inline="" className="block pb-0.5 pl-[12.5px] text-ui leading-snug text-secondary max-sm:pl-[15.5px]">{note}</span>, place) : null}
+      {place ? createPortal(<span role="status" data-settings-dot-popover="" data-program-dot-inline="" className="block break-words pb-0.5 pl-[12.5px] text-ui leading-snug text-secondary max-sm:pl-[15.5px]">{shown}</span>, place) : null}
     </>
+  );
+}
+
+/** A dot whose line already says everything: it opens nothing, and keeps its place and its name for a screen reader. */
+function PlainDot({ tone, note, label }: { tone: DotTone; note: string; label: string }) {
+  return (
+    <span role="img" data-settings-dot={tone} aria-label={`${label}: ${note}`} className={`flex shrink-0 items-center ${DOT_HIT}`}>
+      <span aria-hidden className={`block h-[7px] w-[7px] rounded-full ${DOT_CLASS[tone]}`} />
+    </span>
   );
 }
 
@@ -159,10 +186,14 @@ export function DotNotePlace() {
  * Settings row's does: beside the name in the nearest `data-program-dot-row`,
  * over no words. An open popover closes once its dot, or the popover itself,
  * leaves the scrolling body, so it never stands over the guide's header or
- * footer. In a narrow card the words open in the row (`InlineDot`).
+ * footer. In a narrow card the words open in the row (`InlineDot`), under the
+ * line the dot leads: `inline` is what they say there when that line already
+ * states part of the note, and null when it states all of it.
  */
-export function RowDot({ tone, note, label }: { tone: DotTone; note: string; label: string }) {
-  return useNarrowRows() ? <InlineDot tone={tone} note={note} label={label} /> : <FloatingDot tone={tone} note={note} label={label} />;
+export function RowDot({ tone, note, inline = note, label }: { tone: DotTone; note: string; inline?: string | null; label: string }) {
+  const narrow = useNarrowRows();
+  if (!narrow) return <FloatingDot tone={tone} note={note} label={label} />;
+  return inline === null ? <PlainDot tone={tone} note={note} label={label} /> : <InlineDot tone={tone} note={note} shown={inline} label={label} />;
 }
 
 function FloatingDot({ tone, note, label }: { tone: DotTone; note: string; label: string }) {

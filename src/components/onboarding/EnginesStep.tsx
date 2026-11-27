@@ -6,7 +6,7 @@ import { useState, type ReactNode } from "react";
 import { accountSessionLeft, accountSignInAvailable, accountSignInPhase, AccountSignInBlock, AddAccountForm, useAccountSignIn } from "@/components/AccountsPanel";
 import { copilotSignedIn, useCopilotAccounts, type CopilotAccounts } from "@/components/CopilotFooterRow";
 import { antigravityCardState, AntigravitySignIn, type AntigravityAccount, type AntigravityCliPresence } from "@/components/onboarding/AntigravityAccount";
-import { DotNotePlace, InstallCommand, ProgramHead, RowDot, TONE_INK, useNarrowRows, useOnHost, type ProgramId, type ProgramStateWords } from "@/components/onboarding/ProgramRowParts";
+import { DotNotePlace, InstallCommand, ProgramHead, RowDot, TONE_INK, useNarrowRows, useOnHost, type ProgramId, type ProgramInstall, type ProgramInstalls, type ProgramStateWords } from "@/components/onboarding/ProgramRowParts";
 import { formatResetClock } from "@/components/rateLimit";
 import type { DotTone } from "@/components/settings/StatusDot";
 import { NONTERMINAL_CLAUDE_LOGIN_PHASES, type AccountOption, type EngineAccountsState } from "@/hooks/useEngineAccounts";
@@ -65,11 +65,40 @@ const planName = (plan: string | null | undefined) => {
   return trimmed ? trimmed.charAt(0).toUpperCase() + trimmed.slice(1) : null;
 };
 
+type SessionLimit = { left: number; resetsAt: number | null };
+
+/** The hour a session limit starts over, once that is known and still ahead. */
+function resetClock(limit: SessionLimit, now: number): string | null {
+  return limit.resetsAt !== null && limit.resetsAt > now ? formatResetClock(limit.resetsAt, now) : null;
+}
+
 /** What the limit left reads as in a popover: the share, and when it starts over once that is known. */
-function limitNote(limit: { left: number; resetsAt: number | null }, now: number, t: TFunction): string {
-  return limit.resetsAt !== null && limit.resetsAt > now
-    ? t("onboarding.engines.note.limitLeftResets", { left: limit.left, time: formatResetClock(limit.resetsAt, now) })
-    : t("onboarding.engines.note.limitLeft", { left: limit.left });
+function limitNote(limit: SessionLimit, now: number, t: TFunction): string {
+  const time = resetClock(limit, now);
+  return time !== null ? t("onboarding.engines.note.limitLeftResets", { left: limit.left, time }) : t("onboarding.engines.note.limitLeft", { left: limit.left });
+}
+
+/* What one line of a popover holds beside the word that leads the path. */
+const PATH_ROOM = 26;
+
+/** A path as a popover's line holds it: whole when it fits, otherwise its last folders and the file behind "…". */
+export function shortPath(path: string, room = PATH_ROOM): string {
+  if (path.length <= room) return path;
+  const separator = path.includes("\\") && !path.includes("/") ? "\\" : "/";
+  const parts = path.split(separator);
+  let kept = parts.pop() ?? "";
+  while (parts.length > 0 && `…${separator}${parts[parts.length - 1]}${separator}${kept}`.length <= room) kept = `${parts.pop()}${separator}${kept}`;
+  return `…${separator}${kept}`;
+}
+
+/** What a popover says of an installed program (design §3.2): its version and where its command was found, as far as
+    the last check learned them. Null when it learned neither, and the popover keeps its sentence. */
+export function installNote(install: ProgramInstall | null | undefined, t: TFunction): string | null {
+  const version = install?.version ?? null;
+  const path = install?.path ? shortPath(install.path) : null;
+  if (version && path) return t("onboarding.engines.note.versionAt", { version, path });
+  if (version) return t("onboarding.engines.note.version", { version });
+  return path ? t("onboarding.engines.note.foundAt", { path }) : null;
 }
 
 /** The state a Claude Code or Codex row is in (the table of design §3.2). */
@@ -84,14 +113,14 @@ export function accountsRowKind(state: Pick<EngineAccountsState, "engine" | "acc
 }
 
 /** A Claude Code or Codex row's state line: its words, their tone and the dot's popover. Shared with the welcome. */
-export function accountsRowWords(state: Pick<EngineAccountsState, "engine" | "accounts" | "active" | "status">, kind: AccountsRowKind, now: number, t: TFunction): ProgramStateWords | null {
+export function accountsRowWords(state: Pick<EngineAccountsState, "engine" | "accounts" | "active" | "status">, kind: AccountsRowKind, now: number, t: TFunction, install?: ProgramInstall | null): ProgramStateWords | null {
   if (kind === "loading") return null;
   if (kind === "missing") return { words: t("onboarding.engines.missing"), tone: "off", note: t("onboarding.engines.note.missing") };
   if (kind === "unsupported") return { words: t("onboarding.engines.needsWsl"), tone: "off", note: t("onboarding.engines.needsWslNote") };
   if (kind === "signing-in") return { words: t("onboarding.engines.signingIn"), tone: "warn", note: t("onboarding.engines.note.accountSigningIn") };
   if (kind === "signed-out") {
     if (state.status === "error") return { words: t("onboarding.engines.authUnknown"), tone: "warn", note: t("onboarding.engines.note.authUnknown") };
-    return { words: t("onboarding.engines.signedOut"), tone: "warn", note: t(state.engine === "claude" ? "onboarding.engines.isolatedSignin" : "onboarding.engines.note.signedOut") };
+    return { words: t("onboarding.engines.signedOut"), tone: "warn", note: installNote(install, t) ?? t(state.engine === "claude" ? "onboarding.engines.isolatedSignin" : "onboarding.engines.note.signedOut") };
   }
   if (kind === "connected") {
     const account = engineAccount(state);
@@ -100,13 +129,15 @@ export function accountsRowWords(state: Pick<EngineAccountsState, "engine" | "ac
     return {
       words: plan ? t("onboarding.engines.connected", { plan }) : t("onboarding.engines.connectedNoPlan"),
       tone: "ok",
-      note: limit ? limitNote(limit, now, t) : t("onboarding.engines.note.connected"),
+      /* The version and the limit left; without a limit read, the version and the place; without a version, the limit and its hour. */
+      note: limit && install?.version ? t("onboarding.engines.note.versionLimit", { version: install.version, left: limit.left })
+        : limit ? limitNote(limit, now, t) : installNote(install, t) ?? t("onboarding.engines.note.connected"),
     };
   }
   /* Several accounts: the line counts them, and only the ones that wait for a sign-in. */
   const waiting = state.accounts.filter((account) => !accountConnected(account));
   const head = t("onboarding.engines.accountsHeader", { count: state.accounts.length });
-  if (!waiting.length) return { words: head, tone: "ok", note: t("onboarding.engines.note.connected") };
+  if (!waiting.length) return { words: head, tone: "ok", note: installNote(install, t) ?? t("onboarding.engines.note.connected") };
   return {
     words: `${head} · ${t("onboarding.engines.accountsNeedSignIn", { count: waiting.length })}`,
     tone: "warn",
@@ -115,12 +146,12 @@ export function accountsRowWords(state: Pick<EngineAccountsState, "engine" | "ac
 }
 
 /** Antigravity's state line, from the facts every surface of it reads. */
-export function antigravityRowWords(agy: Pick<AntigravityAccount, "cli" | "auth" | "loaded" | "plan">, cli: AntigravityCliPresence, t: TFunction): ProgramStateWords | null {
+export function antigravityRowWords(agy: Pick<AntigravityAccount, "cli" | "auth" | "loaded" | "plan">, cli: AntigravityCliPresence, t: TFunction, install?: ProgramInstall | null): ProgramStateWords | null {
   const state = antigravityCardState(agy, cli);
   if (state === "loading") return null;
   if (state === "missing") return { words: t("onboarding.engines.missing"), tone: "off", note: t("onboarding.engines.note.missing") };
-  if (state === "connected") return { words: agy.plan ? t("onboarding.engines.connected", { plan: agy.plan }) : t("onboarding.engines.connectedNoPlan"), tone: "ok", note: t("onboarding.engines.note.connected") };
-  if (state === "signed-out") return { words: t("onboarding.engines.signedOut"), tone: "warn", note: t("onboarding.engines.note.agySignedOut") };
+  if (state === "connected") return { words: agy.plan ? t("onboarding.engines.connected", { plan: agy.plan }) : t("onboarding.engines.connectedNoPlan"), tone: "ok", note: installNote(install, t) ?? t("onboarding.engines.note.connected") };
+  if (state === "signed-out") return { words: t("onboarding.engines.signedOut"), tone: "warn", note: installNote(install, t) ?? t("onboarding.engines.note.agySignedOut") };
   return { words: t("onboarding.engines.authUnknown"), tone: "warn", note: t("onboarding.engines.note.agyUnknown") };
 }
 
@@ -158,6 +189,11 @@ function AccountLine({ state, account, now, signIn, phone }: { state: EngineAcco
   const tone: DotTone = connected && !low ? "ok" : "warn";
   const words = !connected ? t(phase === "running" ? "onboarding.engines.accountSigningIn" : "onboarding.engines.accountNeedsSignIn") : low ? t("onboarding.engines.accountLimitLeft", { left: limit.left }) : null;
   const note = !connected ? t(phase === "running" ? "onboarding.engines.note.accountSigningIn" : "onboarding.engines.note.accountSignedOut") : limit ? limitNote(limit, now, t) : t("onboarding.engines.note.connected");
+  /* In a narrow card the note opens right under the account's own words, so there it adds only what they leave out:
+     under the share of the limit, the hour it starts over. Words that say all of it ("needs sign-in", "signing in", a
+     share with no hour known) leave the dot nothing to open. An account with room left has no words, and its note is whole. */
+  const time = low ? resetClock(limit, now) : null;
+  const inline = !connected ? null : !low ? undefined : time !== null ? t("onboarding.engines.note.resets", { time }) : null;
   const plan = planName(account.plan);
   const loginBusy = engine === "claude" && state.accounts.some((candidate) => candidate.login != null && NONTERMINAL_CLAUDE_LOGIN_PHASES.has(candidate.login.phase));
   const canSignIn = !connected && phase === null && accountSignInAvailable(engine, account);
@@ -166,7 +202,7 @@ function AccountLine({ state, account, now, signIn, phone }: { state: EngineAcco
       <div data-program-dot-row="" className="flex min-h-8 min-w-0 items-center gap-3 max-sm:min-h-11">
         <div className="flex min-w-0 flex-1 flex-col">
           <span className="flex min-w-0 items-center">
-            <RowDot tone={tone} note={note} label={account.label} />
+            <RowDot tone={tone} note={note} inline={inline} label={account.label} />
             <span data-settings-row-label="" className="min-w-0 text-ui text-primary">
               <span className="font-semibold">{account.label}</span>
               {plan ? <span className="text-secondary"> · {plan}</span> : null}
@@ -189,9 +225,11 @@ function AccountLine({ state, account, now, signIn, phone }: { state: EngineAcco
 }
 
 /** A Claude Code or Codex row over the engine's account store. */
-function AccountsRow({ state, cli, now, platform, primary, lead, phone, stacked }: {
+function AccountsRow({ state, cli, install, now, platform, primary, lead, phone, stacked }: {
   state: EngineAccountsState;
   cli: CliPresence;
+  /** Where the program's command was found and its version, for the dot's popover. */
+  install?: ProgramInstall;
   now: number;
   platform: HostPlatform;
   /** This row's action is the step's next thing to press. */
@@ -209,7 +247,7 @@ function AccountsRow({ state, cli, now, platform, primary, lead, phone, stacked 
   const phases = state.accounts.map((account) => accountSignInPhase(engine, account, signIn));
   const running = phases.includes("running");
   const kind = accountsRowKind(state, cli, platform, running);
-  const base = accountsRowWords(state, kind, now, t);
+  const base = accountsRowWords(state, kind, now, t, install);
   /* While a sign-in is pending "Add an account" is disabled, and the row's dot says why. */
   const words = base && running && kind === "several" ? { ...base, note: t("onboarding.engines.note.signingIn") } : base;
   const only = state.accounts[0] ?? null;
@@ -259,11 +297,11 @@ function AccountsRow({ state, cli, now, platform, primary, lead, phone, stacked 
   return <ProgramRow program={engine} kind={kind} words={words} action={action}>{body}</ProgramRow>;
 }
 
-function AntigravityRow({ agy, cli, platform, onHost }: { agy: AntigravityAccount; cli: AntigravityCliPresence; platform: HostPlatform; onHost: boolean }) {
+function AntigravityRow({ agy, cli, install, platform, onHost }: { agy: AntigravityAccount; cli: AntigravityCliPresence; install?: ProgramInstall; platform: HostPlatform; onHost: boolean }) {
   const { t } = useLocale();
   const state = antigravityCardState(agy, cli);
   return (
-    <ProgramRow program="antigravity" kind={state} words={antigravityRowWords(agy, cli, t)}>
+    <ProgramRow program="antigravity" kind={state} words={antigravityRowWords(agy, cli, t, install)}>
       {state === "missing" ? (
         <InstallCommand engine="antigravity" install={agentInstallCommand("antigravity", platform)} sentence={t(platform === "win32" ? "onboarding.engines.pastePowerShell" : "onboarding.engines.pasteTerminal")} />
       ) : state === "signed-out" || state === "unknown" ? <AntigravitySignIn agy={agy} onHost={onHost} /> : null}
@@ -281,14 +319,14 @@ function copilotKind(accounts: CopilotAccounts): CopilotKind {
 }
 
 /** Copilot's row: the guide starts no install and no sign-in for it, so each state that waits holds one sentence and no button. */
-function CopilotRow({ accounts, onHost }: { accounts: CopilotAccounts; onHost: boolean }) {
+function CopilotRow({ accounts, install, onHost }: { accounts: CopilotAccounts; install?: ProgramInstall; onHost: boolean }) {
   const { t } = useLocale();
   const kind = copilotKind(accounts);
   const signedIn = copilotSignedIn(accounts.body);
   const words: ProgramStateWords | null = kind === "loading" ? null
     : kind === "missing" ? { words: t("onboarding.engines.missing"), tone: "off", note: t("onboarding.engines.note.missingCopilot") }
       : kind === "connected" ? { words: t("onboarding.engines.connectedCopilot", { label: signedIn?.label ?? "" }), tone: "ok", note: t("onboarding.engines.copilotNote") }
-        : { words: t("onboarding.engines.signedOut"), tone: "warn", note: t("onboarding.engines.note.copilotSignedOut") };
+        : { words: t("onboarding.engines.signedOut"), tone: "warn", note: installNote(install, t) ?? t("onboarding.engines.note.copilotSignedOut") };
   return (
     <ProgramRow program="copilot" kind={kind} words={words}>
       {kind === "missing" ? <p data-onboarding-copilot-manual="" className="text-ui text-secondary">{t("onboarding.engines.copilotInstall")}</p>
@@ -315,12 +353,14 @@ export function anyAgentSignedIn(claude: Pick<EngineAccountsState, "accounts">, 
   return engineReady(claude, cli.claude) || engineReady(codex, cli.codex) || antigravityCardState(antigravity, cli.antigravity ?? antigravity.cli) === "connected";
 }
 
-export function EnginesStep({ claude, codex, antigravity, cli, now, platform = "linux", onRecheck }: {
+export function EnginesStep({ claude, codex, antigravity, cli, installs = {}, now, platform = "linux", onRecheck }: {
   claude: EngineAccountsState;
   codex: EngineAccountsState;
   /** Antigravity's recorded sign-in and its check; the dialog owns it because the mapping rows read it too. */
   antigravity: AntigravityAccount;
   cli: { claude: CliPresence; codex: CliPresence; antigravity?: CliPresence };
+  /** What the same check learned of each installed program: its path and version, which the status popovers name. */
+  installs?: ProgramInstalls;
   now: number;
   /** The system Delegatus runs on: on Windows a row shows the PowerShell line, and Codex asks for WSL 2. */
   platform?: HostPlatform;
@@ -357,10 +397,10 @@ export function EnginesStep({ claude, codex, antigravity, cli, now, platform = "
         <p data-onboarding-accounts-lead="" className="mt-2 text-body leading-[1.45] text-secondary">{t("onboarding.engines.lead")}</p>
       </div>
       <ul data-onboarding-programs="" className="flex flex-col divide-y divide-border rounded-[12px] border border-border bg-card">
-        <AccountsRow state={claude} cli={cli.claude} now={now} platform={platform} primary={next === "claude"} lead={lead} phone={phone} stacked={stacked} />
-        <AccountsRow state={codex} cli={cli.codex} now={now} platform={platform} primary={next === "codex"} lead={lead} phone={phone} stacked={stacked} />
-        <AntigravityRow agy={antigravity} cli={agyCli} platform={platform} onHost={onHost} />
-        <CopilotRow accounts={copilot} onHost={onHost} />
+        <AccountsRow state={claude} cli={cli.claude} install={installs.claude} now={now} platform={platform} primary={next === "claude"} lead={lead} phone={phone} stacked={stacked} />
+        <AccountsRow state={codex} cli={cli.codex} install={installs.codex} now={now} platform={platform} primary={next === "codex"} lead={lead} phone={phone} stacked={stacked} />
+        <AntigravityRow agy={antigravity} cli={agyCli} install={installs.antigravity} platform={platform} onHost={onHost} />
+        <CopilotRow accounts={copilot} install={installs.copilot} onHost={onHost} />
       </ul>
     </div>
   );

@@ -23,6 +23,7 @@ import { engineAccount, engineReady, EnginesStep, type CliPresence } from "./Eng
 import { MemoryStep } from "./MemoryStep";
 import { OrchestratorStep } from "./OrchestratorStep";
 import { PhoneStep, type PhoneStepOutcome } from "./PhoneStep";
+import { programInstalls, type ProgramInstalls } from "./ProgramRowParts";
 import type { CreateDraft } from "@/components/ProjectRail";
 import { ProjectStep, type GuideProject } from "./ProjectStep";
 import { RelayStep } from "./RelayStep";
@@ -96,8 +97,10 @@ const DEFAULT_CHECK_MINUTES = 5;
 
 /** `/api/accounts` also says whether each engine's command resolves; the
     engine stores parse the accounts, so the step reads that one fact itself. */
-function useCliPresence(): { cli: Record<RoleEngine, CliPresence>; answered: boolean; recheck: () => Promise<void> } {
+function useCliPresence(): { cli: Record<RoleEngine, CliPresence>; installs: ProgramInstalls; answered: boolean; recheck: () => Promise<void> } {
   const [cli, setCli] = useState<Record<RoleEngine, CliPresence>>({ claude: null, codex: null, antigravity: null });
+  /* What the same check learned of each program: where its command was found and its version. */
+  const [installs, setInstalls] = useState<ProgramInstalls>({});
   /* The first read has ended, with an answer or without one: the welcome waits for it before it says what is installed. */
   const [answered, setAnswered] = useState(false);
   const read = useCallback((fresh: boolean) => {
@@ -113,11 +116,12 @@ function useCliPresence(): { cli: Record<RoleEngine, CliPresence>; answered: boo
           return presence(value && typeof value === "object" ? (value as { cli?: unknown }).cli : value);
         };
         setCli({ claude: read("claude"), codex: read("codex"), antigravity: read("antigravity") });
+        setInstalls(programInstalls((body as { cliInstalls?: unknown }).cliInstalls));
       })
       .finally(() => setAnswered(true));
   }, []);
   useEffect(() => { void read(false); }, [read]);
-  return { cli, answered, recheck: () => read(true) };
+  return { cli, installs, answered, recheck: () => read(true) };
 }
 
 function useNow(): number {
@@ -163,7 +167,7 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
   const isMobile = useIsMobile();
   const claude = useEngineAccounts("claude");
   const codex = useEngineAccounts("codex");
-  const { cli, answered: cliAnswered, recheck } = useCliPresence();
+  const { cli, installs, answered: cliAnswered, recheck } = useCliPresence();
   /* Antigravity's recorded sign-in, with one check when `agy` is installed and nothing has recorded it. */
   const antigravity = useAntigravityAccount({ autoProbe: true });
   const agyCli = cli.antigravity ?? antigravity.cli;
@@ -443,7 +447,7 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
     </>
   );
   const content = cover ? (
-    <WelcomeStep claude={claude} codex={codex} antigravity={antigravity} cli={cli} cliAnswered={cliAnswered} now={now} platform={hostPlatform} onContinue={() => leaveWelcome(true)} onAccounts={() => leaveWelcome(false)} />
+    <WelcomeStep claude={claude} codex={codex} antigravity={antigravity} cli={cli} installs={installs} cliAnswered={cliAnswered} now={now} platform={hostPlatform} onContinue={() => leaveWelcome(true)} onAccounts={() => leaveWelcome(false)} />
   ) : view === "mapping" || current === "agents" ? (
     <>
       {view === "mapping" ? <p className="mb-4 text-body leading-[1.45] text-secondary">{t("onboarding.agents.leadStandalone")}</p> : null}
@@ -487,7 +491,7 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
       newcomer={unfinishedFirstRun(marker, markerStatus)}
     />
   ) : (
-    <EnginesStep claude={claude} codex={codex} antigravity={antigravity} cli={cli} now={now} platform={hostPlatform} onRecheck={recheckAll} />
+    <EnginesStep claude={claude} codex={codex} antigravity={antigravity} cli={cli} installs={installs} now={now} platform={hostPlatform} onRecheck={recheckAll} />
   );
 
   const stepRow = (id: OnboardingStepId, index: number | null) => {

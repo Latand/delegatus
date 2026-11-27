@@ -1135,15 +1135,35 @@ step to the list and touches none of the files that pull request rewrites.
     sentence about installing into the home folder.
   - *Rows.* A dot's popover holds one or two short lines: what the state
     line leaves out, and for a signed-in account the share of its session
-    limit left with the hour it starts over. The version and path the table
-    names need a probe that reports them; slice 3 adds it with the install
-    job. The popover is placed against the row's name and state alone, so
+    limit left with the hour it starts over. An installed, signed-out
+    program's popover names its version and the path its command was found
+    at ("Version 2.1.4 at ~/.local/bin/claude"); a signed-in one's names the
+    version and the limit left, or the version and the path when no limit
+    has been read. Both come from the check the rows already wait for: the
+    one bounded `--version` run per program that says whether the command
+    starts (`cliReport` in `src/lib/accounts/engineConnection.ts`) also
+    keeps the resolved path and the first dotted triple of a clean answer.
+    `GET /api/accounts` and the re-probe `GET /api/accounts/cli` carry them
+    as `cliInstalls`, for Copilot too. A path under the home reads from
+    `~`, so the answer carries no user name; a command found through PATH
+    alone has no path, and a `--version` that fails has no version, and
+    then the popover says the part that is known or keeps its sentence. A
+    path longer than a popover's line keeps its last folders and the file
+    behind "…". A program that is not installed never quotes either. The
+    popover is placed against the row's name and state alone, so
     it ends before an action beside them. Under 768 px the list is about
     300 px wide (a phone, and a window where the step list stands beside
     it): beside "Claude Code" that leaves a popover some 130 px, which two
     short lines do not fit. There a row's action stands under its head and
     the dot's words open in the row itself, under the state line, where
-    they cover nothing. Escape closes an open popover alone and the next
+    they cover nothing. Words that open there stand right under the line
+    their dot leads, so they add only what that line leaves out: under
+    "12% of the session limit left" an amber account's note reads "Resets
+    at 11:35." alone. Where the words say all of it (no hour known, "needs
+    sign-in", "signing in") the dot opens nothing there. The
+    floating popover of a wide card keeps both sentences, and the dot's
+    label for a screen reader keeps both at every width. Escape closes an
+    open popover alone and the next
     Escape closes the guide. The footer reads "Continue without an agent" on a border until
     Claude Code, Codex or Antigravity has a signed-in account, and the
     visited step's warning mark in the list follows the same rule.
@@ -1152,13 +1172,22 @@ step to the list and touches none of the files that pull request rewrites.
     reads; otherwise the sentence names the computer running Delegatus.
   - *Windows.* `GET /api/onboarding` names the host's system. On `win32` a
     missing row shows the vendor's PowerShell line (all three answered on
-    2026-11-26) and Codex reads "Needs WSL 2 on Windows". Finding `agy.exe`
-    under `%LOCALAPPDATA%` waits for slice 3, which touches the same
-    resolver for the install job.
+    2026-11-26) and Codex reads "Needs WSL 2 on Windows". Antigravity's
+    line installs `%LOCALAPPDATA%\agy\bin\agy.exe` and extends the user's
+    PATH, which a Delegatus that is already running never sees, so the
+    Windows search probes that folder for `agy` by name: from
+    `LOCALAPPDATA`, then from its usual place under the home
+    (`windowsAgentBinaryCandidates` in `bin/agent-binaries.mjs`, the one
+    list the launcher and the Viewer's resolver in `src/lib/agent/cli.ts`
+    both read). "Check again" after the install finds it with no restart.
   - *The guide no longer carries* the provider form, the usage header or
     "Remove": they stay on the accounts screen (A3).
   - *Frames:* the states `welcome-*`, `engines-*` and `accounts-*` of the
-    kanban driver's guide block, at 1440, 900, 860, 645 and 390.
+    kanban driver's guide block, at 1440, 900, 860, 645 and 390; 860 in
+    both themes, as 1440 and 390 are. The block presses every dot and
+    checks that a signed-out program's popover names its version and path,
+    a signed-in one's its version, and that words opened in a narrow row
+    repeat nothing of the line above them.
 
 ### 12.4 Slice 3: the install job and its button
 

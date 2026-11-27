@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { findAgentBinary } from "../../../bin/agent-binaries.mjs";
+import { findAgentBinary, windowsAgentBinaryCandidates } from "../../../bin/agent-binaries.mjs";
 
 import { accountForSpawn, codexHomeOwningSessionPath, isManagedCodexHome } from "@/lib/accounts/codex";
 import { claudeProviderForHome, claudeProviderLauncherPath, claudeSettingsPath, claudeTranscriptOwnership, isManagedClaudeHome, legacyClaudeHome } from "@/lib/accounts/claude";
@@ -56,15 +56,16 @@ export type AgentEngine = "claude" | "codex" | "copilot" | "antigravity";
  * failure instead of a clean "not installed" — the README says to use the
  * native installer. `CreateProcess` searching PATH appends `.exe` and `.com`
  * and never `.cmd`, so the bare-name fallback has the same property.
+ * Antigravity's PowerShell installer writes `%LOCALAPPDATA%\agy\bin\agy.exe`
+ * and extends the user's PATH, which a Viewer that is already running does
+ * not see, so `agy` is probed in that folder by name. The list itself lives
+ * beside the launcher's (`bin/agent-binaries.mjs`), so both search one set.
  *
- * Pure over `home`, so the order is asserted without a Windows filesystem.
+ * Pure over `home` and `localAppData`, so the order is asserted without a
+ * Windows filesystem.
  */
-export function windowsBinaryCandidates(home: string, name: string): string[] {
-  return [
-    path.join(home, ".local", "bin", `${name}.exe`),
-    path.join(home, ".bun", "bin", `${name}.exe`),
-    path.join(home, "AppData", "Local", "Programs", name, `${name}.exe`),
-  ];
+export function windowsBinaryCandidates(home: string, name: string, localAppData: string = process.env.LOCALAPPDATA ?? ""): string[] {
+  return windowsAgentBinaryCandidates(name, { home, localAppData });
 }
 
 /** Absolute path of an agent CLI when we can find one; bare name otherwise. */

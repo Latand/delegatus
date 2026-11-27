@@ -45918,6 +45918,13 @@ describe("first-run guide: variant 1 on the real components", () => {
     { token: "settings-memory-before", label: { en: "Settings · Delegatus memory, no orchestrator", uk: "Налаштування · пам’ять Delegatus, без оркестратора" } },
     { token: "settings-memory-after", label: { en: "Settings · Delegatus memory, orchestrator exists", uk: "Налаштування · пам’ять Delegatus, оркестратор є" } },
   ];
+  /* What the fixture's check learned of each installed program (`FIRST_RUN_INSTALLS`): the version and path its popover names. */
+  const FIRST_RUN_INSTALLED: Record<string, { version: string; path: string }> = {
+    claude: { version: "2.1.4", path: "~/.local/bin/claude" },
+    codex: { version: "0.170.0", path: "~/.npm-global/bin/codex" },
+    antigravity: { version: "1.5.17", path: "~/.local/bin/agy" },
+    copilot: { version: "1.0.87", path: "~/.bun/bin/copilot" },
+  };
   /* The states of onboarding v2, slice 1. */
   const SLICE_1 = (token: string) => token.startsWith("first-visit") || token === "orchestrator-no-engine";
   /* The states of slice 2: the Accounts rows and the welcome. */
@@ -45925,13 +45932,13 @@ describe("first-run guide: variant 1 on the real components", () => {
   const WELCOME = (token: string) => token.startsWith("welcome-");
   const SLICE_2 = (token: string) => ROWS(token) || WELCOME(token);
   /* The named widths in both languages and themes; 645 and 900 stand between them, in English and Ukrainian, light.
-     860 is the first width of the guide's desktop layout, drawn for the states of slices 1 and 2. */
+     860 is the first width of the guide's desktop layout, a named width too, drawn for the states of slices 1 and 2. */
   const WIDTHS: Array<{ width: number; themes: Array<"light" | "dark">; tokens?: (token: string) => boolean }> = [
     { width: 1440, themes: ["light", "dark"] },
     { width: 390, themes: ["light", "dark"] },
     { width: 900, themes: ["light"] },
     { width: 645, themes: ["light"] },
-    { width: 860, themes: ["light"], tokens: (token) => SLICE_1(token) || SLICE_2(token) },
+    { width: 860, themes: ["light", "dark"], tokens: (token) => SLICE_1(token) || SLICE_2(token) },
   ];
   /* Names, product words and code a Ukrainian line may keep in Latin letters. */
   const LATIN = /^(?:Claude|Code|Codex|Copilot|GitHub|Delegatus|Telegram|Opus|GPT-6\.1-Sol|Sol|README|CLI|CSV|API|Max|Pro|atlas|atlas-api|src\/billing|curl|fsSL|https|bash|sh|install\.sh|claude\.ai|chatgpt\.com|codex|Account|A|B|Report|Bot|Team|Reports|OpenCode|Go|Messages|repo|uk|en|low|medium|high|xhigh|BotFather|team-reports|id|delegatus\.org|Antigravity|Google|OAuth|AI|agy|copilot|PowerShell|Windows|WSL|PATH|H|Plus|QK7P-M2XD|irm|iex|install\.ps1|antigravity\.google|claude\.ai\/oauth)$/;
@@ -46261,8 +46268,11 @@ describe("first-run guide: variant 1 on the real components", () => {
         if (Math.min(rect.right, box.right) - Math.max(rect.left, box.left) > 0.5 && Math.min(rect.bottom, box.bottom) - Math.max(rect.top, box.top) > 0.5) { covered.push(node.textContent.trim().slice(0, 40)); break; }
       }
     }
+    /* In a narrow card the words open right under the line their dot leads: that line is what they must not say again. */
+    const lineAbove = popover.closest("[data-program-dot-row]")?.querySelector("[data-onboarding-account-words], [data-onboarding-engine-header]")?.textContent?.trim() ?? "";
     return {
       text: popover.textContent ?? "",
+      above: popover.hasAttribute("data-program-dot-inline") ? lineAbove : "",
       lines,
       inline: popover.hasAttribute("data-program-dot-inline"),
       inWindow: box.left >= 0 && box.top >= 0 && box.right <= innerWidth + 0.5 && box.bottom <= innerHeight + 0.5,
@@ -46587,20 +46597,46 @@ describe("first-run guide: variant 1 on the real components", () => {
           if (surfaceCheck.sideways > 1) failures.push(`${name}: scrolls sideways by ${surfaceCheck.sideways}px`);
           /* Slice 2: every status dot is pressed, and its popover read where it opened. */
           if (SLICE_2(spec.token)) {
-            const dots = page.locator("[data-onboarding-dialog] [data-onboarding-programs] [data-settings-dot]");
+            /* A dot whose line already says all of its note is no button and opens nothing; every other one is pressed. */
+            const dots = page.locator("[data-onboarding-dialog] [data-onboarding-programs] button[data-settings-dot]");
             const popovers: Array<Record<string, unknown>> = [];
-            /* The frames that keep a popover on screen: the amber account among several, a program that is not installed, and the welcome's first row. */
-            const kept = spec.token === "accounts-several" ? 2 : spec.token === "engines-no-cli" || spec.token === "welcome-found" ? 0 : -1;
+            /* Letters and digits alone, so a line and a note compare by their words. */
+            const plain = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}%]+/gu, " ").trim();
+            const signedOutWords = translate(lang, "onboarding.engines.signedOut").replaceAll("\u00a0", " ");
+            const connectedWords = translate(lang, "onboarding.engines.connectedNoPlan").replaceAll("\u00a0", " ");
+            /* The frames that keep a popover on screen: the amber account among several, a program that is not installed, the
+               welcome's first row, and Claude Code's row signed out (version and path) and signed in (version and limit). */
+            const kept = spec.token === "accounts-several" ? 2 : ["engines-no-cli", "welcome-found", "engines-signed-out", "engines-claude-only"].includes(spec.token) ? 0 : -1;
             for (let index = 0; index < await dots.count(); index += 1) {
               const dot = dots.nth(index);
               await dot.scrollIntoViewIfNeeded();
+              /* Whose dot it is: a program's own, or one account's among several, and the words it leads. */
+              const owner = await dot.evaluate((node) => ({
+                program: node.closest("[data-onboarding-engine]")?.getAttribute("data-onboarding-engine") ?? "",
+                account: node.closest("[data-onboarding-account]") !== null,
+                words: node.closest("[data-program-dot-row]")?.querySelector("[data-onboarding-account-words], [data-onboarding-engine-header]")?.textContent?.trim() ?? "",
+              }));
               await dot.locator("span").first().click({ timeout: 5_000 });
               await page.waitForFunction(() => { const popover = document.querySelector<HTMLElement>("[data-settings-dot-popover]"); return popover !== null && getComputedStyle(popover).visibility === "visible"; }, null, { timeout: 5_000 });
               const popover = await page.evaluate(DOT_POPOVER);
               const where = `${name}: the popover of dot ${index + 1}`;
               if (!popover) failures.push(`${where} did not open`);
               else {
-                popovers.push({ dot: index + 1, text: popover.text, lines: popover.lines, inline: popover.inline });
+                popovers.push({ dot: index + 1, program: owner.program, account: owner.account, words: owner.words, text: popover.text, lines: popover.lines, inline: popover.inline });
+                /* Design §3.2: an installed, signed-out program's popover holds its version and path, a signed-in one's its
+                   version. Copilot's signed-in popover keeps saying what Copilot runs. */
+                const install = FIRST_RUN_INSTALLED[owner.program];
+                owner.words = owner.words.replaceAll("\u00a0", " ");
+                if (!owner.account && install) {
+                  if (owner.words === signedOutWords && !(popover.text.includes(install.version) && popover.text.includes(install.path))) failures.push(`${where} of a signed-out ${owner.program} reads «${popover.text}» without version ${install.version} and path ${install.path}`);
+                  if (owner.program !== "copilot" && owner.words.startsWith(connectedWords) && !popover.text.includes(install.version)) failures.push(`${where} of a signed-in ${owner.program} reads «${popover.text}» without version ${install.version}`);
+                }
+                /* Words that open in the row repeat nothing of the line they stand under. */
+                if (popover.inline && popover.above) {
+                  const said = plain(popover.above);
+                  const again = popover.text.split(/(?<=[.!?])\s+/).map(plain).filter((sentence) => sentence && (sentence.includes(said) || said.includes(sentence)));
+                  if (again.length) failures.push(`${where} repeats the line above it («${popover.above}»): «${popover.text}»`);
+                }
                 /* Under 768 px the card is too narrow for a popover beside a name: the words open in the row. */
                 if (popover.inline !== width < 768) failures.push(`${where} ${popover.inline ? "opens in the row" : "floats"} at ${width} px`);
                 if (!popover.text.trim()) failures.push(`${where} is empty`);

@@ -7,7 +7,7 @@ import type { HostPlatform } from "@/lib/onboarding/agentInstallCommands";
 
 import type { AntigravityAccount } from "./AntigravityAccount";
 import { accountsRowKind, accountsRowWords, antigravityRowWords, anyAgentSignedIn, type CliPresence } from "./EnginesStep";
-import { ProgramHead, useOnHost, type ProgramStateWords } from "./ProgramRowParts";
+import { ProgramHead, useOnHost, type ProgramInstalls, type ProgramStateWords } from "./ProgramRowParts";
 
 /**
  * The guide's cover (docs/design/onboarding-v2.md §3.1, Welcome 2), shown
@@ -26,11 +26,13 @@ const BUTTON = `inline-flex h-8 shrink-0 items-center justify-center whitespace-
 
 const AGENT_PROGRAMS = ["claude", "codex", "antigravity"] as const;
 
-export function WelcomeStep({ claude, codex, antigravity, cli, cliAnswered = true, now, platform = "linux", onContinue, onAccounts }: {
+export function WelcomeStep({ claude, codex, antigravity, cli, installs = {}, cliAnswered = true, now, platform = "linux", onContinue, onAccounts }: {
   claude: EngineAccountsState;
   codex: EngineAccountsState;
   antigravity: AntigravityAccount;
   cli: { claude: CliPresence; codex: CliPresence; antigravity?: CliPresence };
+  /** Each installed program's path and version, which a row's popover names as the Accounts step does. */
+  installs?: ProgramInstalls;
   /** The read that says which programs are installed has ended; until then no row claims a state. */
   cliAnswered?: boolean;
   now: number;
@@ -44,9 +46,9 @@ export function WelcomeStep({ claude, codex, antigravity, cli, cliAnswered = tru
   const onHost = useOnHost();
   const signingIn = (state: EngineAccountsState) => state.accounts.some((account) => account.loginPending);
   const words: Record<typeof AGENT_PROGRAMS[number], ProgramStateWords | null> = cliAnswered ? {
-    claude: accountsRowWords(claude, accountsRowKind(claude, cli.claude, platform, signingIn(claude)), now, t),
-    codex: accountsRowWords(codex, accountsRowKind(codex, cli.codex, platform, signingIn(codex)), now, t),
-    antigravity: antigravityRowWords(antigravity, cli.antigravity ?? antigravity.cli, t),
+    claude: accountsRowWords(claude, accountsRowKind(claude, cli.claude, platform, signingIn(claude)), now, t, installs.claude),
+    codex: accountsRowWords(codex, accountsRowKind(codex, cli.codex, platform, signingIn(codex)), now, t, installs.codex),
+    antigravity: antigravityRowWords(antigravity, cli.antigravity ?? antigravity.cli, t, installs.antigravity),
   } : { claude: null, codex: null, antigravity: null };
   /* The question waits for every program's answer, so the buttons never change under a pointer. */
   const settled = AGENT_PROGRAMS.every((program) => words[program] !== null);

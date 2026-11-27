@@ -8,6 +8,7 @@ import { installActEnv } from "@/test-helpers/actEnv";
 import { installOnboardingDom, jsonResponse, settle, typeInto } from "@/test-helpers/onboardingDom";
 
 import type { AntigravityAccount } from "./AntigravityAccount";
+import type { ProgramInstalls } from "./ProgramRowParts";
 
 /*
  * The Accounts step as rows (docs/design/onboarding-v2.md §3.2): one row per
@@ -19,7 +20,9 @@ import type { AntigravityAccount } from "./AntigravityAccount";
 const dom = installOnboardingDom();
 installActEnv();
 const { createRoot } = await import("react-dom/client");
-const { EnginesStep } = await import("./EnginesStep");
+const { EnginesStep, shortPath } = await import("./EnginesStep");
+const { programInstalls } = await import("./ProgramRowParts");
+const { formatResetClock } = await import("@/components/rateLimit");
 
 /* Unix seconds, as the dialog hands the time down. */
 const NOW = 1_800_000_000;
@@ -76,14 +79,14 @@ function agyAccount(over: Partial<AntigravityAccount> = {}): AntigravityAccount 
 type Cli = { claude: "found" | "missing"; codex: "found" | "missing"; antigravity?: "found" | "missing" };
 const FOUND: Cli = { claude: "found", codex: "found" };
 
-async function mount(claude: EngineAccountsState, codex: EngineAccountsState, options: { cli?: Cli; onRecheck?: () => unknown; antigravity?: AntigravityAccount; platform?: HostPlatform } = {}): Promise<HTMLDivElement> {
+async function mount(claude: EngineAccountsState, codex: EngineAccountsState, options: { cli?: Cli; onRecheck?: () => unknown; antigravity?: AntigravityAccount; platform?: HostPlatform; installs?: ProgramInstalls } = {}): Promise<HTMLDivElement> {
   const host = document.createElement("div");
   /* The dialog's body: a status dot's popover reads this surface for the words it must not cover. */
   host.setAttribute("data-settings-scroller", "");
   document.body.append(host);
   const root = createRoot(host);
   mounted = { root, host };
-  await act(async () => root.render(<EnginesStep claude={claude} codex={codex} antigravity={options.antigravity ?? agyAccount()} cli={options.cli ?? FOUND} now={NOW} platform={options.platform} onRecheck={options.onRecheck ?? (() => {})} />));
+  await act(async () => root.render(<EnginesStep claude={claude} codex={codex} antigravity={options.antigravity ?? agyAccount()} cli={options.cli ?? FOUND} installs={options.installs} now={NOW} platform={options.platform} onRecheck={options.onRecheck ?? (() => {})} />));
   await act(async () => { await settle(); });
   return host;
 }
@@ -503,5 +506,178 @@ test("in a wide card a row's action stands beside its head, and a dot's words fl
   await act(async () => { row(host, "codex").querySelector<HTMLButtonElement>("[data-settings-dot]")!.click(); });
   const popover = document.querySelector("[data-settings-dot-popover]")!;
   expect(popover.textContent).toBe("No account is signed in yet.");
+  expect(host.contains(popover)).toBe(false);
+});
+
+/* What the check learned of each program, as `/api/accounts` hands it to the guide. */
+const INSTALLS: ProgramInstalls = {
+  claude: { path: "~/.local/bin/claude", version: "2.1.4" },
+  codex: { path: "~/.npm-global/bin/codex", version: "0.170.0" },
+  antigravity: { path: "~/.local/bin/agy", version: "1.5.17" },
+  copilot: { path: "~/.bun/bin/copilot", version: "1.0.87" },
+};
+
+/** A drawn sentence with its no-break spaces as plain ones: the words are what a case reads. */
+const spaced = (text: string | null | undefined) => text?.replaceAll("\u00a0", " ");
+
+/** Presses a row's own dot, reads what it opened, and closes it again. */
+async function popoverOf(host: HTMLElement, program: string): Promise<string | undefined> {
+  const dot = row(host, program).querySelector<HTMLButtonElement>("[data-program-dot-row] [data-settings-dot]")!;
+  await act(async () => { dot.click(); });
+  const text = spaced(document.querySelector("[data-settings-dot-popover]")?.textContent);
+  await act(async () => { dot.click(); });
+  return text;
+}
+
+test("an installed, signed-out program's popover names its version and the path its command was found at", async () => {
+  copilot = { present: true, accounts: [] };
+  const host = await mount(engineState("claude", [signedOut({ id: "cl-main", label: "Main" })], "cl-main"), none("codex"), { antigravity: agyAccount({ auth: "signed_out" }), installs: INSTALLS });
+  expect(await popoverOf(host, "claude")).toBe("Version 2.1.4 at ~/.local/bin/claude");
+  expect(await popoverOf(host, "codex")).toBe("Version 0.170.0 at ~/.npm-global/bin/codex");
+  expect(await popoverOf(host, "antigravity")).toBe("Version 1.5.17 at ~/.local/bin/agy");
+  expect(await popoverOf(host, "copilot")).toBe("Version 1.0.87 at ~/.bun/bin/copilot");
+});
+
+test("a signed-in program's popover holds its version and the limit left; with no limit read, the version and the path", async () => {
+  const claude = engineState("claude", [account({ id: "cl-main", label: "Main", plan: "max", limits: sessionUsed(20) })], "cl-main");
+  const codex = engineState("codex", [account({ id: "cx-main", label: "Main", plan: "pro" })], "cx-main");
+  const host = await mount(claude, codex, { antigravity: agyAccount({ auth: "signed_in", plan: "Google AI Pro" }), installs: INSTALLS });
+  expect(await popoverOf(host, "claude")).toBe("Version 2.1.4. 80% of the session limit left.");
+  expect(await popoverOf(host, "codex")).toBe("Version 0.170.0 at ~/.npm-global/bin/codex");
+  expect(await popoverOf(host, "antigravity")).toBe("Version 1.5.17 at ~/.local/bin/agy");
+});
+
+test("a check that learned only part of an install says that part, and one that learned nothing keeps the row's sentence", async () => {
+  copilot = { present: true, accounts: [] };
+  const limited = engineState("claude", [account({ id: "cl-main", label: "Main", plan: "max", limits: sessionUsed(20) })], "cl-main");
+  /* A version with no place (the command came through PATH alone), a place with no version (its --version failed), and nothing. */
+  const host = await mount(limited, none("codex"), { antigravity: agyAccount({ auth: "signed_out" }), installs: { claude: { path: "~/.local/bin/claude", version: null }, codex: { path: null, version: "0.170.0" }, antigravity: { path: "~/.local/bin/agy", version: null }, copilot: { path: null, version: null } } });
+  /* With no version the signed-in row falls back to the limit and its hour. */
+  expect(await popoverOf(host, "claude")).toBe(`80% of the session limit left. Resets at ${formatResetClock(NOW + 3600, NOW)}.`);
+  expect(await popoverOf(host, "codex")).toBe("Version 0.170.0.");
+  expect(await popoverOf(host, "antigravity")).toBe("Found at ~/.local/bin/agy");
+  expect(await popoverOf(host, "copilot")).toBe("The copilot command is installed and no account is signed in.");
+});
+
+test("a program that is not installed never quotes a version or a path, whatever an earlier check left", async () => {
+  copilot = { present: false, accounts: [] };
+  const host = await mount(none("claude"), none("codex"), { cli: { claude: "missing", codex: "missing", antigravity: "missing" }, antigravity: agyAccount({ cli: "missing", auth: "unknown" }), installs: INSTALLS });
+  for (const program of ["claude", "codex", "antigravity", "copilot"]) {
+    const text = await popoverOf(host, program);
+    expect(text).not.toContain("Version");
+    expect(text).not.toContain("bin/");
+    expect(text).toBe(program === "copilot" ? "The copilot command was not found on PATH." : "Not found in ~/.local/bin, ~/.bun/bin or PATH.");
+  }
+});
+
+test("a long path keeps its last folders and the file behind an ellipsis, and a short one is whole", () => {
+  expect(shortPath("~/.local/bin/claude")).toBe("~/.local/bin/claude");
+  expect(shortPath("~/.npm-global/bin/codex")).toBe("~/.npm-global/bin/codex");
+  expect(shortPath("/opt/homebrew/Caskroom/codex/0.170.0/bin/codex")).toBe("…/codex/0.170.0/bin/codex");
+  expect(shortPath("/opt/homebrew/Caskroom/antigravity/1.5.17/bin/agy")).toBe("…/1.5.17/bin/agy");
+  expect(shortPath("~\\AppData\\Local\\agy\\bin\\agy.exe")).toBe("…\\Local\\agy\\bin\\agy.exe");
+  /* A file name longer than the room is kept whole: the name is the part that tells programs apart. */
+  expect(shortPath("/srv/tools/a-launcher-with-a-very-long-name")).toBe("…/a-launcher-with-a-very-long-name");
+  expect(shortPath("agy")).toBe("agy");
+});
+
+test("the installs block is read per program, and anything that is no text is no answer", () => {
+  expect(programInstalls({ claude: { path: " ~/.local/bin/claude ", version: "2.1.4" }, codex: { path: "", version: 7 }, antigravity: null, copilot: "1.0.87", other: { path: "/x", version: "1.0.0" } })).toEqual({
+    claude: { path: "~/.local/bin/claude", version: "2.1.4" },
+    codex: { path: null, version: null },
+  });
+  for (const nothing of [null, undefined, "found", 3]) expect(programInstalls(nothing)).toEqual({});
+});
+
+/** Runs a case in the narrow card, where a dot's words open in the row. */
+async function narrow(run: () => Promise<void>): Promise<void> {
+  const view = dom.dom as unknown as { matchMedia: (query: string) => { matches: boolean } };
+  const desktop = view.matchMedia;
+  const phone = (query: string) => ({ ...desktop(query), matches: query.includes("max-width") });
+  view.matchMedia = phone;
+  Object.assign(globalThis, { matchMedia: phone });
+  try { await run(); } finally {
+    view.matchMedia = desktop;
+    Object.assign(globalThis, { matchMedia: desktop });
+  }
+}
+
+const severalWithLow = (limits: AccountOption["limits"]) => engineState("claude", [
+  account({ id: "cl-main", label: "Main", plan: "max", limits: sessionUsed(20) }),
+  account({ id: "cl-lab", label: "Lab", plan: "pro", limits }),
+], "cl-main");
+
+test("in a narrow card a low account's opened note adds only the hour its limit starts over: the share is said once", async () => {
+  await narrow(async () => {
+    const host = await mount(severalWithLow(sessionUsed(88)), none("codex"));
+    const line = row(host, "claude").querySelector<HTMLElement>("[data-onboarding-account=cl-lab]")!;
+    const said = line.querySelector("[data-onboarding-account-words]")!.textContent!;
+    expect(said).toBe("12% of the session limit left");
+    const dot = line.querySelector<HTMLButtonElement>("[data-settings-dot]")!;
+    const resets = `Resets at ${formatResetClock(NOW + 3600, NOW)}.`;
+    await act(async () => { dot.click(); });
+    const note = line.querySelector("[data-settings-dot-popover]")!;
+    expect(spaced(note.textContent)).toBe(resets);
+    expect(line.textContent!.split("12%")).toHaveLength(2);
+    /* It stands under the words it completes, and a screen reader still hears the whole of it on the dot. */
+    expect(line.querySelector("[data-onboarding-account-words]")!.compareDocumentPosition(note) & 4).toBe(4);
+    expect(spaced(dot.getAttribute("aria-label"))).toBe(`Lab: 12% of the session limit left. ${resets}`);
+    await act(async () => { dot.click(); });
+    /* An account with room left has no words under its name, so its note says the share itself. */
+    const main = row(host, "claude").querySelector<HTMLElement>("[data-onboarding-account=cl-main]")!;
+    await act(async () => { main.querySelector<HTMLButtonElement>("[data-settings-dot]")!.click(); });
+    expect(spaced(main.querySelector("[data-settings-dot-popover]")!.textContent)).toBe(`80% of the session limit left. ${resets}`);
+  });
+});
+
+test("in a narrow card a low account with no reset hour known has nothing to add: its dot opens nothing and keeps its name", async () => {
+  await narrow(async () => {
+    const past: AccountOption["limits"] = { freshness: "fresh", session: { usedPercent: 88, resetsAt: null, windowMinutes: 300 }, weekly: null, checkedAt: new Date((NOW - 60) * 1000).toISOString() } as AccountOption["limits"];
+    const host = await mount(severalWithLow(past), none("codex"));
+    const line = row(host, "claude").querySelector<HTMLElement>("[data-onboarding-account=cl-lab]")!;
+    expect(line.querySelector("[data-onboarding-account-words]")!.textContent).toBe("12% of the session limit left");
+    const dot = line.querySelector<HTMLElement>("[data-settings-dot]")!;
+    expect(dot.getAttribute("data-settings-dot")).toBe("warn");
+    expect(dot.tagName).toBe("SPAN");
+    expect(dot.getAttribute("role")).toBe("img");
+    expect(spaced(dot.getAttribute("aria-label"))).toBe("Lab: 12% of the session limit left.");
+    await act(async () => { dot.click(); });
+    expect(document.querySelectorAll("[data-settings-dot-popover]")).toHaveLength(0);
+    expect(line.textContent!.split("12%")).toHaveLength(2);
+  });
+});
+
+test("in a narrow card an account that waits for its sign-in says so once, in its words: its dot opens nothing there and floats its note in a wide card", async () => {
+  const waiting = () => engineState("claude", [
+    account({ id: "cl-main", label: "Main", plan: "max" }),
+    signedOut({ id: "cl-spare", label: "Spare" }),
+    signedOut({ id: "cl-new", label: "New", loginPending: true, loginState: "pending", login: login("awaiting_code") }),
+  ], "cl-main");
+  await narrow(async () => {
+    const host = await mount(waiting(), none("codex"));
+    for (const [id, said, heard] of [["cl-spare", "needs sign-in", "Spare: No sign-in yet."], ["cl-new", "signing in", "New: Its sign-in is in progress."]] as const) {
+      const line = row(host, "claude").querySelector<HTMLElement>(`[data-onboarding-account=${id}]`)!;
+      expect(line.querySelector("[data-onboarding-account-words]")!.textContent).toBe(said);
+      const dot = line.querySelector<HTMLElement>("[data-settings-dot]")!;
+      expect(dot.tagName).toBe("SPAN");
+      expect(spaced(dot.getAttribute("aria-label"))).toBe(heard);
+      await act(async () => { dot.click(); });
+      expect(document.querySelectorAll("[data-settings-dot-popover]")).toHaveLength(0);
+    }
+  });
+  await act(async () => mounted!.root.unmount());
+  mounted!.host.remove();
+  const host = await mount(waiting(), none("codex"));
+  const line = row(host, "claude").querySelector<HTMLElement>("[data-onboarding-account=cl-spare]")!;
+  await act(async () => { line.querySelector<HTMLButtonElement>("button[data-settings-dot]")!.click(); });
+  expect(spaced(document.querySelector("[data-settings-dot-popover]")!.textContent)).toBe("No sign-in yet.");
+});
+
+test("in a wide card the low account's floating popover keeps the share and the hour", async () => {
+  const host = await mount(severalWithLow(sessionUsed(88)), none("codex"));
+  const line = row(host, "claude").querySelector<HTMLElement>("[data-onboarding-account=cl-lab]")!;
+  await act(async () => { line.querySelector<HTMLButtonElement>("[data-settings-dot]")!.click(); });
+  const popover = document.querySelector("[data-settings-dot-popover]")!;
+  expect(spaced(popover.textContent)).toBe(`12% of the session limit left. Resets at ${formatResetClock(NOW + 3600, NOW)}.`);
   expect(host.contains(popover)).toBe(false);
 });
