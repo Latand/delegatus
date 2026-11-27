@@ -30,6 +30,17 @@ import { serviceSurvivors } from "./owned-runner.cleanup";
  * runs the command inside the owner's namespaces. */
 type Launch = { command: string[]; cwd: string; env: NodeJS.ProcessEnv; owner: ProcessIdentity; parent?: ProcessIdentity; unit: string; timeoutMs: number; namespace?: true };
 const args = process.argv.slice(2);
+// Read the actual parent before asynchronous launch work can outlive it.
+// The gate names its child directly. A reparented runner has no authority
+// to start work, even if the gate's numeric PID is later reused.
+const gateParentPid = process.env.LLV_OWNED_RUN_GATE_PARENT_PID;
+delete process.env.LLV_OWNED_RUN_GATE_PARENT_PID;
+const gateParent = gateParentPid !== undefined && Number(gateParentPid) === process.ppid
+  ? captureProcessIdentity(process.ppid) : undefined;
+const gateParentAlive = () => gateParentPid === undefined || (!!gateParent && process.ppid === gateParent.pid
+  && processIdentityStatus(gateParent) === "alive" && !procBackend.processExited(gateParent.pid));
+if (!gateParentAlive()) process.exit(137);
+
 function writeCompletionReceipt() {
   const filename = process.env.LLV_OWNED_RUN_COMPLETION_RECEIPT;
   const token = process.env.LLV_OWNED_RUN_COMPLETION_TOKEN;
@@ -122,7 +133,8 @@ if (args[0] === "--namespace-guardian") {
   }
   const parent = process.env.LLV_OWNED_RUN_PARENT_IDENTITY
     ? JSON.parse(process.env.LLV_OWNED_RUN_PARENT_IDENTITY) as ProcessIdentity : undefined;
-  const parentAlive = () => !parent || (processIdentityStatus(parent) === "alive" && !procBackend.processExited(parent.pid));
+  const parentAlive = () => gateParentAlive()
+    && (!parent || (processIdentityStatus(parent) === "alive" && !procBackend.processExited(parent.pid)));
   if (!parentAlive()) process.exit(137);
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-owned-run-"));
   fs.chmodSync(directory, 0o700);
@@ -424,7 +436,10 @@ if (args[0] === "--namespace-guardian") {
       taskError = true; stop();
     }
   };
-  const taskTimer = setInterval(sampleTasks, 50);
+  const taskTimer = setInterval(() => {
+    if (!gateParentAlive()) stop();
+    sampleTasks();
+  }, 50);
   const code = await close;
   clearInterval(taskTimer);
   sampleTasks();

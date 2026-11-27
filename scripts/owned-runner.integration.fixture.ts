@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
+import { captureProcessIdentity, processIdentityMayRun, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
 import { signalFixtureIdentity, stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
 import { procBackend } from "../src/lib/proc";
 import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
@@ -106,17 +106,21 @@ test("portable lifetime", async () => {
         supervisor.kill("SIGKILL"); await ended;
       }
       await until(() => runner.exitCode !== null || runner.signalCode !== null, 12000);
-      await until(() => owned.every(identity => processIdentityStatus(identity) === "dead"));
+      // A killed orphan can retain its identity as a zombie until reaped by
+      // its new parent. The runner must end execution of every recorded child.
+      await until(() => owned.every(identity => !processIdentityMayRun(identity)));
       expect(processIdentityStatus(other)).toBe("alive");
+      expect(processIdentityMayRun(other)).toBe(true);
       if (mode === "TERM" || mode === "INT") expect(fs.readFileSync(received, "utf8")).toBe(mode === "INT" ? "SIGINT" : "SIGTERM");
       expect(runner.exitCode).toBe(mode === "complete" ? 0 : mode === "exit" ? 1 : mode === "deadline" ? 124 : mode === "TERM" ? 143 : mode === "INT" ? 130 : mode === "KILL" ? null : 137);
+      expect(runner.signalCode).toBe(mode === "KILL" ? "SIGKILL" : null);
     } finally {
       await stopFixtureProcess(runner);
       if (supervisor) await stopFixtureProcess(supervisor);
       await stopFixtureProcess(bystander);
       if (!owned.length && fs.existsSync(record)) owned = JSON.parse(fs.readFileSync(record, "utf8"));
       for (const identity of owned) signalFixtureIdentity(identity, "SIGKILL");
-      await until(() => owned.every(identity => processIdentityStatus(identity) === "dead"));
+      await until(() => owned.every(identity => !processIdentityMayRun(identity)));
       fs.rmSync(root, { recursive: true, force: true });
     }
   }, 20000);
