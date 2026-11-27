@@ -113,10 +113,9 @@ export function gateToolFiles(root: string): string[] {
   return [...seen, "bunfig.toml", "tsconfig.json"].sort();
 }
 
-/** Isolation replaces these before a check reads them, or they only record
- * how this process was started. */
+/** Per-executor paths and launch settings that do not change check inputs. */
 const ROOTS = new Set(["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR", "TMPDIR", "LLV_STATE_DIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_TMPDIR",
-  "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "NODE_ENV", "LLV_VIEWER_CONTROL_URL"]);
+  "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "NODE_ENV", "LLV_VIEWER_CONTROL_URL", "BUN_INSTALL_CACHE_DIR", "UV_CACHE_DIR"]);
 const BOOKKEEPING = new Set(["PWD", "OLDPWD", "SHLVL", "_", "INVOCATION_ID", "JOURNAL_STREAM", "SYSTEMD_EXEC_PID", "MANAGERPID",
   // The native entry proves each worker's supervisor. The recorder collects
   // its queue timing separately. Those bindings belong to one execution.
@@ -160,7 +159,8 @@ export function checkInputEnvironment(source: Partial<NodeJS.ProcessEnv>): Recor
   const env = withoutGateAdmissionLauncher(source);
   const declared = declaredInputs(env);
   const names = new Set([...Object.keys(env).filter(name => KEYED.test(name) && name !== "PATH"), ...declared]);
-  return Object.fromEntries([...names].sort().map(name => [name, Object.hasOwn(env, name) ? env[name] ?? null : null]));
+  return Object.fromEntries([...names].filter(name => !ROOTS.has(name)).sort()
+    .map(name => [name, Object.hasOwn(env, name) ? env[name] ?? null : null]));
 }
 
 /** The host a check ran on, read from the signal boundary when there is one:

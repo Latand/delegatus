@@ -23,6 +23,7 @@ import {
 import { readAntigravityAuthState } from "@/lib/accounts/antigravity";
 import type { DeliveryReceipt } from "./engineHost";
 import { FileRuntimeEventStore } from "./eventStore";
+import { materializeStructuredHostAccess } from "./structuredSpawn";
 
 interface ScriptedAcpServer {
   child: ChildProcessWithoutNullStreams;
@@ -124,6 +125,26 @@ describe("AntigravityAcpHost", () => {
     if (prevHome === undefined) delete process.env.HOME;
     else process.env.HOME = prevHome;
     fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it.each([false, true])("resolves package caches after Antigravity isolates HOME (restricted=%s)", restricted => {
+    const shared = path.join(root, "shared-cache");
+    const source = { HOME: root, XDG_CACHE_HOME: shared, PATH: process.env.PATH };
+    const owner = { pipelineId: "cache-probe", launchId: "cache-probe-launch", retainUntilClose: false };
+    const access = materializeStructuredHostAccess(restricted, source, null, path.join(root, "scratch"), owner);
+    const env = antigravityChildEnv(access.env, antigravityHome);
+    env.HOME = path.join(root, "isolated-home");
+    fs.mkdirSync(env.HOME);
+    fs.writeFileSync(path.join(cwd, "package.json"), "{}");
+    const cacheRoot = restricted ? path.join(access.env.LLV_AGENT_SANDBOX_ROOT!, "cache") : shared;
+    const probe = (command: string[], expected: string) => {
+      const result = Bun.spawnSync(command, { cwd, env, stdout: "pipe", stderr: "pipe" });
+      expect(result.exitCode, result.stderr.toString()).toBe(0);
+      expect(result.stdout.toString().trim()).toBe(expected);
+    };
+    probe([process.execPath, "pm", "cache"], path.join(cacheRoot, ".bun", "install", "cache"));
+    const uv = Bun.which("uv");
+    if (uv) probe([uv, "cache", "dir"], path.join(cacheRoot, "uv"));
   });
 
   it("builds pure launch args, allowlisted child env, and native ACP MCP server payloads", () => {

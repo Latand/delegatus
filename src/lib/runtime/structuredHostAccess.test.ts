@@ -71,6 +71,42 @@ test("legacy read-only launch profiles retain their pre-axis engine sandbox on a
   expect(launchProfileCodexSandbox({ readOnly: true, sandbox: null })).toBe("read-only");
 });
 
+test("full-access stages pin package caches before isolating their working directories", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "stage-cache-access-"));
+  const scratch = path.join(root, "scratch");
+  const home = path.join(root, "home");
+  const xdg = path.join(root, "xdg");
+  const bunInstall = path.join(root, "bun-install");
+  const bunCache = path.join(root, "bun-cache");
+  const uvCache = path.join(root, "uv-cache");
+  const explicit = { BUN_INSTALL_CACHE_DIR: bunCache, UV_CACHE_DIR: uvCache };
+  const originalState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(root, "state");
+  try {
+    const cases = [
+      { env: {}, bun: path.join(home, ".bun"), uv: path.join(home, ".cache", "uv") },
+      { env: { XDG_CACHE_HOME: xdg }, bun: path.join(xdg, ".bun"), uv: path.join(xdg, "uv") },
+      { env: { XDG_CACHE_HOME: xdg, BUN_INSTALL: bunInstall }, bun: bunInstall, uv: path.join(xdg, "uv") },
+    ];
+    const owner = { pipelineId: "stage-cache", launchId: "stage-cache-launch", retainUntilClose: false };
+    for (const { env, bun, uv } of cases) {
+      const full = materializeStructuredHostAccess(false, { HOME: home, ...env }, null, scratch, owner);
+      expect(full.env.BUN_INSTALL_CACHE_DIR).toBe(path.join(bun, "install", "cache"));
+      expect(full.env.UV_CACHE_DIR).toBe(uv);
+    }
+    const source = { HOME: home, XDG_CACHE_HOME: xdg, BUN_INSTALL: bunInstall, ...explicit };
+    const full = materializeStructuredHostAccess(false, source, null, scratch, owner);
+    expect(full.env).toMatchObject(explicit);
+    const restricted = materializeStructuredHostAccess(true, source, null, scratch, owner);
+    expect(restricted.env.BUN_INSTALL_CACHE_DIR).toBeUndefined();
+    expect(restricted.env.UV_CACHE_DIR).toBeUndefined();
+  } finally {
+    if (originalState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = originalState;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("resume successors preserve both explicit pipeline access axes", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-access-resume-"));
   try {

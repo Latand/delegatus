@@ -220,6 +220,14 @@ variable the project's instruction files name". Here that is `LLV_STATE_DIR`:
 besides HOME, XDG_CONFIG_HOME and TMPDIR, isolate `LLV_STATE_DIR` for every
 test run.
 
+Keep the stage's `BUN_INSTALL_CACHE_DIR` and `UV_CACHE_DIR` when isolating
+HOME or the XDG directories. Use the shared package caches in place and leave
+uv at its default link mode. Never copy a cache into scratch. A check that
+needs a clean cache can set its own cache directory under TMPDIR and record that
+choice in its report. If a check modifies installed files, use
+`UV_LINK_MODE=copy` for that environment only. A restricted stage with unset
+cache variables that needs to install can use a cache under TMPDIR.
+
 ## This repository is public — publication surfaces carry no identities
 
 Docs, issues, PR bodies, commit messages, fixtures, and test data are public the

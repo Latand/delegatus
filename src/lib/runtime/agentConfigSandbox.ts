@@ -89,6 +89,9 @@ export function withAgentConfigSandbox(
   home?: string,
 ): NodeJS.ProcessEnv {
   Object.assign(env, agentPublicationIdentityEnv(source));
+  for (const name of ["BUN_INSTALL_CACHE_DIR", "UV_CACHE_DIR"]) {
+    if (source[name]) env[name] = source[name];
+  }
   discardUnsupportedApiCredentials(env);
   const realConfigRoot = configRootFor(source);
   const root = agentConfigSandboxRoot(source, home);

@@ -8,6 +8,20 @@ import { STATE_OWNER_ENV, underOperatorRoot } from "@/lib/stateOwnership";
 
 import { agentConfigSandboxRoot, withAgentConfigSandbox } from "./agentConfigSandbox";
 
+test("isolating configuration forwards only package cache paths supplied by the source", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "package-cache-sandbox-"));
+  try {
+    const source = { HOME: root, TMPDIR: root };
+    const caches = { BUN_INSTALL_CACHE_DIR: path.join(root, "bun"), UV_CACHE_DIR: path.join(root, "uv") };
+    expect(withAgentConfigSandbox({}, { ...source, ...caches })).toMatchObject(caches);
+    const unpinned = withAgentConfigSandbox({}, source);
+    expect(unpinned.BUN_INSTALL_CACHE_DIR).toBeUndefined();
+    expect(unpinned.UV_CACHE_DIR).toBeUndefined();
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 /* The spawn boundary's half of #1905. The hosts' own suites assert the child
    command carries this; these cases pin what "isolated" means. */
 

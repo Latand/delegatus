@@ -262,6 +262,15 @@ export function materializeStructuredHostAccess(
     } : () => fs.rmSync(scratchDirectory, { recursive: true, force: true });
     if (configDirectory) baseEnv.LLV_AGENT_SANDBOX_ROOT = configDirectory;
     if (!restricted) {
+      if (owner?.pipelineId) {
+        const home = sourceEnv.HOME || os.homedir();
+        const bunRoot = sourceEnv.BUN_INSTALL || path.join(sourceEnv.XDG_CACHE_HOME || home, ".bun");
+        const uvRoot = process.platform === "win32" && sourceEnv.LOCALAPPDATA
+          ? path.join(sourceEnv.LOCALAPPDATA, "uv", "cache")
+          : path.join(sourceEnv.XDG_CACHE_HOME || path.join(home, ".cache"), "uv");
+        baseEnv.BUN_INSTALL_CACHE_DIR = sourceEnv.BUN_INSTALL_CACHE_DIR || path.join(bunRoot, "install", "cache");
+        baseEnv.UV_CACHE_DIR = sourceEnv.UV_CACHE_DIR || uvRoot;
+      }
       return {
         env: {
           ...baseEnv,
@@ -277,6 +286,8 @@ export function materializeStructuredHostAccess(
         cleanup,
       };
     }
+    delete baseEnv.BUN_INSTALL_CACHE_DIR;
+    delete baseEnv.UV_CACHE_DIR;
     const codex = ownerRelayHandoffOnly
       ? { permissionProfile: READ_ONLY_STAGE_PERMISSION_PROFILE,
           permissionProfileConfig: `permissions.${READ_ONLY_STAGE_PERMISSION_PROFILE}={extends=":read-only",filesystem={${JSON.stringify(scratchDirectory)}="write",${JSON.stringify(evidenceDirectory)}="write"}}` }
