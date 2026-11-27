@@ -1,16 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import worker, { type Env } from "../worker";
-import { createCaptureStatsBinding } from "./capture-stats";
+import worker from "../worker";
+import { createCaptureWorkerEnv } from "./capture-stats";
 
 describe("landing capture stats binding", () => {
   test("records Worker events in the capture format and rejects install pings", async () => {
     const points: { event: string; agent?: string; lang: string; country: string }[] = [];
-    const env = {
-      STATS_ORIGIN: "https://stats.example",
-      STATS_RP_ID: "stats.example",
-      STATS: createCaptureStatsBinding(points),
-      ASSETS: { fetch: async () => new Response("not found", { status: 404 }) },
-    } as Env;
+    const env = createCaptureWorkerEnv(points, { fetch: async () => new Response("not found", { status: 404 }) });
     const request = new Request("https://stats.example/api/event", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

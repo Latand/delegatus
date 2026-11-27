@@ -591,7 +591,7 @@ describe("stats Worker and store", () => {
     h.env.STATS_ENROLLMENT = await enrollmentSecret(secondToken, fixed);
     const current = await enrolled(h, secondToken, { id: 2 });
 
-    const response = await worker.fetch(request("/stats", { headers: { Cookie: current.cookie } }), h.env);
+    const response = await target.fetch(request("/stats", { headers: { Cookie: current.cookie } }), h.env);
     expect(response.status).toBe(200);
     const html = await response.text();
     expect(html.match(/This device · Added 2026-10-11 12:30 UTC/g)).toHaveLength(1);

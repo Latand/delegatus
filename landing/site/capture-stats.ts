@@ -3,6 +3,15 @@ import type { StatsClient } from "../stats/store";
 
 export type CaptureEvent = { event: string; agent?: string; lang: string; country: string };
 
+export function createCaptureWorkerEnv(points: CaptureEvent[], assets: Env["ASSETS"]): Env {
+  return {
+    STATS_ORIGIN: "https://stats.example",
+    STATS_RP_ID: "stats.example",
+    STATS: createCaptureStatsBinding(points),
+    ASSETS: assets,
+  };
+}
+
 export function createCaptureStatsBinding(points: CaptureEvent[]): Env["STATS"] {
   const client = {
     async recordPing() {

@@ -53,7 +53,7 @@ import { chromium, type Frame, type Page } from "playwright-core";
 import { type Locale } from "@/lib/i18n";
 
 import worker from "../worker";
-import { createCaptureStatsBinding, type CaptureEvent } from "./capture-stats";
+import { createCaptureWorkerEnv, type CaptureEvent } from "./capture-stats";
 
 type PerfRecord = {
   type: string;
@@ -94,12 +94,9 @@ const server = Bun.serve({
   async fetch(request) {
     if (new URL(request.url).pathname.startsWith("/api/")) {
       if (eventsCheck) eventBodies.push(await request.clone().json());
-      return worker.fetch(request, {
-        STATS_ORIGIN: "https://stats.example",
-        STATS_RP_ID: "stats.example",
-        STATS: createCaptureStatsBinding(eventPoints),
-        ASSETS: { fetch: async () => new Response("not found", { status: 404 }) },
-      });
+      return worker.fetch(request, createCaptureWorkerEnv(eventPoints, {
+        fetch: async () => new Response("not found", { status: 404 }),
+      }));
     }
     let pathname = decodeURIComponent(new URL(request.url).pathname);
     if (pathname.endsWith("/")) pathname += "index.html";
