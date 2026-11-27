@@ -1,5 +1,6 @@
 import { signalFixtureIdentity } from "../src/lib/testing/fixtureProcess";
 import { afterEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -22,6 +23,7 @@ import { probeMcpRuntime } from "../src/runtime-host/mcpRuntimeProbe";
 import { mcpLauncherImports } from "../src/runtime-host/mcpRuntimeRelease";
 import { RuntimeHostFence } from "../src/runtime-host/runtimeHostFence";
 import { HostCommandViewerDeploymentAdapter } from "../src/runtime-host/deploymentAdapter";
+import { adapterFailureReason } from "../src/runtime-host/deploymentFailureReport";
 import { serveRuntimeHost } from "../src/runtime-host/socket";
 import {
   completeHotStatePreparation,
@@ -1528,8 +1530,8 @@ exit 1
     expect(code).toBe(1);
     expect(stderr).toContain("Viewer Compose service has uncovered fields: cap_add; the running deployer cannot apply them to a candidate.");
     expect(stderr).toContain("Compose schema changes ship in two deploys");
-    // The host keeps the first 500 characters of an adapter error.
-    expect(stderr.trim().length).toBeLessThanOrEqual(500);
+    // The host keeps the first 500 characters of a marked adapter failure; the whole refusal has to fit.
+    expect(adapterFailureReason(stderr)).toEndWith("(docs/RELEASING.md, \"Compose schema changes ship in two deploys\")");
     const dockerCalls = fs.readFileSync(dockerLog, "utf8").split("\n");
     expect(dockerCalls.some((line) => line.startsWith("build"))).toBe(false);
     expect(fs.existsSync(path.join(state, "deployments", "deploy-uncovered-compose", "source"))).toBe(false);
@@ -2134,7 +2136,9 @@ exit 1
 `,
     });
     expect(result.code).toBe(1);
-    expect(result.stderr).toContain("flows.json");
+    // The recorded refusal names the checkpoint and the worker's own cause.
+    expect(adapterFailureReason(result.stderr)).toStartWith(`hot-state fence checkpoint for release ${candidate.revision.slice(0, 12)} failed: `);
+    expect(adapterFailureReason(result.stderr)).toContain("flows.json");
     expect(result.target).toEqual(candidate);
     expect(result.authority).toMatchObject({ mode: "fencing", releaseRevision: candidate.revision });
     expect(result.authority?.checkpoint).toBeUndefined();
@@ -2430,3 +2434,121 @@ exit 1
   }
 }, 60_000);
 }
+
+/* The deploy of 2026-11-26: the fence checkpoint ran past its budget, and the
+   record held the worker's lock diagnostics in place of that refusal. */
+test("a refused promote records the refusal behind the diagnostics its checkpoint printed", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-promote-refusal-"));
+  mirrorSandboxes.push(sandbox);
+  const state = path.join(sandbox, "state");
+  const bin = path.join(sandbox, "bin");
+  fs.mkdirSync(state, { recursive: true });
+  fs.mkdirSync(bin, { recursive: true });
+  initializeHotStateFixture(state, sqliteIncumbent);
+  fs.writeFileSync(path.join(bin, "docker"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  const diagnostics = [
+    "[state lease-hold] {", "  collection: \"pipelines_archive\",", "  operation: \"pipelines_archive.mutation\",", "  heldMs: 4579,", "}",
+    ...["tasks", "board", "accounts"].map((subject) => `[blocking-wait] ${JSON.stringify({ site: "state-write-lock",
+      stateWait: { callSite: "state.mirror.demotion", reason: "sqlite", outcome: "success", attempts: 1 },
+      role: "runtime-host", durationMs: 883.8, synchronous: false, subject })}`),
+  ].join("\n");
+  expect(diagnostics.length).toBeGreaterThan(500);
+  const wrapper = path.join(sandbox, "adapter.sh");
+  fs.writeFileSync(wrapper, `#!/bin/sh
+export HOME='${sandbox}' XDG_CONFIG_HOME='${path.join(sandbox, "config")}' LLV_STATE_DIR='${state}' LLV_VIEWER_PORT=1
+export PATH='${bin}':"$PATH"
+cat >&2 <<'DIAGNOSTICS'
+${diagnostics}
+DIAGNOSTICS
+exec '${process.execPath}' '${adapter}' "$1"
+`, { mode: 0o700 });
+  const host = HostCommandViewerDeploymentAdapter.fromExecutable(wrapper, {
+    stateFile: path.join(sandbox, "adapter-process.json"), log: () => {},
+  });
+  /* A writer that does not let go keeps the checkpoint worker waiting. */
+  const holder = new Database(path.join(state, "state.sqlite"));
+  try {
+    holder.exec("BEGIN IMMEDIATE");
+    const refusal = await host.promote(sqliteCandidate("3".repeat(40), "deploy-refusal"))
+      .then(() => "promoted", (error: Error) => error.message);
+    expect(refusal).toBe(`hot-state fence checkpoint for release ${sqliteIncumbent.revision.slice(0, 12)} failed: `
+      + "the backup worker ran past 10000 ms and was stopped");
+  } finally {
+    holder.close();
+  }
+  expect(readHotStateAuthority(state)).toMatchObject({ mode: "sqlite", releaseRevision: sqliteIncumbent.revision });
+}, 60_000);
+
+/* Rollback readiness against a previous release that is restarting. */
+async function rollbackAgainst(options: {
+  healthyAfterRounds: number;
+  dockerScript?: string;
+  environment?: Record<string, string>;
+}) {
+  let rounds = 0;
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      const pathname = new URL(request.url).pathname;
+      const capability = pathname === "/api/runtime/deployments/capabilities/v1";
+      if (capability) rounds += 1;
+      const headers = { connection: "close" };
+      if (rounds <= options.healthyAfterRounds) return new Response("Internal Server Error", { status: 500, headers });
+      if (capability) return Response.json({ capability: "viewer-deployments", version: 1, registryBackendMode: "sqlite" }, { headers });
+      if (pathname === "/_next/static/app.js") return new Response("self.__viewer=true", { headers });
+      return new Response('<script src="/_next/static/app.js"></script>', { headers: { ...headers, "content-type": "text/html" } });
+    },
+  });
+  const previous = { ...release, container: "viewer-restarting", image: "viewer:restarting", endpoint: `http://127.0.0.1:${server.port}` };
+  try {
+    return await runAction({
+      action: "rollback",
+      input: { previous, candidate: release, previousMcpRuntime: {
+        source: "legacy", revision: "8".repeat(40), releaseId: null, artifactDigest: "8".repeat(64), stagedAt: null,
+      } },
+      snapshots: [previous.container],
+      environment: options.environment,
+      dockerScript: options.dockerScript ?? `#!/bin/sh
+if [ "$1 $2" = "container inspect" ]; then exit 0; fi
+if [ "$1" = "inspect" ]; then printf 'running\n'; exit 0; fi
+if [ "$1" = "start" ]; then exit 0; fi
+exit 1
+`,
+    });
+  } finally {
+    server.stop(true);
+  }
+}
+
+test("rollback waits past 30 attempts for the previous release to finish restarting", async () => {
+  const result = await rollbackAgainst({ healthyAfterRounds: 34 });
+  expectAdapterSuccess(result);
+  expect(JSON.parse(result.stdout)).toMatchObject({ action: "restore", durable: true });
+}, 90_000);
+
+test("rollback keeps waiting while the supervisor restarts an exited previous release", async () => {
+  /* Running when it is started, exited for the next two looks, then back. */
+  const result = await rollbackAgainst({ healthyAfterRounds: 0, dockerScript: `#!/bin/sh
+if [ "$1 $2" = "container inspect" ]; then exit 0; fi
+if [ "$1" = "inspect" ]; then
+  echo look >> "$FAKE_DOCKER_LOG"
+  case $(grep -c look "$FAKE_DOCKER_LOG") in 2|3) printf 'restarting\n' ;; *) printf 'running\n' ;; esac
+  exit 0
+fi
+if [ "$1" = "start" ]; then exit 0; fi
+exit 1
+` });
+  expectAdapterSuccess(result);
+  expect(result.dockerCalls.filter((call) => call === "look").length).toBeGreaterThanOrEqual(4);
+}, 30_000);
+
+test("rollback of a release that never answers fails inside its budget and names what it saw", async () => {
+  const result = await rollbackAgainst({
+    healthyAfterRounds: Number.MAX_SAFE_INTEGER,
+    environment: { LLV_ROLLBACK_READINESS_TIMEOUT_MS: "1500" },
+  });
+  expect(result.code).toBe(1);
+  expect(result.stderr).toContain("candidate readiness timed out");
+  expect(result.stderr).toContain("HTTP 500");
+}, 30_000);

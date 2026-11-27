@@ -108,6 +108,21 @@ test("candidate readiness stops immediately after container exit", async () => {
   expect(sleeps).toBe(0);
 });
 
+test.each([
+  { state: "missing" as const, detail: "candidate container disappeared before readiness", waited: 0 },
+  { state: "exited" as const, detail: "candidate readiness timed out", waited: 5_000 },
+])("a restart-tolerant wait over a $state container ends as it should", async ({ state, detail, waited }) => {
+  let now = 0;
+  const result = await waitForViewerReadiness({
+    endpoint: "http://127.0.0.1:18001", inspect: async () => state, probe: async () => evidence(true),
+    now: () => now, sleep: async (delay) => { now += delay; },
+    timeoutMs: 5_000, awaitRestart: true,
+  });
+  expect(result.ok).toBe(false);
+  expect(result.detail).toContain(detail);
+  expect(now).toBe(waited);
+});
+
 test("explicitly bounded readiness callers retain their wall-clock bound", async () => {
   let now = 0;
   const probe = (readyAt: number) => waitForViewerReadiness({

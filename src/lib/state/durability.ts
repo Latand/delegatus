@@ -72,6 +72,9 @@ export interface StateDatabase {
   name: string;
   filename: string;
   check: "integrity_check" | "quick_check";
+  /** A bounded activation check may be sufficient before stores open. Full
+      integrity checks still validate backups and other recovery candidates. */
+  activationCheck?: "integrity_check" | "quick_check";
   backup: { intervalMs: number; retention: BackupRetention } | null;
   /** A content revision, so an unchanged database is not copied again. When it
       is null or fails, the file signature stands in. */
@@ -96,6 +99,14 @@ export function stateDatabases(stateDirectory: string): StateDatabase[] {
       name: "agent-registry.sqlite",
       filename: at("agent-registry.sqlite"),
       check: "integrity_check",
+      // Verifying every index against every row is O(N log N) and made a
+      // multi-gigabyte registry consume the entire 90-second deploy window.
+      // quick_check validates B-tree structure and page integrity, but it does
+      // not detect index-to-table or uniqueness mismatches. Those remain in
+      // place at activation; the next backup pass reports and refuses a bad
+      // copy, without automatically repairing the live registry. Recovery
+      // candidates continue to require the full integrity_check.
+      activationCheck: "quick_check",
       backup: { intervalMs: LARGE_STORE_BACKUP_INTERVAL_MS, retention: { kind: "tiered" } },
       revisionSql: "SELECT value AS revision FROM registry_meta WHERE key = 'revision'",
       rebuiltTriggers: [],
@@ -351,13 +362,20 @@ export type SwapStepHook = (step: "recovery-lock" | "set-aside-main" | "set-asid
 
 export function checkDatabaseAtActivation(
   database: StateDatabase,
-  options: { stateDirectory: string; backupDirectory?: string; now?: Date; beforeSwapStep?: SwapStepHook },
+  options: {
+    stateDirectory: string; backupDirectory?: string; now?: Date; beforeSwapStep?: SwapStepHook;
+    testHooks?: {
+      inspect?: (filename: string, pragma: StateDatabase["check"], readonly: boolean) => Verdict;
+      dropRebuiltTriggers?: typeof dropRebuiltTriggers;
+    };
+  },
 ): DatabaseCheckOutcome {
   /* A marker left by a swap that died would refuse every open until it aged. */
   fs.rmSync(databaseSwapMarker(database.filename), { force: true });
   if (!exists(database.filename)) return { state: "absent" };
   const now = options.now ?? new Date();
-  let verdict = inspect(database.filename, database.check, true);
+  const inspectActivation = options.testHooks?.inspect ?? inspect;
+  let verdict = inspectActivation(database.filename, database.activationCheck ?? database.check, true);
   let repaired: StorageIncident | null = null;
   if (verdict.verdict === "incompatible") {
     const first = verdict;
@@ -374,12 +392,12 @@ export function checkDatabaseAtActivation(
     if (!database.rebuiltTriggers.includes(first.object)) return incompatible(first);
     let kept: string[];
     try {
-      kept = dropRebuiltTriggers(database.filename, database.rebuiltTriggers, `${database.filename}.schema-${stamp(now)}`);
+      kept = (options.testHooks?.dropRebuiltTriggers ?? dropRebuiltTriggers)(database.filename, database.rebuiltTriggers, `${database.filename}.schema-${stamp(now)}`);
     } catch (error) {
       console.error(`[state durability] ${database.name}: dropping the triggers its store rebuilds failed: ${errorText(error)}`);
       return incompatible(first);
     }
-    verdict = inspect(database.filename, database.check, true);
+    verdict = inspectActivation(database.filename, database.activationCheck ?? database.check, true);
     if (verdict.verdict === "incompatible") return incompatible(verdict, kept);
     repaired = {
       kind: "database-schema-repaired", database: database.name, at: now.toISOString(), detail: first.detail,
@@ -1141,6 +1159,7 @@ export interface BackupWorkerResponse {
   worktreeRecoveryFinished?: true;
   worktreeRecovery?: { folded: number; leftAlone: number };
   checkpoint?: import("./hotStateAuthority").HotStateCheckpoint["revisions"];
+  checkpointFailure?: string;
 }
 
 /** The worker's side: one pass over the request, answered as one JSON line. */
@@ -1207,6 +1226,7 @@ export async function checkStateDatabasesInWorker(stateDirectory: string, onData
     run in the leased worker while the Viewer remains able to acknowledge. */
 export async function checkpointHotStateRollbackMirrorsInWorker(stateDirectory: string, timeoutMs = 10_000) {
   const response = await runDurabilityWorker({ stateDirectory, lastRevisions: [], operation: "checkpoint" }, { timeoutMs });
+  if (response.checkpointFailure) throw new Error(response.checkpointFailure);
   if (!response.checkpoint) throw new Error("the checkpoint worker returned no revisions");
   return response.checkpoint;
 }
@@ -1238,7 +1258,9 @@ async function runDurabilityWorker(
   const launch = options.launch ?? stateBackupWorkerLaunch();
   const { endLeasedHelper, leasedHelperInput, spawnLeasedHelper } = await import("@/lib/helperLease");
   options.signal?.throwIfAborted();
-  const useNice = fs.existsSync("/usr/bin/nice");
+  // Readiness waits for the activation verdict, so that worker inherits the
+  // Viewer's scheduling priority. Background backups can yield CPU.
+  const useNice = request.operation !== "activation" && fs.existsSync("/usr/bin/nice");
   /* Under a lease: a pass that outlives its Viewer would keep the service's
      cgroup populated after it (src/lib/helperLease.ts). */
   const child = spawnLeasedHelper("state-backup", {

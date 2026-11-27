@@ -106,7 +106,9 @@ import {
   INCUMBENT_RELEASE_POLL_MS,
   INCUMBENT_RELEASE_TIMEOUT_MS,
   PROMOTE_ACTION_TIMEOUT_MS,
+  ROLLBACK_READINESS_TIMEOUT_MS,
 } from "../src/runtime-host/deploymentHotState";
+import { adapterFailureOutput } from "../src/runtime-host/deploymentFailureReport";
 import {
   candidateLogExcerpt,
   hasViewerDeploymentCapability,
@@ -682,6 +684,7 @@ async function verifyViewer(
   endpoint: string,
   expectedAssetsEndpoint?: string,
   reportPhase?: (phase: string) => void,
+  restartBudgetMs?: number,
 ): Promise<ViewerHealthEvidence> {
   const evidence = await waitForViewerReadiness({
     endpoint,
@@ -692,6 +695,7 @@ async function verifyViewer(
       // retries. Individual probes can keep retrying while startup progresses.
       timeoutMs: null,
     } : {}),
+    ...(restartBudgetMs === undefined ? {} : { timeoutMs: restartBudgetMs, awaitRestart: true }),
   });
   if (evidence.ok) return evidence;
   const containerLog = await candidateContainerLog(candidate.container);
@@ -1254,7 +1258,10 @@ async function checkpointHotStateFence(
        so the barrier (#1905) admits the mirror writes — and only these. */
     const remaining = deadline - Date.now() - 2_000; // Reserve helper cleanup.
     if (remaining <= 0) throw new Error("hot-state checkpoint exhausted its quiescence deadline");
-    const revisions = await checkpointHotStateRollbackMirrorsInWorker(stateDir, Math.min(10_000, remaining));
+    const revisions = await checkpointHotStateRollbackMirrorsInWorker(stateDir, Math.min(10_000, remaining))
+      .catch((error: unknown) => {
+        throw new Error(`hot-state fence checkpoint for release ${revision.slice(0, 12)} failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+      });
     const current = readHotStateAuthority(stateDir);
     if (current?.mode === "fencing"
       && current.epoch === request.epoch
@@ -1610,7 +1617,8 @@ async function main(): Promise<unknown> {
       (phase) => reportAdapterPhase(action, phase),
     );
     reportAdapterPhase(action, "verifying the rollback Viewer release");
-    const evidence = await verifyViewer(previous, previous.endpoint);
+    const evidence = await verifyViewer(previous, previous.endpoint, undefined, undefined,
+      budgetMs("LLV_ROLLBACK_READINESS_TIMEOUT_MS", ROLLBACK_READINESS_TIMEOUT_MS, 100));
     if (!evidence.ok) throw new Error(evidence.detail ?? "rollback release health gate failed");
     return publication;
   }
@@ -1653,7 +1661,7 @@ if (import.meta.main) {
   try {
     output = `${JSON.stringify(await main())}\n`;
   } catch (error) {
-    output = `${error instanceof Error ? error.message : "deployment adapter failed"}\n`;
+    output = adapterFailureOutput(error instanceof Error ? error.message : "deployment adapter failed");
     exitCode = 1;
   }
   const stream = exitCode === 0 ? process.stdout : process.stderr;

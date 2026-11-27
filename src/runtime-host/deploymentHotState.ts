@@ -45,6 +45,16 @@ export const PROMOTE_ACTION_TIMEOUT_MS = HAND_OVER_BUDGET_MS
   + PROMOTE_PUBLICATION_BUDGET_MS
   + 2 * CONTAINER_INSPECTION_TIMEOUT_MS;
 
+/* A rollback ends by waiting for the previous release to answer, and that
+   release may be restarting: its supervisor brings it back, it waits out any
+   fence and then runs its whole activation before the first response. A restart
+   on the Docker install answered after about 50s, and healthy startup has taken
+   176s at history scale; 30 attempts over 32s gave up in the middle of it. */
+export const ROLLBACK_READINESS_TIMEOUT_MS = 300_000;
+/** The start, the candidate fence and the publication precede the readiness
+    wait, and the host deadline must outlast all of them. */
+export const ROLLBACK_ACTION_TIMEOUT_MS = ROLLBACK_READINESS_TIMEOUT_MS + 120_000;
+
 /** Adapter phases are validated against `/^[A-Za-z0-9 -]{1,160}$/` before the
     host will read them back, so every phase fragment stays in that alphabet. */
 const PHASE_LIMIT = 160;
