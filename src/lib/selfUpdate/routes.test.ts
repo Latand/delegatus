@@ -802,9 +802,9 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     mkdirSync(join(candidate, "bin"), { recursive: true });
     writeFileSync(join(candidate, "bin", "cli.mjs"), 'process.stdout.write("fixture\\n");\n');
     writeFileSync(record.releasePointer, JSON.stringify({ sha: tipSha, dir: candidate, checkoutHead: firstSha }));
-    const calls: string[][] = [];
+    let restartRuns = 0;
     h.deps.install = { action: () => ({ id: "restart-service", button: true, unit: "fixture.service" }),
-      run: action => { calls.push(action.args); }, entry: () => join(checkout, "bin", "cli.mjs"), unit: () => "fixture.service" };
+      run: () => { restartRuns++; }, entry: () => join(checkout, "bin", "cli.mjs"), unit: () => "fixture.service" };
     const clock = spyOn(performance, "now");
     let pending = true;
     h.deps.quiet = { runtimeSnapshot: async () => ({ sessions: [] }), pipelines: () => [], presence: () => [],
@@ -821,13 +821,13 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
       const failed = JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8"));
       expect(failed).toMatchObject({ state: "failed", externalRestart: true, detail: expect.stringContaining("manual-restart-launch") });
       expect(existsSync(record.requestFile)).toBe(false);
-      expect(calls).toHaveLength(0);
+      expect(restartRuns).toBe(0);
       expect(existsSync(drainFile)).toBe(false);
       expect(existsSync(record.releasePointer)).toBe(false);
 
       pending = false;
       expect(await h.service.performInstallAction()).toMatchObject({ ok: true });
-      expect(calls).toHaveLength(1);
+      expect(restartRuns).toBe(1);
       expect(JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8"))).toMatchObject({ state: "switching", externalRestart: true });
     } finally { clock.mockRestore(); pending = false; h.service.stop(); }
   });
