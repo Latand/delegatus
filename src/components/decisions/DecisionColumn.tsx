@@ -1,15 +1,16 @@
 "use client";
 
-import { MessageCircleQuestionMark } from "lucide-react";
+import { KeyRound, MessageCircleQuestionMark } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { ChevronRight } from "@/components/icons";
 import { ReportLog } from "@/components/orchestrator/reportLog/ReportLog";
-import { usePrototypeNoticesFor } from "@/components/prototypeReview/prototypeReviewStore";
+import { usePrototypeNoticesFor, useSecretRequestCount } from "@/components/prototypeReview/prototypeReviewStore";
 import { useLocale } from "@/lib/i18n";
 import type { OperatorDecisionView } from "@/lib/prototypeReview/types";
 
-import { DecisionCard, DecisionRecord, DecisionRow } from "./DecisionCard";
+import { DecisionCard, DecisionRecord, DecisionRow, FoldedDecisionRow } from "./DecisionCard";
+import { SecretRequestCard, secretRequestTitle } from "./SecretRequestCard";
 import { useOperatorDecisions } from "./useOperatorDecisions";
 
 /*
@@ -39,7 +40,7 @@ export function newestDecisionsFirst(decisions: readonly OperatorDecisionView[])
 
 /** How many decisions wait in a project: the page's one poll already counts them. */
 export function useOpenDecisionCount(project: string): number {
-  return usePrototypeNoticesFor(project).length;
+  return usePrototypeNoticesFor(project).length + useSecretRequestCount(project);
 }
 
 export function DecisionList({ project, active = true, focus, touch = false, initial }: {
@@ -55,11 +56,21 @@ export function DecisionList({ project, active = true, focus, touch = false, ini
   const { t } = useLocale();
   const read = useOperatorDecisions(project, active, initial);
   const [picked, setPicked] = useState<string | null>(focus?.reviewId ?? null);
+  const [feedback, setFeedback] = useState<{ text: string; error?: true } | null>(null);
+  useEffect(() => {
+    if (!feedback) return;
+    const timer = window.setTimeout(() => setFeedback(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [feedback]);
   /* Folded by the operator: a view state for this list only, never an answer. */
   const [collapsed, setCollapsed] = useState(false);
   /* The control a press on a row or a header hands the keyboard focus to. */
   const follow = useRef<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  /* The status line stands above the list, so a list left scrolled down hides it. */
+  useEffect(() => {
+    if (feedback) listRef.current?.scrollTo?.({ top: 0 });
+  }, [feedback]);
   const [width, setWidth] = useState(0);
   useEffect(() => {
     const node = listRef.current;
@@ -81,8 +92,11 @@ export function DecisionList({ project, active = true, focus, touch = false, ini
      newest is the default only on the first draw and once the shown form leaves. */
   const [held, setHeld] = useState<string | null>(null);
   const decisions = newestDecisionsFirst(read.decisions ?? []);
-  const expanded = collapsed ? null : decisions.find((decision) => decision.id === picked)
-    ?? decisions.find((decision) => decision.id === held) ?? decisions[0] ?? null;
+  const rows = [
+    ...decisions.map(decision => ({ id: decision.id, at: Date.parse(decision.createdAt) || 0, decision })),
+    ...(read.secretRequests ?? []).map(secret => ({ id: secret.id, at: secret.createdAt, secret })),
+  ].sort((a, b) => b.at - a.at);
+  const expanded = collapsed ? null : rows.find(row => row.id === picked) ?? rows.find(row => row.id === held) ?? rows[0] ?? null;
   if (expanded && expanded.id !== held) setHeld(expanded.id);
   /* A request that named a form brings it into the column's view; a first
      paint scrolls nothing, so the board around the column stays put. */
@@ -101,6 +115,23 @@ export function DecisionList({ project, active = true, focus, touch = false, ini
       : listRef.current?.querySelector<HTMLElement>(`[data-decision-row="${id}"]`);
     target?.focus({ preventScroll: true });
   }, [expandedId]);
+  useEffect(() => {
+    const list = listRef.current;
+    const cardContainer = list?.querySelector<HTMLElement>("[data-secret-request]");
+    if (!list || !cardContainer) return;
+    const fit = () => {
+      if (list.querySelector("[data-decision-feedback]")) return;
+      const viewport = list.getBoundingClientRect();
+      const card = cardContainer.getBoundingClientRect();
+      if (card.bottom > viewport.bottom && card.top > viewport.top + 6) list.scrollTop += card.top - viewport.top - 6;
+    };
+    fit();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(fit);
+    observer.observe(cardContainer);
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, [expandedId]);
   const open = (id: string) => { follow.current = id; setPicked(id); setCollapsed(false); };
   const collapse = (id: string) => { follow.current = id; setCollapsed(true); };
   /* The card is the column's width less its gutter; a narrow column keeps the title. */
@@ -109,10 +140,19 @@ export function DecisionList({ project, active = true, focus, touch = false, ini
   let body: ReactNode;
   if (!read.loaded) {
     body = <p role="status" data-decision-list-state={read.failed ? "failed" : "loading"} className="m-0 px-1 py-2 text-body text-muted">{t(read.failed ? "decisions.failed" : "decisions.loading")}</p>;
-  } else if (!decisions.length) {
+  } else if (!rows.length) {
     body = <p data-decision-list-empty="" className="m-0 px-1 py-2 text-body text-muted">{t("decisions.empty")}</p>;
   } else {
-    body = decisions.map((decision) => decision.id === expanded?.id
+    body = rows.map(row => {
+      if ("secret" in row) {
+        const { secret } = row;
+        return row.id === expanded?.id
+          ? <SecretRequestCard key={row.id} request={secret} onCollapse={() => collapse(row.id)}
+            onUpdate={(answer, status) => { read.updateSecrets(secret, answer); if (status) setFeedback(status); }} />
+          : <FoldedDecisionRow key={row.id} id={row.id} title={secretRequestTitle(t, secret)} mark={KeyRound} wrap onOpen={() => open(row.id)} />;
+      }
+      const { decision } = row;
+      return decision.id === expanded?.id
       ? <div key={decision.id} className="flex shrink-0 flex-col gap-2">{decision.decision
         ? <DecisionRecord key={decision.id} decision={decision} onCollapse={() => collapse(decision.id)}
           onRetry={() => void read.answer(decision.id, { retry: true }, decision)}
@@ -128,17 +168,19 @@ export function DecisionList({ project, active = true, focus, touch = false, ini
         {read.withdrawError === decision.id ? <p role="alert" data-decision-withdraw-error="" className="m-0 text-label text-danger">{t("decisions.withdrawFailed")}</p> : null}
       </div>
       </div>
-      : <DecisionRow key={decision.id} decision={decision} onOpen={() => open(decision.id)} />);
+      : <DecisionRow key={decision.id} decision={decision} onOpen={() => open(decision.id)} />;
+    });
   }
   return (
     <div
       ref={listRef}
       role="region"
       aria-label={t("decisions.listAria")}
-      data-decision-list={decisions.length}
+      data-decision-list={rows.length}
       data-decision-expanded={expandedId ?? ""}
       className={`flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overscroll-y-contain ${touch ? "px-3 pb-4 pt-3" : "p-3"}`}
     >
+      {feedback ? <p role={feedback.error ? "alert" : "status"} data-decision-feedback="" className={`m-0 px-1 py-1 text-ui ${feedback.error ? "text-danger" : "text-primary"}`}>{feedback.text}</p> : null}
       {body}
     </div>
   );

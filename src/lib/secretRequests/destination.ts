@@ -123,21 +123,18 @@ export async function gitStatus(parent: string, name: string): Promise<ResolvedS
     const next = path.dirname(ancestor);
     if (next === ancestor) break;
   }
-  const topLevel = await git(["rev-parse", "--show-toplevel"]);
-  if (topLevel.code !== 0) throw new SecretRequestError("secret_destination_unavailable");
-  const nearestRoot = path.resolve(topLevel.stdout.trim());
-  const ignoreCase = await git(["config", "--type=bool", "--get", "core.ignorecase"]);
-  if (ignoreCase.code !== 0 && ignoreCase.code !== 1) throw new SecretRequestError("secret_destination_unavailable");
-  const caseInsensitive = process.platform === "darwin" || ignoreCase.stdout.trim() === "true";
+  if (!roots.size) throw new SecretRequestError("secret_destination_unavailable");
   for (const root of roots) {
     const relative = path.relative(root, destination).split(path.sep).join("/");
     if (relative === ".." || relative.startsWith("../") || path.isAbsolute(relative)) continue;
-    const outerCase = root === nearestRoot ? null : await git(["-C", root, "config", "--type=bool", "--get", "core.ignorecase"]);
-    if (outerCase && outerCase.code !== 0 && outerCase.code !== 1) {
-      throw new SecretRequestError("secret_destination_unavailable");
+    // A repository setting cannot rule out case aliases on a Darwin volume.
+    let caseInsensitive = process.platform === "darwin";
+    if (!caseInsensitive) {
+      const configured = await git(["-C", root, "config", "--type=bool", "--get", "core.ignorecase"]);
+      if (configured.code !== 0 && configured.code !== 1) throw new SecretRequestError("secret_destination_unavailable");
+      caseInsensitive = configured.stdout.trim() === "true";
     }
-    const caseSetting = root === nearestRoot ? caseInsensitive : outerCase?.stdout.trim() === "true";
-    const tracked = await git(["-C", root, "ls-files", "--error-unmatch", "--", `:(literal${caseSetting ? ",icase" : ""})${relative}`]);
+    const tracked = await git(["-C", root, "ls-files", "--error-unmatch", "--", `:(literal${caseInsensitive ? ",icase" : ""})${relative}`]);
     if (tracked.code === 0) throw new SecretRequestError("secret_destination_tracked");
     if (tracked.code !== 1) throw new SecretRequestError("secret_destination_unavailable");
   }

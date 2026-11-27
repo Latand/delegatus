@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { forgetDecisionDraft, reconcileSeatDrafts } from "@/components/prototypeReview/decisionDrafts";
 import { fireTasksChanged, TASKS_CHANGED_EVENT } from "@/components/tasks/taskApi";
 import type { DecidePrototypeInput, OperatorDecisionView, OperatorDecisionsRead } from "@/lib/prototypeReview/types";
+import type { SecretActionAnswer, SecretRequestView } from "@/lib/secretRequests/view";
 
 /** How often an open «Рішення» tab reads its project's decisions. */
 export const DECISIONS_POLL_MS = 3000;
@@ -26,7 +27,7 @@ export type DecisionAnswer = Omit<DecidePrototypeInput, "reviewId">;
  * puts the record back as it was beside the reason (audit B13).
  */
 export function useOperatorDecisions(project: string, active: boolean, initial?: OperatorDecisionView[]) {
-  const [state, setState] = useState<{ project: string; decisions: OperatorDecisionView[] | null; failed: boolean }>(
+  const [state, setState] = useState<{ project: string; decisions: OperatorDecisionView[] | null; failed: boolean; secretRequests?: SecretRequestView[] }>(
     () => ({ project, decisions: initial ?? null, failed: false }));
   const [withdrawing, setWithdrawing] = useState<string | null>(null);
   const [withdrawError, setWithdrawError] = useState<string | null>(null);
@@ -40,16 +41,21 @@ export function useOperatorDecisions(project: string, active: boolean, initial?:
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     const seq = ++sequence.current;
+    let unauthorized = false;
     try {
       const response = await fetch(decisionsUrl(project), { signal, cache: "no-store" });
+      unauthorized = response.status === 401 || response.status === 403;
       const body = await response.json() as OperatorDecisionsRead & { error?: string };
       if (!response.ok) throw new Error(body.error ?? "decisions unavailable");
       if (seq === sequence.current && !signal?.aborted) {
-        setState({ project, decisions: body.decisions, failed: false });
+        setState({ project, decisions: body.decisions, secretRequests: body.secretRequests, failed: false });
         reconcileSeatDrafts(body.project, body.decisions);
       }
     } catch {
-      if (seq === sequence.current && !signal?.aborted) setState((held) => ({ project, decisions: held.project === project ? held.decisions : null, failed: true }));
+      if (seq === sequence.current && !signal?.aborted) setState((held) => ({
+        project, decisions: held.project === project ? held.decisions : null, failed: true,
+        secretRequests: !unauthorized && held.project === project ? held.secretRequests : undefined,
+      }));
     }
   }, [project]);
 
@@ -83,7 +89,7 @@ export function useOperatorDecisions(project: string, active: boolean, initial?:
       ++sequence.current;
       /* Saved: the draft the form kept as the operator typed goes. A refusal leaves it for the form that comes back. */
       if (!("retry" in body) && !decided) forgetDecisionDraft(reviewId);
-      setState({ project, decisions: result.decisions, failed: false });
+      setState(held => ({ project, decisions: result.decisions, secretRequests: held.project === project ? held.secretRequests : undefined, failed: false }));
       fireTasksChanged();
       return true;
     } catch (failure) {
@@ -114,8 +120,22 @@ export function useOperatorDecisions(project: string, active: boolean, initial?:
     finally { inflight.current.delete(decision.id); setWithdrawing(null); }
   }, []);
 
+  const updateSecrets = (request: SecretRequestView, answer: SecretActionAnswer) => {
+    const removeAll = answer.code === "operator_only" || answer.code === "owner_required";
+    const remove = !answer.code || answer.code === "secret_not_pending" || answer.code === "secret_expired";
+    if (!answer.secretRequests && !removeAll && !remove) return;
+    ++sequence.current;
+    const fresh = answer.secretRequests?.find(row => row.id === request.id);
+    setState(held => held.project !== project ? held : { ...held, secretRequests: removeAll ? undefined
+      : held.secretRequests?.flatMap(row => {
+        if (row.id !== request.id) return [row];
+        if (remove) return [];
+        return [fresh && row.destinationRevision === request.destinationRevision ? fresh : row];
+      }) });
+    fireTasksChanged();
+  };
   const decisions = current.decisions?.filter((decision) => !answering.has(decision.id)).map((decision) => predicted.get(decision.id) ?? decision) ?? null;
-  return { decisions, loaded: current.decisions !== null, failed: current.failed && current.decisions === null, answer, error, refresh, withdraw, withdrawing, withdrawError };
+  return { decisions, secretRequests: current.secretRequests, updateSecrets, loaded: current.decisions !== null, failed: current.failed && current.decisions === null, answer, error, refresh, withdraw, withdrawing, withdrawError };
 }
 
 /** A decided record as its Retry (the message on its way) or its Revoke (the access refused) leaves it. */
