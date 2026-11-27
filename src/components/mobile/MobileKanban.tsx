@@ -585,7 +585,8 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onOpenStag
           </span>
         ) : null}
         {loose && item.firstAgent?.agentActivity ? <CardStatusBadge file={item.firstAgent} /> : null}
-        <NeedBadge item={item} />
+        {/* A fault the state line already names (a message stuck in delivery) draws no badge beside it. */}
+        {state?.subject.kind === "fault" ? null : <NeedBadge item={item} />}
       </span>
       {state ? (
         <CardStateLine state={state} nowMs={nowMs} title={title} phone motion={motion} spend={spendTask ? <TaskSpendMarks taskId={spendTask} interactive={false} /> : undefined}

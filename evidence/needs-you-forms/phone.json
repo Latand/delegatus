@@ -1,0 +1,2203 @@
+{
+  "driver": "src/components/mobile/issue1671Evidence.browser.test.tsx",
+  "fixture": "src/components/attention/needsYouPanel.fixture.tsx?scenario=forms&overview=1",
+  "failures": [],
+  "readings": [
+    {
+      "frame": "normal-560-uk-light",
+      "state": "normal",
+      "forms": 9,
+      "width": 560,
+      "lang": "uk",
+      "scheme": "light",
+      "bar": {
+        "drawn": true,
+        "count": "9",
+        "text": "9",
+        "aria": "Потрібні ви · 9",
+        "whole": true,
+        "apart": true,
+        "target": {
+          "width": 52,
+          "height": 44
+        },
+        "overflow": false
+      },
+      "sheet": {
+        "title": "Потрібні ви · 9",
+        "titleWhole": true,
+        "rows": 9,
+        "otherRows": 0,
+        "sections": [
+          [
+            "delegatus",
+            5
+          ],
+          [
+            "shop-web",
+            3
+          ],
+          [
+            "tg-bot",
+            1
+          ]
+        ],
+        "dismiss": 0,
+        "placeholders": 0,
+        "done": 0,
+        "firstWhole": true,
+        "lastWhole": false,
+        "scrolls": true,
+        "right": 560,
+        "end": {
+          "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "5",
+        "chip": {
+          "count": "5",
+          "word": "Потрібні ви · 5",
+          "text": "Потрібні ви · 5",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 122,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 5,
+        "strip": {
+          "count": "5",
+          "text": "Потрібні ви · 5",
+          "whole": true
+        }
+      }
+    },
+    {
+      "frame": "normal-560-uk-dark",
+      "state": "normal",
+      "forms": 9,
+      "width": 560,
+      "lang": "uk",
+      "scheme": "dark",
+      "bar": {
+        "drawn": true,
+        "count": "9",
+        "text": "9",
+        "aria": "Потрібні ви · 9",
+        "whole": true,
+        "apart": true,
+        "target": {
+          "width": 52,
+          "height": 44
+        },
+        "overflow": false
+      },
+      "sheet": {
+        "title": "Потрібні ви · 9",
+        "titleWhole": true,
+        "rows": 9,
+        "otherRows": 0,
+        "sections": [
+          [
+            "delegatus",
+            5
+          ],
+          [
+            "shop-web",
+            3
+          ],
+          [
+            "tg-bot",
+            1
+          ]
+        ],
+        "dismiss": 0,
+        "placeholders": 0,
+        "done": 0,
+        "firstWhole": true,
+        "lastWhole": false,
+        "scrolls": true,
+        "right": 560,
+        "end": {
+          "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "5",
+        "chip": {
+          "count": "5",
+          "word": "Потрібні ви · 5",
+          "text": "Потрібні ви · 5",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 122,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 5,
+        "strip": {
+          "count": "5",
+          "text": "Потрібні ви · 5",
+          "whole": true
+        }
+      }
+    },
+    {
+      "frame": "normal-560-en-light",
+      "state": "normal",
+      "forms": 9,
+      "width": 560,
+      "lang": "en",
+      "scheme": "light",
+      "bar": {
+        "drawn": true,
+        "count": "9",
+        "text": "9",
+        "aria": "Needs you · 9",
+        "whole": true,
+        "apart": true,
+        "target": {
+          "width": 52,
+          "height": 44
+        },
+        "overflow": false
+      },
+      "sheet": {
+        "title": "Needs you · 9",
+        "titleWhole": true,
+        "rows": 9,
+        "otherRows": 0,
+        "sections": [
+          [
+            "delegatus",
+            5
+          ],
+          [
+            "shop-web",
+            3
+          ],
+          [
+            "tg-bot",
+            1
+          ]
+        ],
+        "dismiss": 0,
+        "placeholders": 0,
+        "done": 0,
+        "firstWhole": true,
+        "lastWhole": false,
+        "scrolls": true,
+        "right": 560,
+        "end": {
+          "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "5",
+        "chip": {
+          "count": "5",
+          "word": "Needs you · 5",
+          "text": "Needs you · 5",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 116,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 5,
+        "strip": {
+          "count": "5",
+          "text": "Needs you · 5",
+          "whole": true
+        }
+      }
+    },
+    {
+      "frame": "normal-560-en-dark",
+      "state": "normal",
+      "forms": 9,
+      "width": 560,
+      "lang": "en",
+      "scheme": "dark",
+      "bar": {
+        "drawn": true,
+        "count": "9",
+        "text": "9",
+        "aria": "Needs you · 9",
+        "whole": true,
+        "apart": true,
+        "target": {
+          "width": 52,
+          "height": 44
+        },
+        "overflow": false
+      },
+      "sheet": {
+        "title": "Needs you · 9",
+        "titleWhole": true,
+        "rows": 9,
+        "otherRows": 0,
+        "sections": [
+          [
+            "delegatus",
+            5
+          ],
+          [
+            "shop-web",
+            3
+          ],
+          [
+            "tg-bot",
+            1
+          ]
+        ],
+        "dismiss": 0,
+        "placeholders": 0,
+        "done": 0,
+        "firstWhole": true,
+        "lastWhole": false,
+        "scrolls": true,
+        "right": 560,
+        "end": {
+          "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "5",
+        "chip": {
+          "count": "5",
+          "word": "Needs you · 5",
+          "text": "Needs you · 5",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 116,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 5,
+        "strip": {
+          "count": "5",
+          "text": "Needs you · 5",
+          "whole": true
+        }
+      }
+    },
+    {
+      "frame": "normal-475-uk-light",
+      "state": "normal",
+      "forms": 9,
+      "width": 475,
+      "lang": "uk",
+      "scheme": "light",
+      "bar": {
+        "drawn": true,
+        "count": "9",
+        "text": "9",
+        "aria": "Потрібні ви · 9",
+        "whole": true,
+        "apart": true,
+        "target": {
+          "width": 52,
+          "height": 44
+        },
+        "overflow": false
+      },
+      "sheet": {
+        "title": "Потрібні ви · 9",
+        "titleWhole": true,
+        "rows": 9,
+        "otherRows": 0,
+        "sections": [
+          [
+            "delegatus",
+            5
+          ],
+          [
+            "shop-web",
+            3
+          ],
+          [
+            "tg-bot",
+            1
+          ]
+        ],
+        "dismiss": 0,
+        "placeholders": 0,
+        "done": 0,
+        "firstWhole": true,
+        "lastWhole": false,
+        "scrolls": true,
+        "right": 475,
+        "end": {
+          "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "5",
+        "chip": {
+          "count": "5",
+          "word": "Потрібні ви · 5",
+          "text": "Потрібні ви · 5",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 122,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 5,
+        "strip": {
+          "count": "5",
+          "text": "Потрібні ви · 5",
+          "whole": true
+        }
+      }
+    },
+    {
+      "frame": "normal-475-uk-dark",
+      "state": "normal",
+      "forms": 9,
+      "width": 475,
+      "lang": "uk",
+      "scheme": "dark",
+      "bar": {
+        "drawn": true,
+        "count": "9",
+        "text": "9",
+        "aria": "Потрібні ви · 9",
+        "whole": true,
+        "apart": true,
+        "target": {
+          "width": 52,
+          "height": 44
+        },
+        "overflow": false
+      },
+      "sheet": {
+        "title": "Потрібні ви · 9",
+        "titleWhole": true,
+        "rows": 9,
+        "otherRows": 0,
+        "sections": [
+          [
+            "delegatus",
+            5
+          ],
+          [
+            "shop-web",
+            3
+          ],
+          [
+            "tg-bot",
+            1
+          ]
+        ],
+        "dismiss": 0,
+        "placeholders": 0,
+        "done": 0,
+        "firstWhole": true,
+        "lastWhole": false,
+        "scrolls": true,
+        "right": 475,
+        "end": {
+          "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "5",
+        "chip": {
+          "count": "5",
+          "word": "Потрібні ви · 5",
+          "text": "Потрібні ви · 5",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 122,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 5,
+        "strip": {
+          "count": "5",
+          "text": "Потрібні ви · 5",
+          "whole": true
+        }
+      }
+    },
+    {
+      "frame": "normal-475-en-light",
+      "state": "normal",
+      "forms": 9,
+      "width": 475,
+      "lang": "en",
+      "scheme": "light",
+      "bar": {
+        "drawn": true,
+        "count": "9",
+        "text": "9",
+        "aria": "Needs you · 9",
+        "whole": true,
+        "apart": true,
+        "target": {
+          "width": 52,
+          "height": 44
+        },
+        "overflow": false
+      },
+      "sheet": {
+        "title": "Needs you · 9",
+        "titleWhole": true,
+        "rows": 9,
+        "otherRows": 0,
+        "sections": [
+          [
+            "delegatus",
+            5
+          ],
+          [
+            "shop-web",
+            3
+          ],
+          [
+            "tg-bot",
+            1
+          ]
+        ],
+        "dismiss": 0,
+        "placeholders": 0,
+        "done": 0,
+        "firstWhole": true,
+        "lastWhole": false,
+        "scrolls": true,
+        "right": 475,
+        "end": {
+          "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "5",
+        "chip": {
+          "count": "5",
+          "word": "Needs you · 5",
+          "text": "Needs you · 5",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 116,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 5,
+        "strip": {
+          "count": "5",
+          "text": "Needs you · 5",
+          "whole": true
+        }
+      }
+    },
+    {
+      "frame": "normal-475-en-dark",
+      "state": "normal",
+      "forms": 9,
+      "width": 475,
+      "lang": "en",
+      "scheme": "dark",
+      "bar": {
+        "drawn": true,
+        "count": "9",
+        "text": "9",
+        "aria": "Needs you · 9",
+        "whole": true,
+        "apart": true,
+        "target": {
+          "width": 52,
+          "height": 44
+        },
+        "overflow": false
+      },
+      "sheet": {
+        "title": "Needs you · 9",
+        "titleWhole": true,
+        "rows": 9,
+        "otherRows": 0,
+        "sections": [
+          [
+            "delegatus",
+            5
+          ],
+          [
+            "shop-web",
+            3
+          ],
+          [
+            "tg-bot",
+            1
+          ]
+        ],
+        "dismiss": 0,
+        "placeholders": 0,
+        "done": 0,
+        "firstWhole": true,
+        "lastWhole": false,
+        "scrolls": true,
+        "right": 475,
+        "end": {
+          "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "5",
+        "chip": {
+          "count": "5",
+          "word": "Needs you · 5",
+          "text": "Needs you · 5",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 116,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 5,
+        "strip": {
+          "count": "5",
+          "text": "Needs you · 5",
+          "whole": true
+        }
+      }
+    },
+    {
+      "frame": "normal-390-uk-light",
+      "state": "normal",
+      "forms": 9,
+      "width": 390,
+      "lang": "uk",
+      "scheme": "light",
+      "bar": {
+        "drawn": true,
+        "count": "9",
+        "text": "9",
+        "aria": "Потрібні ви · 9",
+        "whole": true,
+        "apart": true,
+        "target": {
+          "width": 52,
+          "height": 44
+        },
+        "overflow": false
+      },
+      "sheet": {
+        "title": "Потрібні ви · 9",
+        "titleWhole": true,
+        "rows": 9,
+        "otherRows": 0,
+        "sections": [
+          [
+            "delegatus",
+            5
+          ],
+          [
+            "shop-web",
+            3
+          ],
+          [
+            "tg-bot",
+            1
+          ]
+        ],
+        "dismiss": 0,
+        "placeholders": 0,
+        "done": 0,
+        "firstWhole": true,
+        "lastWhole": false,
+        "scrolls": true,
+        "right": 390,
+        "end": {
+          "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "5",
+        "chip": {
+          "count": "5",
+          "word": "Потрібні ви · 5",
+          "text": "Потрібні ви · 5",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 122,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 5,
+        "strip": {
+          "count": "5",
+          "text": "Потрібні ви · 5",
+          "whole": true
+        }
+      }
+    },
+    {
+      "frame": "normal-390-uk-dark",
+      "state": "normal",
+      "forms": 9,
+      "width": 390,
+      "lang": "uk",
+      "scheme": "dark",
+      "bar": {
+        "drawn": true,
+        "count": "9",
+        "text": "9",
+        "aria": "Потрібні ви · 9",
+        "whole": true,
+        "apart": true,
+        "target": {
+          "width": 52,
+          "height": 44
+        },
+        "overflow": false
+      },
+      "sheet": {
+        "title": "Потрібні ви · 9",
+        "titleWhole": true,
+        "rows": 9,
+        "otherRows": 0,
+        "sections": [
+          [
+            "delegatus",
+            5
+          ],
+          [
+            "shop-web",
+            3
+          ],
+          [
+            "tg-bot",
+            1
+          ]
+        ],
+        "dismiss": 0,
+        "placeholders": 0,
+        "done": 0,
+        "firstWhole": true,
+        "lastWhole": false,
+        "scrolls": true,
+        "right": 390,
+        "end": {
+          "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "5",
+        "chip": {
+          "count": "5",
+          "word": "Потрібні ви · 5",
+          "text": "Потрібні ви · 5",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 122,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 5,
+        "strip": {
+          "count": "5",
+          "text": "Потрібні ви · 5",
+          "whole": true
+        }
+      }
+    },
+    {
+      "frame": "normal-390-en-light",
+      "state": "normal",
+      "forms": 9,
+      "width": 390,
+      "lang": "en",
+      "scheme": "light",
+      "bar": {
+        "drawn": true,
+        "count": "9",
+        "text": "9",
+        "aria": "Needs you · 9",
+        "whole": true,
+        "apart": true,
+        "target": {
+          "width": 52,
+          "height": 44
+        },
+        "overflow": false
+      },
+      "sheet": {
+        "title": "Needs you · 9",
+        "titleWhole": true,
+        "rows": 9,
+        "otherRows": 0,
+        "sections": [
+          [
+            "delegatus",
+            5
+          ],
+          [
+            "shop-web",
+            3
+          ],
+          [
+            "tg-bot",
+            1
+          ]
+        ],
+        "dismiss": 0,
+        "placeholders": 0,
+        "done": 0,
+        "firstWhole": true,
+        "lastWhole": false,
+        "scrolls": true,
+        "right": 390,
+        "end": {
+          "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "5",
+        "chip": {
+          "count": "5",
+          "word": "Needs you · 5",
+          "text": "Needs you · 5",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 116,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 5,
+        "strip": {
+          "count": "5",
+          "text": "Needs you · 5",
+          "whole": true
+        }
+      }
+    },
+    {
+      "frame": "normal-390-en-dark",
+      "state": "normal",
+      "forms": 9,
+      "width": 390,
+      "lang": "en",
+      "scheme": "dark",
+      "bar": {
+        "drawn": true,
+        "count": "9",
+        "text": "9",
+        "aria": "Needs you · 9",
+        "whole": true,
+        "apart": true,
+        "target": {
+          "width": 52,
+          "height": 44
+        },
+        "overflow": false
+      },
+      "sheet": {
+        "title": "Needs you · 9",
+        "titleWhole": true,
+        "rows": 9,
+        "otherRows": 0,
+        "sections": [
+          [
+            "delegatus",
+            5
+          ],
+          [
+            "shop-web",
+            3
+          ],
+          [
+            "tg-bot",
+            1
+          ]
+        ],
+        "dismiss": 0,
+        "placeholders": 0,
+        "done": 0,
+        "firstWhole": true,
+        "lastWhole": false,
+        "scrolls": true,
+        "right": 390,
+        "end": {
+          "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "5",
+        "chip": {
+          "count": "5",
+          "word": "Needs you · 5",
+          "text": "Needs you · 5",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 116,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 5,
+        "strip": {
+          "count": "5",
+          "text": "Needs you · 5",
+          "whole": true
+        }
+      }
+    },
+    {
+      "frame": "empty-560-uk-light",
+      "state": "empty",
+      "forms": 0,
+      "width": 560,
+      "lang": "uk",
+      "scheme": "light",
+      "bar": {
+        "drawn": false,
+        "count": null,
+        "text": null,
+        "aria": null,
+        "whole": false,
+        "apart": true,
+        "target": null,
+        "overflow": false
+      },
+      "sheet": null,
+      "board": {
+        "badge": null,
+        "chip": {
+          "count": "0",
+          "word": "Не доставлено",
+          "text": "Не доставлено",
+          "stuck": true,
+          "whole": true,
+          "target": {
+            "width": 125,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 0,
+        "strip": null
+      }
+    },
+    {
+      "frame": "empty-560-uk-dark",
+      "state": "empty",
+      "forms": 0,
+      "width": 560,
+      "lang": "uk",
+      "scheme": "dark",
+      "bar": {
+        "drawn": false,
+        "count": null,
+        "text": null,
+        "aria": null,
+        "whole": false,
+        "apart": true,
+        "target": null,
+        "overflow": false
+      },
+      "sheet": null,
+      "board": {
+        "badge": null,
+        "chip": {
+          "count": "0",
+          "word": "Не доставлено",
+          "text": "Не доставлено",
+          "stuck": true,
+          "whole": true,
+          "target": {
+            "width": 125,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 0,
+        "strip": null
+      }
+    },
+    {
+      "frame": "empty-560-en-light",
+      "state": "empty",
+      "forms": 0,
+      "width": 560,
+      "lang": "en",
+      "scheme": "light",
+      "bar": {
+        "drawn": false,
+        "count": null,
+        "text": null,
+        "aria": null,
+        "whole": false,
+        "apart": true,
+        "target": null,
+        "overflow": false
+      },
+      "sheet": null,
+      "board": {
+        "badge": null,
+        "chip": {
+          "count": "0",
+          "word": "Not delivered",
+          "text": "Not delivered",
+          "stuck": true,
+          "whole": true,
+          "target": {
+            "width": 114,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 0,
+        "strip": null
+      }
+    },
+    {
+      "frame": "empty-560-en-dark",
+      "state": "empty",
+      "forms": 0,
+      "width": 560,
+      "lang": "en",
+      "scheme": "dark",
+      "bar": {
+        "drawn": false,
+        "count": null,
+        "text": null,
+        "aria": null,
+        "whole": false,
+        "apart": true,
+        "target": null,
+        "overflow": false
+      },
+      "sheet": null,
+      "board": {
+        "badge": null,
+        "chip": {
+          "count": "0",
+          "word": "Not delivered",
+          "text": "Not delivered",
+          "stuck": true,
+          "whole": true,
+          "target": {
+            "width": 114,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 0,
+        "strip": null
+      }
+    },
+    {
+      "frame": "empty-475-uk-light",
+      "state": "empty",
+      "forms": 0,
+      "width": 475,
+      "lang": "uk",
+      "scheme": "light",
+      "bar": {
+        "drawn": false,
+        "count": null,
+        "text": null,
+        "aria": null,
+        "whole": false,
+        "apart": true,
+        "target": null,
+        "overflow": false
+      },
+      "sheet": null,
+      "board": {
+        "badge": null,
+        "chip": {
+          "count": "0",
+          "word": "Не доставлено",
+          "text": "Не доставлено",
+          "stuck": true,
+          "whole": true,
+          "target": {
+            "width": 125,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 0,
+        "strip": null
+      }
+    },
+    {
+      "frame": "empty-475-uk-dark",
+      "state": "empty",
+      "forms": 0,
+      "width": 475,
+      "lang": "uk",
+      "scheme": "dark",
+      "bar": {
+        "drawn": false,
+        "count": null,
+        "text": null,
+        "aria": null,
+        "whole": false,
+        "apart": true,
+        "target": null,
+        "overflow": false
+      },
+      "sheet": null,
+      "board": {
+        "badge": null,
+        "chip": {
+          "count": "0",
+          "word": "Не доставлено",
+          "text": "Не доставлено",
+          "stuck": true,
+          "whole": true,
+          "target": {
+            "width": 125,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 0,
+        "strip": null
+      }
+    },
+    {
+      "frame": "empty-475-en-light",
+      "state": "empty",
+      "forms": 0,
+      "width": 475,
+      "lang": "en",
+      "scheme": "light",
+      "bar": {
+        "drawn": false,
+        "count": null,
+        "text": null,
+        "aria": null,
+        "whole": false,
+        "apart": true,
+        "target": null,
+        "overflow": false
+      },
+      "sheet": null,
+      "board": {
+        "badge": null,
+        "chip": {
+          "count": "0",
+          "word": "Not delivered",
+          "text": "Not delivered",
+          "stuck": true,
+          "whole": true,
+          "target": {
+            "width": 114,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 0,
+        "strip": null
+      }
+    },
+    {
+      "frame": "empty-475-en-dark",
+      "state": "empty",
+      "forms": 0,
+      "width": 475,
+      "lang": "en",
+      "scheme": "dark",
+      "bar": {
+        "drawn": false,
+        "count": null,
+        "text": null,
+        "aria": null,
+        "whole": false,
+        "apart": true,
+        "target": null,
+        "overflow": false
+      },
+      "sheet": null,
+      "board": {
+        "badge": null,
+        "chip": {
+          "count": "0",
+          "word": "Not delivered",
+          "text": "Not delivered",
+          "stuck": true,
+          "whole": true,
+          "target": {
+            "width": 114,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 0,
+        "strip": null
+      }
+    },
+    {
+      "frame": "empty-390-uk-light",
+      "state": "empty",
+      "forms": 0,
+      "width": 390,
+      "lang": "uk",
+      "scheme": "light",
+      "bar": {
+        "drawn": false,
+        "count": null,
+        "text": null,
+        "aria": null,
+        "whole": false,
+        "apart": true,
+        "target": null,
+        "overflow": false
+      },
+      "sheet": null,
+      "board": {
+        "badge": null,
+        "chip": {
+          "count": "0",
+          "word": "Не доставлено",
+          "text": "Не доставлено",
+          "stuck": true,
+          "whole": true,
+          "target": {
+            "width": 125,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 0,
+        "strip": null
+      }
+    },
+    {
+      "frame": "empty-390-uk-dark",
+      "state": "empty",
+      "forms": 0,
+      "width": 390,
+      "lang": "uk",
+      "scheme": "dark",
+      "bar": {
+        "drawn": false,
+        "count": null,
+        "text": null,
+        "aria": null,
+        "whole": false,
+        "apart": true,
+        "target": null,
+        "overflow": false
+      },
+      "sheet": null,
+      "board": {
+        "badge": null,
+        "chip": {
+          "count": "0",
+          "word": "Не доставлено",
+          "text": "Не доставлено",
+          "stuck": true,
+          "whole": true,
+          "target": {
+            "width": 125,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 0,
+        "strip": null
+      }
+    },
+    {
+      "frame": "empty-390-en-light",
+      "state": "empty",
+      "forms": 0,
+      "width": 390,
+      "lang": "en",
+      "scheme": "light",
+      "bar": {
+        "drawn": false,
+        "count": null,
+        "text": null,
+        "aria": null,
+        "whole": false,
+        "apart": true,
+        "target": null,
+        "overflow": false
+      },
+      "sheet": null,
+      "board": {
+        "badge": null,
+        "chip": {
+          "count": "0",
+          "word": "Not delivered",
+          "text": "Not delivered",
+          "stuck": true,
+          "whole": true,
+          "target": {
+            "width": 114,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 0,
+        "strip": null
+      }
+    },
+    {
+      "frame": "empty-390-en-dark",
+      "state": "empty",
+      "forms": 0,
+      "width": 390,
+      "lang": "en",
+      "scheme": "dark",
+      "bar": {
+        "drawn": false,
+        "count": null,
+        "text": null,
+        "aria": null,
+        "whole": false,
+        "apart": true,
+        "target": null,
+        "overflow": false
+      },
+      "sheet": null,
+      "board": {
+        "badge": null,
+        "chip": {
+          "count": "0",
+          "word": "Not delivered",
+          "text": "Not delivered",
+          "stuck": true,
+          "whole": true,
+          "target": {
+            "width": 114,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 0,
+        "strip": null
+      }
+    },
+    {
+      "frame": "busy-560-uk-light",
+      "state": "busy",
+      "forms": 27,
+      "width": 560,
+      "lang": "uk",
+      "scheme": "light",
+      "bar": {
+        "drawn": true,
+        "count": "27",
+        "text": "27",
+        "aria": "Потрібні ви · 27",
+        "whole": true,
+        "apart": true,
+        "target": {
+          "width": 52,
+          "height": 44
+        },
+        "overflow": false
+      },
+      "sheet": {
+        "title": "Потрібні ви · 27",
+        "titleWhole": true,
+        "rows": 27,
+        "otherRows": 0,
+        "sections": [
+          [
+            "delegatus",
+            14
+          ],
+          [
+            "shop-web",
+            9
+          ],
+          [
+            "tg-bot",
+            4
+          ]
+        ],
+        "dismiss": 0,
+        "placeholders": 0,
+        "done": 0,
+        "firstWhole": true,
+        "lastWhole": false,
+        "scrolls": true,
+        "right": 560,
+        "end": {
+          "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "14",
+        "chip": {
+          "count": "14",
+          "word": "Потрібні ви · 14",
+          "text": "Потрібні ви · 14",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 129,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 14,
+        "strip": {
+          "count": "14",
+          "text": "Потрібні ви · 14",
+          "whole": true
+        }
+      }
+    },
+    {
+      "frame": "busy-560-uk-dark",
+      "state": "busy",
+      "forms": 27,
+      "width": 560,
+      "lang": "uk",
+      "scheme": "dark",
+      "bar": {
+        "drawn": true,
+        "count": "27",
+        "text": "27",
+        "aria": "Потрібні ви · 27",
+        "whole": true,
+        "apart": true,
+        "target": {
+          "width": 52,
+          "height": 44
+        },
+        "overflow": false
+      },
+      "sheet": {
+        "title": "Потрібні ви · 27",
+        "titleWhole": true,
+        "rows": 27,
+        "otherRows": 0,
+        "sections": [
+          [
+            "delegatus",
+            14
+          ],
+          [
+            "shop-web",
+            9
+          ],
+          [
+            "tg-bot",
+            4
+          ]
+        ],
+        "dismiss": 0,
+        "placeholders": 0,
+        "done": 0,
+        "firstWhole": true,
+        "lastWhole": false,
+        "scrolls": true,
+        "right": 560,
+        "end": {
+          "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "14",
+        "chip": {
+          "count": "14",
+          "word": "Потрібні ви · 14",
+          "text": "Потрібні ви · 14",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 129,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 14,
+        "strip": {
+          "count": "14",
+          "text": "Потрібні ви · 14",
+          "whole": true
+        }
+      }
+    },
+    {
+      "frame": "busy-560-en-light",
+      "state": "busy",
+      "forms": 27,
+      "width": 560,
+      "lang": "en",
+      "scheme": "light",
+      "bar": {
+        "drawn": true,
+        "count": "27",
+        "text": "27",
+        "aria": "Needs you · 27",
+        "whole": true,
+        "apart": true,
+        "target": {
+          "width": 52,
+          "height": 44
+        },
+        "overflow": false
+      },
+      "sheet": {
+        "title": "Needs you · 27",
+        "titleWhole": true,
+        "rows": 27,
+        "otherRows": 0,
+        "sections": [
+          [
+            "delegatus",
+            14
+          ],
+          [
+            "shop-web",
+            9
+          ],
+          [
+            "tg-bot",
+            4
+          ]
+        ],
+        "dismiss": 0,
+        "placeholders": 0,
+        "done": 0,
+        "firstWhole": true,
+        "lastWhole": false,
+        "scrolls": true,
+        "right": 560,
+        "end": {
+          "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "14",
+        "chip": {
+          "count": "14",
+          "word": "Needs you · 14",
+          "text": "Needs you · 14",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 122,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 14,
+        "strip": {
+          "count": "14",
+          "text": "Needs you · 14",
+          "whole": true
+        }
+      }
+    },
+    {
+      "frame": "busy-560-en-dark",
+      "state": "busy",
+      "forms": 27,
+      "width": 560,
+      "lang": "en",
+      "scheme": "dark",
+      "bar": {
+        "drawn": true,
+        "count": "27",
+        "text": "27",
+        "aria": "Needs you · 27",
+        "whole": true,
+        "apart": true,
+        "target": {
+          "width": 52,
+          "height": 44
+        },
+        "overflow": false
+      },
+      "sheet": {
+        "title": "Needs you · 27",
+        "titleWhole": true,
+        "rows": 27,
+        "otherRows": 0,
+        "sections": [
+          [
+            "delegatus",
+            14
+          ],
+          [
+            "shop-web",
+            9
+          ],
+          [
+            "tg-bot",
+            4
+          ]
+        ],
+        "dismiss": 0,
+        "placeholders": 0,
+        "done": 0,
+        "firstWhole": true,
+        "lastWhole": false,
+        "scrolls": true,
+        "right": 560,
+        "end": {
+          "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "14",
+        "chip": {
+          "count": "14",
+          "word": "Needs you · 14",
+          "text": "Needs you · 14",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 122,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 14,
+        "strip": {
+          "count": "14",
+          "text": "Needs you · 14",
+          "whole": true
+        }
+      }
+    },
+    {
+      "frame": "busy-475-uk-light",
+      "state": "busy",
+      "forms": 27,
+      "width": 475,
+      "lang": "uk",
+      "scheme": "light",
+      "bar": {
+        "drawn": true,
+        "count": "27",
+        "text": "27",
+        "aria": "Потрібні ви · 27",
+        "whole": true,
+        "apart": true,
+        "target": {
+          "width": 52,
+          "height": 44
+        },
+        "overflow": false
+      },
+      "sheet": {
+        "title": "Потрібні ви · 27",
+        "titleWhole": true,
+        "rows": 27,
+        "otherRows": 0,
+        "sections": [
+          [
+            "delegatus",
+            14
+          ],
+          [
+            "shop-web",
+            9
+          ],
+          [
+            "tg-bot",
+            4
+          ]
+        ],
+        "dismiss": 0,
+        "placeholders": 0,
+        "done": 0,
+        "firstWhole": true,
+        "lastWhole": false,
+        "scrolls": true,
+        "right": 475,
+        "end": {
+          "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "14",
+        "chip": {
+          "count": "14",
+          "word": "Потрібні ви · 14",
+          "text": "Потрібні ви · 14",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 129,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 14,
+        "strip": {
+          "count": "14",
+          "text": "Потрібні ви · 14",
+          "whole": true
+        }
+      }
+    },
+    {
+      "frame": "busy-475-uk-dark",
+      "state": "busy",
+      "forms": 27,
+      "width": 475,
+      "lang": "uk",
+      "scheme": "dark",
+      "bar": {
+        "drawn": true,
+        "count": "27",
+        "text": "27",
+        "aria": "Потрібні ви · 27",
+        "whole": true,
+        "apart": true,
+        "target": {
+          "width": 52,
+          "height": 44
+        },
+        "overflow": false
+      },
+      "sheet": {
+        "title": "Потрібні ви · 27",
+        "titleWhole": true,
+        "rows": 27,
+        "otherRows": 0,
+        "sections": [
+          [
+            "delegatus",
+            14
+          ],
+          [
+            "shop-web",
+            9
+          ],
+          [
+            "tg-bot",
+            4
+          ]
+        ],
+        "dismiss": 0,
+        "placeholders": 0,
+        "done": 0,
+        "firstWhole": true,
+        "lastWhole": false,
+        "scrolls": true,
+        "right": 475,
+        "end": {
+          "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "14",
+        "chip": {
+          "count": "14",
+          "word": "Потрібні ви · 14",
+          "text": "Потрібні ви · 14",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 129,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 14,
+        "strip": {
+          "count": "14",
+          "text": "Потрібні ви · 14",
+          "whole": true
+        }
+      }
+    },
+    {
+      "frame": "busy-475-en-light",
+      "state": "busy",
+      "forms": 27,
+      "width": 475,
+      "lang": "en",
+      "scheme": "light",
+      "bar": {
+        "drawn": true,
+        "count": "27",
+        "text": "27",
+        "aria": "Needs you · 27",
+        "whole": true,
+        "apart": true,
+        "target": {
+          "width": 52,
+          "height": 44
+        },
+        "overflow": false
+      },
+      "sheet": {
+        "title": "Needs you · 27",
+        "titleWhole": true,
+        "rows": 27,
+        "otherRows": 0,
+        "sections": [
+          [
+            "delegatus",
+            14
+          ],
+          [
+            "shop-web",
+            9
+          ],
+          [
+            "tg-bot",
+            4
+          ]
+        ],
+        "dismiss": 0,
+        "placeholders": 0,
+        "done": 0,
+        "firstWhole": true,
+        "lastWhole": false,
+        "scrolls": true,
+        "right": 475,
+        "end": {
+          "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "14",
+        "chip": {
+          "count": "14",
+          "word": "Needs you · 14",
+          "text": "Needs you · 14",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 122,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 14,
+        "strip": {
+          "count": "14",
+          "text": "Needs you · 14",
+          "whole": true
+        }
+      }
+    },
+    {
+      "frame": "busy-475-en-dark",
+      "state": "busy",
+      "forms": 27,
+      "width": 475,
+      "lang": "en",
+      "scheme": "dark",
+      "bar": {
+        "drawn": true,
+        "count": "27",
+        "text": "27",
+        "aria": "Needs you · 27",
+        "whole": true,
+        "apart": true,
+        "target": {
+          "width": 52,
+          "height": 44
+        },
+        "overflow": false
+      },
+      "sheet": {
+        "title": "Needs you · 27",
+        "titleWhole": true,
+        "rows": 27,
+        "otherRows": 0,
+        "sections": [
+          [
+            "delegatus",
+            14
+          ],
+          [
+            "shop-web",
+            9
+          ],
+          [
+            "tg-bot",
+            4
+          ]
+        ],
+        "dismiss": 0,
+        "placeholders": 0,
+        "done": 0,
+        "firstWhole": true,
+        "lastWhole": false,
+        "scrolls": true,
+        "right": 475,
+        "end": {
+          "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "14",
+        "chip": {
+          "count": "14",
+          "word": "Needs you · 14",
+          "text": "Needs you · 14",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 122,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 14,
+        "strip": {
+          "count": "14",
+          "text": "Needs you · 14",
+          "whole": true
+        }
+      }
+    },
+    {
+      "frame": "busy-390-uk-light",
+      "state": "busy",
+      "forms": 27,
+      "width": 390,
+      "lang": "uk",
+      "scheme": "light",
+      "bar": {
+        "drawn": true,
+        "count": "27",
+        "text": "27",
+        "aria": "Потрібні ви · 27",
+        "whole": true,
+        "apart": true,
+        "target": {
+          "width": 52,
+          "height": 44
+        },
+        "overflow": false
+      },
+      "sheet": {
+        "title": "Потрібні ви · 27",
+        "titleWhole": true,
+        "rows": 27,
+        "otherRows": 0,
+        "sections": [
+          [
+            "delegatus",
+            14
+          ],
+          [
+            "shop-web",
+            9
+          ],
+          [
+            "tg-bot",
+            4
+          ]
+        ],
+        "dismiss": 0,
+        "placeholders": 0,
+        "done": 0,
+        "firstWhole": true,
+        "lastWhole": false,
+        "scrolls": true,
+        "right": 390,
+        "end": {
+          "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "14",
+        "chip": {
+          "count": "14",
+          "word": "Потрібні ви · 14",
+          "text": "Потрібні ви · 14",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 129,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 14,
+        "strip": {
+          "count": "14",
+          "text": "Потрібні ви · 14",
+          "whole": true
+        }
+      }
+    },
+    {
+      "frame": "busy-390-uk-dark",
+      "state": "busy",
+      "forms": 27,
+      "width": 390,
+      "lang": "uk",
+      "scheme": "dark",
+      "bar": {
+        "drawn": true,
+        "count": "27",
+        "text": "27",
+        "aria": "Потрібні ви · 27",
+        "whole": true,
+        "apart": true,
+        "target": {
+          "width": 52,
+          "height": 44
+        },
+        "overflow": false
+      },
+      "sheet": {
+        "title": "Потрібні ви · 27",
+        "titleWhole": true,
+        "rows": 27,
+        "otherRows": 0,
+        "sections": [
+          [
+            "delegatus",
+            14
+          ],
+          [
+            "shop-web",
+            9
+          ],
+          [
+            "tg-bot",
+            4
+          ]
+        ],
+        "dismiss": 0,
+        "placeholders": 0,
+        "done": 0,
+        "firstWhole": true,
+        "lastWhole": false,
+        "scrolls": true,
+        "right": 390,
+        "end": {
+          "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "14",
+        "chip": {
+          "count": "14",
+          "word": "Потрібні ви · 14",
+          "text": "Потрібні ви · 14",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 129,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 14,
+        "strip": {
+          "count": "14",
+          "text": "Потрібні ви · 14",
+          "whole": true
+        }
+      }
+    },
+    {
+      "frame": "busy-390-en-light",
+      "state": "busy",
+      "forms": 27,
+      "width": 390,
+      "lang": "en",
+      "scheme": "light",
+      "bar": {
+        "drawn": true,
+        "count": "27",
+        "text": "27",
+        "aria": "Needs you · 27",
+        "whole": true,
+        "apart": true,
+        "target": {
+          "width": 52,
+          "height": 44
+        },
+        "overflow": false
+      },
+      "sheet": {
+        "title": "Needs you · 27",
+        "titleWhole": true,
+        "rows": 27,
+        "otherRows": 0,
+        "sections": [
+          [
+            "delegatus",
+            14
+          ],
+          [
+            "shop-web",
+            9
+          ],
+          [
+            "tg-bot",
+            4
+          ]
+        ],
+        "dismiss": 0,
+        "placeholders": 0,
+        "done": 0,
+        "firstWhole": true,
+        "lastWhole": false,
+        "scrolls": true,
+        "right": 390,
+        "end": {
+          "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "14",
+        "chip": {
+          "count": "14",
+          "word": "Needs you · 14",
+          "text": "Needs you · 14",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 122,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 14,
+        "strip": {
+          "count": "14",
+          "text": "Needs you · 14",
+          "whole": true
+        }
+      }
+    },
+    {
+      "frame": "busy-390-en-dark",
+      "state": "busy",
+      "forms": 27,
+      "width": 390,
+      "lang": "en",
+      "scheme": "dark",
+      "bar": {
+        "drawn": true,
+        "count": "27",
+        "text": "27",
+        "aria": "Needs you · 27",
+        "whole": true,
+        "apart": true,
+        "target": {
+          "width": 52,
+          "height": 44
+        },
+        "overflow": false
+      },
+      "sheet": {
+        "title": "Needs you · 27",
+        "titleWhole": true,
+        "rows": 27,
+        "otherRows": 0,
+        "sections": [
+          [
+            "delegatus",
+            14
+          ],
+          [
+            "shop-web",
+            9
+          ],
+          [
+            "tg-bot",
+            4
+          ]
+        ],
+        "dismiss": 0,
+        "placeholders": 0,
+        "done": 0,
+        "firstWhole": true,
+        "lastWhole": false,
+        "scrolls": true,
+        "right": 390,
+        "end": {
+          "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "14",
+        "chip": {
+          "count": "14",
+          "word": "Needs you · 14",
+          "text": "Needs you · 14",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 122,
+            "height": 44
+          }
+        }
+      },
+      "seat": {
+        "section": 14,
+        "strip": {
+          "count": "14",
+          "text": "Needs you · 14",
+          "whole": true
+        }
+      }
+    }
+  ]
+}

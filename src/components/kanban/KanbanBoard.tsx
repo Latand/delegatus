@@ -1614,7 +1614,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     }
     /* A flagged conversation or lane on no task: no task to move or rename, so its ⋯ holds only the flag's Dismiss or Undo. */
     if (!card.task) {
-      const flag: KanbanMenuItem[] = card.needsYou && card.reasons.length
+      const flag: KanbanMenuItem[] = card.reasons.length
         ? [{ type: "item", id: "dismissFlag", label: t("cardState.dismissMenu"), why: t("needs.dismissHint"), onSelect: () => dismissCard(card) }]
         : !card.needsYou && card.cleared.length ? [{ type: "item", id: "undoFlag", label: t("cardState.undoMenu"), why: clearedLine(t, card.cleared[0]!, modelNow), onSelect: () => undoDismissCard(card) }] : [];
       return flag.length ? { label: t("kanban.cardActions", { title }), items: flag } : null;
@@ -1669,7 +1669,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         { type: "item", id: "describe", label: card.description ? t("kanban.editDescription") : t("kanban.addDescription"), kbd: "E", keepFocus: true, onSelect: () => startEdit(card, "description") },
         ...(card.task ? [linksItem({ kind: "task", id: card.task.id })] : []),
         /* The foot's ✓ and its Undo (§2.2): stop flagging what the card asks, or flag it again. */
-        ...(card.needsYou && card.reasons.length ? [{ type: "item" as const, id: "dismissFlag", label: t("cardState.dismissMenu"), why: t("needs.dismissHint"), onSelect: () => dismissCard(card) }]
+        ...(card.reasons.length ? [{ type: "item" as const, id: "dismissFlag", label: t("cardState.dismissMenu"), why: t("needs.dismissHint"), onSelect: () => dismissCard(card) }]
           : !card.needsYou && card.cleared.length ? [{ type: "item" as const, id: "undoFlag", label: t("cardState.undoMenu"), why: clearedLine(t, card.cleared[0]!, modelNow), onSelect: () => undoDismissCard(card) }] : []),
         ...laneGroups,
         { type: "sep" },

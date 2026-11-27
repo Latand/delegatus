@@ -745,6 +745,22 @@ describe("a decision the operator owes outranks every word for «it is running»
     expect(badgeOf(state)).toBe("needs-you");
   });
 
+  test("«needs you» is a waiting form or the seat's own turn asking: its report-log questions and a stuck delivery are not", () => {
+    const report = { id: "report-merge-order", at: new Date(NOW * 1000 - 60_000).toISOString(), seq: 1_204, body: "Which merges first?" };
+    const reporting = file({ bridgeAsks: [report], bridgeAsk: report });
+    const quiet = deriveOrchestratorPanelState({ ...seated, file: reporting, surface: "live-root" });
+    expect(quiet).toMatchObject({ attention: null, formsWaiting: false });
+    expect(badgeOf(quiet)).toBe("working");
+    const stuck = deriveOrchestratorPanelState({ ...seated, file: file({ stuckDelivery: { since: new Date(NOW * 1000 - 60_000).toISOString(), attempts: 2, state: "held" } }), surface: "live-root" });
+    expect(badgeOf(stuck)).toBe("working");
+    /* A form of the seat's project waits: the seat needs the operator. */
+    expect(badgeOf(deriveOrchestratorPanelState({ ...seated, file: reporting, surface: "live-root", formsWaiting: true }))).toBe("needs-you");
+    /* The turn's own question under an open report-log question still counts. */
+    const both = deriveOrchestratorPanelState({ ...seated, file: file({ bridgeAsks: [report], bridgeAsk: report, pendingQuestion: asked }), surface: "live-root" });
+    expect(both).toMatchObject({ attention: "tool-use-orch" });
+    expect(badgeOf(both)).toBe("needs-you");
+  });
+
   test("the attention read follows the queue: stalled turns owe nothing", () => {
     const abandoned = file({ activity: "stalled", proc: "done", mtime: NOW - 60 });
     expect(deriveOrchestratorPanelState({ ...seated, file: abandoned, surface: "live-root" })).toMatchObject({ attention: null });

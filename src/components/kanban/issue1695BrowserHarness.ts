@@ -1292,15 +1292,19 @@ export async function captureDoneFrames(browser: Browser, phone: boolean) {
     });
     for (const width of phone ? [390] : [800,1440]) for (const lang of ["en","uk"] as const) for (const theme of ["light","dark"] as const) for (const state of ["retained","missing","error"] as const) {
       const name = `${width}-${lang}-${theme}-${state}`;
-      const { page,context,pageErrors } = await openFixture(browser,`${server.base}?${new URLSearchParams({lang,open:"1",done:"1",doneframes:state,"done-frame-src":saved.src})}`,{width,height:phone?844:900},theme,lang,"reduce",phone);
+      /* «Готово» lives above the orchestrator's report log (docs/design/legatus/build-plan.md, slice 1). */
+      const { page,context,pageErrors } = await openFixture(browser,`${server.base}?${new URLSearchParams({lang,done:"1",...(phone ? {} : {seat:"beside"}),doneframes:state,"done-frame-src":saved.src})}`,{width,height:phone?844:900},theme,lang,"reduce",phone);
       try {
         if (phone) {
-          await page.waitForFunction(()=>Number(document.querySelector("[data-mobile2-attention-count]")?.getAttribute("data-mobile2-attention-count"))>1);
-          await page.locator('[data-mobile2-open="attention"]').click();
+          await page.locator("[data-mobile2-seat-open]").click({timeout:20_000});
+          await page.locator('[data-mobile2-open="reports"]').click({timeout:10_000});
+        } else {
+          const toggle = page.locator("[data-report-log-toggle]").first();
+          await toggle.waitFor({timeout:15_000});
+          if (await toggle.getAttribute("data-report-log-toggle") === "closed") await toggle.click();
         }
-        const section = page.locator(`[data-done-section="${phone ? "phone" : "desktop"}"][data-done-place="needs-you"]`);
+        const section = page.locator(`[data-report-log] [data-done-section="${phone ? "phone" : "desktop"}"][data-done-place="reports"]`);
         await section.waitFor();
-        if (!phone) await page.waitForFunction(()=>document.querySelectorAll("[data-needs-you-section]").length >= 3);
         if (state === "retained") {
           await page.waitForFunction(()=>{const image=document.querySelector<HTMLImageElement>("[data-done-thumb] img");return Boolean(image?.complete && image.naturalWidth);});
           const loaded=await section.locator("[data-done-thumb] img").evaluate((image)=>({width:(image as HTMLImageElement).naturalWidth,src:image.getAttribute("src")}));

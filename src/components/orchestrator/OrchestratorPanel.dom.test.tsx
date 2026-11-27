@@ -2010,7 +2010,7 @@ test("the badge is localized with the rest of the dock", async () => {
   flushSync(() => undefined);
 
   expect(stateBadge(host).getAttribute("data-orchestrator-badge")).toBe("needs-you");
-  expect(stateBadge(host).textContent).toBe("потребує тебе");
+  expect(stateBadge(host).textContent).toBe("потребує вас");
 });
 
 

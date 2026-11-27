@@ -13,7 +13,7 @@ import type { FileEntry } from "@/lib/types";
 
 import type { StripSurface } from "../agentCapabilities";
 import { diffTextLines } from "../feed/diff";
-import { attentionId } from "../attention";
+import { attentionReason, reasonAsksOperator } from "../attention";
 import type { IncumbentRotationCause, IncumbentTelegramAction, OrchestratorIncumbent } from "./incumbent";
 
 export type { SeatFailureRecord } from "@/lib/orchestrator/seatFailure";
@@ -494,6 +494,20 @@ export type SeatLiveness = "resolving" | "live" | "waiting" | "stalled" | "resum
 export type SeatBadge = "needs-you" | "working" | Exclude<SeatLiveness, "live">;
 
 /**
+ * What the seat's own turn asks the operator, as an attention id: a question,
+ * a plan, a permission or a terminal prompt it stopped on. Its open questions
+ * in the report log are its reports and its forms, and a stuck delivery or a
+ * failed launch asks nobody (docs/design/legatus/build-plan.md, slice 1), so
+ * none of them makes the seat «need you».
+ */
+export function seatTurnAsks(file: FileEntry, now?: number): string | null {
+  /* An open report-log question ranks first in the queue's reading; the turn's own ask under it still counts. */
+  const reason = attentionReason(file.bridgeAsks?.length || file.bridgeAsk ? { ...file, bridgeAsks: [], bridgeAsk: null } : file, now);
+  if (!reason || !reasonAsksOperator(reason) || reason.kind === "delivery" || reason.kind === "launch") return null;
+  return reason.id;
+}
+
+/**
  * The badge a live seat wears: shared task motion for work and attention, or
  * its lifecycle word when recovery state carries more useful information.
  *
@@ -509,7 +523,7 @@ export type SeatBadge = "needs-you" | "working" | Exclude<SeatLiveness, "live">;
 export function seatBadgeOf(state: OrchestratorLiveState): SeatBadge {
   const motion = taskMotion({
     status: "assigned",
-    needsYou: Boolean(state.attention),
+    needsYou: Boolean(state.attention) || state.formsWaiting === true,
     working: state.liveness === "live" ? 1 : 0,
     inFlight: false,
     pipelines: [],
@@ -597,10 +611,14 @@ export interface OrchestratorLiveState {
   seat: OrchestratorSeat;
   conversationId: string;
   liveness: SeatLiveness;
-  /** The attention id of the seat's conversation (`attentionId`), or null when
-      it is waiting on nobody. The QUEUE's own reading, verbatim — the dock must
-      count as waiting exactly what the island counts (issue #1167). */
+  /** The attention id of what the seat's own turn asks the operator (a
+      question, a plan, a permission), or null when it asks nothing
+      (`seatTurnAsks`). Its open questions in the report log, a stuck delivery
+      and a failed launch wait on nobody here, as in «Needs you». */
   attention: string | null;
+  /** A decision form of the seat's project waits for the operator: what
+      «Needs you» counts (docs/design/legatus/build-plan.md, slice 1). */
+  formsWaiting?: boolean;
   /** Why a `resolving` seat the server calls live has not bound, once the wait
       is past its bound; null whenever «opening» is still an honest answer. */
   bindFailure: SeatBindFailure | null;
@@ -650,6 +668,8 @@ export function deriveOrchestratorPanelState(input: {
   /** Epoch SECONDS, for the one reading that ages: the attention queue's
       stalled tier. Defaults to the wall clock, exactly as `attentionId` does. */
   now?: number;
+  /** A decision form of the seat's project waits for the operator. */
+  formsWaiting?: boolean;
 }): OrchestratorPanelState {
   const { status } = input;
   const active = status?.seat && status.exists ? status.seat : null;
@@ -672,7 +692,8 @@ export function deriveOrchestratorPanelState(input: {
       seat: active,
       conversationId: active.conversationId,
       liveness,
-      attention: input.file ? attentionId(input.file, input.now) : null,
+      attention: input.file ? seatTurnAsks(input.file, input.now) : null,
+      formsWaiting: input.formsWaiting === true,
       bindFailure: bindFailureOf({
         liveness,
         hostLive: input.hostLive === true,

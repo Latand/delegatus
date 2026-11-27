@@ -2,7 +2,7 @@ import { prototypeWaitsOnOperator } from "@/lib/prototypeReview/model";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
-import type { ClearedNeed, NeedReason } from "@/components/attention/needReason";
+import { needOwesAnswer, type ClearedNeed, type NeedReason } from "@/components/attention/needReason";
 import { KANBAN_STATUSES, type KanbanCard, type KanbanMember, type KanbanModel, type KanbanPipeline } from "@/components/kanban/kanbanModel";
 import { pipelineEnded, pipelineNeedsYou } from "@/components/pipelines/pipelineBlockModel";
 
@@ -170,7 +170,9 @@ function prototypeWaits(card: KanbanCard): boolean {
 function cardNeeds(card: KanbanCard, closing: ReadonlySet<string>): boolean {
   const live = liveReasons(card, closing);
   const motionReason = typeof card.motion.reason === "object" ? card.motion.reason : null;
-  return live.length > 0 || prototypeWaits(card) || (card.motion.key === "needs-you"
+  /* A stuck delivery or a failed launch is named on the card and pins nothing:
+     the ⚠ counts what waits on the operator, as «Needs you» does. */
+  return live.some(needOwesAnswer) || prototypeWaits(card) || (card.motion.key === "needs-you"
     && (motionReason?.kind === "operator" || (card.stepSummary?.needsYou ?? 0) > 0));
 }
 
@@ -201,7 +203,9 @@ function phoneCard(card: KanbanCard, kind: PhoneCardKind, rank: ReadonlyMap<stri
   let best = Infinity;
   for (const need of [...reasons.filter((entry) => entry.subject === "pipeline"), ...reasons.filter((entry) => entry.subject === "conversation")]) {
     const at = rankOf(need, rank);
-    if (!first || at < best) {
+    /* A reason that owes an answer outranks a fault beside it. */
+    const owes = needOwesAnswer(need);
+    if (!first || (owes && !needOwesAnswer(first)) || (owes === needOwesAnswer(first) && at < best)) {
       first = need;
       best = at;
     }
@@ -229,7 +233,7 @@ function phoneCard(card: KanbanCard, kind: PhoneCardKind, rank: ReadonlyMap<stri
 
 /** Where each card stands in the attention queue: its earliest ask. */
 function askRank(card: KanbanCard, rank: ReadonlyMap<string, number>, closing: ReadonlySet<string>): number {
-  return Math.min(Infinity, ...liveReasons(card, closing).map((need) => rankOf(need, rank)));
+  return Math.min(Infinity, ...liveReasons(card, closing).filter(needOwesAnswer).map((need) => rankOf(need, rank)));
 }
 
 export function buildPhoneKanban({ model, attention = [], doneShown = DONE_WINDOW, closing: closingIds = [], now }: PhoneKanbanInput): PhoneKanbanModel {
