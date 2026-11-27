@@ -7,6 +7,7 @@ import { recordHostStop, withHostStopOrigin, type HostStopOrigin } from "./hostE
 import fs from "node:fs";
 import { recordedOwnerHeld } from "@/lib/recordedChecks/store";
 import { withRecordedHostFence } from "@/lib/recordedChecks/hostFence";
+import { branchSharesRootHost } from "@/lib/conversation/branchControl";
 
 import { agentRegistry, type ProcessIdentity, type RegistryFile, type StructuredHostCustody } from "@/lib/agent/registry";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
@@ -367,6 +368,8 @@ export type StructuredHostTerminationOutcome =
 
 export interface StructuredHostTerminationDependencies {
   stopOrigin?: HostStopOrigin;
+  /** Time left to acquire the recorded-check host fence. */
+  fenceWaitMs?: number;
   /** The registry whose row this termination ends. Once the tree is proven
       gone, the row's orphan alarm, if one is recorded, is closed there: the
       host it warned about no longer runs. */
@@ -455,7 +458,8 @@ export async function terminateStructuredHostTree(
   ref: StructuredHostKillRef,
   dependencies: StructuredHostTerminationDependencies = {},
 ): Promise<StructuredHostTerminationOutcome> {
-  const outcome = await withRecordedHostFence(ref, () => terminateStructuredHostTreeFenced(ref, dependencies));
+  const outcome = await withRecordedHostFence(ref, () => terminateStructuredHostTreeFenced(ref, dependencies),
+    { waitMs: dependencies.fenceWaitMs });
   if (outcome.ok && ref.sessionId && dependencies.orphanAlarmRegistry) {
     const key: SessionKey = { engine: ref.engine, sessionId: ref.sessionId };
     try {
@@ -466,6 +470,80 @@ export async function terminateStructuredHostTree(
     }
   }
   return outcome;
+}
+
+/** Finish a migration's revoked writer, including after a Viewer restart.
+ * The archived row keeps its process identity until this stop is confirmed. */
+export async function retireMigratedStructuredHost(
+  registry: ReturnType<typeof agentRegistry>,
+  conversationId: ViewerConversationId,
+  key: SessionKey,
+  operationId: string,
+): Promise<void> {
+  const snapshot = () => registry.startupHostSnapshot(key);
+  const id = sessionKeyId(key);
+  const file = snapshot();
+  const entry = file.entries[id];
+  if (!entry?.structuredWriterRetired || !entry.structuredHost) return;
+  const process = recordedScopeProcess(entry.structuredHost);
+  const scope = recordedAgentScope(entry.structuredHost);
+  const custody = { claimEpoch: entry.claimEpoch, claimOwner: entry.claimOwner,
+    writerClaimEpoch: entry.structuredHost.writerClaimEpoch, process };
+  const authorize = () => {
+    const current = snapshot();
+    const row = current.entries[id];
+    const conversation = current.conversations[conversationId];
+    const root = recordedScopeProcess(row?.structuredHost);
+    if (!conversation || conversation.engine !== key.engine
+      || conversation.generations.at(-1)?.id === key.sessionId
+      || !conversation.generations.some(generation => generation.id === key.sessionId && generation.archivedAt
+        && generation.path === row?.artifactPath)
+      || branchSharesRootHost(registry, conversation)
+      || !row?.structuredWriterRetired || row.claimEpoch !== custody.claimEpoch
+      || (row.claimOwner !== custody.claimOwner && row.claimOwner !== null)
+      || row.structuredHost?.writerClaimEpoch !== custody.writerClaimEpoch
+      || (root && process ? !sameRecordedProcessIdentity(root, process) : root !== process)
+      || !sameAgentScope(recordedAgentScope(row.structuredHost), scope)) {
+      return { status: 409 as const, error: "migrated structured host custody changed before retirement" };
+    }
+    return null;
+  };
+  const write = <T>(label: string, action: () => T) => registry.deliveryWriteOrBusy({ label, operationId }, action);
+  if (!process) {
+    if (scope) throw new Error("migrated structured scope has no recorded process identity");
+    await write("migration.retire-writer", () => {
+      if (authorize()) return;
+      registry.terminateInactiveStructuredHost(conversationId, key);
+    });
+    return;
+  }
+  const built = structuredHostKillRefFromRegistry(key, { snapshot: () => file, conversationId });
+  if (!built.ok) throw new Error(built.error);
+  const ref = built.ref;
+  const refusal = authorize();
+  if (refusal) throw new Error(refusal.error);
+  const source = "migration.retire-writer";
+  let capture: ReturnType<typeof registry.captureStructuredTerminationSurvivors> = null;
+  const outcome = await terminateStructuredHostTree(ref, {
+    stopOrigin: { path: "migration-retire-writer", operationId },
+    orphanAlarmRegistry: registry,
+    fenceWaitMs: TERMINATION_DEADLINE_MS,
+    registryCustody: custody,
+    scope,
+    retainedSurvivors: entry.structuredTerminationSurvivors,
+    authorize,
+    persistCapturedTree: identities => write(source, () => {
+      if (authorize()) return false;
+      capture = registry.captureStructuredTerminationSurvivors(key, ref, identities, source);
+      return capture !== null;
+    }),
+    withdrawCapturedTree: () => write(source, () => {
+      if (capture) registry.withdrawStructuredTerminationSurvivors(key, ref, capture, source);
+    }),
+    retireRegistryEntry: (key, expected, confirmed, expectedCustody, confirmedScope) => write(source, () =>
+      registry.terminateStructuredHost(key, expected, confirmed, expectedCustody, confirmedScope)),
+  });
+  if (!outcome.ok) throw new Error(outcome.error);
 }
 
 async function terminateStructuredHostTreeFenced(

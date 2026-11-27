@@ -3641,6 +3641,38 @@ test("issue 367: a delivered structured kill converges host and turn projection 
   journal.close();
 });
 
+test.each([
+  ["legacy", undefined, false],
+  ["released", null, true],
+  ["admitted", "fixture:3", true],
+  ["replacement", "fixture:4", false],
+] as const)("an explicit kill settles with a %s session writer", (_case, writerClaim, projectsStop) => {
+  const dir = sandbox("explicit-kill-writer");
+  const journal = new RuntimeJournal(path.join(dir, "events.sqlite"), { structuredHosts: true, now: () => 100 });
+  const conversationId = "conversation_kill_writer";
+  const sessionKey = { engine: "claude" as const, sessionId: "writer-session" };
+  const operationId = "explicit-kill-writer";
+  try {
+    journal.append({ scope: runtimeScope("session", conversationId), kind: "session-status", payload: {
+      conversationId, sessionKey, hostKind: "claude-broker", host: "hosted", turn: "running", activeTurnId: "writer-turn",
+      ...(writerClaim === undefined ? {} : { writerClaim }),
+    } });
+    journal.executeOperation({ kind: "kill", conversationId, operationId, idempotencyKey: operationId, sessionKey,
+      targets: [{ sessionId: sessionKey.sessionId, claimEpoch: 3, process: null }],
+    });
+    journal.transitionOperation(operationId, "delivering");
+    journal.transitionOperation(operationId, "delivered");
+
+    expect(journal.operationResult(operationId)?.receipt.status).toBe("delivered");
+    expect(journal.readSession({ conversationId })).toMatchObject(projectsStop
+      ? { host: "dead", turn: "idle", activeTurnId: null }
+      : { host: "hosted", turn: "running", activeTurnId: "writer-turn" });
+  } finally {
+    journal.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a delivered kill retains its original admission boundary through compaction", () => {
   const dir = sandbox("kill-boundary-compaction");
   const filename = path.join(dir, "events.sqlite");
@@ -4770,6 +4802,41 @@ test("a kill receipt retains its first send cohort across transitions and a proc
     const result = JSON.parse(new TextDecoder().decode(child.stdout));
     expect(result.replay).toMatchObject({ replayed: true, receipt: { status: "failed", pendingSendIds: ["send-before"] } });
     expect(result.status.receipt.pendingSendIds).toEqual(["send-before"]);
+  } finally {
+    journal.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a replay after generation succession and a process restart keeps the kill targets first admitted", () => {
+  const dir = sandbox("kill-targets");
+  const filename = path.join(dir, "events.sqlite");
+  const journal = new RuntimeJournal(filename, { structuredHosts: true });
+  try {
+    const command = { kind: "kill" as const, conversationId: "conversation_cohort", operationId: "cohort-stop", idempotencyKey: "cohort-stop",
+      sessionKey: { engine: "claude" as const, sessionId: "second" }, targets: [
+        { sessionId: "second", claimEpoch: 2, process: null },
+        { sessionId: "first", claimEpoch: 1, process: { pid: 123, startIdentity: "fixture-start", bootEpoch: "fixture-boot" } },
+      ] };
+    expect(journal.executeOperation(command).receipt.status).toBe("queued");
+    journal.close();
+    const child = Bun.spawnSync({ cmd: [process.execPath, "-e", `
+      import { RuntimeJournal } from "./src/runtime-host/journal.ts";
+      const journal = new RuntimeJournal(process.env.LLV_TEST_JOURNAL, { structuredHosts: true });
+      try {
+        const command = ${JSON.stringify(command)};
+        command.sessionKey.sessionId = "third";
+        command.targets = [{ sessionId: "third", claimEpoch: 3, process: null }];
+        const replay = journal.executeOperation(command);
+        const effects = journal.effectBatch(10, ["runtime.kill"]);
+        console.log(JSON.stringify({ replay, effects }));
+      } finally { journal.close(); }
+    `], cwd: process.cwd(), env: { ...process.env, LLV_TEST_JOURNAL: filename }, stdout: "pipe", stderr: "pipe" });
+    expect(child.exitCode).toBe(0);
+    const { replay, effects } = JSON.parse(new TextDecoder().decode(child.stdout));
+    expect(replay).toMatchObject({ replayed: true, operationId: command.operationId, receipt: { status: "queued" } });
+    expect(effects).toContainEqual(expect.objectContaining({ kind: "runtime.kill",
+      payload: expect.objectContaining({ sessionKey: command.sessionKey, targets: command.targets }) }));
   } finally {
     journal.close();
     fs.rmSync(dir, { recursive: true, force: true });

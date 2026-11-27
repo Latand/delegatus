@@ -4,6 +4,8 @@ import { emptyStore, type RuntimeSession } from "@/components/runtime/runtimeMod
 import type { RuntimeBusState } from "@/hooks/runtimeBus";
 import { createFilesClientCache } from "@/hooks/useFiles";
 import type { FileEntry } from "@/lib/types";
+import { catalogPositions, currentConversationFile, firstFileAtPath, indexedConversationFile, withoutArchivedPredecessors } from "@/lib/accounts/identity";
+import { createCatalogSelection } from "./catalogOverlay";
 
 import { createRuntimeFilesStatusProjection } from "./runtimeFilesStatus";
 
@@ -351,5 +353,167 @@ test("a lifecycle change outside the catalog preserves idle row, array and snaps
     const nowRunning = { ...session, turn: "running" as const, activeTurnId: "new-turn" };
     const next = { ...changed, store: { ...changed.store, sessions: { ...changed.store.sessions, [session.conversationId]: nowRunning } } };
     expect(project(raw, next).files[0]).toBe(raw.files[0]);
+  } finally { cache.dispose(); }
+});
+
+test("an admitted catalog visits no entries for an outside lifecycle and visits only matching positions after a path move", async () => {
+  const cache = await catalog();
+  try {
+    const evaluated = new Set<number>();
+    const source = [...Array.from({length: 64}, (_, i) => ({ ...file, path: "/sibling/" + i, conversationId: "sibling-" + i })),
+      { ...file, conversationId: undefined }].map((row,index) => new Proxy(row,{
+        get(target,key,receiver) {
+          if (key === "conversationId" || key === "lastTurn" || key === "path") evaluated.add(index);
+          return Reflect.get(target,key,receiver);
+        },
+      }));
+    const visited = new Set<number>();
+    const files = new Proxy(source, { get(target, key, receiver) {
+      if (typeof key === "string" && /^\d+$/.test(key)) visited.add(Number(key));
+      return Reflect.get(target,key,receiver);
+    } });
+    const raw = { ...cache.read(), files };
+    const start = runtime({ artifactPath: "/elsewhere", turn: "running", activeTurnId: "first" });
+    const project = createRuntimeFilesStatusProjection();
+    expect(project(raw, start)).toBe(raw);
+    function publish(before: RuntimeBusState, after: RuntimeBusState) {
+      project.updateRuntime(after, { before: before.store, after: after.store, conversations: new Set([session.conversationId]),
+        paths: new Set(), deliveries: new Set(), operations: new Set(), flows:new Set(), deployments:false });
+      return project(raw, after);
+    }
+    const outside = runtime({ artifactPath: "/elsewhere", turn: "idle", settledTurnId: "first" });
+    visited.clear(); evaluated.clear();
+    expect(publish(start, outside)).toBe(raw);
+    expect([...visited]).toEqual([]);
+    expect([...evaluated]).toEqual([]);
+    const nowHere = runtime({ artifactPath: file.path, turn: "idle", settledTurnId: "second" });
+    const after = publish(outside, nowHere);
+    expect([...evaluated]).toEqual([64]);
+    expect(after.files[64]).toMatchObject({ authoritativeTurn: { state: "idle" } });
+    // Array.slice copies references into the caller-visible immutable result.
+    // A miss above must skip even that copy.
+    expect(after.files[0]).toBe(source[0]);
+    expect(source[64]?.authoritativeTurn).toBeUndefined();
+  } finally { cache.dispose(); }
+});
+
+test("a recent overlay expires after 900 seconds on a quiet stream, including while offline", async () => {
+  const cache = await catalog();
+  const clock = Date.now;
+  let now = 1_000_000;
+  Date.now = () => now;
+  try {
+    const raw = { ...cache.read(), files: [{ ...file, mtime:now / 1000 }] };
+    for (const offline of [false, true]) {
+      now = 1_000_000;
+      const project = createRuntimeFilesStatusProjection();
+      const live = runtime({ settledTurnId: "settled" });
+      const recent = project(raw, live);
+      const shown = offline ? { ...live, connection:"offline" as const } : live;
+      expect(project(raw, shown).files[0]?.activity).toBe("recent");
+      now = 1_899_999;
+      expect(project(raw, shown).files).toBe(recent.files);
+      now++;
+      const idle = project(raw, shown);
+      expect(idle.files[0]?.activity).toBe("idle");
+      expect(recent.files[0]?.activity).toBe("recent");
+      expect(project.nextExpiry()).toBe(Infinity);
+      expect(project(raw, shown)).toBe(idle);
+    }
+  } finally { Date.now = clock; cache.dispose(); }
+});
+
+
+test("voice, deep links and settlement share catalog positions while held rows keep their own values", async () => {
+  const cache = await catalog();
+  try {
+    const previous = { ...file, path:"/older", migratedTo:file.path, generation:2 };
+    const placeholder = { ...file, path:"spawn:launch" };
+    const source = [placeholder, previous, file];
+    const raw = { ...cache.read(), files: source };
+    const settled = createRuntimeFilesStatusProjection()(raw,runtime({settledTurnId:"done"}));
+    expect(catalogPositions(settled.files)).toBe(catalogPositions(source));
+    for (const rows of [source,settled.files]) {
+      expect(indexedConversationFile(rows,session.conversationId) ?? null).toBe(currentConversationFile(rows,session.conversationId));
+      expect(firstFileAtPath(rows,file.path)).toBe(rows[2]);
+    }
+    expect(settled.files[1]).toBe(previous);
+    expect(indexedConversationFile(settled.files,session.conversationId)?.activity).toBe("idle");
+    expect(indexedConversationFile(source,session.conversationId)?.activity).toBe("live");
+  } finally { cache.dispose(); }
+});
+
+
+test("switching pinned catalog representations preserves both labels and the held terminal row", async () => {
+  const cache = await catalog();
+  try {
+    const raw = cache.read();
+    const relabeled = { ...raw, files:[{ ...raw.files[0]!, title:"Reopened from another scope" }] };
+    const project = createRuntimeFilesStatusProjection();
+    const ended = runtime({ settledTurnId:"retained" });
+    const first = project(raw,ended);
+    const second = project(relabeled,ended);
+    expect(second.files[0]?.title).toBe("Reopened from another scope");
+    expect(project(raw,ended).files[0]).toBe(first.files[0]);
+    expect(project(relabeled,ended).files[0]).toBe(second.files[0]);
+  } finally {cache.dispose();}
+});
+
+test("another project's settlement reads no row of the open project, and a neighbour's replaces its one row by position", async () => {
+  const cache = await catalog();
+  try {
+    const read = new Set<string>();
+    const watched = (entry: FileEntry) => new Proxy(entry, {
+      get(target, key, receiver) {
+        if (target.project === "demo") read.add(target.path);
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    const row = (name: string, project: string, extra: Partial<FileEntry> = {}) => watched({ ...file, path: "/sessions/" + name, name, conversationId: name, project, ...extra });
+    const source = [row("editor", "demo"), row("neighbour", "demo"), row("idle", "demo"), row("foreign", "elsewhere"),
+      row("older", "demo", { conversationId: "editor", migratedTo: "/sessions/editor" })];
+    const raw = { ...cache.read(), files: source };
+    const sessions = (turns: Record<string, "running" | "idle">): RuntimeBusState => {
+      const state = runtime();
+      state.store.sessions = Object.fromEntries(Object.entries(turns).map(([id, turn]) => [id, { ...session, conversationId: id,
+        artifactPath: "/sessions/" + id, turn, activeTurnId: turn === "running" ? "turn" : null, settledTurnId: turn === "idle" ? "turn" : null }]));
+      return state;
+    };
+    const project = createRuntimeFilesStatusProjection();
+    const current = createCatalogSelection(withoutArchivedPredecessors);
+    const open = createCatalogSelection((rows) => rows.filter((entry) => entry.project === "demo"));
+    let state = sessions({ neighbour: "running", foreign: "running" });
+    const admitted = open(current(project(raw, state).files));
+    expect(admitted.map((entry) => entry.name)).toEqual(["editor", "neighbour", "idle"]);
+    function publish(id: string, turns: Record<string, "running" | "idle">) {
+      const after = sessions(turns);
+      /* The reducer keeps every untouched record. */
+      for (const other of Object.keys(after.store.sessions)) if (other !== id) after.store.sessions[other] = state.store.sessions[other]!;
+      project.updateRuntime(after, { before: state.store, after: after.store, conversations: new Set([id]),
+        paths: new Set(["/sessions/" + id]), deliveries: new Set(), operations: new Set(), flows: new Set(), deployments: false });
+      state = after;
+      return open(current(project(raw, after).files));
+    }
+
+    read.clear();
+    expect(publish("foreign", { neighbour: "running", foreign: "idle" })).toBe(admitted);
+    expect([...read]).toEqual([]);
+
+    const next = publish("neighbour", { neighbour: "idle", foreign: "idle" });
+    expect([...read]).toEqual(["/sessions/neighbour"]);
+    expect(next).not.toBe(admitted);
+    expect(next[1]).toMatchObject({ name: "neighbour", authoritativeTurn: { state: "idle" } });
+    expect(next[0]).toBe(admitted[0]!);
+    expect(next[2]).toBe(admitted[2]!);
+    /* The array on screen keeps its own row. */
+    expect(admitted[1]!.authoritativeTurn).toBeUndefined();
+
+    /* A catalog publication can project the newest sessions before the bus
+       delivers their frame. It reads no more than the frame would. */
+    read.clear();
+    const unannounced = sessions({ offboard: "idle" });
+    unannounced.store.sessions = { ...state.store.sessions, ...unannounced.store.sessions };
+    expect(open(current(project(raw, unannounced).files))).toBe(next);
+    expect([...read]).toEqual([]);
   } finally { cache.dispose(); }
 });
