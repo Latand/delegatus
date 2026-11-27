@@ -77,6 +77,7 @@ test("a clone-only report destination saves its topic and delivers through the p
         }
         return found;
       },
+      confirmationSender: chat => directory.confirmationSender(chat),
       valid: (r, chat) => directory.valid(r, chat), invalidate: (r, kind) => directory.invalidate(r, kind),
       send: (r, input, options) => sendAsClone(r.relay, r.targetId, input, options) } });
   let store: ReturnType<typeof deps.openStore> | undefined;

@@ -3,19 +3,21 @@ import { cloneClientKey, clonePayloadSupported, sendAsClone, type CloneSendInput
 import type { TelegramChatBot } from "./contracts";
 import { TelegramBotError } from "./errors";
 import type { BotTransport } from "./transport";
-import { cloneMethodPayload, cloneMultipart } from "@/lib/externalRelay/cloneMethods";
+import { cloneHasFileMethod, cloneMethodAdmission, cloneMethodPayload, cloneMultipart } from "@/lib/externalRelay/cloneMethods";
 
 export interface ClonePostingPort {
   discoverChats?(): Promise<DiscoveredCloneChat[]>;
-  route(chatId: string): Promise<CloneRoute | null>;
+  route(chatId: string, options?: { discoverFileCapabilities?: boolean }): Promise<CloneRoute | null>;
   peek(chatId: string): CloneRoute | null;
+  confirmationSender(chatId: string): string | null;
   valid(route: CloneRoute, chatId: string): boolean;
   invalidate(route: CloneRoute, kind: "stale" | "unsupported"): void;
   send(route: CloneRoute, input: CloneSendInput, options: CloneSendOptions): Promise<CloneSendResult>;
 }
 export const productionClonePosting: ClonePostingPort = {
   discoverChats: () => cloneDirectory().discoverChats(),
-  route: chat => cloneDirectory().route(chat), peek: chat => cloneDirectory().peek(chat),
+  route: (chat, options) => cloneDirectory().route(chat, options), peek: chat => cloneDirectory().peek(chat),
+  confirmationSender: chat => cloneDirectory().confirmationSender(chat),
   valid: (route, chat) => cloneDirectory().valid(route, chat), invalidate: (route, kind) => cloneDirectory().invalidate(route, kind),
   send: (route, input, options) => sendAsClone(route.relay, route.targetId, input, options),
 };
@@ -39,10 +41,14 @@ export function cloneInput(route: CloneRoute, caller: string, key: string, param
     ...(reply ? { reply_to_message_id: reply } : {}), ...(params.message_thread_id ? { message_thread_id: Number(params.message_thread_id) } : {}) };
 }
 export { clonePayloadSupported };
-export function cloneSupports(route: CloneRoute, caller: string, key: string, method: string, params: Record<string, unknown>, part: number): boolean {
+export function cloneSupportRefusal(route: CloneRoute, caller: string, key: string, method: string, params: Record<string, unknown>, part: number): string | null {
   const input = cloneInput(route, caller, key, params, part);
-  return route.methodsFeature ? !!route.send && !!cloneMethodPayload(method, params, input, route.send.limits, route.send.rights)
-    : method === "sendMessage" && clonePayloadSupported(input);
+  if (!route.methodsFeature && method === "sendMessage" && clonePayloadSupported(input)) return null;
+  if (!route.methodsFeature || !route.send) return route.verifiedNoFileMethods
+    ? "covers this chat but cannot send files yet" : "has no verified current relay file capabilities";
+  const admission = cloneMethodAdmission(method, params, input, route.send.limits, route.send.rights);
+  if (!("reason" in admission)) return null;
+  return cloneHasFileMethod(route.send.limits) ? admission.reason : "covers this chat but cannot send files yet";
 }
 export function cloneTransport(port: ClonePostingPort, route: CloneRoute, caller: string, key: string, authorize: () => Promise<void>,
   persistKey?: (input: CloneSendInput, part: number) => Promise<void>): BotTransport {
@@ -54,7 +60,8 @@ export function cloneTransport(port: ClonePostingPort, route: CloneRoute, caller
       if (!payload) throw new TelegramBotError("bad_request", "clone method, limits or rights changed");
       const upload = payload.files.length ? cloneMultipart(payload) : null;
       if (upload && upload.byteLength > route.send!.limits.max_body_bytes) return {
-        ok: false, kind: "http", status: null, description: null, migrateToChatId: null, retryAfterSeconds: null,
+        ok: false, kind: "http", status: null, description: "The multipart upload exceeds the clone relay's request size limit.",
+        migrateToChatId: null, retryAfterSeconds: null,
         classified: { code: "document_too_large", fallback: true } };
       for (const file of payload.files) {
         const maxPixels = route.send!.limits.files[file.kind]?.max_pixels;
@@ -62,17 +69,23 @@ export function cloneTransport(port: ClonePostingPort, route: CloneRoute, caller
           const sharp = (await import("sharp")).default;
           let pixels = Infinity;
           try { const metadata = await sharp(Buffer.from(await file.blob.arrayBuffer())).metadata(); pixels = (metadata.width ?? Infinity) * (metadata.height ?? Infinity); } catch { /* Refuse unreadable dimensions. */ }
-          if (pixels > maxPixels) return { ok: false, kind: "http", status: null, description: null, migrateToChatId: null, retryAfterSeconds: null,
+          if (pixels > maxPixels) return { ok: false, kind: "http", status: null,
+            description: `The ${file.kind} attachment exceeds the clone relay's pixel limit or its dimensions could not be read.`, migrateToChatId: null, retryAfterSeconds: null,
             classified: { code: "photo_invalid", fallback: true } };
         }
       }
     }
     const input = payload?.input ?? common;
     await persistKey?.(common, options?.partIndex ?? 0);
+    let confirmationRefusal: TelegramBotError | undefined;
     const result = await port.send(route, common, { signal: options?.signal, partIndex: options?.partIndex ?? 0,
       ...(payload ? { payload } : {}),
       beforeSend: async () => {
-        await authorize();
+        try { await authorize(); }
+        catch (error) {
+          if (error instanceof TelegramBotError && error.code === "confirmation_invalid") confirmationRefusal = error;
+          throw error;
+        }
         if (!port.valid(route, String(params.chat_id))) throw new TelegramBotError("chat_not_allowed", "clone coverage changed");
       } });
     if (result.kind === "sent") {
@@ -80,7 +93,10 @@ export function cloneTransport(port: ClonePostingPort, route: CloneRoute, caller
         chat: { id: input.chat_id }, ...(input.message_thread_id ? { message_thread_id: input.message_thread_id } : {}) }));
       return { ok: true as const, result: (method === "sendMediaGroup" ? messages : messages[0]) as T };
     }
-    if (result.kind === "refused" && result.invalidate) port.invalidate(route, result.invalidate);
+    if (result.kind === "refused") {
+      if (confirmationRefusal) throw confirmationRefusal;
+      if (result.invalidate) port.invalidate(route, result.invalidate);
+    }
     return { ok: false as const, kind: result.kind === "uncertain" ? "network_failed" as const : "http" as const,
       status: null, description: null, migrateToChatId: null,
       retryAfterSeconds: result.kind === "refused" ? result.retryAfterSeconds ?? null : null,
