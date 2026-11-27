@@ -3,6 +3,7 @@
 import { useSyncExternalStore } from "react";
 
 import type { PrototypeReviewNotice, PrototypeReviewSummary } from "@/lib/prototypeReview/types";
+import type { SecretRequestNotice } from "@/lib/secretRequests/view";
 
 /*
  * Two small page-wide facts the review's three surfaces share.
@@ -22,6 +23,7 @@ const SEEN_MAX = 200;
 const EMPTY: readonly PrototypeReviewNotice[] = [];
 
 let notices: readonly PrototypeReviewNotice[] = EMPTY;
+let secretNotices: readonly SecretRequestNotice[] = [];
 let seen: ReadonlySet<string> | null = null;
 const listeners = new Set<() => void>();
 
@@ -39,6 +41,16 @@ export function publishPrototypeNotices(next: readonly PrototypeReviewNotice[]):
   if (same) return;
   notices = next.length ? next : EMPTY;
   emit();
+}
+
+export function publishSecretRequestNotices(next: readonly SecretRequestNotice[]): void {
+  if (next === secretNotices || next.length === 0 && secretNotices.length === 0) return;
+  secretNotices = next;
+  emit();
+}
+
+export function useSecretRequestCount(project: string): number {
+  return useSyncExternalStore(subscribe, () => secretNotices.filter(notice => notice.project === project).length, () => 0);
 }
 
 function readSeen(): ReadonlySet<string> {
@@ -88,6 +100,7 @@ export function prototypeButtonState(summary: PrototypeReviewSummary | undefined
 /** Tests only: a clean store, memory and storage both. */
 export function resetPrototypeReviewStoreForTests(): void {
   notices = EMPTY;
+  secretNotices = [];
   seen = null;
   try { localStorage.removeItem(SEEN_KEY); } catch { /* none */ }
   emit();

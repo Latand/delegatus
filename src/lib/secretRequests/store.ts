@@ -72,6 +72,10 @@ export function findSecretRequestRecord(id: string): SecretRequestRecord | null 
   return collection(false)?.get(id) ?? null;
 }
 
+export async function secretRequestRecords(): Promise<readonly SecretRequestRecord[]> {
+  return await collection(false)?.loadReadonlyAsync() ?? [];
+}
+
 export async function writingSecretRequests(): Promise<SecretRequestRecord[]> {
   const records = await collection(false)?.loadReadonlyAsync() ?? [];
   return records.filter(row => row.state === "writing").map(row => structuredClone(row));
