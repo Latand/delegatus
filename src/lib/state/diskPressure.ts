@@ -14,6 +14,9 @@ import { attemptTempConfigParent } from "@/lib/runtime/attemptTempPaths";
 import { agentConfigSandboxRoot } from "@/lib/runtime/agentConfigSandbox";
 import { cachedSystemBootEpoch, systemBootEpoch } from "@/lib/processIdentity";
 import { enterStageHost, includeIdleHostViews, openHostTempRoots, stageHostNamespace, tempViewAvailable } from "@/lib/state/hostTempViews";
+import { readStateCollectionRevision, sharedStateReadonlyDatabase } from "@/lib/state/sqliteStateStore";
+import { sweepMemoryPressured, SweepWalkDeferred } from "@/lib/pipelines/sweepWalkAdmission";
+import { sweepMonotonicNow } from "@/lib/runtime/attemptTempDeadline";
 
 /**
  * Free space on the volumes Delegatus writes to: its state directory, the
@@ -36,6 +39,7 @@ export const DISK_SPACE_WAIT_PREFIX = "waiting for disk space:";
 const OBSERVATION_TTL_MS = 30_000;
 /** Consumer sizes walk every checkout; one walk per this long, and only in an episode. */
 const CONSUMER_CACHE_MS = 30 * 60_000;
+const CONSUMER_WALK_MS = 30_000;
 /** The wake waits this long for the consumer sizes before it goes without them. */
 const CONSUMER_WAKE_WAIT_MS = 15 * 60_000;
 
@@ -117,6 +121,66 @@ function tempViewFor(directory: string, roots: readonly TempSweepRoot[]): TempSw
   const matches = roots.filter(root => root.via && root.anchor
     && (directory === root.path || directory.startsWith(root.path + path.sep)));
   return matches.find(tempViewAvailable) ?? matches[0];
+}
+
+type ProvisioningPaths = { worktrees: string[]; usesClaude: boolean };
+let provisioningPaths: { identity: string; revision: number; paths: ProvisioningPaths } | undefined;
+
+/** The probe needs two fields of a pipeline. Avoid decoding and retaining
+ * run histories in the dedicated reader. Legacy stores still use their reader. */
+async function diskProvisioningPaths(): Promise<ProvisioningPaths> {
+  const file = statePath("state.sqlite");
+  const revision = readStateCollectionRevision(file, "pipelines");
+  if (revision !== null) {
+    const stat = fs.statSync(file, { bigint: true });
+    const identity = `${file}:${stat.dev}:${stat.ino}`;
+    if (provisioningPaths?.identity === identity && provisioningPaths.revision === revision) return provisioningPaths.paths;
+    const db = sharedStateReadonlyDatabase(file);
+    const rows = db.query<{ directory: string | null; claude: number }, []>(`
+      SELECT json_extract(value_json, '$.worktreeDir') AS directory,
+        EXISTS(SELECT 1 FROM json_each(value_json, '$.stages') stage
+          WHERE CASE WHEN stage.type = 'object' THEN json_extract(stage.value, '$.effectiveRole.engine') = 'claude' END) AS claude
+      FROM state_rows WHERE collection = 'pipelines' AND json_valid(value_json)
+    `).iterate();
+    const worktrees: string[] = [];
+    let usesClaude = false;
+    for (const row of rows) {
+      if (typeof row.directory === "string" && row.directory) worktrees.push(row.directory);
+      usesClaude ||= !!row.claude;
+    }
+    const paths = { worktrees, usesClaude };
+    // A later poll renews the projection if a writer changed the revision
+    // between the revision read and the SELECT.
+    if (worktrees.length <= 8192) provisioningPaths = { identity, revision, paths };
+    return paths;
+  }
+  const { loadPipelinesForList } = await import("@/lib/pipelines/store");
+  const pipelines = loadPipelinesForList();
+  return {
+    worktrees: pipelines.map(row => row.worktreeDir).filter(Boolean),
+    usesClaude: pipelines.some(row => row.stages.some(stage => stage.effectiveRole.engine === "claude")),
+  };
+}
+
+let keptPaths: { file: string; stamp: string; worktrees: string[] } | undefined;
+async function diskKeptPaths() {
+  const file = statePath("worktree-sweep-report.json");
+  try {
+    const stat = fs.statSync(file, { bigint: true });
+    const stamp = `${stat.dev}:${stat.ino}:${stat.mtimeNs}:${stat.ctimeNs}:${stat.size}`;
+    if (keptPaths?.file === file && keptPaths.stamp === stamp) return keptPaths.worktrees;
+    const { readWorktreeSweepReport } = await import("@/lib/pipelines/worktreeSweep");
+    const worktrees = (readWorktreeSweepReport()?.kept ?? []).map(row => row.path).filter(Boolean);
+    if (worktrees.length <= 8192) keptPaths = { file, stamp, worktrees };
+    return worktrees;
+  } catch { return []; }
+}
+
+export function diskConsumerMeasurementDue(pressure: DiskPressure, now = Date.now()) {
+  return !!pressure.episode && !pressure.consumers.some(row => {
+    const age = now - Date.parse(row.measuredAt);
+    return age >= 0 && age < CONSUMER_CACHE_MS;
+  });
 }
 
 /** One row per volume; available bytes are those this user can allocate. */
@@ -224,7 +288,7 @@ export function diskPressureWakeReady(pressure: DiskPressure, now = Date.now()):
   return pressure.consumers.length > 0 || now - Date.parse(pressure.episode) >= CONSUMER_WAKE_WAIT_MS;
 }
 
-type PressureCache = { pressure: DiskPressure; observedAt: number; consumersAt: number; measuring?: Promise<void>; unwrittenAgainst?: string };
+type PressureCache = { pressure: DiskPressure; observedAt: number; measuring?: Promise<void>; unwrittenAgainst?: string };
 const caches = new Map<string, PressureCache>();
 
 function readReport(file: string): DiskPressure | null {
@@ -277,6 +341,9 @@ export async function readDiskPressureInHelper(ports: {
   now?: () => number;
   dockerUsage?: typeof readDockerDiskConsumers;
   readOnly?: boolean;
+  probeOnly?: boolean;
+  measureOnly?: boolean;
+  deadline?: number;
 } = {}): Promise<DiskPressure> {
   const now = ports.now ?? Date.now;
   const readers = ports.caches ?? caches;
@@ -294,35 +361,40 @@ export async function readDiskPressureInHelper(ports: {
   let cached = readers.get(directory);
   if (!cached) {
     const prior = readReport(file);
-    cached = { pressure: prior ?? observeDiskPressure([], null, new Date(now()).toISOString()), observedAt: 0, consumersAt: 0 };
+    cached = { pressure: prior ?? observeDiskPressure([], null, new Date(now()).toISOString()), observedAt: 0 };
     readers.set(directory, cached);
   }
-  if (now() - cached.observedAt < OBSERVATION_TTL_MS) return structuredClone(cached.pressure);
-  cached.observedAt = now();
-  /* Loaded here: the pipeline engine imports this module for its admission check. */
-  const [{ loadPipelinesForList }, { diskConsumerBytes, readWorktreeSweepReport }] = await Promise.all([
-    import("@/lib/pipelines/store"),
-    import("@/lib/pipelines/worktreeSweep"),
-  ]);
-  const pipelines = ports.roots || ports.worktrees ? [] : loadPipelinesForList();
-  const sweep = ports.roots || ports.worktrees ? null : readWorktreeSweepReport();
-  const worktrees = ports.worktrees ?? [...new Set([...pipelines.map(row => row.worktreeDir), ...(sweep?.kept ?? []).map(row => row.path)].filter(Boolean))];
+  if (ports.measureOnly) {
+    const latest = readReport(file);
+    if (!latest || !diskConsumerMeasurementDue(latest, now())) return latest ?? cached.pressure;
+    cached.pressure = latest;
+  } else if (now() - cached.observedAt < OBSERVATION_TTL_MS) return structuredClone(cached.pressure);
+  const inputs = ports.roots || ports.worktrees ? { worktrees: [], usesClaude: false } : await diskProvisioningPaths();
+  const worktrees = ports.worktrees ?? (ports.roots ? [] : [...new Set([...inputs.worktrees, ...await diskKeptPaths()])]);
   const tempRoots = includeIdleHostViews(ports.tempRoots ?? (ports.roots ? [] : discoverSweepRoots([...ownTempRoots(), statePath("scratch")])));
   const worktreeView = (directory: string) => tempViewFor(directory, tempRoots);
   const accessible = (directory: string) => (worktreeView(directory)?.via ?? "") + directory;
-  const usesClaude = pipelines.some(pipeline => pipeline.stages.some(stage => stage.effectiveRole.engine === "claude"));
-  const roots: DiskRoot[] = ports.roots ?? [{ role: "state", directory }, ...stageDiskRoots(process.env, tempRoots, usesClaude),
-    ...worktrees.map(directory => ({ role: "worktrees", directory: accessible(directory), view: worktreeView(directory) })),
-    ...tempRoots.map(root => ({ role: "temp", directory: root.via + root.path, view: root }))];
-  const previousEpisode = cached.pressure.episode;
-  cached.pressure = observeDiskPressureReport(file, () => diskVolumes(roots, ports.probe), new Date(now()).toISOString(), cached);
-  if (previousEpisode !== cached.pressure.episode) {
-    cached.consumersAt = 0;
+  if (!ports.measureOnly) {
+    const roots: DiskRoot[] = ports.roots ?? [{ role: "state", directory }, ...stageDiskRoots(process.env, tempRoots, inputs.usesClaude),
+      ...worktrees.map(directory => ({ role: "worktrees", directory: accessible(directory), view: worktreeView(directory) })),
+      ...tempRoots.map(root => ({ role: "temp", directory: root.via + root.path, view: root }))];
+    cached.pressure = observeDiskPressureReport(file, () => diskVolumes(roots, ports.probe), new Date(now()).toISOString(), cached);
+    cached.observedAt = now();
   }
-  if (cached.pressure.episode && now() - cached.consumersAt > CONSUMER_CACHE_MS && !cached.measuring) {
+  if (!ports.probeOnly && diskConsumerMeasurementDue(cached.pressure, now()) && !cached.measuring) {
     const target = cached;
     const episode = cached.pressure.episode;
     target.measuring = (async () => {
+      const { diskConsumerBytes, readWorktreeSweepReport } = await import("@/lib/pipelines/worktreeSweep");
+      const until = Math.min(ports.deadline ?? Infinity, sweepMonotonicNow() + CONSUMER_WALK_MS);
+      let checkAfter = 0;
+      const budget: { entries: number; check: () => void } | undefined = ports.measureOnly ? { entries: 250_000, check: () => {
+        const at = sweepMonotonicNow();
+        if (at < checkAfter) return;
+        checkAfter = at + 250;
+        if (sweepMemoryPressured()) throw new SweepWalkDeferred("memory");
+        if (budget && at >= until - 1000) budget.entries = 0;
+      } } : undefined;
       const reader = await openHostTempRoots(tempRoots);
       const consumerRoots = reader.roots;
       const consumerView = (directory: string) => tempViewFor(directory, consumerRoots);
@@ -332,14 +404,14 @@ export async function readDiskPressureInHelper(ports: {
         const worktreePaths = worktrees.map(consumerPath);
         const seenAllocations = new Set<string>();
         const scratch = statePath("scratch");
-        const stateBytes = await diskConsumerBytes(directory, [scratch, ...worktreePaths], seenAllocations);
-        const scratchBytes = await diskConsumerBytes(scratch, worktreePaths, seenAllocations);
+        const stateBytes = await diskConsumerBytes(directory, [scratch, ...worktreePaths], seenAllocations, budget);
+        const scratchBytes = await diskConsumerBytes(scratch, worktreePaths, seenAllocations, budget);
         let worktreeBytes = 0;
         // Nested linked checkouts must be measured once, through the outer one.
         for (const worktree of worktrees.filter(candidate => !worktrees.some(other => other !== candidate && candidate.startsWith(other + path.sep)))) {
           const view = consumerView(worktree);
           if (view && !tempViewAvailable(view)) continue;
-          const bytes = await diskConsumerBytes(consumerPath(worktree), [directory], seenAllocations);
+          const bytes = await diskConsumerBytes(consumerPath(worktree), [directory], seenAllocations, budget);
           if (!view || tempViewAvailable(view)) worktreeBytes += bytes;
         }
         let tempBytes = scratchBytes, unmanagedTempBytes = 0;
@@ -355,17 +427,20 @@ export async function readDiskPressureInHelper(ports: {
               // checkout and independent role files; exclude only the checkout.
               if (canonicalChild === directory || canonicalChild.startsWith(directory + path.sep)) continue;
               if (!tempViewAvailable(root)) break;
-              const bytes = await diskConsumerBytes(child, [directory, ...worktreePaths], seenAllocations);
+              const bytes = await diskConsumerBytes(child, [directory, ...worktreePaths], seenAllocations, budget);
               if (tempViewAvailable(root)) {
                 if (isOwnedTempConsumerName(entry.name)) tempBytes += bytes; else unmanagedTempBytes += bytes;
               }
             }
-          } catch { /* An inaccessible root has no attributable consumer count. */ }
+          } catch (error) {
+            if (error instanceof SweepWalkDeferred) throw error;
+            // An inaccessible root has no attributable consumer count.
+          }
         }
         if (target.pressure.episode !== episode) return;
         const dockerRows = await (ports.dockerUsage ?? readDockerDiskConsumers)(directory);
         if (target.pressure.episode !== episode) return;
-        const evidenceBytes = await diskConsumerBytes(statePath("evidence"));
+        const evidenceBytes = await diskConsumerBytes(statePath("evidence"), [], undefined, budget);
         if (target.pressure.episode !== episode) return;
         let ledgerBytes = 0, attemptCategory = "Тимчасові дані агентів";
         try {
@@ -392,21 +467,24 @@ export async function readDiskPressureInHelper(ports: {
           ...dockerRows.map(row => ({ name: row.kind === "dockerCache" ? "Кеш збірок Docker" : "Образи Docker", bytes: row.bytes })),
           { name: "Поза обліком Delegatus", bytes: Math.max(0, used - stateBytes - worktreeBytes - tempBytes - unmanagedTempBytes - releaseBytes - dockerRows.reduce((sum, row) => sum + row.bytes, 0)) },
         ];
-        target.consumersAt = now();
         withFileTransactionSync(file, "disk pressure report is busy", () => {
           const latest = readReport(file);
           if (latest?.episode !== episode) return;
           writeJsonDurably(file, { ...latest, consumers: target.pressure.consumers, categories: target.pressure.categories });
         });
       } finally { await reader.close(); }
-    })().catch((error) => console.warn("[disk pressure] consumer measurement failed", error instanceof Error ? error.message : String(error)))
+    })().catch((error) => {
+      if (error instanceof SweepWalkDeferred) return;
+      console.warn("[disk pressure] consumer measurement failed", error instanceof Error ? error.message : String(error));
+    })
       .finally(() => { delete target.measuring; });
   }
+  if (ports.measureOnly) await cached.measuring;
   return structuredClone(cached.pressure);
 }
 
-/** The helper owns the 30 s observation cache, process inventory, probes and
- * consumer walks. Only the compact pressure report crosses back to readers. */
+/** The pressure helper owns the 30 s observation cache and volume probes.
+ * Consumer accounting publishes separately through the durable report. */
 export async function readDiskPressure(ports: Parameters<typeof readDiskPressureInHelper>[0] = {}): Promise<DiskPressure> {
   if (Object.keys(ports).length || process.env.LLV_STATE_OWNER === "mcp") return readDiskPressureInHelper(ports);
   if (process.env.LLV_STATE_OWNER === "viewer" && !viewerReleaseOwnsTraffic()) return readDiskPressureInHelper({ readOnly: true });

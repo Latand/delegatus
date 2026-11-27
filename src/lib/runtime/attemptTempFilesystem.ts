@@ -44,7 +44,26 @@ type RepositoryLinkRead = { at: number; targets: Promise<string[]>; directories?
 type RepositoryDiscovery = { repository: string | null; signature: string };
 /** Completed checkout reads that outlive one tick, keyed by checkout. Each is
  * used again only while every directory it lists still validates. */
-export type RetainedCheckoutReads = Map<string, { at: number; lexicalTargets: string[]; directories: RepositoryDirectoryVersion[] }>;
+export type RetainedCheckoutReads = Map<string, RepositoryLinkSnapshot & { at: number; weight: number }>;
+export const RETAINED_CHECKOUT_READ_LIMIT = 32;
+export const RETAINED_CHECKOUT_BYTES_LIMIT = 16 * 1024 ** 2;
+
+function retainCheckoutRead(retained: RetainedCheckoutReads, repository: string, snapshot: RepositoryLinkSnapshot, at: number) {
+  // Charge strings and per-row object/array overhead against one worker-wide
+  // cache budget. Each checkout's active retirement proof stays independent.
+  let weight = repository.length * 2 + 128;
+  for (const directory of snapshot.directories) weight += (directory.path.length + directory.identity.length) * 2 + 128;
+  for (const target of snapshot.lexicalTargets) weight += target.length * 2 + 32;
+  if (weight > RETAINED_CHECKOUT_BYTES_LIMIT) return;
+  retained.delete(repository);
+  // Saturated inventories keep the completed reads until expiry. A cyclic
+  // scan larger than the cache would evict every hit if it admitted every miss.
+  if (retained.size >= RETAINED_CHECKOUT_READ_LIMIT) return;
+  let total = weight;
+  for (const row of retained.values()) total += row.weight;
+  if (total > RETAINED_CHECKOUT_BYTES_LIMIT) return;
+  retained.set(repository, { ...snapshot, at, weight });
+}
 /** A retained read older than this is repeated in full. */
 export const RETAINED_CHECKOUT_READ_MAX_AGE_MS = 10 * 60_000;
 const sameStrings = (left: readonly string[], right: readonly string[]) =>
@@ -522,7 +541,7 @@ export class RepositoryLinkInventory {
         read.directories = result.directories;
         this.lexicalTargets.set(read, result.lexicalTargets);
         read.at = this.now();
-        this.options.retained?.set(repository, { at: read.at, lexicalTargets: result.lexicalTargets, directories: result.directories });
+        if (this.options.retained) retainCheckoutRead(this.options.retained, repository, result, read.at);
       }
     }, () => undefined);
     this.walks.push(repository);

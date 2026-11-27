@@ -7,6 +7,7 @@ import { WorktreeSweepWorker, stopWorktreeSweepWorker } from "./worktreeSweepWor
 import { SWEEP_CACHE_TREES } from "./worktreeSweepCache";
 import { runWorktreeSweep } from "./worktreeSweep";
 import { readWorktreePage } from "./worktreeDrilldown";
+import { sweepMemoryPressured } from "./sweepWalkAdmission";
 
 const roots: string[] = [];
 const workers: WorktreeSweepWorker[] = [];
@@ -47,6 +48,7 @@ function productionFixture() {
     import { StateLockDeferredError } from ${JSON.stringify(path.join(import.meta.dir, "../state/lockWait.ts"))};
     const root = ${JSON.stringify(root)};
     fs.appendFileSync(path.join(root, "starts"), process.pid + "\\n");
+    if (process.env.SWEEP_FIXTURE_HIGH_RSS === "1") process.memoryUsage.rss = () => 257 * 1024 ** 2;
     const stderr = console.error.bind(console);
     console.error = (...args) => {
       fs.appendFileSync(path.join(root, "diagnostics"), args.join(" ") + "\\n");
@@ -95,6 +97,76 @@ async function waitForFile(file: string) {
   expect(fs.existsSync(file)).toBeTrue();
 }
 
+test.skipIf(process.platform !== "linux")("MemAvailable and both PSI thresholds independently defer a walk", () => {
+  const pressured = (available: number, some: number, full: number) => sweepMemoryPressured(file =>
+    file.endsWith("meminfo") ? `MemTotal: 32768000 kB\nMemAvailable: ${available} kB\n`
+      : `some avg10=${some}\nfull avg10=${full}\n`);
+  expect(pressured(11_000_000, 9.99, 4.99)).toBeFalse();
+  expect(pressured(7_000_000, 0, 0)).toBeTrue();
+  expect(pressured(11_000_000, 10, 0)).toBeTrue();
+  expect(pressured(11_000_000, 5, 5)).toBeTrue();
+});
+
+test.skipIf(process.platform !== "linux")("production helper serializes walks across processes while volume reads stay available", async () => {
+  const { root, env } = productionFixture();
+  const admission = JSON.stringify(path.join(import.meta.dir, "sweepWalkAdmission.ts"));
+  const holder = Bun.spawn([process.execPath, "-e", `
+    import { withSweepWalk } from ${admission};
+    import fs from "node:fs";
+    const here = ${JSON.stringify(root)};
+    await withSweepWalk(Number(process.hrtime.bigint()) / 1e6 + 15000, async () => {
+      fs.readdirSync(here);
+      fs.writeFileSync(here + "/walk-ready", "ready");
+      await new Response(Bun.stdin.stream()).text();
+    });
+  `], { env, stdin: "pipe", stdout: "ignore", stderr: "pipe" });
+  const holderError = new Response(holder.stderr).text();
+  const preload = path.join(root, "pressure-preload.ts");
+  fs.writeFileSync(preload, String.raw`
+    import fs from "node:fs";
+    const read = fs.readFileSync;
+    fs.readFileSync = function(file, ...args) {
+      if (file === "/proc/meminfo") return "MemTotal: 32768000 kB\nMemAvailable: 16384000 kB\n";
+      if (file === "/proc/pressure/memory") return fs.existsSync(${JSON.stringify(path.join(root, "pressured"))})
+        ? "some avg10=12.00\nfull avg10=5.00\n" : "some avg10=0.00\nfull avg10=0.00\n";
+      return read.call(this, file, ...args);
+    };
+  `);
+  const entry = path.join(import.meta.dir, "../worktreeSweep.worker.ts");
+  const child = Bun.spawn([process.execPath, "--preload", preload, entry], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  const childError = new Response(child.stderr).text();
+  const output = child.stdout.pipeThrough(new TextDecoderStream()).getReader();
+  let pending = "";
+  const query = async (kind: string) => {
+    child.stdin.write(JSON.stringify({ kind, deadline: sweepMonotonicNow() + 10_000 }) + "\n");
+    while (!pending.includes("\n")) {
+      const chunk = await output.read();
+      if (chunk.done) throw new Error(await childError);
+      pending += chunk.value;
+    }
+    const end = pending.indexOf("\n"), frame = JSON.parse(pending.slice(0, end));
+    pending = pending.slice(end + 1);
+    return frame;
+  };
+  try {
+    await waitForFile(path.join(root, "walk-ready"));
+    expect(await query("disk-pressure")).toMatchObject({ report: { volumes: expect.any(Array) } });
+    expect(await query("attempt-temp")).toEqual({ deferred: "busy" });
+    expect(fs.existsSync(path.join(env.LLV_STATE_DIR, "attempt-temp-report.json"))).toBeFalse();
+    holder.stdin.end();
+    expect(await holder.exited, await holderError).toBe(0);
+    fs.writeFileSync(path.join(root, "pressured"), "present");
+    expect(await query("attempt-temp")).toEqual({ deferred: "memory" });
+    fs.rmSync(path.join(root, "pressured"));
+    expect(await query("attempt-temp")).toMatchObject({ report: { checked: 0, removed: 0 } });
+  } finally {
+    if (holder.exitCode === null) { holder.kill(); await holder.exited; }
+    child.stdin.end();
+    await output.cancel();
+    if (child.exitCode === null) { child.kill(); await child.exited; }
+  }
+}, 30_000);
+
 test("production helper returns attempt reports and survives its own abandoned lease retry diagnostic", async () => {
   const { root, env, command } = productionFixture();
   const previous = { ...process.env };
@@ -116,6 +188,25 @@ test("production helper returns attempt reports and survives its own abandoned l
     await worker.close();
     for (const key of Object.keys(env)) {
       if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key];
+    }
+  }
+}, 30_000);
+
+test("a helper at its RSS threshold is replaced before the next attempt request", async () => {
+  const { root, env, command } = productionFixture();
+  const saved = { ...process.env };
+  const settings = { ...env, SWEEP_FIXTURE_HIGH_RSS: "1" };
+  Object.assign(process.env, settings);
+  const worker = new WorktreeSweepWorker({ executable: command[0], entry: command[1], args: command.slice(2) }, 20_000);
+  try {
+    expect(await worker.attemptTemp()).toMatchObject({ checked: 0 });
+    expect(await worker.attemptTemp()).toMatchObject({ checked: 0 });
+    const starts = fs.readFileSync(path.join(root, "starts"), "utf8").trim().split("\n");
+    expect(new Set(starts).size).toBe(2);
+  } finally {
+    await worker.close();
+    for (const key of Object.keys(settings)) {
+      if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key];
     }
   }
 }, 30_000);

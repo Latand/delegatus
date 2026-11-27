@@ -18,6 +18,7 @@ import { attemptTempFailureDetail } from "@/lib/runtime/attemptTempDiagnostics";
 import type { ContainerMount } from "@/lib/runtime/attemptTempFilesystem";
 import { GATE_ALLOCATION_FILE, gateSandboxOwnerEnded, LOCAL_GATE_SANDBOX_NAME } from "@/lib/gateSandboxProof";
 import { identitiesInUse, mappedFileIdentity, treeHoldsIdentity } from "@/lib/processFileIdentity";
+import { SweepWalkDeferred } from "./pipelines/sweepWalkAdmission";
 
 /**
  * The bounded sweeper for temp directories Delegatus left behind (#1957).
@@ -1857,11 +1858,15 @@ export function startTempSweep(ports: {
   const arm = (delayMs: number) => {
     const timer = schedule(() => {
       running = true;
+      let deferred = false;
       void withViewerOperation("temp.sweep", sweep)
-        .catch((error) => console.error("[temp sweep] failed", error instanceof Error ? error.message : String(error)))
+        .catch((error) => {
+          if (error instanceof SweepWalkDeferred) deferred = true;
+          else console.error("[temp sweep] failed", error instanceof Error ? error.message : String(error));
+        })
         .finally(() => {
           running = false;
-          if (sweepHost.__llvTempSweepTimer === timer) arm(ports.intervalMs ?? TEMP_SWEEP_INTERVAL_MS);
+          if (sweepHost.__llvTempSweepTimer === timer) arm(deferred ? 60_000 : ports.intervalMs ?? TEMP_SWEEP_INTERVAL_MS);
         });
     }, delayMs);
     timer.unref?.();

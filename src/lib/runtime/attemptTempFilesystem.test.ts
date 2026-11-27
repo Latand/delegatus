@@ -9,7 +9,7 @@ import { reportMediaRoot } from "@/lib/reportMedia/lookup";
 import { execFile } from "node:child_process";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { attemptReferencesClear, containerMountHold, blockedSubtrees, measureAttemptAllocation, inspectAttemptTree, attemptTempUtilityImage, removeAttemptTree, repositoryReferencesAttemptTemp, RepositoryLinkInventory,
-  RETAINED_CHECKOUT_READ_MAX_AGE_MS, type RetainedCheckoutReads } from "./attemptTempFilesystem";
+  RETAINED_CHECKOUT_BYTES_LIMIT, RETAINED_CHECKOUT_READ_LIMIT, RETAINED_CHECKOUT_READ_MAX_AGE_MS, type RetainedCheckoutReads } from "./attemptTempFilesystem";
 import { withAttemptTempDeadline } from "./attemptTempDeadline";
 import { AttemptTempBudgetDeferred } from "./attemptTempDiagnostics";
 import { removeTreeWithinAttemptBudget } from "./attemptTempRemoval";
@@ -546,6 +546,33 @@ test("reads kept across ticks serve unchanged checkouts; a changed or aged check
   const fourth = tick();
   expect(await clear(fourth)).toBeTrue();
   expect(fourth.walks).toHaveLength(3);
+});
+
+test("a cyclic scan beyond the checkout cache cap keeps hits until expiry", async () => {
+  const parent = root();
+  const retained: RetainedCheckoutReads = new Map();
+  let at = 1_000;
+  const now = () => at;
+  const first = new RepositoryLinkInventory({ now, retained });
+  const repos = Array.from({ length: RETAINED_CHECKOUT_READ_LIMIT + 2 }, (_, index) => path.join(parent, `checkout-${index}`));
+  for (const repo of repos) {
+    fs.mkdirSync(repo);
+    fs.symlinkSync("payload", path.join(repo, "pointer"));
+    expect(await first.targets(repo)).toContain(path.join(repo, "payload"));
+  }
+  expect(retained.size).toBe(RETAINED_CHECKOUT_READ_LIMIT);
+  expect([...retained.values()].reduce((total, entry) => total + entry.weight, 0)).toBeLessThanOrEqual(RETAINED_CHECKOUT_BYTES_LIMIT);
+  const next = new RepositoryLinkInventory({ now, retained });
+  await next.targets(repos[0]!);
+  expect(next.walks).toEqual([]);
+  await next.targets(repos.at(-1)!);
+  expect(next.walks).toEqual([repos.at(-1)!]);
+  expect(retained.has(repos[0]!)).toBeTrue();
+  at += RETAINED_CHECKOUT_READ_MAX_AGE_MS + 1;
+  const later = new RepositoryLinkInventory({ now, retained });
+  expect(retained.size).toBe(0);
+  await later.targets(repos.at(-1)!);
+  expect(retained.has(repos.at(-1)!)).toBeTrue();
 });
 
 test("a reused validation never answers the fence that precedes a destructive step", async () => {

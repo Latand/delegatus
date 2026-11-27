@@ -11,6 +11,7 @@ import type { MemoryReading } from "@/lib/state/memoryPressure";
 import type { WorktreeSweepMode, WorktreeSweepReport } from "./worktreeSweep";
 import type { ApprovedAttemptTempRequest, ApprovedAttemptTempReport } from "../runtime/attemptTempApproved";
 import type { CleanerSweepRequest, CleanerSweepResult } from "../cleaner/diskSweep";
+import { SweepWalkDeferred } from "./sweepWalkAdmission";
 
 export const WORKTREE_SWEEP_DEADLINE_MS = 45 * 60_000;
 const MAX_REPLY_BYTES = 8 * 1024 * 1024;
@@ -29,13 +30,14 @@ export function worktreeSweepWorkerLaunch(cwd = process.cwd()): SweepWorkerLaunc
   return { executable: process.execPath, entry: source };
 }
 
-type SweepRequest = { kind: "worktrees"; mode: WorktreeSweepMode }
+export type SweepRequest = { kind: "worktrees"; mode: WorktreeSweepMode }
   | { kind: "temp"; env: Pick<NodeJS.ProcessEnv, "LLV_TEMP_SWEEP" | "LLV_TEMP_SWEEP_MAX_AGE_HOURS" | "LLV_TEMP_STRAY_MAX_AGE_HOURS" | "LLV_TEMP_STRAY_KEEP"> }
   | { kind: "attempt-temp" }
   | { kind: "attempt-temp-approved"; approval: ApprovedAttemptTempRequest }
   | { kind: "maintenance" }
   | { kind: "disk-cleaner"; sweep: CleanerSweepRequest }
   | { kind: "disk-pressure" }
+  | { kind: "disk-consumers" }
   | { kind: "memory" };
 type SweepResult = WorktreeSweepReport | TempSweepReport | DiskPressure | CleanerSweepResult | ApprovedAttemptTempReport | Awaited<ReturnType<typeof import("../runtime/attemptTempProduction").runAttemptTempSweep>> | { checked: number; removed: number } | MemoryReading | null;
 type Pending = { request: SweepRequest; resolve: (report: SweepResult) => void; reject: (error: Error) => void;
@@ -55,6 +57,7 @@ export class WorktreeSweepWorker {
   private pending?: Pending;
   private output = "";
   private replyBytes = 0;
+  private recycleAfterReply = false;
   private closed: Promise<void> = Promise.resolve();
   constructor(private readonly launch = worktreeSweepWorkerLaunch(), private readonly timeoutMs = WORKTREE_SWEEP_DEADLINE_MS,
     private readonly clock: SweepWorkerClock = sweepClock, private readonly pressureOnly = false, private readonly attemptOnly = false) {}
@@ -89,7 +92,10 @@ export class WorktreeSweepWorker {
           }
           const report = response?.report;
           const kind = this.pending.request.kind;
-          const valid = kind === "disk-cleaner" ? report && Array.isArray(report.kept) && Number.isInteger(report.errors)
+          const deferred = kind !== "disk-pressure" && kind !== "memory"
+            && (response?.deferred === "busy" || response?.deferred === "memory") ? response.deferred : undefined;
+          const valid = kind === "disk-consumers" ? report === null
+            : kind === "disk-cleaner" ? report && Array.isArray(report.kept) && Number.isInteger(report.errors)
               && (report.next === null || typeof report.next === "string") && typeof report.more === "boolean"
             : kind === "attempt-temp" || kind === "attempt-temp-approved" || kind === "maintenance" ? report === null || report && Number.isInteger(report.checked) && Number.isInteger(report.removed)
             : kind === "memory" ? report === null || report && Number.isFinite(report.ram?.usedBytes) && Number.isFinite(report.swap?.usedBytes) && "tmp" in report
@@ -99,7 +105,7 @@ export class WorktreeSweepWorker {
             : (kind === "temp" && report === null) || (report && Array.isArray(report.removed) && Array.isArray(report.errors)
               && (kind === "worktrees" ? Array.isArray(report.kept)
                 : report.kept && !Array.isArray(report.kept) && typeof report.kept === "object"));
-          if (!response || response.error || !valid)
+          if (!response || response.error || (!valid && !deferred))
             throw new Error(response?.error || "worktree sweep worker returned an invalid report");
           if (this.pending.failure) return;
           const pending = this.pending;
@@ -107,6 +113,12 @@ export class WorktreeSweepWorker {
           pending.finishPhase?.();
           this.pending = undefined;
           unrefLeasedHelper(child);
+          if (deferred) {
+            if (kind === "attempt-temp" || kind === "maintenance" || kind === "disk-consumers") pending.resolve(null);
+            else pending.reject(new SweepWalkDeferred(deferred));
+            continue;
+          }
+          this.recycleAfterReply = response.recycle === true;
           if (kind === "disk-pressure") {
             this.diskPressureCache = { report: response.report as DiskPressure, observedAt: Date.parse(response.report.at) };
           }
@@ -142,11 +154,14 @@ export class WorktreeSweepWorker {
     const attempt = request.kind === "attempt-temp" || request.kind === "attempt-temp-approved" || request.kind === "disk-cleaner";
     const observation = request.kind === "disk-pressure" || request.kind === "memory";
     const timeoutMs = observation ? Math.min(this.timeoutMs, DISK_PRESSURE_REQUEST_TIMEOUT_MS)
-      : attempt || request.kind === "maintenance" ? Math.min(this.timeoutMs, ATTEMPT_TEMP_REQUEST_TIMEOUT_MS) : this.timeoutMs;
+      : attempt || request.kind === "maintenance" || request.kind === "disk-consumers"
+        ? Math.min(this.timeoutMs, ATTEMPT_TEMP_REQUEST_TIMEOUT_MS) : this.timeoutMs;
     const deadline = this.clock.now() + timeoutMs;
-    const operation = attempt || request.kind === "temp" || request.kind === "maintenance" ? "temp.sweep" : observation ? "resources.read" : "worktrees.sweep";
+    const operation = attempt || request.kind === "temp" || request.kind === "maintenance" ? "temp.sweep"
+      : observation || request.kind === "disk-consumers" ? "resources.read" : "worktrees.sweep";
     const deadlineLabel = request.kind === "disk-cleaner" ? "disk cleaner slice" : attempt ? "attempt temp tick"
-      : request.kind === "worktrees" ? "worktree sweep" : request.kind === "temp" ? "temp sweep" : request.kind === "memory" ? "memory reading" : "disk pressure refresh";
+      : request.kind === "worktrees" ? "worktree sweep" : request.kind === "temp" ? "temp sweep"
+        : request.kind === "memory" ? "memory reading" : request.kind === "disk-consumers" ? "disk consumer measurement" : "disk pressure refresh";
     // At most one job per kind; polls join rather than retaining an unbounded
     // queue. The same deadline includes time behind another sweep.
     const execution = withViewerOperation(operation, () => this.tail.then(() => {
@@ -168,6 +183,7 @@ export class WorktreeSweepWorker {
         child.ref();
         for (const stream of child.stdio) (stream as unknown as { ref?: () => void } | null)?.ref?.();
         this.replyBytes = 0;
+        this.recycleAfterReply = false;
         const timer = this.clock.setTimeout(() => this.fail(new Error(`${deadlineLabel} exceeded ${timeoutMs} ms`)), remaining);
         this.pending = { request, resolve, reject, timer };
         leasedHelperInput(child).write(JSON.stringify({ ...request, deadline }) + "\n");
@@ -175,11 +191,10 @@ export class WorktreeSweepWorker {
     }));
     const completed = execution.then(async report => {
       const attemptComplete = request.kind === "attempt-temp" && !!(report as { pass?: { ended?: unknown } } | null)?.pass?.ended;
-      if ((request.kind === "worktrees" && (report as WorktreeSweepReport | null)?.progress?.complete || attemptComplete) && this.child) {
-        // A full pass is the helper's retention boundary. Release native
-        // watchers, decoded history and allocator high-water memory before
-        // the hourly idle period. Queued jobs remain behind this tail until
-        // the old lease closes; continuations retain their discovery owner.
+      if ((this.recycleAfterReply || request.kind === "worktrees" && (report as WorktreeSweepReport | null)?.progress?.complete || attemptComplete) && this.child) {
+        // Release observers and allocator high-water memory at the pass
+        // boundary or RSS threshold. A continuation can resume its durable
+        // cursor even if the helper has to rebuild its discovery projection.
         endLeasedHelper(this.child);
         await this.closed;
       }
@@ -215,6 +230,7 @@ export class WorktreeSweepWorker {
     return this.request({ kind: "attempt-temp-approved", approval }) as Promise<ApprovedAttemptTempReport>;
   }
   maintenance() { return this.request({ kind: "maintenance" }); }
+  diskConsumers() { return this.request({ kind: "disk-consumers" }); }
   diskCleaner(sweep: CleanerSweepRequest): Promise<CleanerSweepResult> {
     if (!this.attemptOnly) {
       this.attemptWorker ??= new WorktreeSweepWorker(this.launch, this.timeoutMs, this.clock, false, true);
@@ -268,6 +284,7 @@ export function runAttemptTempSweepOffThread() { return worker().attemptTemp(); 
 export function runTemporaryDataMaintenanceOffThread() { return worker().maintenance(); }
 export function runDiskCleanerOffThread(sweep: CleanerSweepRequest) { return worker().diskCleaner(sweep); }
 export function readDiskPressureOffThread() { return worker().diskPressure(); }
+export function measureDiskConsumersOffThread() { return worker().diskConsumers(); }
 export function readMemoryReadingOffThread() { return worker().memory(); }
 export async function stopWorktreeSweepWorker() {
   const worker = shared.__delegatusWorktreeSweepWorker;

@@ -28,6 +28,7 @@ import { backupWorktree } from "./worktreeBackup";
 import { runnerOutputLinked, runnerOutputMentions, runnerOutputPath, type RunnerOutputMentions } from "./runnerOutputLinks";
 import { isPreservedMedia } from "@/lib/artifact/evidenceFormats";
 import { recordWorktreeDrilldown } from "./worktreeDrilldown";
+import { SweepWalkDeferred } from "./sweepWalkAdmission";
 
 /**
  * Removes the worktrees whose work is merged (#2202), and finished ones whose
@@ -231,7 +232,7 @@ export type WorktreeRemoval = {
 
 export type WorktreeKept = { path: string; reason: WorktreeKeptReason; detail?: string; pipelineId?: string; bytes?: number; firstSettledAt?: string;
   /** Advisory display metadata, preserved when a later slice defers this row. */
-  repository?: string; observedAt?: string };
+  repository?: string; observedAt?: string; allocation?: { at: number; stamp: string } };
 
 export type WorktreeSweepReport = {
   at: string;
@@ -243,7 +244,7 @@ export type WorktreeSweepReport = {
     /** Epoch ms at which a kept path's verdict can change with time alone
         (retention ends, recent writes age past the floor, a live holder is
         rechecked); a later slice enqueues it then. */
-    due?: Record<string, number>; visited: number; complete: boolean;
+    due?: Record<string, number>; visited: number; complete: boolean; paused?: true;
     pass?: { startedAt: string; slices: number; visited: number; discoveryMs: number; freedBytes: number } };
   timings?: { fullPassDurationMs: number; discoveryMs: number; sliceDiscoveryMs: number; checksMs: number; accountingMs: number;
     worktreesPerSlice: number; slices: number; completedAt?: string; freedBytes: number };
@@ -265,6 +266,7 @@ export type GitRun = (args: string[], cwd: string) => Promise<ExecResult>;
 export type SweptPipeline = Pick<Pipeline, "id" | "state" | "repoDir" | "worktreeDir" | "branch" | "delivery"> &
   Partial<Pick<Pipeline, "task" | "closeTeardown" | "closeReport" | "activationCloseRequested" | "baseRef" | "closedAt">> & {
     runs?: Pipeline["runs"];
+    archiveFacts?: { activitySettled: boolean; terminalAt: number; heads: Set<string>; numbers: Set<number> };
   };
 
 export type WorktreeSweepPorts = {
@@ -314,6 +316,7 @@ export type WorktreeSweepPorts = {
   timeBudgetMs?: number;
   monotonicNow?: () => number;
   accountingEntryLimit?: number;
+  pause?: () => boolean;
   phase?: (phase: "discovery" | "candidate" | "accounting", directory?: string) => void;
   /** The previous report, whose `firstSettledAt` carries a retention clock
       started by observation across sweeps. */
@@ -330,9 +333,11 @@ const SETTLED_STATES: ReadonlySet<Pipeline["state"]> = new Set(["completed", "cl
 
 /** Open, or completed and closed with a teardown or delivery still in flight. */
 function pipelineHoldsCheckout(pipeline: SweptPipeline): boolean {
-  return !SETTLED_STATES.has(pipeline.state) || !pipelineActivitySettled(pipeline);
+  return !SETTLED_STATES.has(pipeline.state) || !(pipeline.archiveFacts?.activitySettled ?? pipelineActivitySettled(pipeline));
 }
 
+const sweepTerminalTime = (pipelines: readonly SweptPipeline[]) => pipelines.reduce((latest, row) =>
+  Math.max(latest, row.archiveFacts?.terminalAt ?? latestTerminalTime([row])), 0);
 
 /** The baseline's dependency, build and cache classes. Evidence in
     `.artifacts` and nested repositories remains protected inside them. */
@@ -532,12 +537,15 @@ export function allocatedBytes(directory: string, excludedDirectories: readonly 
 
 /** The disk panel runs off-thread. Finish its inventory even on large installs.
  * Only directories and multiply linked files need cross-root identity tracking. */
-export function diskConsumerBytes(directory: string, excluded: readonly string[] = [], seen = new Set<string>()) {
-  return measureDirectory(directory, excluded, seen, false, Infinity);
+export function diskConsumerBytes(directory: string, excluded: readonly string[] = [], seen = new Set<string>(),
+  budget?: { entries: number; check: () => void }) {
+  return measureDirectory(directory, excluded, seen, false, Infinity, Infinity, budget);
 }
 
 async function measureDirectory(directory: string, excludedDirectories: readonly string[], seenEntries: Set<string>, singleLinksOnly: boolean,
-  entryLimit = MEASURE_ENTRY_LIMIT, identityLimit = Number.POSITIVE_INFINITY): Promise<number> {
+  entryLimit = MEASURE_ENTRY_LIMIT, identityLimit = Number.POSITIVE_INFINITY,
+  budget?: { entries: number; check: () => void }): Promise<number> {
+  if (budget && budget.entries <= 0) return 0;
   const excluded = new Set<string>();
   for (const excludedDirectory of excludedDirectories) {
     try { const stat = fs.statSync(excludedDirectory); excluded.add(`${stat.dev}:${stat.ino}`); }
@@ -553,17 +561,23 @@ async function measureDirectory(directory: string, excludedDirectories: readonly
   let bytes = 0;
   let visited = 0;
   const pending = [directory];
-  while (pending.length > 0 && visited < entryLimit && seenEntries.size < identityLimit) {
+  while (pending.length > 0 && visited < entryLimit && seenEntries.size < identityLimit && (!budget || budget.entries > 0)) {
+    budget?.check();
     const current = pending.pop()!;
-    let entries: fs.Dirent[];
+    let entries: fs.Dirent[] | fs.Dir;
     try {
-      entries = await fs.promises.readdir(current, { withFileTypes: true });
+      entries = budget ? await fs.promises.opendir(current) : await fs.promises.readdir(current, { withFileTypes: true });
     } catch {
       continue;
     }
-    for (const entry of entries) {
+    for await (const entry of entries) {
       if (visited >= entryLimit || seenEntries.size >= identityLimit) break;
       visited += 1;
+      if (budget) {
+        if (budget.entries <= 0) break;
+        budget.entries--;
+        if (visited % 1024 === 0) budget.check();
+      }
       const child = path.join(current, entry.name);
       try {
         const stat = await fs.promises.lstat(child);
@@ -745,6 +759,11 @@ function pipelinePrCandidates(pipelines: readonly SweptPipeline[]): { heads: Set
   const heads = new Set<string>();
   const numbers = new Set<number>();
   for (const pipeline of pipelines) {
+    if (pipeline.archiveFacts) {
+      for (const head of pipeline.archiveFacts.heads) heads.add(head);
+      for (const number of pipeline.archiveFacts.numbers) numbers.add(number);
+      continue;
+    }
     if (pipeline.branch) heads.add(pipeline.branch);
     const deliveryBranch = pipeline.delivery?.target.branch?.replace(/^refs\/heads\//, "");
     if (deliveryBranch) heads.add(deliveryBranch);
@@ -1108,7 +1127,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
   const freshPaths = () => physicalPaths.clear();
   const paths = (entries: readonly string[]) => [...new Set([...new Set(entries)].flatMap(entry => [resolve(entry), physical(entry)]))];
   const staleTerminal = (owner: SweptPipeline) => SETTLED_STATES.has(owner.state)
-    && latestTerminalTime([owner]) > 0 && now() - latestTerminalTime([owner]) >= FINISHED_WORKTREE_RETENTION_MS;
+    && sweepTerminalTime([owner]) > 0 && now() - sweepTerminalTime([owner]) >= FINISHED_WORKTREE_RETENTION_MS;
   const holdsCheckout = (owner: SweptPipeline) => pipelineHoldsCheckout(owner) && !staleTerminal(owner);
   const currentPipelines = ports.currentPipelines ?? (() => ports.pipelines);
   // The live list omits archived lanes. Preserve their settled ownership,
@@ -1168,7 +1187,10 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
   /* Registration discovery is outside the slice clock. Even a slow forge
      or candidate must leave a small minimum of progress in each slice. */
   let started: number | undefined;
-  const spent = () => progress.visited >= minimum && started !== undefined && budgetClock() - started >= timeBudget;
+  const spent = () => {
+    if (ports.pause?.()) { progress.paused = true; return true; }
+    return progress.visited >= minimum && started !== undefined && budgetClock() - started >= timeBudget;
+  };
   const priorProgress = ports.previous?.progress;
   const progress: NonNullable<WorktreeSweepReport["progress"]> = { cursor: priorProgress?.cursor ?? "", pending: [] as string[],
     cursors: { ...priorProgress?.cursors }, repositoryCursor: priorProgress?.repositoryCursor,
@@ -1266,7 +1288,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
       repositoryByCheckout.set(directory, root);
       const owners = ownersOf(ownersAtStart, directory);
       const fingerprint = JSON.stringify([entry.head, entry.branch, entry.locked, entry.prunable,
-        owners.map(owner => [owner.id, owner.state, pipelineHoldsCheckout(owner), latestTerminalTime([owner])]),
+        owners.map(owner => [owner.id, owner.state, pipelineHoldsCheckout(owner), sweepTerminalTime([owner])]),
         heldBy(initial, directory, entry.branch)]);
       progress.fingerprints[directory] = fingerprint;
       const due = priorProgress?.due?.[directory];
@@ -1333,7 +1355,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         inside(worktree, temp) && isOwnedTempName(path.relative(temp, worktree).split(path.sep)[0] ?? ""));
       /* A lane's own terminal time dates it on the first pass; otherwise the
          first sweep that saw it settled starts the clock. */
-      const terminal = latestTerminalTime(owners);
+      const terminal = sweepTerminalTime(owners);
       const previous = previouslyKept.get(worktree);
       const terminalAt = terminal ? new Date(terminal).toISOString() : report.at;
       const firstSettledAt = finished ? previous?.firstSettledAt
@@ -1518,7 +1540,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         const freshOwners = ownersOf(ownershipPipelines(), worktree);
         const aged = retained || pushed;
         if (aged && freshOwners.some(holdsCheckout)) return { ...base, reason: "open-pipeline" };
-        const freshSettled = Math.max(settledSince, latestTerminalTime(freshOwners));
+        const freshSettled = Math.max(settledSince, sweepTerminalTime(freshOwners));
         const settledFor = (ms: number) => now() - freshSettled >= ms;
         const held = (why?: string): WorktreeKept => ({ ...base, firstSettledAt: iso(freshSettled), reason: "retention", detail: retentionDetail(freshSettled, why) });
         /* A lane that ran and settled again since the pass began waits anew. */
@@ -1635,7 +1657,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         if (retained || pushed) {
           // A lane can run and settle again during any of the final Git
           // reads. Refresh its terminal clock after the last awaited read.
-          const freshSettled = Math.max(settledSince, latestTerminalTime(ownersOf(ownershipPipelines(), worktree)));
+          const freshSettled = Math.max(settledSince, sweepTerminalTime(ownersOf(ownershipPipelines(), worktree)));
           if (now() - freshSettled < required) {
             keep({ ...base, firstSettledAt: iso(freshSettled), reason: "retention", detail: retentionDetail(freshSettled) });
             continue;
@@ -1722,7 +1744,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         }
         return candidates;
       };
-      const clock = `${entry.head}:${entry.branch}:${owner.id}:${owner.state}:${latestTerminalTime(owners)}:${previouslyKept.get(worktree)?.firstSettledAt ?? ""}`;
+      const clock = `${entry.head}:${entry.branch}:${owner.id}:${owner.state}:${sweepTerminalTime(owners)}:${previouslyKept.get(worktree)?.firstSettledAt ?? ""}`;
       const candidates = ports.cache?.candidates(accessible(worktree), clock, discover) ?? discover();
       for (const next of candidates) {
         if (report.trimmed.length >= maxRemovals || spent()) break;
@@ -1824,12 +1846,31 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
   const checksMs = budgetClock() - checksStart;
   const accountingStart = budgetClock();
   ports.phase?.("accounting");
+  const accountingAt = now();
+  const allocationStamp = (directory: string) => {
+    try {
+      const stat = fs.statSync(accessible(directory), { bigint: true });
+      return `${stat.dev}:${stat.ino}:${stat.mtimeNs}:${stat.ctimeNs}`;
+    } catch { return null; }
+  };
+  const toMeasure = report.kept.filter(row => visited.has(row.path) && row.reason !== "mount-boundary");
+  const stamps = new Map<string, string | null>();
+  // Display allocation can wait for its periodic audit. Keep all-or-none
+  // reuse within this slice so a fresh measurement still deduplicates inodes.
+  const reuse = !!ports.cache && report.kept.length === previouslyKept.size
+    && report.kept.every(row => previouslyKept.get(row.path)?.reason === row.reason)
+    && toMeasure.every(row => {
+      const before = previouslyKept.get(row.path)?.allocation;
+      const stamp = allocationStamp(row.path);
+      stamps.set(row.path, stamp);
+      return !!stamp && before?.stamp === stamp && accountingAt >= before.at && accountingAt - before.at < 4 * HOUR_MS;
+    });
   for (const kept of report.kept) {
     kept.repository ??= repositoryByCheckout.get(kept.path);
     kept.pipelineId ??= ownersOf(ownersAtStart, kept.path)[0]?.id;
     // Accounting is advisory and bounded independently of retirement. A cache
     // eviction never schedules a full walk of every retained tree.
-    const measured = visited.has(kept.path) && !spent();
+    const measured = !reuse && visited.has(kept.path) && !spent();
     if (measured && kept.reason !== "mount-boundary") {
       const nested = report.kept.filter(other => other.path !== kept.path && inside(other.path, kept.path));
       let rootBytes = 0;
@@ -1839,9 +1880,15 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
           if (!seenKept.has(`${stat.dev}:${stat.ino}`)) rootBytes = stat.blocks * 512;
         } catch { /* Missing entries contribute no allocated blocks. */ }
       }
+      const stamp = ports.cache ? stamps.get(kept.path) ?? allocationStamp(kept.path) : null;
       kept.bytes = rootBytes + await measureDirectory(accessible(kept.path), nested.map(row => accessible(row.path)), seenKept, false,
         ports.accountingEntryLimit ?? 4096);
-    } else kept.bytes = previouslyKept.get(kept.path)?.bytes ?? 0;
+      if (stamp && stamp === allocationStamp(kept.path)) kept.allocation = { at: accountingAt, stamp };
+    } else {
+      kept.bytes = previouslyKept.get(kept.path)?.bytes ?? 0;
+      const before = previouslyKept.get(kept.path)?.allocation;
+      if (before) kept.allocation = before;
+    }
     report.keptBytes[kept.reason] = (report.keptBytes[kept.reason] ?? 0) + kept.bytes;
   }
 
@@ -2030,9 +2077,36 @@ export function productionMergedPullRequests(sources: {
   };
 }
 
-function withArchived(hot: readonly Pipeline[], archived: readonly Pipeline[]): Pipeline[] {
+function withArchived(hot: readonly Pipeline[], archived: readonly SweptPipeline[]): SweptPipeline[] {
   const ids = new Set(hot.map((pipeline) => pipeline.id));
   return [...hot, ...archived.filter((pipeline) => !ids.has(pipeline.id))];
+}
+
+let archivedOwners: { key: string; owners: SweptPipeline[] } | undefined;
+async function loadArchivedOwners(store: typeof import("./store")) {
+  const key = () => {
+    const file = statePath("state.sqlite");
+    const stat = fs.statSync(file, { bigint: true });
+    return `${file}:${stat.dev}:${stat.ino}:${store.archivedPipelinesRevision()}`;
+  };
+  const before = key();
+  if (archivedOwners?.key === before) return archivedOwners.owners;
+  archivedOwners = undefined;
+  const owners: SweptPipeline[] = [];
+  let weight = 0;
+  // The archive can contain gigabytes of run and report history. Use its
+  // existing paged decoder and keep only the facts the sweep actually needs.
+  await store.selectArchivedPipelines(row => {
+    const { id, state, repoDir, worktreeDir, branch, task } = row;
+    const { heads, numbers } = pipelinePrCandidates([row]);
+    const archiveFacts = { activitySettled: pipelineActivitySettled(row), terminalAt: latestTerminalTime([row]), heads, numbers };
+    owners.push({ id, state, repoDir, worktreeDir, branch, task, delivery: undefined, archiveFacts });
+    weight += (id.length + repoDir.length + worktreeDir.length + (branch?.length ?? 0) + task.length) * 2 + 384
+      + [...heads].reduce((sum, head) => sum + head.length * 2 + 32, 0) + numbers.size * 24;
+    return false;
+  }, 16);
+  if (weight <= 48 * 1024 ** 2 && key() === before) archivedOwners = { key: before, owners };
+  return owners;
 }
 
 /** The ports as the Viewer runs them, over its own state. `run` is the `gh`
@@ -2041,7 +2115,7 @@ export async function productionWorktreeSweepPorts(
   mode: WorktreeSweepMode,
   run: GithubRunner = githubRunner(os.tmpdir(), GH_TIMEOUT_MS),
 ): Promise<WorktreeSweepPorts> {
-  const [{ loadArchivedPipelinesForListAsync, loadPipelinesForListAsync, loadPipelinesForList }, { projectCurationSnapshot }, { agentRegistry }, { recordWorktreeResolution }, { readForgeCache }, { recordedRootDirectories }, { stateRowsContaining }] = await Promise.all([
+  const [store, { projectCurationSnapshot }, { agentRegistry }, { recordWorktreeResolution }, { readForgeCache }, { recordedRootDirectories }, { stateRowsContaining }] = await Promise.all([
     import("@/lib/pipelines/store"),
     import("@/lib/projects/curation"),
     import("@/lib/agent/registry"),
@@ -2050,7 +2124,7 @@ export async function productionWorktreeSweepPorts(
     import("@/lib/recordedChecks/store"),
     import("@/lib/state/sqliteStateStore"),
   ]);
-  const pipelines = withArchived(await loadPipelinesForListAsync(), await loadArchivedPipelinesForListAsync());
+  const pipelines = withArchived(await store.loadPipelinesForListAsync(), await loadArchivedOwners(store));
   const repositories = projectCurationSnapshot().manualProjects.map((project) => project.root);
   const view = await openHostTempRoots(discoverSweepRoots([...ownTempRoots(), statePath("scratch")]));
   const temp = view.roots;
@@ -2068,7 +2142,7 @@ export async function productionWorktreeSweepPorts(
     /* Settled lanes move to the archive after a while; their delivered PR
        numbers are what find a PR whose head is not the lane branch. */
     pipelines,
-    currentPipelines: () => loadPipelinesForList(),
+    currentPipelines: () => store.loadPipelinesForList(),
     repositories,
     conversationCwds: () => conversationCwdStatus(agentRegistry().worktreeProtectionSnapshot()),
     scan: () => scanProcesses(),
@@ -2160,20 +2234,25 @@ export function startWorktreeSweep(ports: {
       running = true;
       pressureQueued = false;
       let continuation = false;
+      let deferred = false;
       void sweep().then(result => {
         const progress = result && typeof result === "object" && "progress" in result ? (result as WorktreeSweepReport).progress : undefined;
+        deferred = progress?.paused === true;
         // A slice that visited nothing (discovery alone outlasted its budget)
         // waits the normal interval instead of repeating discovery every 5 s.
         continuation = progress?.complete === false && (progress.visited ?? 0) > 0;
-        continuing = continuation;
+        continuing = continuation || deferred && progress?.complete === false;
         const report = result as WorktreeSweepReport | null;
         if (!continuation && report && ((report.timings?.freedBytes ?? ((report.removedBytes ?? 0) + (report.trimmedBytes ?? 0))) === 0))
           pressureAfter = now() + interval;
       })
-        .catch((error) => console.error("[worktree sweep] failed", error instanceof Error ? error.message : String(error)))
+        .catch((error) => {
+          if (error instanceof SweepWalkDeferred) deferred = true;
+          else console.error("[worktree sweep] failed", error instanceof Error ? error.message : String(error));
+        })
         .finally(() => {
           running = false;
-          if (sweepHost.__llvWorktreeSweepTimer === timer) arm(continuation ? 5000 : ports.intervalMs ?? WORKTREE_SWEEP_INTERVAL_MS);
+          if (sweepHost.__llvWorktreeSweepTimer === timer) arm(deferred ? 30_000 : continuation ? 5000 : interval);
         });
     }, delayMs);
     timer.unref?.();

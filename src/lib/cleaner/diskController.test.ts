@@ -23,6 +23,50 @@ test("a pressure reading through a host-only view is retained before and becomes
   expect(measureCleanerSpace(pressure, false)).toContainEqual({ volume: "host-only-volume", roles: ["temp"], freeBytes: null });
 });
 
+test("unchanged zero-byte passes back off across restarts and wake on a retained root change or audit", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "disk-cleaner-backoff-"));
+  const env = isolatedEnvironment(root, process.env);
+  env.LLV_STATE_DIR = path.join(env.TMPDIR!, "state");
+  delete env.PORT;
+  const kept = path.join(env.LLV_STATE_DIR, "scratch", "fixture");
+  fs.mkdirSync(kept, { recursive: true });
+  const run = async (beat: number) => {
+    const command = `
+      import { reconcileAutomaticDiskCleaner } from "./src/lib/cleaner/diskController";
+      import { readDiskCleanerPass } from "./src/lib/cleaner/diskState";
+      const [at, kept] = process.argv.slice(1);
+      const pressure = { at: new Date(+at).toISOString(), episode: "fixture",
+        volumes: [{ volume: "fixture", roles: ["temp"], freeBytes: 1, level: "warning" }],
+        consumers: [], warningBytes: 10, criticalBytes: 1 };
+      let walks = 0;
+      await reconcileAutomaticDiskCleaner(pressure, {
+        now: () => +at, active: () => true, project: async () => "fixture", card: async () => true,
+        env: { LLV_CLEANER: "dry-run" },
+        measure: () => [{ volume: "fixture", roles: ["temp"], freeBytes: 1 }],
+        releases: async () => ({ kept: [], errors: 0 }),
+        sweep: async request => ({ kept: request.class === "attempt-temp"
+          ? (++walks, [{ path: kept, reason: "fixture hold", bytes: 4096 }]) : [], errors: 0, next: null, more: false }),
+      });
+      console.log(JSON.stringify({ walks, retry: readDiskCleanerPass()?.finished?.retained?.retryAt }));
+    `;
+    const child = Bun.spawn([process.execPath, "-e", command, String(NOW + beat * DISK_CLEANER_COOLDOWN_MS), kept], {
+      env, stdout: "pipe", stderr: "pipe",
+    });
+    const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect(code, err).toBe(0);
+    return JSON.parse(out.trim().split("\n").at(-1)!);
+  };
+  try {
+    expect((await run(0)).walks).toBe(1);
+    expect(await run(1)).toEqual({ walks: 1, retry: NOW + 5 * DISK_CLEANER_COOLDOWN_MS });
+    expect((await run(2)).walks).toBe(0);
+    fs.writeFileSync(path.join(kept, "changed"), "data");
+    expect((await run(3)).walks).toBe(1);
+    expect((await run(6)).walks).toBe(0);
+    expect((await run(7)).walks).toBe(1);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}, 30_000);
+
 test("pressure admission, cooldown, journal and seat report survive Viewer restarts", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "disk-cleaner-controller-"));
   const env = isolatedEnvironment(root, process.env);

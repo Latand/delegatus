@@ -19,6 +19,7 @@ export type DiskCleanerPass = {
     kept: CleanerHold[];
     errors: number;
     incomplete: boolean;
+    retained?: { fingerprint: string; stamp: string; retryAt: number };
   };
   card?: boolean;
 };

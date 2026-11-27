@@ -2,7 +2,7 @@ import fs from "node:fs";
 import type { CleanerController } from "@/lib/cleaner/run";
 import { statePath } from "@/lib/configDir";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
-import { readDiskPressure } from "./diskPressure";
+import { diskConsumerMeasurementDue, readDiskPressure } from "./diskPressure";
 import { productionDiskPressureActions, productionMemoryPressureActions, reconcileDiskPressure, type DiskPressureActions } from "./diskPressureActions";
 import { observeMemoryPressureReport, reconcileMemoryPressure, type MemoryPressureActions, type MemoryReading } from "./memoryPressure";
 
@@ -44,6 +44,16 @@ export function startDiskPressureWatch(ports: {
   const actions = ports.actions ?? productionDiskPressureActions();
   const now = ports.now ?? Date.now;
   let running = false;
+  let measuringConsumers = false;
+  const requestConsumerMeasurement = (pressure: Awaited<ReturnType<typeof readDiskPressure>>) => {
+    if (ports.readPressure || ports.actions || process.env.NODE_ENV === "test" || measuringConsumers
+      || !actions.active() || !diskConsumerMeasurementDue(pressure)) return;
+    measuringConsumers = true;
+    void import("@/lib/pipelines/worktreeSweepWorker")
+      .then(({ measureDiskConsumersOffThread }) => measureDiskConsumersOffThread())
+      .catch(error => console.warn("[disk pressure] consumer measurement failed", error instanceof Error ? error.message : String(error)))
+      .finally(() => { measuringConsumers = false; });
+  };
   const automatic = ports.automatic ?? (ports.actions || process.env.NODE_ENV === "test" ? undefined : async (pressure: Awaited<ReturnType<typeof readDiskPressure>>) => {
     const [{ reconcileAutomaticDiskCleaner }, { diskCleanerReport }, { runDiskCleanerOffThread }, { sweepCleanerReleases }] = await Promise.all([
       import("@/lib/cleaner/diskController"), import("@/lib/cleaner/diskReport"), import("@/lib/pipelines/worktreeSweepWorker"), import("./diskPressureSweeps"),
@@ -96,6 +106,7 @@ export function startDiskPressureWatch(ports: {
     try {
       pressure = await (ports.readPressure ?? readDiskPressure)();
       requestAutomaticPass(pressure);
+      requestConsumerMeasurement(pressure);
       if (cleaner && actions.active()) {
         if (process.env.PORT?.trim()) trafficSince = releaseTrafficSince(now()) ?? trafficSince ?? now();
         else trafficSince ??= now();

@@ -19,12 +19,40 @@ import {
   observeDiskPressureReport,
   probeDisk,
   readDiskPressure,
+  readDiskPressureInHelper,
   worktreeDiskWait,
   type DiskProbe,
 } from "./diskPressure";
 
 /* Every volume here is a fake probe answer: nothing reads a real disk. */
 const GiB = 1024 ** 3;
+test("the leased pressure probe performs no consumer walk even during a disk episode", async () => {
+  const old = process.env.LLV_STATE_DIR;
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "disk-probe-"));
+  process.env.LLV_STATE_DIR = fixture;
+  const now = Date.UTC(2030, 0, 1);
+  const data = path.join(fixture, "payload");
+  fs.writeFileSync(data, Buffer.alloc(8192, 1));
+  const options = { now: () => now, roots: [{ directory: fixture, role: "state" }],
+    probe: () => ({ volume: "fixture", freeBytes: GiB }), caches: new Map(), dockerUsage: async () => [] };
+  const readdir = spyOn(fs.promises, "readdir");
+  const opendir = spyOn(fs.promises, "opendir");
+  try {
+    const pressure = await readDiskPressureInHelper({ ...options, probeOnly: true });
+    expect(pressure.episode).toBe(new Date(now).toISOString());
+    expect(pressure.consumers).toEqual([]);
+    expect(readdir).not.toHaveBeenCalled();
+    expect(opendir).not.toHaveBeenCalled();
+    const measured = await readDiskPressureInHelper({ ...options, measureOnly: true });
+    expect(opendir).toHaveBeenCalled();
+    expect(measured.consumers.find(row => row.kind === "state")?.bytes).toBeGreaterThanOrEqual(8192);
+  } finally {
+    readdir.mockRestore();
+    opendir.mockRestore();
+    if (old === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = old;
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
 test("retention category names reclaimable allocation and its deadline", () => {
   const text = attemptRetentionCategory({ periodDays: 7, dueBytes: 2 * GiB, upcomingBytes: GiB, until: Date.parse("2026-11-08T12:00:00Z") });
   expect(text).toContain("7 днів"); expect(text).toContain("2.00 GiB найближчими проходами");

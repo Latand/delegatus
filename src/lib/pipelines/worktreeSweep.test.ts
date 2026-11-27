@@ -37,6 +37,7 @@ import {
   liveOrWaitingConversationCwds,
   parseWorktreeList,
   productionMergedPullRequests,
+  productionWorktreeSweepPorts,
   realGit,
   recordWorktreeSweep,
   runWorktreeSweep,
@@ -52,6 +53,9 @@ import {
   type WorktreeSweepReport,
 } from "./worktreeSweep";
 import { readWorktreeProvenance, recordWorktreeProvenance, WORKTREE_PROVENANCE_FILE } from "./worktreeProvenance";
+import { WorktreeSweepCache } from "./worktreeSweepCache";
+import { archiveSettledPipelines, savePipelines } from "./store";
+import { finishedLane } from "../runtime/attemptTempRetention.testSupport";
 
 /* Every repository here is a throwaway under the test's temp root, and the
    state directory is the test's own: nothing reads or removes the operator's
@@ -136,6 +140,51 @@ function expectBackup(owner: SweptPipeline) {
 }
 
 const NO_PROCESSES: ProcessScan = { ownNamespace: null, processes: [] };
+
+test("retained worktree accounting waits for a root change or its bounded audit", async () => {
+  const repoDir = repository();
+  const worktreeDir = lane(repoDir, path.join(caseDir, "kept"), "kept").dir;
+  const pipelines = [pipeline({ repoDir, worktreeDir, branch: "kept", state: "running" })];
+  let previous: WorktreeSweepReport | null = null;
+  let at = Date.UTC(2031, 0, 1);
+  const read = spyOn(fs.promises, "lstat");
+  const visit = async () => {
+    read.mockClear();
+    const cache = new WorktreeSweepCache(path.join(caseDir, "cache.json"));
+    try {
+      const report = await sweepMergedWorktrees(ports({ pipelines, now: () => at, previous, cache }));
+      previous = JSON.parse(JSON.stringify(report));
+      return { ...report, measured: read.mock.calls.some(([file]) => String(file).startsWith(worktreeDir + path.sep)) };
+    } finally { cache.close(); }
+  };
+  try {
+    expect(await visit()).toMatchObject({ measured: true, kept: [{ reason: "open-pipeline" }], removed: [] });
+    at += WORKTREE_SWEEP_INTERVAL_MS;
+    expect(await visit()).toMatchObject({ measured: false, kept: [{ reason: "open-pipeline" }], removed: [] });
+    fs.writeFileSync(path.join(worktreeDir, "new-entry"), "new");
+    at += WORKTREE_SWEEP_INTERVAL_MS;
+    expect((await visit()).measured).toBeTrue();
+    at += 4 * WORKTREE_SWEEP_INTERVAL_MS;
+    expect((await visit()).measured).toBeTrue();
+  } finally { read.mockRestore(); }
+});
+
+test("production worktree sweeps read archived ownership without retaining attempt history", async () => {
+  const repo = repository();
+  const closed = "2031-01-01T00:00:00Z";
+  const archived = finishedLane(repo, closed);
+  const worktree = lane(repo, archived.worktreeDir, archived.branch);
+  savePipelines([archived]);
+  expect(await archiveSettledPipelines(Date.parse("2031-02-01T00:00:00Z"))).toBe(1);
+  const production = await productionWorktreeSweepPorts("dry-run");
+  try {
+    const owner = production.pipelines.find(row => row.id === archived.id);
+    expect(owner).toMatchObject({ worktreeDir: worktree.dir, state: "completed",
+      archiveFacts: { terminalAt: Date.parse(closed), activitySettled: true, heads: new Set([archived.branch]) } });
+    expect(owner?.runs).toBeUndefined();
+    expect(production.currentPipelines?.()).toEqual([]);
+  } finally { await production.close?.(); }
+});
 
 function ports(overrides: Partial<WorktreeSweepPorts> & { prs?: MergedPullRequest[] | null }): WorktreeSweepPorts {
   const { prs = [], ...rest } = overrides;
