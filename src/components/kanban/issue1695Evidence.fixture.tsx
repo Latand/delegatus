@@ -1,3 +1,4 @@
+import { installIsolationStream, isolationCorpus } from "./composerIsolation.fixture";
 import { AccountsPanel, MobileAccountsPanel } from "@/components/AccountsPanel";
 import { useEngineAccounts } from "@/hooks/useEngineAccounts";
 import type { Flow as ArchivedReview } from "@/lib/reviewHistory/types";
@@ -120,7 +121,8 @@ import { readObstacles } from "@/components/soundCaptionPlacement";
  */
 
 const SCENARIO = new URLSearchParams(location.search).get("scenario");
-const PROJECT_DERIVATION = SCENARIO === "project-derivation";
+const COMPOSER_ISOLATION = SCENARIO === "composer-isolation";
+const PROJECT_DERIVATION = SCENARIO === "project-derivation" || COMPOSER_ISOLATION;
 const OVERVIEW_PERFORMANCE = SCENARIO === "overview-performance";
 const COLD_BOARD = SCENARIO === "cold-board";
 let releaseColdBoard!: () => void;
@@ -744,8 +746,8 @@ let snapshotReads = 0;
 function structuredSnapshot() {
   snapshotReads += 1;
   return {
-    schemaVersion: 1, snapshotSeq: snapshotReads, retentionFloorSeq: 0, structuredHostsEnabled: true, runtime: { hostEpoch: 1, health: "ready" }, filesRevision: 1,
-    sessions: [{
+    schemaVersion: 1, snapshotSeq: isolation ? 0 : snapshotReads, retentionFloorSeq: 0, structuredHostsEnabled: true, runtime: { hostEpoch: 1, health: "ready" }, filesRevision: 1,
+    sessions: isolation?.sessions ?? [{
       conversationId: searchVer2.conversationId, sessionKey: { engine: "claude", sessionId: "search-ver-2-session" }, hostKind: "claude-broker", host: "hosted",
       turn: FEED_RELOAD ? "idle" : FEED_CONTINUITY && feedContinuityStep >= 2 ? "unknown" : "running", provenance: "structured", revision: snapshotReads, attentionIds: [], recentReceipts: [], accountId: "default",
       ...(FEED_RELOAD ? { liveTurn: { turnId: "reload-turn", text: "", items: Array.from({ length: 12 }, (_, index) => ({
@@ -3489,6 +3491,8 @@ const evidence = {
   },
 };
 Object.assign(window, { evidence });
+const isolation = COMPOSER_ISOLATION ? isolationCorpus(files, PROJECT, orchestrator, exportImpl) : null;
+if (isolation) board.prefs.hidden.push(...isolation.hiddenPaths);
 if (PROJECT_DERIVATION) Object.assign(window, {
   projectCorpus: { files: files.length, flows: flows.length, tasks: tasks.length, liveIds: files.filter(f => f.activity === "live").map(f => f.conversationId) },
   projectPoll: () => {
@@ -3547,6 +3551,12 @@ Object.assign(window, {
   EventSource: STREAMING ? StreamEventSource : QuietEventSource,
   runtimeEmit: (envelope: unknown) => streamSource?.onmessage?.({ data: JSON.stringify(envelope) }),
 });
+
+const isolationStream = isolation ? installIsolationStream(isolation, files, getRuntimeBus(),
+  envelope => streamSource?.onmessage?.({ data: JSON.stringify(envelope) }),
+  () => [board.prefs, tasks.map(t => [t.id,t.project,t.status,t.assignments.map(a => a.path)]),
+    pipelines.map(p => [p.id,p.taskIds]), flows.map(f => f.id)]) : null;
+if (isolationStream) Object.assign(window, { composerIsolation: isolationStream });
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
@@ -4849,6 +4859,16 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     });
   }
   if (url.pathname === "/api/files") {
+    if (isolationStream) {
+      const probe = isolationStream.fileProbe(method, url.searchParams);
+      if (probe) return probe;
+      const revision = isolationStream.routedRevision();
+      if (revision !== null) {
+        const headers = new Headers(init?.headers);
+        headers.set("x-isolation-revision", String(revision));
+        return serverFetch(input, { ...init, headers });
+      }
+    }
     if (COLD_BOARD && method === "HEAD") return new Response(null, { status: 204 });
     if (COLD_BOARD && url.searchParams.get("view") === "storage-health") return json({ state: "ok", since: null, freeBytes: 1024 ** 3, registryIssues: [] });
     launchAdvance();
@@ -4902,7 +4922,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const retiredBoard = SCENARIO === "retired-review" && params.get("surface") === "direct-board"
       ? { files: [orchestrator, ...directFiles], flows: [], pipelines: [], tasks: [], conversationAliases: { "old-direct-subject": "direct-subject" },
         projectCatalog: [{ project: PROJECT, conversations: directFiles.length + 1, smt: now }] } : {};
-    const body = JSON.stringify({ ...scoped, ...retiredBoard, ...((DECISIONS || REPORT_PREVIEW || FIRST_RUN_FORM) && seatDecisionNotices().length ? { seatDecisions: seatDecisionNotices() } : {}),
+    isolationStream?.admitCatalog(scoped.files);
+    const body = JSON.stringify({ ...scoped, ...retiredBoard,
+      ...(isolationStream ? { boardProtocol: 2, boardScope: "fixture.global" } : {}),
+      ...((DECISIONS || REPORT_PREVIEW || FIRST_RUN_FORM) && seatDecisionNotices().length ? { seatDecisions: seatDecisionNotices() } : {}),
       ...(DECISIONS === "secrets" ? { secretRequestNotices: secretRequests.map(({ id, project, createdAt, expiresAt, destination }) => ({ id, project, createdAt, expiresAt, target: secretTarget(destination.path, destination.key) })) } : {}), workflows: [], systemHealth: { ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) }, ...(workLinks ? { workLinks } : {}) });
     if (COLD_BOARD) {
       const headers = new Headers(init?.headers);
@@ -4923,6 +4946,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         "x-llv-files-projection-cache": required ? "miss" : "bootstrap",
       } });
     }
+    if (isolationStream) {
+      isolationStream.saveCatalog(body);
+      return new Response(body, { headers: { "content-type":"application/json", ETag:'"isolation-1"', "x-llv-board-protocol":"2" } });
+    }
     if (evidence.filesDelayMs) await new Promise((resolve) => setTimeout(resolve, evidence.filesDelayMs));
     if (pollTransport) return pollResponse(body, init);
     return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
@@ -4939,13 +4966,17 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (!url.searchParams.get("deviceId")) return json({ ok: true, records });
     return json({ ok: true, rootId: "root-fixture", offer: null, live: [], expired: [], records });
   }
-  if (url.pathname === "/api/runtime/snapshot" && STRUCTURED) return json(structuredSnapshot());
+  if (url.pathname === "/api/runtime/snapshot" && STRUCTURED) {
+    if (isolationStream) isolationStream.reads.snapshots++;
+    return json(structuredSnapshot());
+  }
   if (url.pathname === "/api/runtime/snapshot") return json({ code: RUNTIME_PLANE_ABSENT }, 503);
   if (STRUCTURED && url.pathname === "/api/conversation-host" && method === "POST") {
     evidence.pillRequests.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
     return json({ ok: true, structured: true });
   }
   if (url.pathname === "/api/board") {
+    if (isolationStream && method === "GET") isolationStream.reads.board++;
     if (method === "PATCH") {
       const body = JSON.parse(String(init?.body)) as { mutations?: BoardMutationV1[] };
       evidence.boardMutations.push(...(body.mutations ?? []));

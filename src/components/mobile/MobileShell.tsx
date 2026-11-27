@@ -1,11 +1,12 @@
 "use client";
 
+import { GLOBAL_RUNTIME_GATES, WITH_RUNTIME_ACTIVITY } from "@/hooks/runtimeSubscriptions";
 import { ChevronDown, ChevronLeft, Ellipsis, Filter, Search, TriangleAlert } from "lucide-react";
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
+import { memo, createContext, useCallback, useContext, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 
 import type { ConnectionState } from "@/components/runtime/runtimeModel";
 import { reachLineText, useServerReach, type ServerReach } from "@/hooks/serverReach";
-import { useRuntimeBusState } from "@/hooks/useRuntime";
+import { useRuntimeSelector } from "@/hooks/useRuntime";
 import { useLocale } from "@/lib/i18n";
 
 import { BAR_PRESSED } from "@/components/ProjectBar";
@@ -102,6 +103,18 @@ export interface MobileShellHost {
 
 export type SheetRenderer = (name: MobileSheetName, close: () => void) => ReactNode;
 
+export const ViewerSheetContext = createContext<SheetRenderer | null>(null);
+
+function ViewerSheet({ name, close }: { name: Parameters<SheetRenderer>[0]; close: () => void }) {
+  const render = useContext(ViewerSheetContext);
+  return render?.(name, close) ?? null;
+}
+
+/** Only the open sheet consumes global catalog changes. The board keeps the same shell host. */
+export const renderViewerSheet: SheetRenderer = (name, close) =>
+  name === "projects" || name === "attention" ? <ViewerSheet name={name} close={close} /> : null;
+
+
 /** What an enclosing shell offers a screen mounted inside it: the Viewer's
     host (the attention badge, the arrival banner, the sheets it owns), the
     owner's own sheet renderer, and the claim a nested screen makes when it
@@ -144,11 +157,14 @@ function formatClock(at: number, locale: string): string {
 /** The banner slot directly under the bar. It reserves its height in flow so
     it never covers a control. The screen decides what the slot may carry:
     the board drops the arrival kind (`bannerKind`). */
-export function MobileBannerSlot({ screen, arrival }: { screen: MobileScreenKind; arrival: ReactNode }) {
+export const MobileBannerSlot = memo(function MobileBannerSlot({ screen, arrival }: { screen: MobileScreenKind; arrival: ReactNode }) {
   const { t, locale } = useLocale();
-  const { enabled, connection, lastEventAt } = useRuntimeBusState();
+  const enabled = useRuntimeSelector(state => state.enabled, false, Object.is, true, GLOBAL_RUNTIME_GATES);
+  const connection = useRuntimeSelector(state => state.connection, "offline", Object.is, true, GLOBAL_RUNTIME_GATES);
   const reach = useServerReach();
   const kind = bannerKind(enabled, connection, arrival !== null && arrival !== undefined, screen, reach.kind === "offline");
+  const lastEventAt = useRuntimeSelector(state => kind === "offline" ? state.lastEventAt : null,
+    null, Object.is, kind === "offline", WITH_RUNTIME_ACTIVITY);
   if (!kind) return null;
   if (kind === "arrival") {
     return (
@@ -173,7 +189,7 @@ export function MobileBannerSlot({ screen, arrival }: { screen: MobileScreenKind
       <span className="truncate text-body font-medium leading-tight text-secondary">{body}</span>
     </div>
   );
-}
+});
 
 /* A screen change slides 24 px over 200 ms and stays opaque (#2071 D8): the
    new screen's first frame is its cached content or its shaped skeleton,

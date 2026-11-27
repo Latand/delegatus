@@ -521,10 +521,37 @@ export function installSnapshot(snapshot: RuntimeSnapshot, previous?: RuntimeSto
  * Reducer                                                             *
  * ------------------------------------------------------------------ */
 
+/** Identities actually written by one applied envelope. Cursor-only envelopes have none. */
+export interface RuntimeWrites {
+  conversationId?: string;
+  previousOwner?: string;
+  previousPath?: string;
+  artifactPath?: string;
+  operationId?: string;
+  flowId?: string;
+  deployments?: boolean;
+}
+
+const artifactOwners = new WeakMap<RuntimeStore["sessions"], Map<string, string>>();
+
+export function sessionByArtifact(sessions: RuntimeStore["sessions"], path: string): RuntimeSession | null {
+  let owners = artifactOwners.get(sessions);
+  if (!owners) {
+    owners = new Map();
+    // Object enumeration is the legacy artifact fallback's tie breaker.
+    for (const [id, session] of Object.entries(sessions)) {
+      if (session.artifactPath && !owners.has(session.artifactPath)) owners.set(session.artifactPath, id);
+    }
+    artifactOwners.set(sessions, owners);
+  }
+  const id = owners.get(path);
+  return id === undefined ? null : sessions[id] ?? null;
+}
+
 export type ApplyResult =
   /** Event applied; `store` is a new object. `filesBumped` asks the caller to
    *  fetch `/api/files` (debounced). */
-  | { outcome: "applied"; store: RuntimeStore; filesBumped: boolean }
+  | { outcome: "applied"; store: RuntimeStore; filesBumped: boolean; writes: RuntimeWrites }
   /** Older/equal revision or already-seen seq — dropped idempotently. */
   | { outcome: "duplicate" }
   /** Revision skipped ahead of this scope — the caller must resnapshot. */
@@ -540,7 +567,7 @@ export function applyEvent(store: RuntimeStore, env: RuntimeEnvelope): ApplyResu
   if (env.kind === "files.revision") {
     const next = readFilesRevision(env.payload);
     if (next <= store.filesRevision) return { outcome: "duplicate" };
-    return { outcome: "applied", store: { ...store, filesRevision: next, cursor: Math.max(store.cursor, env.seq) }, filesBumped: true };
+    return { outcome: "applied", store: { ...store, filesRevision: next, cursor: Math.max(store.cursor, env.seq) }, filesBumped: true, writes: {} };
   }
 
   // Global seq already consumed: a straight duplicate from an overlapping resume.
@@ -558,8 +585,19 @@ export function applyEvent(store: RuntimeStore, env: RuntimeEnvelope): ApplyResu
     cursor: env.seq,
     scopeHeads: { ...store.scopeHeads, [key]: revision },
   };
-  reduceKnown(next, env, revision);
-  return { outcome: "applied", store: next, filesBumped: false };
+  const writes: RuntimeWrites = {};
+  reduceKnown(next, env, revision, writes);
+  if (writes.conversationId !== undefined) {
+    const before = store.sessions[writes.conversationId];
+    const after = next.sessions[writes.conversationId];
+    if (before?.artifactPath) writes.previousPath = before.artifactPath;
+    if (after?.artifactPath) writes.artifactPath = after.artifactPath;
+    if (before && before.artifactPath === after?.artifactPath) {
+      const owners = artifactOwners.get(store.sessions);
+      if (owners) artifactOwners.set(next.sessions, owners);
+    }
+  }
+  return { outcome: "applied", store: next, filesBumped: false, writes };
 }
 
 function readFilesRevision(payload: unknown): number {
@@ -572,7 +610,13 @@ function readFilesRevision(payload: unknown): number {
 
 /** Mutate the (already-cloned) store for a known event kind. Unknown kinds are
  *  intentionally ignored — the revision head still advanced above. */
-function reduceKnown(store: RuntimeStore, env: RuntimeEnvelope, revision: number): void {
+function reduceKnown(store: RuntimeStore, env: RuntimeEnvelope, revision: number, writes: RuntimeWrites): void {
+  function updateSession(id: string, sessionRevision: number, change: (previous: RuntimeSession) => RuntimeSession): void {
+    writes.conversationId = id;
+    const previous = store.sessions[id] ?? baseSession(id, {});
+    store.sessions = { ...store.sessions, [id]: { ...change(previous), revision: Math.max(previous.revision, sessionRevision) } };
+  }
+
   switch (env.kind) {
     case "session-status": {
       const p = env.payload as Partial<RuntimeSession> & { conversationId?: string };
@@ -591,12 +635,13 @@ function reduceKnown(store: RuntimeStore, env: RuntimeEnvelope, revision: number
         ),
       };
       merged.settledTurnId = retainedSettledTurnId(merged, prev);
+      writes.conversationId = id;
       store.sessions = { ...store.sessions, [id]: merged };
       break;
     }
     case "turn-started": {
       const p = env.payload as { conversationId?: string; turnId?: string };
-      updateSession(store, p.conversationId ?? env.scope.id, revision, (s) => ({
+      updateSession(p.conversationId ?? env.scope.id, revision, (s) => ({
         ...s,
         turn: "running",
         activeTurnId: p.turnId ?? s.activeTurnId,
@@ -612,7 +657,7 @@ function reduceKnown(store: RuntimeStore, env: RuntimeEnvelope, revision: number
       const p = env.payload as { conversationId?: string; turnId?: string; text?: string };
       const fragment = typeof p.text === "string" ? p.text : "";
       if (!fragment) break;
-      updateSession(store, p.conversationId ?? env.scope.id, revision, (s) => {
+      updateSession(p.conversationId ?? env.scope.id, revision, (s) => {
         const turnId = p.turnId ?? s.activeTurnId ?? "unknown";
         return {
           ...s,
@@ -640,7 +685,7 @@ function reduceKnown(store: RuntimeStore, env: RuntimeEnvelope, revision: number
          Assistant prose still settles on `completed` alone. */
       if (p.phase !== "completed" && p.phase !== "started") break;
       const phase = p.phase;
-      updateSession(store, p.conversationId ?? env.scope.id, revision, (s) => {
+      updateSession(p.conversationId ?? env.scope.id, revision, (s) => {
         const turnId = p.turnId ?? s.activeTurnId ?? "unknown";
         const voiceResponse = p.voiceResponse;
         return {
@@ -673,7 +718,7 @@ function reduceKnown(store: RuntimeStore, env: RuntimeEnvelope, revision: number
          read is now out of date. A counter, so a hook can refresh on the change
          instead of polling for it. */
       const p = env.payload as { conversationId?: string };
-      updateSession(store, p.conversationId ?? env.scope.id, revision, (s) => ({
+      updateSession(p.conversationId ?? env.scope.id, revision, (s) => ({
         ...s,
         nativeQueueRevision: (s.nativeQueueRevision ?? 0) + 1,
       }));
@@ -697,7 +742,7 @@ function reduceKnown(store: RuntimeStore, env: RuntimeEnvelope, revision: number
         text: p.text,
         final: p.final === true,
       };
-      updateSession(store, p.conversationId ?? env.scope.id, revision, (s) => ({
+      updateSession(p.conversationId ?? env.scope.id, revision, (s) => ({
         ...s,
         voiceTranscript: foldVoiceTranscriptSegment(s.voiceTranscript, segment),
       }));
@@ -709,7 +754,7 @@ function reduceKnown(store: RuntimeStore, env: RuntimeEnvelope, revision: number
         voiceDelivery?: unknown;
       };
       const delivery = normalizeVoiceDeliveries([p.voiceDelivery])[0];
-      updateSession(store, p.conversationId ?? env.scope.id, revision, (s) => ({
+      updateSession(p.conversationId ?? env.scope.id, revision, (s) => ({
         ...s,
         voiceDeliveries: delivery
           ? appendReadyVoiceDelivery(s.voiceDeliveries, delivery)
@@ -719,7 +764,7 @@ function reduceKnown(store: RuntimeStore, env: RuntimeEnvelope, revision: number
     }
     case "turn-ended": {
       const p = env.payload as { conversationId?: string; turnId?: string; outcome?: string };
-      updateSession(store, p.conversationId ?? env.scope.id, revision, (s) => ({
+      updateSession(p.conversationId ?? env.scope.id, revision, (s) => ({
         ...s,
         turn: "idle",
         activeTurnId: null,
@@ -738,7 +783,7 @@ function reduceKnown(store: RuntimeStore, env: RuntimeEnvelope, revision: number
     }
     case "voice-delivery-acknowledged": {
       const p = env.payload as { conversationId?: string; deliveryId?: string };
-      updateSession(store, p.conversationId ?? env.scope.id, revision, (s) => {
+      updateSession(p.conversationId ?? env.scope.id, revision, (s) => {
         const deliveryId = p.deliveryId ?? "";
         return {
           ...s,
@@ -753,7 +798,7 @@ function reduceKnown(store: RuntimeStore, env: RuntimeEnvelope, revision: number
     }
     case "voice-delivery-progress": {
       const p = env.payload as { conversationId?: string };
-      updateSession(store, p.conversationId ?? env.scope.id, revision, (s) => s);
+      updateSession(p.conversationId ?? env.scope.id, revision, (s) => s);
       break;
     }
     case "attention": {
@@ -761,8 +806,9 @@ function reduceKnown(store: RuntimeStore, env: RuntimeEnvelope, revision: number
       // Codex IDs include their owner and request identity. Once resolved,
       // a replay of that ID cannot reopen the operator's controls.
       if (att.codexReceipt && store.attentions[att.id]?.codexReceipt?.serverResolution) break;
+      writes.previousOwner = store.attentions[att.id]?.conversationId;
       store.attentions = { ...store.attentions, [att.id]: att };
-      updateSession(store, att.conversationId, revision, (s) =>
+      updateSession(att.conversationId, revision, (s) =>
         s.attentionIds.includes(att.id) ? s : { ...s, attentionIds: [...s.attentionIds, att.id] },
       );
       break;
@@ -775,19 +821,22 @@ function reduceKnown(store: RuntimeStore, env: RuntimeEnvelope, revision: number
       if (!attentionId) break;
       const existing = store.attentions[attentionId];
       if (existing) {
+        writes.previousOwner = existing.conversationId;
         store.attentions = { ...store.attentions, [attentionId]: { ...existing, state: p.state ?? "resolved", unowned: false, ...(p.codexReceipt ? { codexReceipt: p.codexReceipt } : {}) } };
       }
       const convId = p.conversationId ?? existing?.conversationId;
       if (convId) {
-        updateSession(store, convId, revision, (s) => ({ ...s, attentionIds: s.attentionIds.filter((id) => id !== attentionId) }));
+        updateSession(convId, revision, (s) => ({ ...s, attentionIds: s.attentionIds.filter((id) => id !== attentionId) }));
       }
       break;
     }
     case "receipt": {
       const receipt = env.payload as RuntimeReceipt;
       const withRev: RuntimeReceipt = { ...receipt, revision };
+      writes.operationId = receipt.operationId;
+      writes.previousOwner = store.operations[receipt.operationId]?.conversationId;
       store.operations = { ...store.operations, [receipt.operationId]: withRev };
-      updateSession(store, receipt.conversationId, store.sessions[receipt.conversationId]?.revision ?? 0, (s) => ({
+      updateSession(receipt.conversationId, store.sessions[receipt.conversationId]?.revision ?? 0, (s) => ({
         ...s,
         recentReceipts: mergeReceipt(s.recentReceipts, withRev),
       }));
@@ -800,16 +849,18 @@ function reduceKnown(store: RuntimeStore, env: RuntimeEnvelope, revision: number
     }
     case "flow.state": {
       const flow = env.payload as Flow;
+      writes.flowId = flow.id;
       store.flows = { ...store.flows, [flow.id]: flow };
       break;
     }
     case "reconcile.drift": {
       const drift = env.payload as RuntimeDrift;
-      updateSession(store, drift.conversationId, revision, (s) => ({ ...s, drift }));
+      updateSession(drift.conversationId, revision, (s) => ({ ...s, drift }));
       break;
     }
     case "deployment.state": {
       const deployment = env.payload as ViewerDeploymentStatus;
+      writes.deployments = true;
       store.deployments = { ...store.deployments, [deployment.deploymentId]: deployment };
       break;
     }
@@ -854,12 +905,6 @@ function retainedSettledTurnId(session: RuntimeSession, prior?: RuntimeSession):
     || prior.artifactPath !== session.artifactPath
     || (session.activeTurnId && session.activeTurnId !== prior.settledTurnId)) return null;
   return prior.settledTurnId ?? null;
-}
-
-function updateSession(store: RuntimeStore, id: string, revision: number, fn: (s: RuntimeSession) => RuntimeSession): void {
-  const prev = store.sessions[id] ?? baseSession(id, {});
-  const nextRevision = revision > prev.revision ? revision : prev.revision;
-  store.sessions = { ...store.sessions, [id]: { ...fn(prev), revision: nextRevision } };
 }
 
 /** Newest-first receipt merge, idempotent on operationId, bounded. */

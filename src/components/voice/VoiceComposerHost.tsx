@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
-import { currentConversationFile } from "@/lib/accounts/identity";
+import { indexedConversationFile } from "@/lib/accounts/identity";
 import type { FileEntry } from "@/lib/types";
 import { ConversationComposerCore } from "@/components/ConversationComposer";
 import {
@@ -58,14 +58,6 @@ const NO_FILES: readonly FileEntry[] = [];
 export function VoiceComposerHost({ files = NO_FILES }: { files?: readonly FileEntry[] }) {
   // Scanner changes reach the delivery owner even when its view retains an
   // older render. Migration holds and current-generation paths stay live.
-  const currentFiles = useMemo(() => {
-    const generations = new Map<string, FileEntry[]>();
-    for (const file of files) if (file.conversationId) {
-      const entries = generations.get(file.conversationId) ?? [];
-      entries.push(file); generations.set(file.conversationId, entries);
-    }
-    return new Map([...generations].map(([id, entries]) => [id, currentConversationFile(entries, id)]));
-  }, [files]);
   /* One subscription for the whole registry: places, props and host presence all
      notify through it, and the version number is the stable snapshot. */
   useSyncExternalStore(subscribeVoiceSlots, getVoiceSlotsVersion, getServerVoiceSlotsVersion);
@@ -114,7 +106,7 @@ export function VoiceComposerHost({ files = NO_FILES }: { files?: readonly FileE
         return (
           <ConversationComposerCore
             key={cardId}
-            file={currentFiles.get(cardId) ?? props.file}
+            file={indexedConversationFile(files, cardId) ?? props.file}
             viewActive={props.viewActive !== false || liveCall?.conversationId === cardId}
             pollPaused={props.pollPaused}
             deadHost={props.deadHost}
