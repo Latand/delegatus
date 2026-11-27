@@ -746,8 +746,10 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     const sawSetup = Promise.withResolvers<void>();
     let pending = true;
     const clock = spyOn(performance, "now");
+    const drainFile = join(h.deps.dir, "auto-drain.json");
     h.deps.quiet = { runtimeSnapshot: async () => ({ sessions: [] }), pipelines: () => [], presence: () => [],
       launchSetupBlocker: () => {
+        if (!existsSync(drainFile)) return null;
         if (pending && outcome === "times out") clock.mockReturnValueOnce(performance.now() + 60_001);
         sawSetup.resolve();
         return pending ? "stage-launch" : null;
@@ -770,7 +772,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
       } else {
         const intent = JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8"));
         expect(intent.state).toBe("ready");
-        expect(JSON.parse(readFileSync(join(h.deps.dir, "auto-drain.json"), "utf8"))).toMatchObject({ id: intent.requestId });
+        expect(JSON.parse(readFileSync(drainFile, "utf8"))).toMatchObject({ id: intent.requestId });
         pending = false;
         await until(() => existsSync(record.requestFile));
         expect(JSON.parse(readFileSync(record.requestFile, "utf8"))).toMatchObject({ requestId: intent.requestId, role: "relaunch" });

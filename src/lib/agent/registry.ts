@@ -2363,10 +2363,12 @@ export function launchSetupIdentities(receipt: LaunchSetupReceipt): ProcessIdent
 
 function failedLaunchSetupCanBeConfirmed(receipt: SpawnReceipt) {
   const setup = unconfirmedLaunchSetup(receipt);
+  // A preparing receipt can predate recording its waiter. Recovery needs
+  // recorded process evidence before it writes a cleanup confirmation.
   return receipt.state === "failed" && receipt.transport === "structured" && setup
     && !receipt.pane && !receipt.verifiedHost && !receipt.artifactPath && !receipt.completionMode
     && receipt.artifactLifecycle !== "materialized"
-    && setup.adoptionClaimEpoch === undefined && !missingSetupProcess(setup)
+    && setup.adoptionClaimEpoch === undefined && setup.processes.length > 0
     && setup.processes.every(identity => processIdentityStatus(identity) === "dead");
 }
 

@@ -131,6 +131,18 @@ test.each(["live", "unverified", "unrecorded", "cancelled"] as const)("automatic
   }
 });
 
+test("preparing without recorded process evidence leaves terminal setup cleanup unconfirmed", async () => {
+  const { receipt: { launchId, admissionOwner } } = beginLegacySpawnFixture(f.registry, {
+    engine: "codex", cwd: f.dir, transport: "structured", clientAttemptId: "cancelled-before-exec",
+  });
+  f.registry.beginStructuredHostSetup(launchId, admissionOwner!, Date.parse("2026-01-01T00:00:00Z"));
+  f.registry.failStructuredSpawn(launchId, "stage activation cancelled before dispatch", { announce: false });
+  const p = ports(f.journal);
+  await p.reconcileLaunchSetup!(Date.now() + 1_000);
+  expect(p.launchSetupBlocker!()).toBeNull();
+  expect(f.registry.spawnReceipt(launchId)!.hostSetup!.cleanupConfirmed).toBeUndefined();
+});
+
 test.each(["unchanged", "new-process", "published"] as const)("a failed standalone launch with dead setup processes (%s)", async (change) => {
   const at = Date.parse("2026-01-01T00:00:00Z");
   const filename = join(f.dir, "launch-registry.json");
