@@ -155,15 +155,19 @@ test("a dead detached waiter cannot confirm cleanup while exec evidence is missi
     const { launchId, admissionOwner } = begun.receipt;
     registry.beginStructuredHostSetup(launchId, admissionOwner!, at);
     registry.recordStructuredHostSetup(launchId, admissionOwner!);
-    registry.recordStructuredHostSetupWaiter(launchId, admissionOwner!, captureProcessIdentity(waiter.pid));
+    const waiterIdentity = captureProcessIdentity(waiter.pid)!;
+    registry.recordStructuredHostSetupWaiter(launchId, admissionOwner!, waiterIdentity);
     registry.failStructuredSpawn(launchId, "setup custody stopped after exec admission", { announce: false });
     waiter.kill("SIGKILL");
     await waiter.exited;
+    registry.agentStateWrite(file => { file.receipts[launchId]!.hostSetup!.processes.push(structuredClone(waiterIdentity)); });
 
     const p = ports(f.journal);
     await p.reconcileLaunchSetup!(Date.now() + 1_000);
     expect(engine.exitCode).toBeNull();
     expect(p.launchSetupBlocker!()).toBe(launchId);
+    expect(registry.spawnReceipt(launchId)!.hostSetup!.cleanupConfirmed).toBeUndefined();
+    expect(() => registry.confirmStructuredHostSetupCleanup(launchId, admissionOwner!)).toThrow("exec custody evidence");
     expect(registry.spawnReceipt(launchId)!.hostSetup!.cleanupConfirmed).toBeUndefined();
 
     engine.kill("SIGKILL");
@@ -180,27 +184,37 @@ test("a dead detached waiter cannot confirm cleanup while exec evidence is missi
   }
 });
 
-test("the deploy census bounds receipt payloads and an expired cleanup reads none", async () => {
+test("the deploy census inspects its bounded lookahead and ignores inert preparations", async () => {
   const registry = new AgentRegistry(join(f.dir, "bounded-launch-registry.json"), undefined, undefined,
     { sqliteMode: "sqlite" });
   try {
     const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: f.dir, transport: "structured" });
-    const dead = { pid: 2_000_000_000, startIdentity: "gone", bootEpoch: captureProcessIdentity(process.pid)!.bootEpoch };
     const source = JSON.parse(JSON.stringify(begun.receipt)) as typeof begun.receipt;
     registry.agentStateWrite(file => {
-      for (let index = 0; index < 40; index++) {
+      file.receipts[begun.receipt.launchId]!.state = "completed";
+      file.receipts[begun.receipt.launchId]!.hostSetup = undefined;
+      file.receipts[begun.receipt.launchId]!.admissionOwner = null;
+      for (let index = 0; index < 33; index++) {
         const launchId = `bounded-launch-${String(index).padStart(3, "0")}`;
         file.receipts[launchId] = { ...structuredClone(source), launchId, conversationId: `conversation_bounded_${index}`,
           state: "failed", key: null, pane: null, verifiedHost: null, artifactPath: null, completionMode: null,
-          artifactLifecycle: "pending", hostSetup: { phase: "executing", execPermitGranted: true,
-            execProcessRecorded: true, processes: [dead] } };
+          artifactLifecycle: "pending", hostSetup: index === 32
+            ? { phase: "executing", execPermitGranted: true, execProcessRecorded: true,
+              processes: [captureProcessIdentity(process.pid)!] }
+            : { phase: "preparing", processes: [] } };
       }
     });
     const store = (registry as unknown as { sqliteStore: { onRowPayloadRead?: (collection: string, count: number) => void } }).sqliteStore;
     let receiptPayloads = 0;
     store.onRowPayloadRead = (collection, count) => { if (collection === "receipts") receiptPayloads += count; };
-    expect(registry.launchSetupBlocker()).toBeTruthy();
+    expect(registry.launchSetupBlocker()).toBe("bounded-launch-032");
     expect(receiptPayloads).toBeLessThanOrEqual(33);
+
+    registry.agentStateWrite(file => {
+      const receipt = file.receipts["bounded-launch-032"]!;
+      receipt.hostSetup = { phase: "preparing", processes: [] };
+    });
+    expect(registry.launchSetupBlocker()).toBeNull();
 
     receiptPayloads = 0;
     await registry.reconcileFailedLaunchSetup(Date.now() - 1);
@@ -224,6 +238,9 @@ test.each(["unchanged", "new-process", "published"] as const)("a failed standalo
       registry.recordStructuredHostSetupWaiter(launchId, admissionOwner!, captureProcessIdentity(child.pid));
       registry.recordStructuredHostSetup(launchId, admissionOwner!);
       registry.recordStructuredHostSetup(launchId, admissionOwner!, captureProcessIdentity(helper.pid));
+      // The incident predates execProcessRecorded; exercise the actual
+      // predecessor receipt shape produced by the same custody writers.
+      registry.agentStateWrite(file => { delete file.receipts[launchId]!.hostSetup!.execProcessRecorded; });
       registry.failStructuredSpawn(launchId, "registry writer busy at spawn.setup-custody", { announce: false });
       child.kill();
       helper.kill();
@@ -233,6 +250,7 @@ test.each(["unchanged", "new-process", "published"] as const)("a failed standalo
       expect(file.conversations[conversationId]).toBeUndefined();
       expect(file.receipts[launchId]).toMatchObject({ key: null, state: "failed", admissionOwner: { pid: process.pid },
         hostSetup: { phase: "executing", execPermitGranted: true } });
+      expect(file.receipts[launchId]!.hostSetup!.execProcessRecorded).toBeUndefined();
       expect(file.receipts[launchId]!.hostSetup!.processes).toHaveLength(2);
       const p = ports(f.journal);
       const writer = new AgentRegistry(filename, undefined, undefined, options);

@@ -2349,7 +2349,19 @@ function unconfirmedLaunchSetup(receipt: LaunchSetupReceipt) {
 
 function missingSetupProcess(setup: NonNullable<SpawnReceipt["hostSetup"]>): boolean {
   return (setup.phase === "executing" || setup.execPermitGranted === true)
-    && (setup.processes.length === 0 || setup.execPermitGranted === true && setup.execProcessRecorded !== true);
+    && (setup.processes.length === 0 || setup.execPermitGranted === true && !setupHasExecProcessEvidence(setup));
+}
+
+/** Before execProcessRecorded was added, the waiter was persisted before the
+    exec permit and the native engine identity was appended after it. Two
+    distinct recorded identities therefore prove that historical exec crossed
+    its boundary; a waiter-only receipt remains ambiguous. */
+function setupHasExecProcessEvidence(setup: NonNullable<SpawnReceipt["hostSetup"]>): boolean {
+  const recordedProcesses = new Set(setup.processes.map(identity => JSON.stringify([
+    identity.pid, identity.startIdentity, identity.bootEpoch ?? null,
+  ])));
+  return setup.execProcessRecorded === true
+    || setup.execPermitGranted === true && recordedProcesses.size >= 2;
 }
 
 export function launchSetupIdentities(receipt: LaunchSetupReceipt): ProcessIdentity[] {
@@ -2370,7 +2382,7 @@ function failedLaunchSetupCanBeConfirmed(receipt: SpawnReceipt) {
     && !receipt.pane && !receipt.verifiedHost && !receipt.artifactPath && !receipt.completionMode
     && receipt.artifactLifecycle !== "materialized"
     && setup.adoptionClaimEpoch === undefined && setup.processes.length > 0
-    && (setup.execPermitGranted !== true || setup.execProcessRecorded === true)
+    && (setup.execPermitGranted !== true || setupHasExecProcessEvidence(setup))
     && setup.processes.every(identity => processIdentityStatus(identity) === "dead");
 }
 
@@ -7752,8 +7764,9 @@ export class AgentRegistry {
           return (CLAIMABLE_RECEIPT_STATES.has(receipt.state) && !!receipt.admissionOwner)
             || (!receipt.key && !!receipt.hostSetup && !receipt.hostSetup.cleanupConfirmed);
         }).sort().slice(0, LAUNCH_SETUP_CLEANUP_BATCH + 1);
-      const hasMore = keys.length > LAUNCH_SETUP_CLEANUP_BATCH;
-      for (const key of keys.slice(0, LAUNCH_SETUP_CLEANUP_BATCH)) {
+      // Inspect the bounded lookahead row too. A page boundary is not a
+      // launch blocker; only its persisted custody evidence can hold deploy.
+      for (const key of keys) {
         const receipt = file.receipts[key];
         if (!receipt) continue;
         const setup = unconfirmedLaunchSetup(receipt);
@@ -7761,7 +7774,6 @@ export class AgentRegistry {
           return receipt.launchId;
         }
       }
-      if (hasMore) return file.receipts[keys[LAUNCH_SETUP_CLEANUP_BATCH]!]?.launchId ?? keys[LAUNCH_SETUP_CLEANUP_BATCH]!;
       return null;
     }, { skipColdKeyInitialization: true });
   }
@@ -8914,8 +8926,10 @@ export class AgentRegistry {
       const receipt = file.receipts[launchId];
       if (!receipt?.admissionOwner || !sameRecordedProcessIdentity(receipt.admissionOwner, owner))
         throw new Error("structured setup custody changed");
-      if (receipt.hostSetup?.phase === "executing" && !receipt.hostSetup.processes.length)
-        throw new Error("structured setup native evidence is unavailable");
+      if (receipt.hostSetup && (receipt.hostSetup.phase === "executing" || receipt.hostSetup.execPermitGranted === true)
+        && (!receipt.hostSetup.processes.length
+          || receipt.hostSetup.execPermitGranted === true && !setupHasExecProcessEvidence(receipt.hostSetup)))
+        throw new Error("structured setup exec custody evidence is unavailable");
       if (receipt.hostSetup?.processes.some(process => processIdentityStatus(process) !== "dead"))
         throw new Error("structured setup process cleanup is not confirmed");
       if (receipt.hostSetup) receipt.hostSetup.cleanupConfirmed = true;

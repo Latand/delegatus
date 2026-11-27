@@ -208,7 +208,9 @@ class Changes {
 }
 
 class StaleApplyDispatch extends Error {}
-class LaunchSetupApplyRefusal extends StaleApplyDispatch {}
+class LaunchSetupApplyRefusal extends StaleApplyDispatch {
+  constructor(readonly requestId: string, launchId: string) { super(launchSetupRefusal(launchId)); }
+}
 
 export class SelfUpdateService {
   readonly changes = new Changes();
@@ -1667,7 +1669,15 @@ export class SelfUpdateService {
 
   private failApply(error: unknown): void {
     if (error instanceof LaunchSetupApplyRefusal) {
-      if (this.apply.current?.state === "ready") this.apply.patch({ state: "failed", detail: error.message });
+      const current = this.apply.current;
+      let durable;
+      try { durable = JSON.parse(readFileSync(join(this.deps.dir, "apply.json"), "utf8")); } catch { /* custody is unresolved */ }
+      if (current?.requestId === error.requestId && current.state === "ready"
+        && JSON.stringify(current) === JSON.stringify(durable)) {
+        this.apply.restoreUntaken();
+        releaseDrain(this.drainFile, current.requestId);
+        this.apply.patch({ state: "failed", detail: error.message });
+      }
       this.changes.emit();
       return;
     }
@@ -1702,7 +1712,7 @@ export class SelfUpdateService {
       const blocked = quiet.launchSetupBlocker();
       if (!blocked) return;
       const remaining = deadline - performance.now();
-      if (remaining <= 0) throw new Error(launchSetupRefusal(blocked));
+      if (remaining <= 0) throw new LaunchSetupApplyRefusal(intent.requestId, blocked);
       await new Promise<void>(resolve => setTimeout(resolve, Math.min(250, remaining)));
     }
   }
@@ -1713,8 +1723,9 @@ export class SelfUpdateService {
       check: { ...this.slice.check, state: "up-to-date", relation: "equal", ahead: 0, behind: 0, delta: null } };
     this.saveNow();
     this.apply.patch({ state: "ready" });
-    const binding = JSON.stringify(this.apply.current);
-    await this.waitForLaunchSetup(this.apply.current!);
+    const applyIntent = this.apply.current!;
+    const binding = JSON.stringify(applyIntent);
+    await this.waitForLaunchSetup(applyIntent);
     const activity = quietDispatchVersion(this.deps.quiet, this.deps.now());
     const current = await this.decide();
     if (!current.record) throw new StaleApplyDispatch("The launcher is unavailable; accepted custody is retained");
@@ -1730,7 +1741,7 @@ export class SelfUpdateService {
       || !record.launcher.startIdentity || !this.deps.processAlive(record.launcher.pid, record.launcher.startIdentity)
       || existsSync(record.requestFile) || this.deps.quiet && activity === null
       || activity !== quietDispatchVersion(this.deps.quiet, this.deps.now()) || blockingLaunch) {
-      if (blockingLaunch) throw new LaunchSetupApplyRefusal(launchSetupRefusal(blockingLaunch));
+      if (blockingLaunch) throw new LaunchSetupApplyRefusal(applyIntent.requestId, blockingLaunch);
       throw new StaleApplyDispatch("Stale apply dispatch was refused; accepted custody is retained");
     }
     if (current.record.launcher.relaunch === 1) {
@@ -1756,7 +1767,7 @@ export class SelfUpdateService {
         || JSON.stringify(finalIntent) !== binding || JSON.stringify(this.apply.current) !== binding
         || this.deps.quiet && activity === null || activity !== quietDispatchVersion(this.deps.quiet, this.deps.now())
         || lateBlockingLaunch || existsSync(current.record.requestFile)) {
-        if (lateBlockingLaunch) throw new LaunchSetupApplyRefusal(launchSetupRefusal(lateBlockingLaunch));
+        if (lateBlockingLaunch) throw new LaunchSetupApplyRefusal(intent.requestId, lateBlockingLaunch);
         throw new StaleApplyDispatch("Stale credential preflight was refused; accepted custody is retained");
       }
       writeAtomic(launcherControlFile(current.record.requestFile, "trial"), {

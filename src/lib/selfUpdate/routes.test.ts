@@ -758,6 +758,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
       } };
     setSelfUpdateServiceForTests(h.service);
     const record = readLauncherRecord(h.recordFile)!;
+    const priorPointer = existsSync(record.releasePointer) ? readFileSync(record.releasePointer, "utf8") : null;
     try {
       await postCheck(post("/check"));
       await until(snapshot => snapshot.check.state === "update-available");
@@ -771,6 +772,9 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
         await until(() => JSON.parse(readFileSync(applyFile, "utf8")).state === "failed");
         expect(JSON.parse(readFileSync(applyFile, "utf8")).detail).toContain("launch stage-launch");
         expect(existsSync(record.requestFile)).toBe(false);
+        expect(existsSync(drainFile)).toBe(false);
+        if (priorPointer === null) expect(existsSync(record.releasePointer)).toBe(false);
+        else expect(readFileSync(record.releasePointer, "utf8")).toBe(priorPointer);
       } else {
         const intent = JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8"));
         expect(intent.state).toBe("ready");
@@ -780,6 +784,42 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
         expect(JSON.parse(readFileSync(record.requestFile, "utf8"))).toMatchObject({ requestId: intent.requestId, role: "relaunch" });
       }
     } finally { clock.mockRestore(); pending = false; h.releaseBuild?.(); h.service.stop(); }
+  });
+
+  test("a late launch refusal preserves a newer apply and its drain", async () => {
+    const h = harness({ relaunch: false, holdBuild: true });
+    const drainFile = join(h.deps.dir, "auto-drain.json");
+    const applyFile = join(h.deps.dir, "apply.json");
+    let blockerReads = 0;
+    h.deps.quiet = { runtimeSnapshot: async () => ({ sessions: [] }), pipelines: () => [], presence: () => [],
+      launchSetupBlocker: () => existsSync(drainFile) && ++blockerReads >= 3 ? "stage-launch" : null };
+    const internals = h.service as unknown as {
+      apply: { current: Record<string, unknown> | null };
+      failApply(error: unknown): void;
+    };
+    const originalFail = internals.failApply.bind(h.service);
+    internals.failApply = error => {
+      if (error instanceof Error && error.message.includes("launch stage-launch")) {
+        const newer = { ...internals.apply.current!, requestId: "newer-stage-apply" };
+        internals.apply.current = newer;
+        writeFileSync(applyFile, JSON.stringify(newer));
+        writeFileSync(drainFile, JSON.stringify({ id: "newer-stage-apply", target: tipSha,
+          since: new Date().toISOString(), until: Date.now() + 60_000 }));
+      }
+      originalFail(error);
+    };
+    setSelfUpdateServiceForTests(h.service);
+    try {
+      await postCheck(post("/check"));
+      await until(snapshot => snapshot.check.state === "update-available");
+      expect((await updatePost(post("/update", { key: "newer-apply-survives-launch-refusal" }))).status).toBe(202);
+      await until(() => h.releaseBuild !== null);
+      h.releaseBuild!(); h.releaseBuild = null;
+      await until(() => JSON.parse(readFileSync(applyFile, "utf8")).requestId === "newer-stage-apply");
+      expect(JSON.parse(readFileSync(applyFile, "utf8"))).toMatchObject({ requestId: "newer-stage-apply", state: "ready" });
+      expect(JSON.parse(readFileSync(drainFile, "utf8")).id).toBe("newer-stage-apply");
+      expect(JSON.parse(readFileSync(readLauncherRecord(h.recordFile)!.releasePointer, "utf8")).sha).toBe(tipSha);
+    } finally { h.releaseBuild?.(); h.service.stop(); }
   });
 
   test.each(["optional-red", "empty-required-optional-red", "required-red", "unreadable-protection", "ruleset-required-red", "ruleset-required-green", "malformed-protection", "set-less-protection", "null-protection", "unreadable-rules"] as const)("manual checkout Update uses required CI on the equal-tree PR head: %s", async scenario => {
