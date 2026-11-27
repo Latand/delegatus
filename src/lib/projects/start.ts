@@ -103,6 +103,7 @@ function createProjectStartFolder(checkpoint: ProjectStartCheckpoint, assert: ()
       assert();
       if (!sameDirectory(fs.fstatSync(held), projectStartDirectory(current))) throw new ProjectStartRefusal("target_changed");
       const child = path.join(anchored(), part);
+      if (repositoryRootForPath(current)) throw new ProjectStartRefusal("PARENT_IN_REPOSITORY", 400);
       fs.mkdirSync(child);
       const next = fs.openSync(child, flags);
       fs.closeSync(held);

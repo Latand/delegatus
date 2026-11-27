@@ -85,7 +85,7 @@ function seatActive(project: string, conversationId: string, transcriptPath: str
   completeOrchestratorSeatIntent({ project, clientRequestId: "seed_0000001", conversationId, path: transcriptPath, now: AT });
 }
 
-for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "hostile", "recipient-replaced", "recipient-replaced-after-claim", "recipient-replaced-before-response", "workspace-grant-revoked", "codex-pre-exec", "claude-pre-exec"] as const) {
+for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "hostile", "parent-became-repository", "recipient-replaced", "recipient-replaced-after-claim", "recipient-replaced-before-response", "workspace-grant-revoked", "codex-pre-exec", "claude-pre-exec"] as const) {
   test(`project start keeps original-key custody through the real Viewer's ${mode} path`, async () => {
     const oldHome = process.env.HOME;
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "project-start-home-"));
@@ -107,7 +107,9 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
         team.putWorkspaceMember(principal.workspaceId, principal.memberId, "member", owner.id, AT);
       }
       const source = projectStartFixtureSeat(testRegistry, sandbox, sourceRoot, 51, process.pid, team ? principal : undefined);
-      const targetRoot = path.join(parent, "sample");
+      const targetParent = mode === "parent-became-repository" ? path.join(parent, "target-parent") : parent;
+      if (mode === "parent-became-repository") fs.mkdirSync(targetParent);
+      const targetRoot = path.join(targetParent, "sample");
       const preExecEngine = mode === "codex-pre-exec" ? "codex" : mode === "claude-pre-exec" ? "claude" : null;
       if (preExecEngine) saveRoleOverrides({ orchestrator: { config: preExecEngine === "codex"
         ? { engine: "codex", model: "gpt-6.1-sol", effort: "medium" }
@@ -170,7 +172,8 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
         clientRequestId: "fixture-project-start-key",
         operatorRequest: "Start the project and its first task.",
         target: existing ? { kind: "existing_project", project: existing.project }
-          : { kind: "new_project", name: "Sample", folder: { mode: "by_name" } },
+          : { kind: "new_project", name: "Sample", folder: mode === "parent-became-repository"
+            ? { mode: "create", root: targetRoot } : { mode: "by_name" } },
         task: { text: "Prepare the first implementation plan", dueAt: "2030-01-15T12:00:00Z" },
       };
       const file = statePath("mcp-receipts.sqlite");
@@ -264,6 +267,9 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
       if (mode === "changed-caller") {
         testRegistry.upsert({ ...source.entry, claimOwner: "replacement-writer" });
       }
+      if (mode === "parent-became-repository") {
+        expect(await preparePipelineRepository(targetParent)).toMatchObject({ ok: true });
+      }
       receipts.close();
       receipts = new SqliteMcpReceiptStore(file);
       service = openService(receipts);
@@ -344,6 +350,12 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
       }
       if (!replay.ok) throw new Error(`fixture project start replay refused: ${replay.code}`);
       expect(replay).toMatchObject({ ok: true, replayed: true, operationId: accepted.operationId });
+      if (mode === "parent-became-repository") {
+        expect(replay).toMatchObject({ state: "partial", cause: { code: "PARENT_IN_REPOSITORY" }, effects: { folder: "refused", task: "not-started" } });
+        expect(fs.existsSync(targetRoot)).toBe(false);
+        expect(launchCount).toBe(0);
+        return;
+      }
       if (mode === "ambiguous-folder") {
         expect(replay).toMatchObject({ state: "unknown", effects: { folder: "unknown" } });
         expect(fs.readdirSync(targetRoot)).toEqual([]);
