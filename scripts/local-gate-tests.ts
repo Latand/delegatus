@@ -54,8 +54,11 @@ export function comparisonPhaseBudgetMs(fileCount: number): number {
   return Math.min(COMPARISON_BUDGET_MS, MIN_PHASE_BUDGET_MS + Math.ceil(Math.max(0, fileCount - 30) / 4) * 60_000);
 }
 
-const nestedComparisonFile = (file: string): boolean =>
-  /^scripts\/(?:local-gate(?:-tests)?(?:\.|$)|gate-slot\.|owned-runner\.|compiler-admission\.|check-worker-broker\.|merge-batch\.|privacy-)/.test(file.split(path.sep).join("/"));
+const nestedComparisonFile = (file: string): boolean => {
+  const relative = file.split(path.sep).join("/");
+  return /^scripts\/(?:local-gate(?:-tests)?(?:\.|$)|gate-slot\.|owned-runner\.|compiler-admission\.|check-worker-broker\.|merge-batch\.|privacy-)/.test(relative)
+    || /^src\/lib\/pipelines\/(?:publicationRecovery|stageAttemptPush)\./.test(relative);
+};
 
 /** Multiple gate fixtures can exhaust a service's task limit. Limit that
  * class while letting ordinary source tests use the remaining file workers. */

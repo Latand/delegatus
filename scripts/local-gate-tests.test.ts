@@ -410,12 +410,15 @@ test("between-test errors match across private roots without hiding a changed pa
 test("gate harness selections limit nested workers while ordinary head and baseline files retain their parallelism", () => {
   const regular = Array.from({ length: 12 }, (_, n) => "src/example" + n + ".test.ts");
   const nested = ["scripts/local-gate-tests.baseline.test.ts", "scripts/local-gate.binding.test.ts", "scripts/privacy-commit-input.test.ts"];
-  const mergeBatch = ["scripts/merge-batch.refresh.test.ts", "scripts/merge-batch.sampling.test.ts", "scripts/merge-batch.landing.test.ts"];
+  const publication = [
+    "scripts/merge-batch.refresh.test.ts", "scripts/merge-batch.sampling.test.ts", "scripts/merge-batch.landing.test.ts",
+    "src/lib/pipelines/stageAttemptPush.rehost.test.ts", "src/lib/pipelines/publicationRecovery.producer.test.ts",
+  ];
   expect(comparisonFileWorkers(regular, 8)).toBe(8);
   expect(comparisonFileWorkers(regular, 3)).toBe(3);
   expect(comparisonFileWorkers(nested, 8)).toBe(2);
-  expect(comparisonFileWorkers(mergeBatch, 8)).toBe(2);
-  expect(comparisonFileWorkers([...mergeBatch, regular[0]!], 8)).toBe(3);
+  expect(comparisonFileWorkers(publication, 8)).toBe(2);
+  expect(comparisonFileWorkers([...publication, regular[0]!], 8)).toBe(3);
   expect(comparisonFileWorkers([...nested, regular[0]!], 8)).toBe(3);
   expect(comparisonFileWorkers([...nested, ...regular], 8)).toBe(8);
   expect(comparisonFileWorkers([...nested, ...regular], 3)).toBe(3);
