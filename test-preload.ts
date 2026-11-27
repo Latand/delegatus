@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterAll, beforeAll } from "bun:test";
 
-import { claimProcessTempRoot, TEST_RUN_TEMP_PREFIX } from "./src/lib/tempDirs";
+import { claimTestTempRoot } from "./src/lib/tempDirs";
 import { beginTestChildOwnership } from "./src/lib/testing/testChildren";
 import { captureProcessIdentity } from "./src/lib/processIdentity";
 import { spawn } from "node:child_process";
@@ -30,7 +30,7 @@ if (process.env.LLV_TEST_STARTUP_HOME !== os.homedir()) {
   // Keep the child's temp parent: nesting its repetition root under this
   // startup root makes Chromium's SingletonSocket exceed the Unix path limit.
   const env = { ...process.env };
-  const startup = claimProcessTempRoot(TEST_RUN_TEMP_PREFIX);
+  const startup = claimTestTempRoot();
   try {
     isolateHomes(startup.root, env);
     env.LLV_TEST_STARTUP_HOME = env[process.platform === "win32" ? "USERPROFILE" : "HOME"];
@@ -121,10 +121,10 @@ process.env.GIT_CONFIG_NOSYSTEM = "1";
  */
 const isolatedKeys = [...homeKeys, ...accountAliasKeys, "TMPDIR", "GIT_CONFIG_GLOBAL", "GIT_TEMPLATE_DIR", "LLV_STATE_DIR", "LLV_FIXTURE_PARENT_IDENTITY", "LLV_TEST_STARTUP_HOME"] as const;
 const inherited = Object.fromEntries(isolatedKeys.map(key => [key, process.env[key]]));
-let run: ReturnType<typeof claimProcessTempRoot> | undefined;
+let run: ReturnType<typeof claimTestTempRoot> | undefined;
 let releaseChildren: (() => Promise<void>) | undefined;
 function beginRepetition(): void {
-  run = claimProcessTempRoot(TEST_RUN_TEMP_PREFIX);
+  run = claimTestTempRoot();
   // Bun caches os.homedir() at process start. Pin account and CLI overrides
   // too, including inherited ones, before a resolver or scanner can load.
   isolateHomes(run.root, process.env);
