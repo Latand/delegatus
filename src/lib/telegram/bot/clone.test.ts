@@ -40,7 +40,7 @@ beforeEach(async () => {
   });
   relay = clonePairing(server.origin);
   directory = new CloneDirectory({ file: path.join(process.env.LLV_STATE_DIR, "clones.json"), relays: () => [relay], now: () => now, origin: server.origin });
-  port = { route: chat => directory.route(chat), peek: chat => directory.peek(chat), valid: (r, chat) => directory.valid(r, chat),
+  port = { route: (chat, options) => directory.route(chat, options), peek: chat => directory.peek(chat), valid: (r, chat) => directory.valid(r, chat),
     invalidate: (r, kind) => directory.invalidate(r, kind),
     send: (r, input, options) => sendAsClone(r.relay, r.targetId, input, { ...options, now: () => now, deadline: now + 300,
       sleep: async ms => { now += ms; } }) };
@@ -98,7 +98,7 @@ test("pairing-only clone discovery, allowlisting and idempotent send work withou
   store = deps.openStore();
   discoveries = 0;
   directory = new CloneDirectory({ file: path.join(process.env.LLV_STATE_DIR, "clones.json"), relays: () => [relay], now: () => now, origin: server.origin });
-  port = { route: chat => directory.route(chat), peek: chat => directory.peek(chat), valid: (r, chat) => directory.valid(r, chat),
+  port = { route: (chat, options) => directory.route(chat, options), peek: chat => directory.peek(chat), valid: (r, chat) => directory.valid(r, chat),
     invalidate: (r, kind) => directory.invalidate(r, kind), discoverChats: () => directory.discoverChats(),
     send: (r, input, options) => sendAsClone(r.relay, r.targetId, input, { ...options, now: () => now, deadline: now + 300,
       sleep: async ms => { now += ms; } }) };
@@ -307,7 +307,7 @@ test.each(["document", "media"] as const)("pairing-only MCP %s reports unavailab
   process.env.LLV_STATE_DIR = path.join(root, `${sequence}-pairing-only-mcp-${kind}`);
   store = deps.openStore();
   directory = new CloneDirectory({ file: path.join(process.env.LLV_STATE_DIR, "clones.json"), relays: () => [relay], now: () => now, origin: server.origin });
-  port = { route: chat => directory.route(chat), peek: chat => directory.peek(chat), valid: (r, chat) => directory.valid(r, chat),
+  port = { route: (chat, options) => directory.route(chat, options), peek: chat => directory.peek(chat), valid: (r, chat) => directory.valid(r, chat),
     invalidate: (r, reason) => directory.invalidate(r, reason), discoverChats: () => directory.discoverChats(),
     send: (r, input, options) => sendAsClone(r.relay, r.targetId, input, { ...options, now: () => now, deadline: now + 300,
       sleep: async ms => { now += ms; } }) };

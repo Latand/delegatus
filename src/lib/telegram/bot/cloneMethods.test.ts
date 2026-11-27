@@ -66,7 +66,7 @@ beforeEach(async () => {
   });
   relay = clonePairing(server.origin); relay.features = ["clone_send_methods"];
   directory = new CloneDirectory({ file: path.join(state, "clones.json"), relays: () => [relay], now: () => now, origin: server.origin });
-  port = { route: chat => directory.route(chat), peek: chat => directory.peek(chat), valid: (r, chat) => directory.valid(r, chat),
+  port = { route: (chat, options) => directory.route(chat, options), peek: chat => directory.peek(chat), valid: (r, chat) => directory.valid(r, chat),
     invalidate: (r, kind) => directory.invalidate(r, kind),
     send: (r, input, options) => sendAsClone(r.relay, r.targetId, input, { ...options, now: () => now, deadline: now + 500,
       sleep: async ms => { now += ms; } }) };
@@ -300,11 +300,6 @@ test.each(["empty", "missing"] as const)("pairing-only Office send discovers liv
     .toMatchObject({ messageIds: [101], sentBy: { name: "Report clone" }, alreadySent: false });
   expect(descriptors).toBe(1); expect(rightsReads).toBe(1); expect(sends).toHaveLength(1);
   expect(sends[0]!.files.get("document")).toMatchObject({ name: office.filename, type: mime });
-});
-test("chat discovery refreshes capabilities for a pairing without stored feature metadata", async () => {
-  delete relay.features;
-  expect(await directory.discoverChats()).toEqual([{ chatId: String(group.id), title: "Fixture reports" }]);
-  expect(descriptors).toBe(1); expect(rightsReads).toBe(1);
 });
 test.each(["secret", "malformed", "outside-root", "dot-directory", "state-directory"] as const)(
   "pairing-only %s document refusal happens before any relay request", async mode => {

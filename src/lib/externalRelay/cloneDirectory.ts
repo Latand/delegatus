@@ -144,14 +144,14 @@ export class CloneDirectory {
     }
     return null;
   }
-  async route(chatId: string): Promise<CloneRoute | null> {
+  async route(chatId: string, options: { discoverFileCapabilities?: boolean } = {}): Promise<CloneRoute | null> {
     // A cold lookup has one five-second budget across pairings, not per pairing.
     const relays = this.relays();
     if (!this.peek(chatId)) await Promise.all(relays.filter(r => !this.snapshot(r)).map(r => this.refresh(r)));
     const route = this.peek(chatId);
     // The active pairing and its pinned API origin authorize descriptor
     // discovery; older pairing records may not store a features list.
-    if (route) await this.#capabilities.refresh(route.relay, route.targetId);
+    if (route && options.discoverFileCapabilities) await this.#capabilities.refresh(route.relay, route.targetId);
     return this.peek(chatId);
   }
   async discoverChats(): Promise<DiscoveredCloneChat[]> {
@@ -160,9 +160,6 @@ export class CloneDirectory {
       const snapshot = this.snapshot(relay);
       return !snapshot || this.ports.now() - snapshot.fetchedAt >= SOFT_TTL ? this.refresh(relay) : Promise.resolve();
     }));
-    for (const relay of relays) for (const target of this.snapshot(relay)?.targets ?? [])
-      if (target.active && relay.targets.some(t => t.id === target.target_id && t.enabled))
-        await this.#capabilities.refresh(relay, target.target_id);
     const chats = new Map<string, DiscoveredCloneChat>();
     for (const relay of relays) {
       const snapshot = this.snapshot(relay);

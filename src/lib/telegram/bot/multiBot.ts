@@ -323,7 +323,7 @@ export class BotSelector {
       const bots = this.orderedBots(chat, connected, assigned, retryBot);
       const candidates: Array<{ bot: PostingBot; checked?: boolean; membership?: Membership | null }> = bots.map(bot => ({ bot }));
       if (!assigned && chat.type !== "private" && this.clones) {
-        const route = await this.clones.route(chat.chatId);
+        const route = await this.clones.route(chat.chatId, { discoverFileCapabilities: capability !== "canPost" });
         if (route && !await assignedBot() && this.clones.valid(route, chat.chatId)
           && cloneSupportRefusal(route, caller, key, method, params, options?.partIndex ?? 0) === null) {
           candidates.unshift({ bot: { id: route.id, name: route.name, username: null, receiving: false, tokenState: "ok", clone: route,
@@ -400,7 +400,7 @@ export class BotSelector {
       let first: BotAttempt | undefined = attempts[0];
       // Surface the clone's file refusal after local file senders are exhausted.
       if (capability !== "canPost" && chat.type !== "private" && this.clones && !await assignedBot()) {
-        const route = await this.clones.route(chat.chatId);
+        const route = await this.clones.route(chat.chatId, { discoverFileCapabilities: true });
         if (route && !await assignedBot() && this.clones.valid(route, chat.chatId)) {
           try {
             authorize();

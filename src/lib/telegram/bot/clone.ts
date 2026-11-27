@@ -7,7 +7,7 @@ import { cloneHasFileMethod, cloneMethodAdmission, cloneMethodPayload, cloneMult
 
 export interface ClonePostingPort {
   discoverChats?(): Promise<DiscoveredCloneChat[]>;
-  route(chatId: string): Promise<CloneRoute | null>;
+  route(chatId: string, options?: { discoverFileCapabilities?: boolean }): Promise<CloneRoute | null>;
   peek(chatId: string): CloneRoute | null;
   valid(route: CloneRoute, chatId: string): boolean;
   invalidate(route: CloneRoute, kind: "stale" | "unsupported"): void;
@@ -15,7 +15,7 @@ export interface ClonePostingPort {
 }
 export const productionClonePosting: ClonePostingPort = {
   discoverChats: () => cloneDirectory().discoverChats(),
-  route: chat => cloneDirectory().route(chat), peek: chat => cloneDirectory().peek(chat),
+  route: (chat, options) => cloneDirectory().route(chat, options), peek: chat => cloneDirectory().peek(chat),
   valid: (route, chat) => cloneDirectory().valid(route, chat), invalidate: (route, kind) => cloneDirectory().invalidate(route, kind),
   send: (route, input, options) => sendAsClone(route.relay, route.targetId, input, options),
 };
