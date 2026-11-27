@@ -42,7 +42,7 @@ export const SESSION_SECONDS = 90 * DAY / 1000;
 const KEEP_DAYS = 92;
 const importErrors = ["http", "network", "shape", "limit"];
 type Credential = { public_key: ArrayBuffer; alg: number; sign_count: number };
-type Access = { passkeys: { id: string; created_at: number; last_used_at: number | null }[]; importStatus: string };
+type Access = { currentCredentialId: string; passkeys: { id: string; created_at: number; last_used_at: number | null }[]; importStatus: string };
 export type Snapshot = { now: number; days: string[]; results: QueryResult[]; access: Access };
 
 export class StatsCore {
@@ -248,7 +248,11 @@ export class StatsCore {
   async snapshot(token: string): Promise<Snapshot | null> {
     const hash = hex(await sha256(bytes(token, 32)));
     const now = this.now();
-    if (!this.#session(hash, now)) return null;
+    const currentCredential = this.#rows<{ id: string }>(`SELECT credentials.id FROM sessions
+      JOIN credentials ON credentials.id = sessions.credential_id
+      WHERE sessions.token_hash = ? AND sessions.expires_at > ?
+      AND sessions.revoked_at IS NULL AND credentials.revoked_at IS NULL`, hash, now)[0];
+    if (!currentCredential) return null;
     const days = Array.from({ length: 30 }, (_, index) => utcDay(now - (29 - index) * DAY));
     const today = days[29];
     const retained = utcDay(now - KEEP_DAYS * DAY);
@@ -284,7 +288,7 @@ export class StatsCore {
     const importStatus = this.#meta("import_done") ? "History import complete."
       : error && importErrors.includes(error) ? `History import stopped (${error}).`
         : historyConfigured(this.env) ? "Importing history…" : "History import unavailable.";
-    return { now, days, results, access: { passkeys, importStatus } };
+    return { now, days, results, access: { currentCredentialId: currentCredential.id, passkeys, importStatus } };
   }
 
   #pendingImport() {

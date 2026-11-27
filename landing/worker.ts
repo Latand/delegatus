@@ -122,7 +122,7 @@ function renderStats(snapshot: Snapshot): string {
   <section><h2>Access</h2><p class="muted">${escapeHtml(access.importStatus)}</p>
   <div class="access-actions">${accessForm("/stats/logout", "Sign out")}${accessForm("/stats/sessions/revoke", "Sign out on all devices")}</div>
   ${access.passkeys.length ? `<ul class="passkeys">${access.passkeys.map(key =>
-    `<li>Added ${new Date(key.created_at).toISOString().slice(0, 10)} · ${key.last_used_at === null ? "Never used to sign in" : `Last used ${new Date(key.last_used_at).toISOString().slice(0, 10)}`}
+    `<li>${key.id === access.currentCredentialId ? "This device · " : ""}Added ${new Date(key.created_at).toISOString().slice(0, 16).replace("T", " ")} UTC · ${key.last_used_at === null ? "Never used to sign in" : `Last used ${new Date(key.last_used_at).toISOString().slice(0, 10)}`}
     ${accessForm("/stats/passkeys/remove", "Remove", key.id)}</li>`).join("")}</ul>` : ""}</section>
   <footer class="muted">Generated ${escapeHtml(now.toISOString())} · ID resets count as new installs. An ID may appear in several breakdown rows after an update or configuration change.</footer></main></body></html>`;
 }

@@ -585,6 +585,22 @@ describe("stats Worker and store", () => {
     expect(await h.client.session(removed.cookie.split("=")[1])).toBe(false);
   });
 
+  test("stats identifies the passkey that owns the current session", async () => {
+    const h = await harness();
+    await enrolled(h);
+    h.env.STATS_ENROLLMENT = await enrollmentSecret(secondToken, fixed);
+    const current = await enrolled(h, secondToken, { id: 2 });
+
+    const response = await worker.fetch(request("/stats", { headers: { Cookie: current.cookie } }), h.env);
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    expect(html.match(/This device · Added 2026-10-11 12:30 UTC/g)).toHaveLength(1);
+    const visibleRows = [...html.matchAll(/<li>(.*?)<\/li>/gs)].map(([row]) =>
+      row.replace(/<form[^>]*>[\s\S]*?<\/form>/g, "").replace(/\s+/g, " ").trim());
+    expect(visibleRows).toHaveLength(2);
+    expect(new Set(visibleRows).size).toBe(2);
+  });
+
   test("pings update the newest fields and events accumulate by day and dimensions", async () => {
     const h = await harness();
     expect((await worker.fetch(pingRequest(ping), h.env)).status).toBe(204);
