@@ -1,7 +1,5 @@
 import { expect, test } from "bun:test";
-import { risesFromSamples, limitWeight, dayRate, planMedian, nearestRate } from "./limitRates";
-import { emptyTokens } from "./tokenUsage";
-import { tokenCost } from "./tokenPrices";
+import { risesFromSamples, dayRate, planMedian, nearestRate } from "./limitRates";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -22,12 +20,6 @@ test("rates require ten percentage points and a positive priced denominator; med
   expect(nearestRate([{ day: "2026-10-18", rate: 2 }, { day: "2026-10-20", rate: 4 }], "2026-10-19")).toBe(2);
   expect(nearestRate([{ day: "2026-10-20", rate: 4 }], "2026-10-19")).toBe(4);
 });
-test("Codex ultrafast weight uses fast pricing and unpriced tokens remain unknown", () => {
-  const counts = { ...emptyTokens(), input: 1000, output: 300 };
-  expect(limitWeight("gpt-6.1-sol", "ultrafast", "codex", counts)).toBe(tokenCost("gpt-6.1-sol", "fast", counts));
-  expect(limitWeight("unpriced", "standard", "claude", counts)).toBeNull();
-});
-
 test("hourly calibration uses the seven-day span, borrows only within a plan, and freezes prior days across reopen", async () => {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),"limit-rates-")), file=path.join(root,"records.sqlite");
   let store=ActivityStore.open(file);
@@ -98,4 +90,42 @@ test("truncated limit history cannot freeze an own rate against a full seven-day
       .toEqual({rate:null,frozen:0});
     expect(repaired).toContainEqual({account:"claude:a",day:"2026-10-10"});
   } finally {store.close();fs.rmSync(root,{recursive:true,force:true});}
+});
+
+test("a provisional measured rate and its plan tier survive the loss of its sample window", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "limit-rates-retention-"));
+  const file = path.join(root, "records.sqlite");
+  let store = ActivityStore.open(file);
+  const date = "2026-11-19", start = Date.parse(date), now = start + 12 * HOUR;
+  const first = start - 6 * DAY;
+  const account = "claude:a";
+  const plan: { plan: string; planTier: string | undefined; session: null; weekly: null; capturedAt: null } =
+    { plan: "max", planTier: "default_claude_max_20x", session: null, weekly: null, capturedAt: null };
+  const reading = (at: number, remaining: number) => ({ t: at / 1000, remaining });
+  let series = { "claude|a|weekly": [reading(first, 100), reading(start + HOUR, 80), reading(now, 80)] };
+  const run = (at: number, observation: typeof plan | null) => refreshLimitRates(store.db, at,
+    { history: () => ({ series }), observations: new Map(observation ? [[account, observation]] : []), coverageComplete: false },
+    async work => { store.transaction(work); });
+  const row = () => store.db.query("SELECT * FROM usage_limit_rates WHERE account=? AND day=? AND window='weekly'").get(account, date);
+  try {
+    store.db.query("INSERT INTO usage_hours VALUES('',?,?,?,?,?,?,NULL,'builder','operator',NULL,NULL,1,1000000,0,0,0,0,0)")
+      .run(start / HOUR, "fixture", "claude-sonnet-5-5", "standard", account, "claude");
+    await run(now, plan);
+    const saved = row();
+    expect(saved).toMatchObject({ rate: 10, plan: "max", plan_tier: "default_claude_max_20x", frozen: 0 });
+    store.close();
+    store = ActivityStore.open(file);
+    series = { "claude|a|weekly": [reading(first + DAY, 100), reading(now, 80), reading(now + 3 * DAY, 70)] };
+    expect(await run(now + 3 * DAY, null)).not.toContainEqual({ account, day: date });
+    expect(row()).toEqual(saved);
+    const latestDay = new Date(now + 3 * DAY).toISOString().slice(0,10);
+    const carried = store.db.query("SELECT plan,plan_tier FROM usage_limit_rates WHERE account=? AND day=? AND window='weekly'").get(account, latestDay);
+    expect(carried).toEqual({ plan: "max", plan_tier: "default_claude_max_20x" });
+    await run(now + 3 * DAY, { ...plan, plan: "pro", planTier: undefined });
+    expect(store.db.query("SELECT plan,plan_tier FROM usage_limit_rates WHERE account=? AND day=? AND window='weekly'").get(account, latestDay))
+      .toEqual({ plan: "pro", plan_tier: null });
+  } finally {
+    store.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

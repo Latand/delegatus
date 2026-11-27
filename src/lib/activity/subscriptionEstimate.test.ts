@@ -1,0 +1,79 @@
+import { expect, test } from "bun:test";
+import estimates from "./usageEstimates.json";
+import { apiCost, estimateShare, estimateVersionAt, meterCost, planBudget, planWithoutFixedLimit } from "./subscriptionEstimate";
+import { emptyTokens } from "./tokenUsage";
+
+test("mixed Claude models use the rates for cache reads, both cache write durations, and output", () => {
+  const opus = { ...emptyTokens(), requests: 1, input: 300_000, cacheRead: 68_600_000, cacheWrite: 900_000, cacheWrite1h: 100_000, output: 200_000, reasoning: 100_000 };
+  const sonnet = { ...emptyTokens(), input: 100_000, cacheRead: 2_000_000, output: 50_000 };
+  const usd = apiCost("claude-opus-5-5", "standard", opus)! + apiCost("claude-sonnet-5-5", "standard", sonnet)!;
+  expect(usd).toBeCloseTo(24.62, 8);
+  expect(meterCost("claude-opus-5-5", "fast", "claude", opus)).toBeCloseTo(47.44);
+});
+
+test("Codex metering uses published speed multipliers while API prices use the recorded service tier", () => {
+  const counts = { ...emptyTokens(), input: 50_000, cacheRead: 4_930_000, cacheWrite: 100_000, cacheWrite1h: 20_000, output: 20_000 };
+  expect(apiCost("gpt-6.1-sol", "priority", counts)).toBeCloseTo(2.186);
+  expect(meterCost("gpt-6.1-sol", "priority", "codex", counts)).toBeCloseTo(2.4825);
+  expect(apiCost("gpt-6.1-sol", "ultrafast", counts)).toBeCloseTo(6.558);
+  expect(meterCost("gpt-6.1-sol", "ultrafast", "codex", counts)).toBeCloseTo(7.944);
+  expect(apiCost("gpt-6.2-sol", "ultrafast", counts)).toBeCloseTo(3.279);
+  expect(meterCost("gpt-6.2-sol", "ultrafast", "codex", counts)).toBeCloseTo(5.958);
+  const mixed = meterCost("gpt-6.2-sol", "default", "codex", counts)! + meterCost("gpt-6-luna", "default", "codex", counts)!;
+  expect(mixed).toBeCloseTo(1.0673);
+  expect(apiCost("fixture-model", "standard", counts)).toBeNull();
+  expect(meterCost("fixture-model", "standard", "codex", counts)).toBeNull();
+});
+
+test("weekly share combines measured rates and budget fallback with the full estimate range", () => {
+  const budget = planBudget("claude", "max", "default_claude_max_20x")!;
+  expect(budget).toEqual({ low: 900, mid: 1600, high: 2300, grade: "measured" });
+  const mixed = estimateShare(160, 80, 10, budget);
+  expect(mixed).toEqual({ weeklyPp: 15, range: { low: 7 + 80 / 2300 * 100, high: 13 + 80 / 900 * 100 },
+    measured: 80, planned: 80, basis: "mixed", missingBudget: false, outsideBudget: true });
+  expect(estimateShare(160, 0, null, budget)).toMatchObject({ weeklyPp: 10, basis: "plan", outsideBudget: false });
+  expect(estimateShare(160, 144, 9, budget)).toMatchObject({ weeklyPp: 10, basis: "measured" });
+  expect(estimateShare(160, 16, 1, budget)).toMatchObject({ weeklyPp: 10, basis: "plan" });
+  expect(planBudget("claude", "max", null)).toMatchObject({ mid: 1000, grade: "inferred" });
+  expect(planBudget("codex", "pro-lite", null)).toMatchObject({ mid: 360 });
+  expect(planBudget("codex", null, null)).toBeNull();
+  expect(planBudget("codex", "fixture-plan", null)).toBeNull();
+  expect(estimateShare(160, 0, null, null)).toMatchObject({ weeklyPp: null, basis: null, range: null, missingBudget: true });
+  expect(estimateShare(160, 80, 3, null)).toMatchObject({ weeklyPp: 3, basis: "measured", missingBudget: true });
+  expect(planWithoutFixedLimit("enterprise")).toBe(true);
+  expect(planWithoutFixedLimit("enterprise", true)).toBe(false);
+  expect(planWithoutFixedLimit("fixture-plan")).toBe(false);
+  expect(planBudget("claude", "enterprise", null)).toBeNull();
+  expect(planBudget("codex", "enterprise", null)).toMatchObject({low:25,mid:45,high:90});
+  expect(planBudget("codex", "edu", null)).toMatchObject({low:25,mid:45,high:90});
+  expect(planBudget("codex", "plus", null, "session")).toMatchObject({low:3,mid:25,high:90});
+  expect(planBudget("claude", "team-premium", null, "session")).toMatchObject({mid:83.33});
+});
+
+test("the versioned data has distinct, sourced, dated rows and current promotions", () => {
+  const today = "2026-11-26";
+  expect(estimates.version).toMatch(/^\d{4}-\d{2}-\d{2}\.\d+$/);
+  const groups = [
+    { rows: estimates.prices, keys: estimates.prices.map(row => [row.model, row.tier, row.effectiveFrom ?? row.date]) },
+    { rows: estimates.meter, keys: estimates.meter.map(row => [row.engine, row.model, row.tier]) },
+    { rows: estimates.budgets, keys: estimates.budgets.map(row => [row.engine, row.plan, row.window, row.planTier]) },
+  ];
+  for (const { rows, keys } of groups) {
+    expect(new Set(keys.map(key => JSON.stringify(key))).size).toBe(rows.length);
+    for (const row of rows) {
+      expect(Object.hasOwn(estimates.sources, row.source)).toBe(true);
+      expect(new Date(row.date).toISOString().slice(0, 10)).toBe(row.date);
+      expect(row.date <= estimates.version.slice(0, 10)).toBe(true);
+    }
+  }
+  expect(estimates.prices.filter(({ until }) => until).every(({ until }) => today <= until!)).toBe(true);
+  for (const budget of estimates.budgets) {
+    expect(budget.low > 0 && budget.low <= budget.mid && budget.mid <= budget.high).toBe(true);
+    expect(["measured", "measured-thin", "inferred", "published"]).toContain(budget.grade);
+  }
+});
+
+test("scheduled price transitions change the bounded repricing key only when the active rate changes", () => {
+  expect(estimateVersionAt("2027-02-27")).toBe(estimateVersionAt("2027-02-28"));
+  expect(estimateVersionAt("2027-03-01")).not.toBe(estimateVersionAt("2027-02-28"));
+});
