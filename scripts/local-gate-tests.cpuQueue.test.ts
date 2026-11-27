@@ -3,14 +3,15 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { gateTemporaryRoot, isolatedEnvironment } from "./local-gate";
-import { touchedTests } from "./local-gate-tests";
+import { BudgetExhausted, touchedTests } from "./local-gate-tests";
+import { portableFixture } from "./owned-runner.integration.fixture";
 import { CpuAdmissionQueue } from "../src/lib/runtime/cpuAdmission";
 
 const directories: string[] = [];
 afterEach(() => { for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true }); });
-function fixture() {
+function fixture(inherited = process.env) {
   const dir = mkdtempSync(path.join(gateTemporaryRoot(), "comparison-cpu-")); directories.push(dir);
-  const env = isolatedEnvironment(path.join(dir, "env"), process.env);
+  const env = isolatedEnvironment(path.join(dir, "env"), inherited);
   Object.assign(env, { GIT_AUTHOR_NAME: "Test", GIT_COMMITTER_NAME: "Test", GIT_AUTHOR_EMAIL: "noreply@example.invalid", GIT_COMMITTER_EMAIL: "noreply@example.invalid", DELEGATUS_CPU_PRESSURE: "off", LLV_GATE_LOCK_DIR: path.join(dir, "locks"), LLV_GATE_POLL_SECONDS: "0.02" });
   mkdirSync(env.LLV_GATE_LOCK_DIR!, { recursive: true });
   const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, env, encoding: "utf8", stdio: "pipe" }).trim();
@@ -64,13 +65,17 @@ test("synthetic workflow ticket", () => {
   } finally { outer.close(); }
 }, 30000);
 
-test("a touched test still expires when execution spends its budget without a CPU wait", async () => {
-  const f = fixture();
+const runnerModes = process.platform === "linux" ? ["default", "portable"] as const : ["default"] as const;
+test.each(runnerModes)("a touched test reaches its execution deadline without a verdict with the %s runner", async mode => {
+  const portable = mode === "portable" ? portableFixture("unreachable") : undefined;
+  if (portable) directories.push(portable.root);
+  const f = fixture(portable?.env);
   writeFileSync(path.join(f.dir, "example.test.ts"), 'import { test } from "bun:test"; test("execution over budget", async () => { await Bun.sleep(5000); }, 10000);');
-  const result = await touchedTests(f.dir, f.base, ["example.test.ts"], { env: f.env, log: () => {}, budgets: { fileMs: 1500, runMs: 4000 } });
-  expect(result.introduced).toHaveLength(1);
-  expect(result.introduced[0]!.kind).toBe("error");
-  expect(result.introduced[0]!.name).toContain("runner did not finish");
+  const lines: string[] = [];
+  await expect(touchedTests(f.dir, f.base, ["example.test.ts"], {
+    env: f.env, log: line => lines.push(line), budgets: { fileMs: 1500, runMs: 4000 },
+  })).rejects.toBeInstanceOf(BudgetExhausted);
+  expect(lines.join("\n")).not.toContain("baseline selected");
 }, 15000);
 
 test("the outer execution guard closes a stalled supervisor", async () => {

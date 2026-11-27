@@ -184,7 +184,10 @@ if (args[0] === "--namespace-guardian") {
     if (refusal || !parentAlive()) cancel(refusal === "deadline" ? 124 : 137);
   }, 100);
   process.on("SIGTERM", () => cancel(143)); process.on("SIGINT", () => cancel(130, "SIGINT"));
-  const stopTimer = cpuBudgetTimer(timeoutMs, budget.elapsed, () => cancel(124));
+  const stopTimer = cpuBudgetTimer(timeoutMs, budget.elapsed, () => {
+    console.error("owned runner: deadline expired");
+    cancel(124);
+  });
   const code = await close;
   await cleanup;
   clearInterval(parentTimer); stopTimer(); budget.close();
