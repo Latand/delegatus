@@ -8,6 +8,195 @@ compatibility raises the major version.
 
 ## [Unreleased]
 
+## [2.4.0] — 2026-11-26
+
+### Added
+- **Antigravity is a supported engine.** Agents can be launched on the
+  Antigravity CLI (`agy`, which has to be installed) through a structured ACP
+  host, with its own model catalog, and can fill roles in pipeline stages
+  ([#4323]). A conversation on it is controlled through the same composer and
+  conversation-host API as the other engines ([#4400]). Board cards, scanner
+  discovery, the feed and transcript reader, the timeline and search understand
+  its sessions ([#4403]). A "quota reached" answer becomes a five-hour limit
+  window that shows in the limits footer and in the `account_limits` tool; emails,
+  tokens and home paths are removed before it is stored ([#4407]). The engine has
+  its own periodic-table "Ne" mark with a glow while it works ([#4420]). In the
+  agent mapping table the three engines fit one row as icon segments, and every
+  engine that is not ready offers a sign-in or install card; for Antigravity,
+  which has no login command, the card runs a real ACP probe that opens a
+  session without calling a model ([#4473]). Stored metrics rows from before the
+  Antigravity bucket existed still read ([#4404]).
+- **Trusted relay requesters.** A relay target can hold entries bound to a
+  project that select an elevated run for a requester the owner has approved;
+  every other valid request keeps the restricted answer profile. Moving the
+  target to another project suspends its entries, and moving it back restores
+  them ([#4337]). The owner enrols a requester with a one-time code that expires
+  after ten minutes, manages the list from the target's settings panel, and every
+  change is audited. A new `relay_trusted_requesters` tool proposes changes that
+  the owner approves in the browser through a single-use link ([#4384]). A verified
+  non-owner requester can be answered through the guest runner with the same
+  context, memory and history-photo handling as an owner's guest turn. This stays
+  off until the paired service releases the matching capability ([#4363]).
+- **Pipeline stages appear as tabs in the stages window.** The lane graph maps
+  onto a tab strip: steps, return (fix) tabs, conditional stages marked "if
+  needed" and detached stages, with a popover and the graph beside it, on desktop and on the phone, in English and Ukrainian ([#4311]).
+- **Task chart rows open their conversation and show real working time.** A
+  click on an attempt row, or Enter or Space on its label, opens the
+  conversation the attempt recorded. Rows read "Worked" from the turns in the
+  whole transcript and label the wall-clock span separately as "Calendar span";
+  waits and settlement never count. An unreadable transcript falls back to the
+  labelled last-turn text. The transcript is read through the new
+  `GET /api/board/work-time`, which is cached, capped at 128 MiB and limited to
+  the caller's workspace ([#4375]).
+- **The Telegram bot sends Excel and Word documents** (`.xlsx`, `.xls`,
+  `.docx`) under the existing safety checks ([#3585]). `telegram_bot_reactions`
+  lists the reactions a chat allows and `telegram_bot_set_reaction` sets one on
+  a message, under the seat grant and the chat allowlist ([#4429]).
+- **The quota burndown chart opens for every listed account.** Inactive lines in
+  the limits footer get the same chart button as the active line. The chart is
+  always drawn: observed stretches are solid, and gaps, a late first sample, a
+  stale last reading and an unobserved window are dashed, with a readout that
+  says the share is estimated. `GET /api/limits/history` accepts `engine` and
+  `account`; an inactive account is served from stored history with no provider
+  read. The phone has no account lines, so it has no chart entry ([#4469]).
+- **Disk pressure starts a cleanup pass.** On a disk warning or critical
+  reading, or below `LLV_CLEANER_FREE_GB` (150 GB by default), the serving
+  Viewer starts a guarded cleanup pass. A lease serializes passes across
+  Viewer generations and a finished pass starts a 15-minute cooldown. Scratch of
+  an open or parked lane, anything a process or container still references, Git
+  data, keep markers and evidence inside its seven-day retention are protected.
+  Self-update checkouts beyond the newest 15 go through the release owner's
+  removal gate. Each removal is recorded with its path, size, class and proof,
+  and the disk card and a seat wake report free space before and after ([#4401]).
+
+### Changed
+- **Telegram decision forms are sent without polls.** The message names the
+  project, spells out each question in full with lettered options and a ✅ on the
+  recommendation. A long form can shorten option labels and reduce previews. The
+  board link, copy button and text replies remain, and earlier polls and receipts
+  stay as they were ([#4434]).
+- **Waiting keeps only what the operator has to do.** A hold parks a task only
+  when its kind is operator or the operator wrote it. A shared classifier sends
+  every other task to the operator, the seat or the agents, and the seat gets
+  resumable waits as lines in its agenda. A board maintenance run is refused when
+  it tries to park work on the operator ([#4270]). A hold that names a task, a
+  pull request or a future date stays in effect while that prerequisite is open;
+  a completed task, a closed or merged pull request and an elapsed date return
+  the task to the seat ([#4431]).
+- **Phone and desktop agree on states and hints.** A finished agent reads
+  "done" on both, an idle hosted seat reads "waiting" quietly on the phone,
+  priority hints show only on Inbox cards, the stage pane's controls stay on one
+  line, and a Stages connector is drawn only where it fits inside the lane
+  ([#4430]). The memory profile window puts levels on the left and rules on the
+  right ([#4312]).
+- **Relay requests reach the owning project's seat.** A request verified as
+  coming from the owner is handed to the seat of the target's project, ready
+  attachment descriptions go with it, and a guest handoff keeps its restricted
+  grants, also after a pause ([#4315]). Relay answers keep their Markdown links
+  and their public URLs with query strings when they reach Telegram ([#4468]).
+- **`request_attention` from another project notifies.** The operator's view
+  moves only when the request belongs to the project on screen; for any other
+  project the existing notification appears and a click navigates ([#4441]).
+- **Manual updates wait only for required checks.** A failing optional check,
+  such as Windows, no longer blocks an update and is named in a warning. Failing
+  required checks and an unreadable branch protection still block it, and the
+  dialog names each failing check in English and Ukrainian instead of showing the
+  runtime-host message ([#4465]).
+- **A Codex stage refused as a cybersecurity risk is parked with that reason.**
+  The saved attempt shows "Codex cybersecurity refusal", and once the host is
+  idle it is retired. Changing the provider remains the seat's decision
+  ([#4449], [#4470]). A Codex stage that fails with a transient workspace
+  requirements error is resumed in the same conversation after one, two and four
+  minutes, and each retry is recorded on the attempt ([#4391]).
+- **Attempt scratch is cleaned when the attempt ends.** Terminal attempt events
+  give each registered scratch root a deadline, routine passes remove expired
+  roots in expiry order (up to 32 per pass), a malformed command line no longer
+  stops a pass, and measurement and expiry queues drain even while retirement is
+  backed off. The cleanup report shows bytes reclaimed in the last hour
+  ([#4372], [#4418], [#4442], [#4471]).
+- **macOS and Windows log expected limits as information.** The notes that CPU
+  placement is off and that agents run without the Linux signal boundary are
+  info there and stay warnings on Linux ([#4446]).
+
+### Fixed
+- **Closing a conversation takes it out of the address.** A reload no longer
+  reopens a conversation the operator closed ([#4497]).
+- **The board header's Timeline button joins its neighbours** as the last segment
+  of the panel group instead of a separate box ([#4374]).
+- **Seat messages and the seat tick.** A machine label that matches both this
+  machine and a linked one is refused with `machine_ambiguous` and the candidate
+  install IDs, and local delivery needs `here` or the local install ID ([#4178]).
+  Seat task pages keep to the configured wake interval ([#4222]). A tick keeps
+  its result when the journal is busy ([#4356]). A wake whose reply was pushed
+  beyond the event-log tail by later events is recognized as answered ([#4395]).
+- **Deliveries and hosts.** Held deliveries whose account switch keeps failing
+  settle with an owner receipt, and a dispatch that may have started settles as
+  unknown unless the destination confirms arrival ([#4432]). A worker's decision
+  notice tells the launcher to answer it with `send_message` ([#4397]). A refused
+  recipient-evidence check names its cause category, and the paid-credit guard
+  retry log is bounded ([#4386]). Credit-guard reseat stops cycling on an unchanged
+  dead generation and conversation stops are scoped ([#4171]). A stop that was
+  confirmed stays counted in retirement totals, and a Codex host that is already
+  retiring no longer requests a second custody ticket ([#4229], [#4458]). An idle
+  Codex host whose rollout is too large to read within the acquisition budget is
+  still retired ([#4381]). A busy launch writer ends in a safe retry ([#4455]).
+  Viewer startup adopts hosts in checkpointed batches and no longer blocks deploy
+  admission ([#4352]), and the startup host census skips terminal host records
+  ([#4415]).
+- **Pipelines.** The "Latest pipeline result" block of a pull request follows
+  the final verdict after a failed re-check ([#4079]). A passed stage whose
+  accepted commit is already published leaves committing and opens its pull
+  request ([#4452]). Standalone mergers are recovered after a checkout handover
+  ([#4258]).
+- **Tools, reads and updates.** `list_pipelines` with `includeClosed` includes archived
+  lanes ([#4433]). `list_tasks` and the curation panel answer within budget under
+  load ([#4402]). An archived correction stays first for the curator until its own
+  disposition ([#4436]). Linked-install GitHub reads name the cause when they fail
+  ([#4364]). Checkout readiness answers from a revision-bound `GET /api/ready`
+  instead of the full board read ([#4383]).
+- **The Viewer does less work per update.** Fewer registry reads and snapshot
+  copies on hot paths: the delivery owner lookup ([#4377]), project account
+  bindings ([#4454]), snapshot refresh and fully hot collections ([#4467],
+  [#4472]), processless archive entries during reconciliation ([#4482]),
+  workspace reach checks and manager seat aliases ([#4440], [#4365]), and Codex
+  quota probes, which share one CLI launch admission ([#4463]).
+
+### Security
+- **Next.js moves to 16.4.6.** The first patched 16.4 release for
+  GHSA-f3mh-rxg3-f5g2; `eslint-config-next` moves with it ([#4345]).
+- **Relay attachments stay inside the run's outbox.** Files are staged against
+  the run's canonical path, links inside that boundary are refused, and a symlink
+  to a sibling run is refused. Completion refusals are recorded, sanitized
+  ([#4359]).
+
+### Maintainer notes
+- **Release flow.** The release preflight and the publication use one required
+  merged-pull-request check, an untagged version on main is reported as
+  `release-version-mismatch`, and a release pull request merged on GitHub through
+  a batch counts as merge proof ([#4179], [#4447]).
+- **Local gate and CPU admission.** Check planning is shared by stage, hook and
+  batch ([#4422]). Slots that are free make progress again, a publication started
+  from an older lane checkout is recognized, and the queue no longer fences itself
+  on a hook's own child ([#4419], [#4437], [#4366]). Green touched-test
+  checkpoints survive retries ([#4348]), stage dependency preparation runs on the
+  pinned Bun ([#4423]), and the supervised command's signal is recorded when the
+  recorder dies ([#4439]). Lane publication succeeds inside the Viewer container
+  ([#4376]), and fixtures write only into their temporary roots ([#4412]).
+- **Privacy gate.** It reads committed attributes with Git 2.39 and has a larger
+  suite budget ([#4396]), and accepts the squash co-author trailers GitHub
+  composes on landed main commits ([#4438]).
+- **Diagnostics.** File-transaction blocking waits carry a subject, label, call
+  site and holder ([#4378]), and keyed registry reads in pause reports carry the
+  Viewer operation ([#4448]). The native caller artifacts watch is removed when
+  the last artifact goes ([#4426]).
+- **Designs.** [#4291], [#4293], [#4443], [#4445], [#4457] and [#4500] add design
+  documents for owner facts, controller jobs, host retirement, the Update dialog,
+  composer decoupling and disk cleanliness; they change no behaviour.
+- **macOS newcomer check.** It records first-start retention and accepts the
+  receipt contract of an already published package ([#4264], [#4399], [#4450]).
+- **Test stability.** [#4316], [#4388], [#4428] and [#4462] repair fixtures and
+  assertions without changing product behaviour.
+
 ## [2.3.0] — 2026-11-22
 
 ### Added
@@ -5648,7 +5837,8 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 - Implement→review flows with fresh headless reviewer rounds.
 - Remote access over Tailscale behind a token gate.
 
-[Unreleased]: https://github.com/Latand/delegatus/compare/v2.3.0...HEAD
+[Unreleased]: https://github.com/Latand/delegatus/compare/v2.4.0...HEAD
+[2.4.0]: https://github.com/Latand/delegatus/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/Latand/delegatus/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/Latand/delegatus/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/Latand/delegatus/compare/v2.0.0...v2.1.0
@@ -7278,3 +7468,99 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#4347]: https://github.com/Latand/delegatus/pull/4347
 [#4350]: https://github.com/Latand/delegatus/pull/4350
 [#4351]: https://github.com/Latand/delegatus/pull/4351
+[#3585]: https://github.com/Latand/delegatus/pull/3585
+[#4079]: https://github.com/Latand/delegatus/pull/4079
+[#4171]: https://github.com/Latand/delegatus/pull/4171
+[#4178]: https://github.com/Latand/delegatus/pull/4178
+[#4179]: https://github.com/Latand/delegatus/pull/4179
+[#4222]: https://github.com/Latand/delegatus/pull/4222
+[#4229]: https://github.com/Latand/delegatus/pull/4229
+[#4258]: https://github.com/Latand/delegatus/pull/4258
+[#4264]: https://github.com/Latand/delegatus/pull/4264
+[#4270]: https://github.com/Latand/delegatus/pull/4270
+[#4291]: https://github.com/Latand/delegatus/pull/4291
+[#4293]: https://github.com/Latand/delegatus/pull/4293
+[#4311]: https://github.com/Latand/delegatus/pull/4311
+[#4312]: https://github.com/Latand/delegatus/pull/4312
+[#4315]: https://github.com/Latand/delegatus/pull/4315
+[#4316]: https://github.com/Latand/delegatus/pull/4316
+[#4323]: https://github.com/Latand/delegatus/pull/4323
+[#4337]: https://github.com/Latand/delegatus/pull/4337
+[#4345]: https://github.com/Latand/delegatus/pull/4345
+[#4348]: https://github.com/Latand/delegatus/pull/4348
+[#4352]: https://github.com/Latand/delegatus/pull/4352
+[#4356]: https://github.com/Latand/delegatus/pull/4356
+[#4359]: https://github.com/Latand/delegatus/pull/4359
+[#4363]: https://github.com/Latand/delegatus/pull/4363
+[#4364]: https://github.com/Latand/delegatus/pull/4364
+[#4365]: https://github.com/Latand/delegatus/pull/4365
+[#4366]: https://github.com/Latand/delegatus/pull/4366
+[#4372]: https://github.com/Latand/delegatus/pull/4372
+[#4374]: https://github.com/Latand/delegatus/pull/4374
+[#4375]: https://github.com/Latand/delegatus/pull/4375
+[#4376]: https://github.com/Latand/delegatus/pull/4376
+[#4377]: https://github.com/Latand/delegatus/pull/4377
+[#4378]: https://github.com/Latand/delegatus/pull/4378
+[#4381]: https://github.com/Latand/delegatus/pull/4381
+[#4383]: https://github.com/Latand/delegatus/pull/4383
+[#4384]: https://github.com/Latand/delegatus/pull/4384
+[#4386]: https://github.com/Latand/delegatus/pull/4386
+[#4388]: https://github.com/Latand/delegatus/pull/4388
+[#4391]: https://github.com/Latand/delegatus/pull/4391
+[#4395]: https://github.com/Latand/delegatus/pull/4395
+[#4396]: https://github.com/Latand/delegatus/pull/4396
+[#4397]: https://github.com/Latand/delegatus/pull/4397
+[#4399]: https://github.com/Latand/delegatus/pull/4399
+[#4400]: https://github.com/Latand/delegatus/pull/4400
+[#4401]: https://github.com/Latand/delegatus/pull/4401
+[#4402]: https://github.com/Latand/delegatus/pull/4402
+[#4403]: https://github.com/Latand/delegatus/pull/4403
+[#4404]: https://github.com/Latand/delegatus/pull/4404
+[#4407]: https://github.com/Latand/delegatus/pull/4407
+[#4412]: https://github.com/Latand/delegatus/pull/4412
+[#4415]: https://github.com/Latand/delegatus/pull/4415
+[#4418]: https://github.com/Latand/delegatus/pull/4418
+[#4419]: https://github.com/Latand/delegatus/pull/4419
+[#4420]: https://github.com/Latand/delegatus/pull/4420
+[#4422]: https://github.com/Latand/delegatus/pull/4422
+[#4423]: https://github.com/Latand/delegatus/pull/4423
+[#4426]: https://github.com/Latand/delegatus/pull/4426
+[#4428]: https://github.com/Latand/delegatus/pull/4428
+[#4429]: https://github.com/Latand/delegatus/pull/4429
+[#4430]: https://github.com/Latand/delegatus/pull/4430
+[#4431]: https://github.com/Latand/delegatus/pull/4431
+[#4432]: https://github.com/Latand/delegatus/pull/4432
+[#4433]: https://github.com/Latand/delegatus/pull/4433
+[#4434]: https://github.com/Latand/delegatus/pull/4434
+[#4436]: https://github.com/Latand/delegatus/pull/4436
+[#4437]: https://github.com/Latand/delegatus/pull/4437
+[#4438]: https://github.com/Latand/delegatus/pull/4438
+[#4439]: https://github.com/Latand/delegatus/pull/4439
+[#4440]: https://github.com/Latand/delegatus/pull/4440
+[#4441]: https://github.com/Latand/delegatus/pull/4441
+[#4442]: https://github.com/Latand/delegatus/pull/4442
+[#4443]: https://github.com/Latand/delegatus/pull/4443
+[#4445]: https://github.com/Latand/delegatus/pull/4445
+[#4446]: https://github.com/Latand/delegatus/pull/4446
+[#4447]: https://github.com/Latand/delegatus/pull/4447
+[#4448]: https://github.com/Latand/delegatus/pull/4448
+[#4449]: https://github.com/Latand/delegatus/pull/4449
+[#4450]: https://github.com/Latand/delegatus/pull/4450
+[#4452]: https://github.com/Latand/delegatus/pull/4452
+[#4454]: https://github.com/Latand/delegatus/pull/4454
+[#4455]: https://github.com/Latand/delegatus/pull/4455
+[#4457]: https://github.com/Latand/delegatus/pull/4457
+[#4458]: https://github.com/Latand/delegatus/pull/4458
+[#4462]: https://github.com/Latand/delegatus/pull/4462
+[#4463]: https://github.com/Latand/delegatus/pull/4463
+[#4465]: https://github.com/Latand/delegatus/pull/4465
+[#4467]: https://github.com/Latand/delegatus/pull/4467
+[#4468]: https://github.com/Latand/delegatus/pull/4468
+[#4469]: https://github.com/Latand/delegatus/pull/4469
+[#4470]: https://github.com/Latand/delegatus/pull/4470
+[#4471]: https://github.com/Latand/delegatus/pull/4471
+[#4472]: https://github.com/Latand/delegatus/pull/4472
+[#4473]: https://github.com/Latand/delegatus/pull/4473
+[#4482]: https://github.com/Latand/delegatus/pull/4482
+[#4497]: https://github.com/Latand/delegatus/pull/4497
+[#4500]: https://github.com/Latand/delegatus/pull/4500
