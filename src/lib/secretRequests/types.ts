@@ -26,7 +26,8 @@ export type SecretRefusal =
   | "secret_env_value_unquotable" | "secret_platform_unsupported"
   | "secret_too_many_open" | "secret_not_pending" | "secret_expired"
   | "secret_value_format" | "secret_value_too_long" | "secret_entry_interrupted"
-  | "secret_request_input" | "secret_request_unavailable" | "staging" | "idempotency_conflict";
+  | "secret_request_input" | "secret_request_unavailable" | "staging" | "idempotency_conflict"
+  | "operator_only" | "owner_required";
 
 export class SecretRequestError extends Error {
   constructor(readonly code: SecretRefusal) {

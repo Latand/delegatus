@@ -38,6 +38,7 @@ export async function writeSummaryBootstrap(directory: string, body: string, eta
     ? `"${createHash("sha1").update(JSON.stringify([board.epoch, board.scope])).update(body).digest("hex")}"`
     : `"${bodyHash}"`;
   if (parsed.readProjection !== "board-summary" || parsed.systemHealth?.storage?.writes?.state !== "ok"
+    || Object.hasOwn(parsed, "secretRequestNotices")
     || etag !== expectedEtag
     || (board && (parsed.boardProtocol !== 2 || parsed.boardScope !== boardCursorScope(board.epoch, board.scope)))) {
     throw new Error("summary bootstrap requires a healthy operator summary and its ETag");

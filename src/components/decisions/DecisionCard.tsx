@@ -1,6 +1,6 @@
 "use client";
 
-import { CircleCheck, GalleryHorizontalEnd, Loader2, MessageCircleQuestionMark, RotateCw, ZoomIn } from "lucide-react";
+import { CircleCheck, GalleryHorizontalEnd, Loader2, MessageCircleQuestionMark, RotateCw, ZoomIn, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { ImageGalleryProvider, Lightbox, type GalleryImage } from "@/components/feed/Lightbox";
@@ -28,7 +28,8 @@ import type { DecisionAnswer } from "./useOperatorDecisions";
  * shows its frames and opens the window.
  */
 
-const PRIMARY = "inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-control bg-accent px-3.5 text-ui font-semibold text-white hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-45 [@media(pointer:coarse)]:h-11";
+export const DECISION_PRIMARY_BUTTON = "inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-control bg-accent px-3.5 text-ui font-semibold text-white hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-45 [@media(pointer:coarse)]:h-11";
+const PRIMARY = DECISION_PRIMARY_BUTTON;
 const SECONDARY = "inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-control border border-border bg-card px-3 text-ui font-semibold text-primary hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [@media(pointer:coarse)]:h-11";
 
 /** A moment as the column writes it: the hours and minutes. */
@@ -102,18 +103,27 @@ function Thumbs({ decision, small }: { decision: OperatorDecisionView; small: bo
 export function DecisionRow({ decision, onOpen }: { decision: OperatorDecisionView; onOpen: () => void }) {
   const { t } = useLocale();
   const Mark = decision.questions?.length ? MessageCircleQuestionMark : GalleryHorizontalEnd;
+  return <FoldedDecisionRow id={decision.id} title={decision.title} mark={Mark} wrap={Boolean(decision.decision)} onOpen={onOpen}>
+    {decision.decision ? <span data-decision-delivery={decision.decision.delivery.state} data-decision-delivery-phase={decision.decision.delivery.phase} className="shrink-0 text-caption font-semibold text-warning">{t(decision.decision.delivery.phase === "retired" ? "decisions.state.retired" : decision.decision.delivery.phase === "attention" && decision.decision.delivery.state === "pending" ? "decisions.state.failed" : `decisions.state.${decision.decision.delivery.state}`)}</span> : null}
+  </FoldedDecisionRow>;
+}
+
+export function FoldedDecisionRow({ id, title, mark: Mark, wrap, onOpen, children }: {
+  id: string; title: string; mark: LucideIcon; wrap?: boolean; onOpen: () => void; children?: ReactNode;
+}) {
+  const { t } = useLocale();
   return (
     <button
       type="button"
-      data-decision-row={decision.id}
+      data-decision-row={id}
       aria-expanded={false}
-      aria-label={t("decisions.expandAria", { title: decision.title })}
+      aria-label={t("decisions.expandAria", { title })}
       className="flex min-h-11 w-full min-w-0 shrink-0 items-center gap-2 rounded-surface border border-border bg-card px-3 text-left hover:border-accent/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       onClick={onOpen}
     >
       <Mark className="h-4 w-4 shrink-0 text-accent" aria-hidden />
-      <span className={`min-w-0 flex-1 text-ui font-semibold text-primary ${decision.decision ? "[overflow-wrap:anywhere]" : "truncate"}`}>{decision.title}</span>
-      {decision.decision ? <span data-decision-delivery={decision.decision.delivery.state} data-decision-delivery-phase={decision.decision.delivery.phase} className="shrink-0 text-caption font-semibold text-warning">{t(decision.decision.delivery.phase === "retired" ? "decisions.state.retired" : decision.decision.delivery.phase === "attention" && decision.decision.delivery.state === "pending" ? "decisions.state.failed" : `decisions.state.${decision.decision.delivery.state}`)}</span> : null}
+      <span className={`min-w-0 flex-1 text-ui font-semibold text-primary ${wrap ? "[overflow-wrap:anywhere]" : "truncate"}`}>{title}</span>
+      {children}
       <ChevronDown className="h-4 w-4 shrink-0 text-muted" aria-hidden />
     </button>
   );
@@ -121,7 +131,7 @@ export function DecisionRow({ decision, onOpen }: { decision: OperatorDecisionVi
 
 /** The open decision's header. In the column it is also the fold: a press
     turns the form back into its row, and nothing about the decision changes. */
-function FoldHeader({ title, frame, row, onCollapse, children }: {
+export function FoldHeader({ title, frame, row, onCollapse, children }: {
   title: string;
   /** The header's own box: its border and ground. */
   frame: string;

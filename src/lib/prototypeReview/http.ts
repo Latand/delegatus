@@ -4,6 +4,8 @@ import { issueReportApprovalForm } from "@/lib/issueReports/approvalForm";
 import { operatorLocale } from "@/lib/operator/settings";
 import { NextRequest, NextResponse } from "next/server";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
+import { keysOwnerRequest } from "@/lib/keys/access";
+import { operatorSecretRequests } from "@/lib/secretRequests/operatorRead";
 import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { refuseAnonymous, teamActor } from "@/lib/team";
 import { parsePrototypeInput, PrototypeError } from "./input";
@@ -231,6 +233,7 @@ export async function decisionsGET(request: NextRequest,project: string,world: P
   const anonymous = refuseAnonymous(teamActor(request)); if (anonymous) return anonymous;
   try {
     if (!project) throw new PrototypeError("project is required");
+    const owner = keysOwnerRequest(request);
     const caller = world.caller(request);
     if (caller.conversationId && (!caller.project || canonicalProject(caller.project) !== canonicalProject(project))) throw new PrototypeError("prototype access is limited to the caller's project",403);
     /* One round's record is what the feed polls while its message travels:
@@ -244,7 +247,10 @@ export async function decisionsGET(request: NextRequest,project: string,world: P
         if (task && !runsElsewhere(task)) await refreshPrototypeDelivery(task.id,review,delivery);
       }
     }
-    return NextResponse.json(operatorDecisions(project, undefined, review),{ headers: { "cache-control": "private, no-store" } });
+    const secretRequests = owner ? await operatorSecretRequests(project) : undefined;
+    const decisions = operatorDecisions(project, undefined, review);
+    return NextResponse.json({ ...decisions, ...(secretRequests && keysOwnerRequest(request) ? { secretRequests } : {}) },
+      { headers: { "cache-control": "private, no-store" } });
   } catch (error) { return prototypeFailure(error, "GET /api/projects/decisions"); }
 }
 /** One answer from the column: a seat's question or a task's waiting round,
