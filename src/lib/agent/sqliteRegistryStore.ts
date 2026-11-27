@@ -498,11 +498,14 @@ const receiptState = "json_extract(value_json,'$.state')";
 const launchSetupRows = `collection='receipts' AND (
   (COALESCE(${receiptState},'') NOT IN ('completed','failed','conflicted')
     AND json_extract(value_json,'$.admissionOwner') IS NOT NULL)
-  OR (json_extract(value_json,'$.key') IS NULL AND json_extract(value_json,'$.hostSetup') IS NOT NULL
-    AND json_extract(value_json,'$.hostSetup.cleanupConfirmed') IS NOT 1)
+  OR (json_extract(value_json,'$.key') IS NULL
+    AND json_extract(value_json,'$.hostSetup.cleanupConfirmed') IS NOT 1
+    AND (json_extract(value_json,'$.hostSetup.phase')='executing'
+      OR json_extract(value_json,'$.hostSetup.execPermitGranted')=1
+      OR json_array_length(value_json,'$.hostSetup.processes')>0))
 )`;
 const registryLaunchSetupIndexes = declaredIndexes([
-  `CREATE INDEX IF NOT EXISTS registry_launch_setup_by_key ON registry_rows(row_key) WHERE ${launchSetupRows}`,
+  `CREATE INDEX IF NOT EXISTS registry_launch_setup_by_key_v2 ON registry_rows(row_key) WHERE ${launchSetupRows}`,
 ]);
 const registryRowIndexes = declaredIndexes([
   `CREATE INDEX IF NOT EXISTS registry_busy_carriers ON registry_rows(collection,${carrierTurn},row_order,row_key,${Object.values(carrierColumns).join(",")}) WHERE ${busyCarrierRows}`,
@@ -5386,7 +5389,7 @@ export class SqliteAgentRegistryStore {
   /** Current hot and archived receipts share this index. Callers limit keys
       before loading bodies, and cursor seeks remain ordered by receipt key. */
   launchSetupKeys(selection: { after: string; limit: number }): string[] {
-    const index = this.options.readOnly || this.options.allowArchiveMigration === false ? "" : " INDEXED BY registry_launch_setup_by_key";
+    const index = this.options.readOnly || this.options.allowArchiveMigration === false ? "" : " INDEXED BY registry_launch_setup_by_key_v2";
     return this.db.query<{ row_key: string }, (string | number)[]>(`SELECT row_key
       FROM registry_rows${index} WHERE ${launchSetupRows}
       AND row_key>? ORDER BY row_key LIMIT ?`)

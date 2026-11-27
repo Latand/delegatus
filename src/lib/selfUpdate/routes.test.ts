@@ -27,6 +27,7 @@ import { GreenReader, type GreenVerdict } from "./green";
 import { buildEnv } from "./env";
 import { checkForUpdate, readRevision, runGit } from "./git";
 import { launcherControlFile, readLauncherRecord, requestRestart } from "./launcher";
+import { releaseDirFor } from "./release";
 import { deploymentsEnabled, detectMode } from "./mode";
 import { readStartIdentity, sameProcess } from "./pid";
 import { getEvents, getSnapshot, getStepLog, postAuto, postCheck, postRestart, postUpdate, postInstallAction } from "./routes";
@@ -784,6 +785,51 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
         expect(JSON.parse(readFileSync(record.requestFile, "utf8"))).toMatchObject({ requestId: intent.requestId, role: "relaunch" });
       }
     } finally { clock.mockRestore(); pending = false; h.releaseBuild?.(); h.service.stop(); }
+  });
+
+  test("a manual restart launch refusal settles its building apply and admits the next attempt", async () => {
+    const h = harness();
+    const record = readLauncherRecord(h.recordFile)!;
+    h.deps.bun = join(h.deps.dir, "bun-fixture");
+    mkdirSync(h.deps.dir, { recursive: true });
+    writeFileSync(h.deps.bun, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    const candidate = releaseDirFor(record.releasesDir, tipSha);
+    await git(checkout, "fetch", "origin");
+    const added = await runGit(["worktree", "add", "--detach", candidate, tipSha], checkout);
+    if (added.code !== 0) throw new Error(added.stderr);
+    mkdirSync(join(candidate, ".next"), { recursive: true });
+    writeFileSync(join(candidate, ".next", "BUILD_ID"), "fixture\n");
+    mkdirSync(join(candidate, "bin"), { recursive: true });
+    writeFileSync(join(candidate, "bin", "cli.mjs"), 'process.stdout.write("fixture\\n");\n');
+    writeFileSync(record.releasePointer, JSON.stringify({ sha: tipSha, dir: candidate, checkoutHead: firstSha }));
+    const calls: string[][] = [];
+    h.deps.install = { action: () => ({ id: "restart-service", button: true, unit: "fixture.service" }),
+      run: action => { calls.push(action.args); }, entry: () => join(checkout, "bin", "cli.mjs"), unit: () => "fixture.service" };
+    const clock = spyOn(performance, "now");
+    let pending = true;
+    h.deps.quiet = { runtimeSnapshot: async () => ({ sessions: [] }), pipelines: () => [], presence: () => [],
+      launchSetupBlocker: () => {
+        if (pending) clock.mockReturnValueOnce(performance.now() + 60_001);
+        return pending ? "manual-restart-launch" : null;
+      } };
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    const drainFile = join(h.deps.dir, "auto-drain.json");
+    try {
+      const refused = await postInstallAction(post("/install-action"));
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toMatchObject({ error: expect.stringContaining("manual-restart-launch") });
+      const failed = JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8"));
+      expect(failed).toMatchObject({ state: "failed", externalRestart: true, detail: expect.stringContaining("manual-restart-launch") });
+      expect(existsSync(record.requestFile)).toBe(false);
+      expect(calls).toHaveLength(0);
+      expect(existsSync(drainFile)).toBe(false);
+      expect(existsSync(record.releasePointer)).toBe(false);
+
+      pending = false;
+      expect(await h.service.performInstallAction()).toMatchObject({ ok: true });
+      expect(calls).toHaveLength(1);
+      expect(JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8"))).toMatchObject({ state: "switching", externalRestart: true });
+    } finally { clock.mockRestore(); pending = false; h.service.stop(); }
   });
 
   test("a late launch refusal preserves a newer apply and its drain", async () => {

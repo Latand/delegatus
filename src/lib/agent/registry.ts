@@ -2349,7 +2349,7 @@ function unconfirmedLaunchSetup(receipt: LaunchSetupReceipt) {
 
 function missingSetupProcess(setup: NonNullable<SpawnReceipt["hostSetup"]>): boolean {
   return (setup.phase === "executing" || setup.execPermitGranted === true)
-    && (setup.processes.length === 0 || setup.execPermitGranted === true && !setupHasExecProcessEvidence(setup));
+    && (setup.processes.length === 0 || !setupHasExecProcessEvidence(setup));
 }
 
 /** Before execProcessRecorded was added, the waiter was persisted before the
@@ -2382,7 +2382,7 @@ function failedLaunchSetupCanBeConfirmed(receipt: SpawnReceipt) {
     && !receipt.pane && !receipt.verifiedHost && !receipt.artifactPath && !receipt.completionMode
     && receipt.artifactLifecycle !== "materialized"
     && setup.adoptionClaimEpoch === undefined && setup.processes.length > 0
-    && (setup.execPermitGranted !== true || setupHasExecProcessEvidence(setup))
+    && ((setup.phase !== "executing" && setup.execPermitGranted !== true) || setupHasExecProcessEvidence(setup))
     && setup.processes.every(identity => processIdentityStatus(identity) === "dead");
 }
 
@@ -7783,6 +7783,10 @@ export class AgentRegistry {
           return receipt.launchId;
         }
       }
+      // The indexed census is deliberately bounded. If there are more
+      // possible owners than this request can inspect, preserve the fence
+      // under a known launch id until a later cadence can establish absence.
+      if (keys.length > LAUNCH_SETUP_CLEANUP_BATCH) return file.receipts[keys[LAUNCH_SETUP_CLEANUP_BATCH]!]?.launchId ?? keys[LAUNCH_SETUP_CLEANUP_BATCH]!;
       return null;
     }, { skipColdKeyInitialization: true });
   }
@@ -8936,8 +8940,7 @@ export class AgentRegistry {
       if (!receipt?.admissionOwner || !sameRecordedProcessIdentity(receipt.admissionOwner, owner))
         throw new Error("structured setup custody changed");
       if (receipt.hostSetup && (receipt.hostSetup.phase === "executing" || receipt.hostSetup.execPermitGranted === true)
-        && (!receipt.hostSetup.processes.length
-          || receipt.hostSetup.execPermitGranted === true && !setupHasExecProcessEvidence(receipt.hostSetup)))
+        && (!receipt.hostSetup.processes.length || !setupHasExecProcessEvidence(receipt.hostSetup)))
         throw new Error("structured setup exec custody evidence is unavailable");
       if (receipt.hostSetup?.processes.some(process => processIdentityStatus(process) !== "dead"))
         throw new Error("structured setup process cleanup is not confirmed");

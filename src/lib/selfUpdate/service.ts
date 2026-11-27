@@ -1672,7 +1672,7 @@ export class SelfUpdateService {
       const current = this.apply.current;
       let durable;
       try { durable = JSON.parse(readFileSync(join(this.deps.dir, "apply.json"), "utf8")); } catch { /* custody is unresolved */ }
-      if (current?.requestId === error.requestId && current.state === "ready"
+      if (current?.requestId === error.requestId && ["building", "ready"].includes(current.state)
         && JSON.stringify(current) === JSON.stringify(durable)) {
         this.apply.restoreUntaken();
         releaseDrain(this.drainFile, current.requestId);

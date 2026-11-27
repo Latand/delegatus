@@ -160,7 +160,15 @@ test("a dead detached waiter cannot confirm cleanup while exec evidence is missi
     registry.failStructuredSpawn(launchId, "setup custody stopped after exec admission", { announce: false });
     waiter.kill("SIGKILL");
     await waiter.exited;
-    registry.agentStateWrite(file => { file.receipts[launchId]!.hostSetup!.processes.push(structuredClone(waiterIdentity)); });
+    // The predecessor writer persisted the waiter as executing, then could
+    // authorize exec without updating the receipt with a permit or native PID.
+    registry.agentStateWrite(file => {
+      const setup = file.receipts[launchId]!.hostSetup!;
+      setup.phase = "executing";
+      setup.processes = [structuredClone(waiterIdentity)];
+      delete setup.execPermitGranted;
+      delete setup.execProcessRecorded;
+    });
 
     const p = ports(f.journal);
     await p.reconcileLaunchSetup!(Date.now() + 1_000);
@@ -194,11 +202,11 @@ test("the deploy census inspects its bounded lookahead and ignores inert prepara
       file.receipts[begun.receipt.launchId]!.state = "completed";
       file.receipts[begun.receipt.launchId]!.hostSetup = undefined;
       file.receipts[begun.receipt.launchId]!.admissionOwner = null;
-      for (let index = 0; index < 33; index++) {
+      for (let index = 0; index < 34; index++) {
         const launchId = `bounded-launch-${String(index).padStart(3, "0")}`;
         file.receipts[launchId] = { ...structuredClone(source), launchId, conversationId: `conversation_bounded_${index}`,
           state: "failed", key: null, pane: null, verifiedHost: null, artifactPath: null, completionMode: null,
-          artifactLifecycle: "pending", hostSetup: index === 32
+          artifactLifecycle: "pending", hostSetup: index === 33
             ? { phase: "executing", execPermitGranted: true, execProcessRecorded: true,
               processes: [captureProcessIdentity(process.pid)!] }
             : { phase: "preparing", processes: [] } };
@@ -207,14 +215,28 @@ test("the deploy census inspects its bounded lookahead and ignores inert prepara
     const store = (registry as unknown as { sqliteStore: { onRowPayloadRead?: (collection: string, count: number) => void } }).sqliteStore;
     let receiptPayloads = 0;
     store.onRowPayloadRead = (collection, count) => { if (collection === "receipts") receiptPayloads += count; };
-    expect(registry.launchSetupBlocker()).toBe("bounded-launch-032");
-    expect(receiptPayloads).toBeLessThanOrEqual(33);
+    expect(registry.launchSetupBlocker()).toBe("bounded-launch-033");
+    expect(receiptPayloads).toBeLessThanOrEqual(1);
 
     registry.agentStateWrite(file => {
-      const receipt = file.receipts["bounded-launch-032"]!;
+      const receipt = file.receipts["bounded-launch-033"]!;
       receipt.hostSetup = { phase: "preparing", processes: [] };
     });
     expect(registry.launchSetupBlocker()).toBeNull();
+
+    const exited = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"]);
+    const dead = captureProcessIdentity(exited.pid)!;
+    exited.kill("SIGKILL");
+    await exited.exited;
+    registry.agentStateWrite(file => {
+      for (let index = 0; index < 33; index++) {
+        const launchId = `uncertain-launch-${String(index).padStart(3, "0")}`;
+        file.receipts[launchId] = { ...structuredClone(source), launchId, conversationId: `conversation_uncertain_${index}`,
+          state: "failed", key: null, pane: null, verifiedHost: null, artifactPath: null, completionMode: null,
+          artifactLifecycle: "pending", hostSetup: { phase: "preparing", processes: [dead] } };
+      }
+    });
+    expect(registry.launchSetupBlocker()).toBe("uncertain-launch-032");
 
     receiptPayloads = 0;
     await registry.reconcileFailedLaunchSetup(Date.now() - 1);
