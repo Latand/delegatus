@@ -9,7 +9,7 @@ const GAP = 6;
 const EDGE = 8;
 
 type Box = { top: number; bottom: number; left: number; right: number; width: number };
-export type BubblePosition = { left: number; top: number; maxWidth?: number };
+export type BubblePosition = { left: number; top: number; maxWidth?: number; width?: number; minHeight?: number };
 
 /**
  * Where a bubble of `size` goes against `anchor`: on the asked side when it
@@ -73,6 +73,8 @@ export function TooltipBubble({
       const bubble = bubbleRef.current;
       if (!anchor || !bubble) return;
       bubble.style.maxWidth = "";
+      bubble.style.width = "";
+      bubble.style.minHeight = "";
       const own = place?.(bubble);
       if (own) { setPosition(own); return; }
       setPosition(
