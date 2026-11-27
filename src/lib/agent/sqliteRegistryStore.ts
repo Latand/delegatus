@@ -481,6 +481,8 @@ const carrierSelect = Object.entries(carrierColumns).map(([name, expr]) => `${ex
 const registryRowIndexes = declaredIndexes([
   `CREATE INDEX IF NOT EXISTS registry_busy_carriers ON registry_rows(collection,${carrierTurn},row_order,row_key,${Object.values(carrierColumns).join(",")}) WHERE ${busyCarrierRows}`,
   "CREATE INDEX IF NOT EXISTS registry_rows_collection_order ON registry_rows(collection, row_order)",
+  "CREATE INDEX IF NOT EXISTS registry_entries_cwd ON registry_rows(collection,json_extract(value_json,'$.cwd'),row_order) WHERE collection='entries'",
+  "CREATE INDEX IF NOT EXISTS registry_conversations_launch_cwd ON registry_rows(collection,json_extract(value_json,'$.generations[#-1].launchProfile.cwd'),row_order) WHERE collection='conversations'",
   "CREATE INDEX IF NOT EXISTS registry_state_page ON registry_rows(collection,json_extract(value_json,'$.state'),row_key)",
   "CREATE INDEX IF NOT EXISTS registry_migration_page ON registry_rows(collection,json_extract(value_json,'$.migration.phase'),row_key)",
   "CREATE INDEX IF NOT EXISTS registry_delivery_claim ON registry_rows(json_extract(value_json,'$.conversationId'),json_extract(value_json,'$.state'),json_extract(value_json,'$.generationId'),json_extract(value_json,'$.admissionSeq'),json_extract(value_json,'$.createdAt'),json_extract(value_json,'$.id'),row_key) WHERE collection='heldDeliveries'",

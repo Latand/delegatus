@@ -970,12 +970,10 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
     try {
       const cleaner = options.cleaner;
       /** This visit found a removal an earlier one began and did not finish. */
-      let interrupted = false;
       const cleanerProof = () => `ledger identity ${owner.identity}, ${owner.pipelineId ? "settled lane" : "dead standalone host"}, tree idle at least three hours, references and preservation fences clear`;
       const cleanerHold = (directory: string) => {
         if (!cleaner) return null;
         if (!cleaner.allowed()) return "cleaner lost traffic ownership";
-        if (interrupted) return null;
         const cutoff = now() - cleaner.idleMs;
         const tree = inspectTree(directory, { threshold: cutoff, ignoreRootCtime: true, git: true,
           stat: file => { checkBudget(); return fs.lstatSync(file); } });
@@ -1011,7 +1009,6 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
           "ordinary_sweep_recovery");
         return;
       }
-      interrupted = !!cleaner?.overCap && !stat && pendingJournal;
       const pendingTrash = !stat && pendingJournal;
       if (recoveredTrash) {
         if (!store.recoveredTrashCurrent(owner.directory)) {

@@ -288,7 +288,9 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
     // The expiry page goes first. After a tick in which it left reclaim no time
     // at all, reclaim goes first once, so neither can starve the other.
     const leading = previous.starvedCap !== undefined && store.bytes() > previous.starvedCap;
-    const led = leading ? await reclaim(previous.starvedCap!, true) : null;
+    // The previous report controls scheduling only. Deletion authority uses
+    // the effective cap observed for this tick.
+    const led = leading ? await reclaim(configuredCapBytes, true) : null;
     const roots = await sweepAttemptTemps(store, { ...options, runBudgetMs: rootTimeLeft() });
     // A tick that ran the ledger's own pressure pass has already served the cap.
     const followed = !leading && !roots.pressure && roots.bytes > roots.capBytes ? await reclaim(roots.capBytes, false) : null;

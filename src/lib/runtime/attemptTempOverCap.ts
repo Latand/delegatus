@@ -88,7 +88,18 @@ export async function reclaimOverCapScratch(store: AttemptTempStore, ports: Over
     for (const row of page) {
       if (visited.has(row.directory)) continue;
       last = row;
-      if (!fs.lstatSync(row.directory, { throwIfNoEntry: false })
+      let rootStat: ReturnType<typeof fs.lstatSync> | undefined;
+      try { rootStat = fs.lstatSync(row.directory, { throwIfNoEntry: false }); }
+      catch (error) {
+        const reason = `cannot inspect stage scratch root: ${error instanceof Error ? error.message : String(error)}`.slice(0, 512);
+        report.errors++;
+        report.held.unreadable = { count: (report.held.unreadable?.count ?? 0) + 1,
+          bytes: (report.held.unreadable?.bytes ?? 0) + row.bytes };
+        report.outcomes.push({ directory: row.directory, disposition: "held", bytes: row.bytes, reason, reasonCode: "root_unreadable" });
+        visited.add(row.directory);
+        continue;
+      }
+      if (!rootStat
         && !fs.lstatSync(attemptTempJournalPath(row.directory), { throwIfNoEntry: false }) && !store.recoveredTrash(row.directory)) {
         // A directory removed by someone else occupies nothing. Say so before
         // deleting anything on its account; the expiry page settles its row.

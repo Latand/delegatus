@@ -15,7 +15,7 @@ import type { AttemptTempOwner } from "./attemptTempRetention";
  * contains every root and says nothing about any of them; a process standing
  * there holds a root only by naming it, which the reference proof answers. */
 const worksIn = (directory: string) => (other: string) =>
-  other === directory || other.startsWith(directory + path.sep) || other === path.dirname(directory);
+  other === directory || other.startsWith(directory + path.sep);
 
 /** A lane that is not both closed and settled is open. */
 function openLaneDirectories(): string[] {

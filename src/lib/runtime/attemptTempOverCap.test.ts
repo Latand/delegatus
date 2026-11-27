@@ -113,6 +113,26 @@ test("under the cap, finished scratch keeps its 24 hours whatever else the tick 
   expect(fs.existsSync(directory)).toBeTrue();
 });
 
+test("an unreadable root keeps its measured bytes while reclaim continues and publishes the report", async () => {
+  const f = fixture();
+  const unreadable = f.make("unread", f.lane("lane-unread", 8));
+  const eligible = f.make("eligible", f.lane("lane-eligible", 6));
+  const original = fs.lstatSync.bind(fs);
+  const stat = spyOn(fs, "lstatSync").mockImplementation(((target: fs.PathLike, ...args: unknown[]) => {
+    if (String(target) === unreadable) throw Object.assign(new Error("fixture denied"), { code: "EACCES" });
+    return (original as (...values: unknown[]) => ReturnType<typeof fs.lstatSync>)(target, ...args);
+  }) as typeof fs.lstatSync);
+  try {
+    const report = await f.tick(1);
+    expect(report.overCap?.outcomes).toContainEqual(expect.objectContaining({ directory: unreadable, bytes: MiB, reasonCode: "root_unreadable" }));
+    expect(report.overCap?.removed).toBe(1);
+    expect(fs.existsSync(unreadable)).toBeTrue();
+    expect(fs.existsSync(eligible)).toBeFalse();
+    expect(Date.parse(f.written().at)).not.toBeNaN();
+    expect(f.written().overCap.outcomes).toContainEqual(expect.objectContaining({ directory: unreadable, reasonCode: "root_unreadable" }));
+  } finally { stat.mockRestore(); }
+});
+
 test("over the cap, every existing proof still keeps its root", async () => {
   const f = fixture();
   const cases = ["live", "argv", "keep", "git", "linked", "custody", "open", "inside", "touched", "clear"] as const;
