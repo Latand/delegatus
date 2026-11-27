@@ -12,6 +12,7 @@ import { OWNERSHIP_PRELOAD, ownershipSandbox } from "@/lib/state/fixtures/owners
 import { writeEnvelope } from "@/lib/recordedChecks/wire";
 import { attemptTempJournalPath, type ProcessScan } from "@/lib/tempSweep";
 import { attemptReferencesClear } from "./attemptTempFilesystem";
+import * as attemptRemoval from "./attemptTempRemoval";
 import { AttemptTempStore, type AttemptTempSweepOptions } from "./attemptTempRetention";
 import { runAttemptTempSweep } from "./attemptTempProduction";
 import { finishedLane, holdFinishedRoot, nameInReport } from "./attemptTempRetention.testSupport";
@@ -204,6 +205,24 @@ test("a conversation that starts working inside a root during its proofs keeps i
   } finally { peer?.close(); }
 });
 
+test("a cwd at the scratch namespace parent leaves a child eligible while a cwd inside another root holds it", async () => {
+  const f = fixture();
+  const parentCwd = f.make("parent", f.lane("lane-parent", 8));
+  const insideCwd = f.make("inside2", f.lane("lane-inside2", 6));
+  const registry = new AgentRegistry(statePath("agent-registry.json"), () => false, undefined, { sqliteMode: "sqlite" });
+  registry.upsert({ key: { engine: "codex", sessionId: "scratch-parent-cwd" }, artifactPath: path.join(f.root, "parent.jsonl"),
+    cwd: statePath("scratch"), accountId: null, status: "live", host: null, claimEpoch: 1, claimOwner: null, pendingAction: null, structuredHost: null });
+  registry.upsert({ key: { engine: "codex", sessionId: "scratch-inside-cwd" }, artifactPath: path.join(f.root, "inside.jsonl"),
+    cwd: path.join(insideCwd, "working"), accountId: null, status: "live", host: null, claimEpoch: 1, claimOwner: null, pendingAction: null, structuredHost: null });
+  try {
+    const report = await f.tick(1);
+    expect(report.errors).toBe(0);
+    expect(fs.existsSync(parentCwd)).toBeFalse();
+    expect(fs.existsSync(insideCwd)).toBeTrue();
+    expect(report.overCap?.outcomes).toContainEqual(expect.objectContaining({ directory: insideCwd, reasonCode: "open_lane" }));
+  } finally { registry.close(); }
+});
+
 test("an unchanged registry is read once however many roots a reclaim proves", async () => {
   const f = fixture();
   // Reading every conversation again at each proof outlasts a root's window on
@@ -321,6 +340,24 @@ test("an interrupted reclaim is finished by a later reclaim before the attempt e
   expect(report.errors, JSON.stringify(report.overCap?.outcomes)).toBe(0);
   expect(report.overCap).toMatchObject({ removed: 1, ended: "cleared" });
   expect(fs.readdirSync(statePath("scratch"))).toEqual([]);
+});
+
+test("a fresh write in quarantined scratch survives replay until idle for three hours", async () => {
+  const f = fixture();
+  const directory = f.make("newwrite", f.lane("lane-newwrite", 5));
+  const interrupt = spyOn(attemptRemoval, "removeTreeWithinAttemptBudget").mockImplementation(async (_target, mutationStarted) => {
+    mutationStarted();
+    throw new Error("fixture process stopped after quarantine");
+  });
+  try { await f.tick(1); } finally { interrupt.mockRestore(); }
+  const journal = JSON.parse(fs.readFileSync(attemptTempJournalPath(directory), "utf8"));
+  const fresh = path.join(journal.trash, "fresh-after-quarantine");
+  fs.writeFileSync(fresh, "keep this new write");
+  fs.utimesSync(fresh, new Date(NOW + 1000), new Date(NOW + 1000));
+  clock.mockReturnValue(NOW + 1000);
+  const report = await f.tick(1);
+  expect(report.errors, JSON.stringify(report.overCap?.outcomes)).toBe(0);
+  expect(fs.readFileSync(path.join(directory, "fresh-after-quarantine"), "utf8")).toBe("keep this new write");
 });
 
 test("a tick whose expiry page spends the whole budget lets reclaim go first on the next one", async () => {
@@ -462,5 +499,24 @@ test.each([
     expect(tick.answer, JSON.stringify(tick.answer.outcomes)).toMatchObject({ ...expected, removed: 1, errors: 0 });
     expect(fs.existsSync(seeded.directory)).toBeFalse();
     expect(JSON.parse(fs.readFileSync(tick.report, "utf8"))).toMatchObject({ ...expected, removed: 1, errors: 0 });
+  } finally { sandbox.release(); }
+}, 120_000);
+
+test("a fresh helper uses its current cap after a prior tick starved at one byte", () => {
+  const sandbox = ownershipSandbox();
+  try {
+    const run = (owner: "viewer" | "tool", ...argv: string[]) => {
+      const result = Bun.spawnSync({ cmd: [process.execPath, "--preload", OWNERSHIP_PRELOAD,
+        path.join(import.meta.dir, "attemptTempOverCap.fixture.ts"), ...argv],
+        cwd: process.cwd(), env: { ...sandbox.environment(), LLV_STATE_OWNER: owner }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+      expect(result.exitCode, result.stderr.toString()).toBe(0);
+      return JSON.parse(result.stdout.toString().trim().split("\n").at(-1)!);
+    };
+    const seeded = run("viewer", "--seed-previous-release", "5", path.join(sandbox.temporaryRoot(), "repo")).answer;
+    run("viewer", "--viewer-start");
+    run("viewer", "--record-starved-report");
+    const tick = run("tool", "--minute-tick", String(100 * MiB));
+    expect(tick.answer.overCap).toMatchObject({ capBytes: 100 * MiB, removed: 0 });
+    expect(fs.existsSync(seeded.directory)).toBeTrue();
   } finally { sandbox.release(); }
 }, 120_000);

@@ -2,6 +2,7 @@
  * `attemptTempOverCap.test.ts` under an operator-shaped home. The caller names
  * the process owner in the environment, as each real entry point does. */
 import fs from "node:fs";
+import path from "node:path";
 import { Database } from "bun:sqlite";
 import { statePath } from "@/lib/configDir";
 import { AgentRegistry } from "@/lib/agent/registry";
@@ -49,6 +50,13 @@ if (mode === "--seed-previous-release") {
     loadAccountMigrationController: async () => ({ startAccountMigrationController: async () => {} }),
     loadTempSweep: async () => ({ startTempSweep: () => {} }),
   });
+  answer = {};
+} else if (mode === "--record-starved-report") {
+  fs.mkdirSync(path.dirname(statePath("attempt-temp-report.json")), { recursive: true });
+  fs.writeFileSync(statePath("attempt-temp-report.json"), JSON.stringify({
+    at: new Date(NOW).toISOString(), condition: { mode: "on", overCap: true, failing: false },
+    overCap: { checked: 0, ended: "budget", capBytes: 1 },
+  }));
   answer = {};
 } else if (mode === "--minute-tick") {
   answer = await runAttemptTempSweep({ scan: () => ({ ownNamespace: null, processes: [] }),

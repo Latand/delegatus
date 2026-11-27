@@ -64,6 +64,8 @@ export function installRegistryArchive(db: Database): void {
     }),
     `CREATE INDEX IF NOT EXISTS registry_archive_order ON registry_archive(collection,row_order)`,
     `CREATE INDEX IF NOT EXISTS registry_archive_key ON registry_archive(collection,row_key)`,
+    `CREATE INDEX IF NOT EXISTS registry_archive_entries_cwd ON registry_archive(collection,json_extract(value_json,'$.cwd'),row_order)`,
+    `CREATE INDEX IF NOT EXISTS registry_archive_conversations_launch_cwd ON registry_archive(collection,json_extract(value_json,'$.generations[#-1].launchProfile.cwd'),row_order)`,
     ...["conversationId", "artifactPath", "clientAttemptId", "spawnCapabilityDigest", "parentConversationId", "state"].map(field =>
       `CREATE INDEX IF NOT EXISTS registry_archive_${field} ON registry_archive(collection,json_extract(value_json,'$.${field}'),row_order)`),
     `CREATE INDEX IF NOT EXISTS registry_archive_operation ON registry_archive(collection,json_extract(value_json,'$.command.operationId'),row_order)`,

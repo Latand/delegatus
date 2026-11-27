@@ -481,8 +481,8 @@ const carrierSelect = Object.entries(carrierColumns).map(([name, expr]) => `${ex
 const registryRowIndexes = declaredIndexes([
   `CREATE INDEX IF NOT EXISTS registry_busy_carriers ON registry_rows(collection,${carrierTurn},row_order,row_key,${Object.values(carrierColumns).join(",")}) WHERE ${busyCarrierRows}`,
   "CREATE INDEX IF NOT EXISTS registry_rows_collection_order ON registry_rows(collection, row_order)",
-  "CREATE INDEX IF NOT EXISTS registry_entries_cwd ON registry_rows(collection,json_extract(value_json,'$.cwd'),row_order) WHERE collection='entries'",
-  "CREATE INDEX IF NOT EXISTS registry_conversations_launch_cwd ON registry_rows(collection,json_extract(value_json,'$.generations[#-1].launchProfile.cwd'),row_order) WHERE collection='conversations'",
+  "CREATE INDEX IF NOT EXISTS registry_entries_cwd ON registry_rows(collection,json_extract(value_json,'$.cwd'),row_order)",
+  "CREATE INDEX IF NOT EXISTS registry_conversations_launch_cwd ON registry_rows(collection,json_extract(value_json,'$.generations[#-1].launchProfile.cwd'),row_order)",
   "CREATE INDEX IF NOT EXISTS registry_state_page ON registry_rows(collection,json_extract(value_json,'$.state'),row_key)",
   "CREATE INDEX IF NOT EXISTS registry_migration_page ON registry_rows(collection,json_extract(value_json,'$.migration.phase'),row_key)",
   "CREATE INDEX IF NOT EXISTS registry_delivery_claim ON registry_rows(json_extract(value_json,'$.conversationId'),json_extract(value_json,'$.state'),json_extract(value_json,'$.generationId'),json_extract(value_json,'$.admissionSeq'),json_extract(value_json,'$.createdAt'),json_extract(value_json,'$.id'),row_key) WHERE collection='heldDeliveries'",
@@ -2717,17 +2717,24 @@ export class SqliteAgentRegistryStore {
         // the separator closes the range of paths below a directory.
         const cwd = `json_extract(value_json,'${collection === "entries" ? "$.cwd" : "$.generations[#-1].launchProfile.cwd"}')`;
         const scoped = collection === "heldDeliveries" ? undefined : within;
-        const scope = scoped ? ` AND (${scoped.map(() => `${cwd}=? OR ${cwd}>=? AND ${cwd}<?`).join(" OR ") || "0"})` : "";
+        // Separate equality and descendant ranges so SQLite can seek the cwd
+        // expression index in both branches instead of scanning a collection
+        // to evaluate an OR predicate.
+        const scopedSql = scoped ? scoped.length ? scoped.flatMap(() => [
+          `SELECT row_key,value_json,row_order FROM ${this.recordsSource} WHERE collection=? AND ${cwd}=?`,
+          `SELECT row_key,value_json,row_order FROM ${this.recordsSource} WHERE collection=? AND ${cwd}>=? AND ${cwd}<?`,
+        ]).join(" UNION ALL ") : `SELECT row_key,value_json,row_order FROM ${this.recordsSource} WHERE 0` : undefined;
         // Each state gets its own index seek. Null is the legacy default
         // "held"; the normalizer still rejects corrupt idle/image commands.
         const sql = collection === "heldDeliveries"
           ? ["held", "assigned", "delivery-uncertain", null].map(() =>
             `SELECT row_key,value_json,row_order FROM ${this.recordsSource}
               WHERE collection='heldDeliveries' AND json_extract(value_json,'$.state') IS ?`).join(" UNION ALL ") + " ORDER BY row_order"
-          : `SELECT row_key,value_json FROM ${this.recordsSource} WHERE collection=?${scope} ORDER BY row_order`;
+          : scopedSql ? `${scopedSql} ORDER BY row_order`
+            : `SELECT row_key,value_json,row_order FROM ${this.recordsSource} WHERE collection=? ORDER BY row_order`;
         const bindings = collection === "heldDeliveries" ? ["held", "assigned", "delivery-uncertain", null]
-          : [collection, ...(scoped ?? []).flatMap(directory => [directory, directory + path.sep,
-            directory + String.fromCharCode(path.sep.charCodeAt(0) + 1)])];
+          : scoped ? scoped.flatMap(directory => [collection, directory, collection, directory + path.sep,
+            directory + String.fromCharCode(path.sep.charCodeAt(0) + 1)]) : [collection];
         // This read owns its statement. An interrupted iterator must not leave
         // a cached Bun statement unusable after the peer repairs the row.
         const statement = this.db.prepare<{ row_key: string; value_json: string }, (string | null)[]>(sql);
