@@ -101,6 +101,40 @@ test("a contended slice resumes the same cleaner pass and selection on the short
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }, 30_000);
 
+test("critical pressure wakes the cleaner during unchanged warning backoff", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "disk-cleaner-critical-wake-"));
+  const env = isolatedEnvironment(root, process.env);
+  env.LLV_STATE_DIR = path.join(env.TMPDIR!, "state"); delete env.PORT;
+  const run = async (minutes: number, free: number, level: "warning" | "critical", volume = "fixture") => {
+    const child = Bun.spawn([process.execPath, "-e", `
+      import { reconcileAutomaticDiskCleaner } from "./src/lib/cleaner/diskController";
+      import { readDiskCleanerPass } from "./src/lib/cleaner/diskState";
+      const at = ${NOW} + ${minutes} * 60000, free = ${free}, level = ${JSON.stringify(level)}, volume = ${JSON.stringify(volume)};
+      const pressure = { at: new Date(at).toISOString(), episode: "same-episode",
+        volumes: [{ volume, roles: ["temp"], freeBytes: free, level }], consumers: [], warningBytes: 10, criticalBytes: 1 };
+      let releases = 0;
+      await reconcileAutomaticDiskCleaner(pressure, { now: () => at, active: () => true, project: async () => "fixture", card: async () => true,
+        env: { LLV_CLEANER: "dry-run" }, measure: () => [{ volume, roles: ["temp"], freeBytes: free }],
+        releases: async () => { releases++; return { kept: [], errors: 0 }; },
+        sweep: async () => ({ kept: [], errors: 0, next: null, more: false }) });
+      console.log(JSON.stringify({ releases, pass: readDiskCleanerPass()?.id }));
+    `], { env, stdout: "pipe", stderr: "pipe" });
+    const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect(code, err).toBe(0);
+    return JSON.parse(out.trim().split("\n").at(-1)!);
+  };
+  try {
+    const first = await run(0, 2.25 * 1024 ** 3, "warning");
+    const second = await run(15, 2.25 * 1024 ** 3, "warning");
+    expect(first.releases).toBe(1);
+    expect(second.releases).toBe(1);
+    expect((await run(20, 2.25 * 1024 ** 3, "warning")).pass).toBe(second.pass);
+    expect((await run(20, 1.75 * 1024 ** 3, "critical")).releases).toBe(1);
+    expect((await run(21, 1.75 * 1024 ** 3, "warning")).releases).toBe(0);
+    expect((await run(22, 1.75 * 1024 ** 3, "critical", "new-critical-volume")).releases).toBe(1);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}, 30_000);
+
 test("pressure admission, cooldown, journal and seat report survive Viewer restarts", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "disk-cleaner-controller-"));
   const env = isolatedEnvironment(root, process.env);

@@ -9,7 +9,7 @@ import { reportMediaRoot } from "@/lib/reportMedia/lookup";
 import { execFile } from "node:child_process";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { attemptReferencesClear, containerMountHold, blockedSubtrees, measureAttemptAllocation, inspectAttemptTree, attemptTempUtilityImage, removeAttemptTree, repositoryReferencesAttemptTemp, RepositoryLinkInventory,
-  RETAINED_CHECKOUT_BYTES_LIMIT, RETAINED_CHECKOUT_READ_MAX_AGE_MS, type RetainedCheckoutReads } from "./attemptTempFilesystem";
+  REPOSITORY_ACTIVE_BYTES_LIMIT, RETAINED_CHECKOUT_BYTES_LIMIT, RETAINED_CHECKOUT_READ_MAX_AGE_MS, type RetainedCheckoutReads } from "./attemptTempFilesystem";
 import { withAttemptTempDeadline } from "./attemptTempDeadline";
 import { AttemptTempBudgetDeferred } from "./attemptTempDiagnostics";
 import { removeTreeWithinAttemptBudget } from "./attemptTempRemoval";
@@ -451,7 +451,7 @@ esac
   }
 });
 
-test("a capture created during the final container observation is preserved before reclaim", async () => {
+test("a capture created during the final reference observation is preserved before reclaim", async () => {
   const parent = root(), directory = path.join(parent, "llv-stage-late-capture");
   fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "keep");
   const repository = path.join(parent, "checkout"); fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
@@ -460,18 +460,21 @@ test("a capture created during the final container observation is preserved befo
   const store = new AttemptTempStore(path.join(parent, "owners.sqlite"));
   store.register({ directory, pipelineId: "closed-lane", launchId: "late-capture", retainUntilClose: false, createdAt: 1 });
   store.measure(directory, 4096); store.release(directory);
-  let stateReads = 0;
+  let referenceReads = 0;
   let now = 2;
-  const sweep = () => sweepAttemptTemps(store, { now: () => now, maxRoots: 1,
-    state: async () => {
-      stateReads++;
-      if (stateReads === 2) fs.writeFileSync(path.join(directory, "frame.png"), "late frame");
-      return "closed";
-    }, references: async () => true, scan: () => ({ ownNamespace: null, processes: [] }) });
+  const sweep = () => sweepAttemptTemps(store, { now: () => now, maxRoots: 1, capBytes: 1024 ** 2,
+    availableBytes: () => Number.MAX_SAFE_INTEGER,
+    state: async () => "closed", references: async () => {
+      // The second awaited reference observation is the final dispatch window;
+      // inserting here tests the post-preservation mutation fence directly.
+      if (++referenceReads === 2) fs.writeFileSync(path.join(directory, "frame.png"), "late frame");
+      return true;
+    }, scan: () => ({ ownNamespace: null, processes: [] }) });
   try {
     const first = await sweep();
-    expect(stateReads).toBeGreaterThanOrEqual(2);
+    expect(referenceReads).toBeGreaterThanOrEqual(2);
     expect(first.removed).toBe(0);
+    expect(first.outcomes[0]?.reasonCode).toBe("evidence_changed");
     expect(fs.readFileSync(path.join(directory, "frame.png"), "utf8")).toBe("late frame");
     now += 60_001;
     expect((await sweep()).removed).toBe(1);
@@ -605,18 +608,32 @@ test.skipIf(process.platform === "win32")("a large link inventory stays below it
   let target = parent;
   for (let index = 0; index < 16; index++) target = path.join(target, "d".repeat(190));
   fs.mkdirSync(target, { recursive: true });
-  for (let index = 0; index < 3_000; index++) fs.symlinkSync(target, path.join(repository, `link-${index}`), "dir");
   const source = path.resolve(import.meta.dir, "attemptTempFilesystem.ts");
-  const measured: Array<{ rss: number; peak: number; targets: number; targetWeight: number; walks: number; cpuMs: number }> = [];
+  const measured: Array<{ rss: number; peak: number; initialTargets: number; initialTargetWeight: number;
+    targets: number; targetWeight: number; walks: number; cpuMs: number }> = [];
   for (let repetition = 0; repetition < 3; repetition++) {
+    for (let index = 0; index < 3_000; index++) {
+      const link = path.join(repository, `link-${index}`);
+      if (!fs.existsSync(link)) fs.symlinkSync(target, link, "dir");
+    }
     const child = Bun.spawn([process.execPath, "-e", `
     import { RepositoryLinkInventory } from ${JSON.stringify(source)};
+    import fs from "node:fs";
     const cpu = process.cpuUsage();
     const inventory = new RepositoryLinkInventory();
-    const targets = await inventory.targets(process.argv[1]);
-    const targetWeight = targets.reduce((total, value) => total + value.length * 2 + 32, 0);
+    let deferred = "";
+    let initialTargets = 0, initialTargetWeight = 0;
+    try {
+      const initial = await inventory.targets(process.argv[1]);
+      initialTargets = initial.length;
+      initialTargetWeight = initial.reduce((total, value) => total + value.length * 2 + 32, 0);
+    } catch (error) { deferred = String(error); }
+    const directory = process.argv[1];
+    for (const name of fs.readdirSync(directory).slice(10)) fs.unlinkSync(directory + "/" + name);
+    const resumed = await new RepositoryLinkInventory().targets(directory);
+    const targetWeight = resumed.reduce((total, value) => total + value.length * 2 + 32, 0);
     const used = process.cpuUsage(cpu);
-    console.log(JSON.stringify({ rss: process.memoryUsage.rss(), targets: targets.length, targetWeight, walks: inventory.walks.length,
+    console.log(JSON.stringify({ rss: process.memoryUsage.rss(), deferred, initialTargets, initialTargetWeight, targets: resumed.length, targetWeight, walks: inventory.walks.length,
       cpuMs: (used.user + used.system) / 1000 }));
   `, repository], { env: { ...process.env, LLV_STATE_DIR: path.join(parent, "state"), XDG_CONFIG_HOME: path.join(parent, "config"),
       TMPDIR: path.join(parent, "tmp") }, stdout: "pipe", stderr: "pipe" });
@@ -633,15 +650,18 @@ test.skipIf(process.platform === "win32")("a large link inventory stays below it
       expect(peak).toBeGreaterThan(0);
       expect(peak).toBeLessThan(224 * 1024 ** 2);
       expect(observed.rss).toBeLessThan(224 * 1024 ** 2);
-      expect(observed.targets).toBe(6_000);
-      expect(observed.targetWeight).toBeGreaterThan(30 * 1024 ** 2);
+      expect(observed.deferred).toContain("active memory bound");
+      expect(observed.initialTargets).toBe(0);
+      expect(observed.initialTargetWeight).toBe(0);
+      expect(observed.targets).toBe(20);
+      expect(observed.targetWeight).toBeLessThan(REPOSITORY_ACTIVE_BYTES_LIMIT);
       expect(observed.walks).toBe(1);
       measured.push({ ...observed, peak });
       expect(fs.existsSync(repository)).toBeTrue();
     } finally { if (child.exitCode === null) { child.kill("SIGKILL"); await child.exited; } }
   }
   const average = (key: "rss" | "peak" | "cpuMs") => measured.reduce((sum, row) => sum + row[key], 0) / measured.length;
-  console.info(`[attempt-temp inventory] repetitions=3 links=3000 targets=6000 weightedTargetsMiB=${(measured[0]!.targetWeight / 1024 ** 2).toFixed(1)} peakRssMiB=${measured.map(row => (row.peak / 1024 ** 2).toFixed(1)).join(",")} meanPeakRssMiB=${(average("peak") / 1024 ** 2).toFixed(1)} meanCpuMs=${average("cpuMs").toFixed(1)}`);
+  console.info(`[attempt-temp inventory] repetitions=3 inputLinks=3000 resumedTargets=20 activeLimitMiB=${(REPOSITORY_ACTIVE_BYTES_LIMIT / 1024 ** 2).toFixed(1)} peakRssMiB=${measured.map(row => (row.peak / 1024 ** 2).toFixed(1)).join(",")} meanPeakRssMiB=${(average("peak") / 1024 ** 2).toFixed(1)} meanRetainedRssMiB=${(average("rss") / 1024 ** 2).toFixed(1)} meanCpuMs=${average("cpuMs").toFixed(1)}`);
 });
 
 test("a reused validation never answers the fence that precedes a destructive step", async () => {

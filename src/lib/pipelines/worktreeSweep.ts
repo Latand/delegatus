@@ -601,6 +601,15 @@ async function measureDirectory(directory: string, excludedDirectories: readonly
   return bytes;
 }
 
+/** The accounting phase used by the leased worktree-sweep worker for retained
+ * checkout allocation. Keep the pause checks in the same recursive walk so a
+ * pressure transition can stop this worker at its next directory boundary. */
+export function measureKeptWorktreeAllocation(directory: string, excludedDirectories: readonly string[], seenEntries: Set<string>,
+  entryLimit: number, check: () => void) {
+  return measureDirectory(directory, excludedDirectories, seenEntries, false, entryLimit, Number.POSITIVE_INFINITY,
+    { entries: Number.POSITIVE_INFINITY, check });
+}
+
 type RegistryShape = {
   entries?: Record<string, Partial<Pick<AgentRegistryEntry, "key" | "cwd" | "status" | "pendingAction" | "updatedAt"
     | "host" | "structuredHost" | "structuredTerminationSurvivors" | "claimOwner">>>;
@@ -1889,9 +1898,8 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         } catch { /* Missing entries contribute no allocated blocks. */ }
       }
       const stamp = ports.cache ? stamps.get(kept.path) ?? allocationStamp(kept.path) : null;
-      kept.bytes = rootBytes + await measureDirectory(accessible(kept.path), nested.map(row => accessible(row.path)), seenKept, false,
-        ports.accountingEntryLimit ?? 4096, Number.POSITIVE_INFINITY,
-        { entries: Number.POSITIVE_INFINITY, check: () => { if (ports.pause?.()) throw new SweepWalkDeferred("memory"); } });
+      kept.bytes = rootBytes + await measureKeptWorktreeAllocation(accessible(kept.path), nested.map(row => accessible(row.path)), seenKept,
+        ports.accountingEntryLimit ?? 4096, () => { if (ports.pause?.()) throw new SweepWalkDeferred("memory"); });
       if (stamp && stamp === allocationStamp(kept.path)) kept.allocation = { at: accountingAt, stamp };
     } else {
       kept.bytes = previouslyKept.get(kept.path)?.bytes ?? 0;

@@ -15,11 +15,13 @@ import { openHostTempRoots, stageHostNamespace } from "@/lib/state/hostTempViews
 import { globalCache } from "@/lib/scanner/caches";
 import { projectForCwd, recordWorktreeResolution } from "@/lib/scanner/describe";
 import { inspectTree, scanProcesses, type ProcessScan } from "@/lib/tempSweep";
+import { sweepMonotonicNow } from "@/lib/runtime/attemptTempDeadline";
 import type { FileEntry, RootKey } from "@/lib/types";
 
 import { readForgeCache, resetForgeCacheForTests, type ForgeCacheFile } from "@/lib/forge/cache";
 import { sweepForgeLinks } from "@/lib/forge/sweep";
 import type { GithubRunner } from "@/lib/monitor/githubEvidence";
+import { withSweepWalk } from "./sweepWalkAdmission";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { RunState as MergeBatchState } from "../../../scripts/merge-batch";
 
@@ -44,6 +46,7 @@ import {
   startWorktreeSweep,
   stopWorktreeSweep,
   sweepMergedWorktrees,
+  measureKeptWorktreeAllocation,
   worktreeSweepForeign,
   worktreeSweepMode,
   worktreeSweepStatus,
@@ -252,16 +255,17 @@ test("memory pressure after registration Git yields discovery and the retry buil
   let pressured = false, gitReads = 0;
   const base = ports({ pipelines: [pipeline({ repoDir: root, worktreeDir: dir, branch: "pressure/yield" })],
     prs: [merged(71, "pressure/yield", tip)] });
-  await expect(sweepMergedWorktrees({ ...base, git: async (args, cwd) => {
+  const admittedSweep = () => withSweepWalk(sweepMonotonicNow() + 60_000, () => sweepMergedWorktrees({ ...base, git: async (args, cwd) => {
     gitReads++;
     const result = await base.git(args, cwd);
     pressured = true;
     return result;
-  }, pause: () => pressured })).rejects.toMatchObject({ reason: "memory" });
+  }, pause: () => pressured }));
+  await expect(admittedSweep()).rejects.toMatchObject({ reason: "memory" });
   expect(gitReads).toBe(1);
   expect(fs.existsSync(dir)).toBe(true);
-  const resumed = await sweepMergedWorktrees(ports({ pipelines: [pipeline({ repoDir: root, worktreeDir: dir, branch: "pressure/yield" })],
-    prs: [merged(71, "pressure/yield", tip)] }));
+  const resumed = await withSweepWalk(sweepMonotonicNow() + 60_000, () => sweepMergedWorktrees(ports({
+    pipelines: [pipeline({ repoDir: root, worktreeDir: dir, branch: "pressure/yield" })], prs: [merged(71, "pressure/yield", tip)] })));
   expect(resumed.removed).toEqual([expect.objectContaining({ path: dir, pr: expect.objectContaining({ number: 71 }) })]);
   expect(fs.existsSync(dir)).toBe(false);
 });
@@ -277,6 +281,18 @@ test("memory pressure inside the recursive candidate audit interrupts it and ret
     prs: [merged(72, "pressure/inspect", tip)] }));
   expect(resumed.removed).toEqual([expect.objectContaining({ path: dir, pr: expect.objectContaining({ number: 72 }) })]);
   expect(fs.existsSync(dir)).toBe(false);
+});
+
+test("retained-worktree accounting yields at its traversal checkpoint and can restart cleanly", async () => {
+  const directory = path.join(caseDir, "retained-accounting"); fs.mkdirSync(directory);
+  for (let index = 0; index < 2048; index++) fs.writeFileSync(path.join(directory, `entry-${index}`), "accounted bytes");
+  let checks = 0;
+  await expect(measureKeptWorktreeAllocation(directory, [], new Set(), 4096, () => {
+    if (++checks === 2) throw Object.assign(new Error("pressure"), { reason: "memory" });
+  })).rejects.toMatchObject({ reason: "memory" });
+  expect(checks).toBe(2);
+  const bytes = await measureKeptWorktreeAllocation(directory, [], new Set(), 4096, () => {});
+  expect(bytes).toBeGreaterThan(0);
 });
 
 test("the lane's PR is found by the delivered number when its head branch differs from the lane branch", async () => {
