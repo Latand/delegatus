@@ -248,9 +248,16 @@ export async function applyStructuredReconfigure(
     throw new Error("an Antigravity session uses the host's signed-in account; account changes are not supported");
   }
   const ownsOperation = dependencies.ownsOperation ?? (async () => true);
-  const release = (key: SessionKey, assertCurrent?: () => void) => withHostStopOrigin({ path: "structured-reconfigure", operationId: effect.operationId }, () => {
+  const release = (key: SessionKey, assertCurrent?: () => void) => withHostStopOrigin({ path: "structured-reconfigure", operationId: effect.operationId }, async () => {
     assertCurrent?.();
-    return dependencies.releaseHost ? dependencies.releaseHost(key) : releaseStructuredHost(key, assertCurrent);
+    if (dependencies.releaseHost) return dependencies.releaseHost(key);
+    const released = await releaseStructuredHost(key, assertCurrent);
+    if (!released && registry.hostEntry(key)?.structuredWriterRetired) {
+      const { retireMigratedStructuredHost } = await import("./structuredHostControl");
+      assertCurrent?.();
+      await retireMigratedStructuredHost(registry, conversationId, key, effect.operationId);
+    }
+    return released;
   });
   const originalCustody = captureReleasedHostCustody(registry, key);
   const recover = dependencies.recover ?? recoverDeadStructuredConversation;

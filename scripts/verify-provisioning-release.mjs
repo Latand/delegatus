@@ -129,15 +129,7 @@ export async function verifyProvisioningRelease(origin, sandbox, env) {
   return { ...baseline, heldReplies };
 }
 
-export function firstStageFixtureReady(lane, label) {
-  const attempts = lane.runs?.find(run => run.stageId === "build")?.attempts?.length ?? 0;
-  // Checkout readiness is persisted before the controller schedules the first attempt.
-  if (attempts === 0 && lane.state === "running") return false;
-  if (attempts !== 1) throw new Error(`${label} fixture expected one first-stage attempt, observed ${attempts} (${lane.state})`);
-  return true;
-}
-
-async function verifyFixtureLane(origin, checkout, remote, git, env, holdReply) {
+export async function verifyFixtureLane(origin, checkout, remote, git, env, holdReply) {
   await git(checkout, "add", ".");
   await git(checkout, "-c", "user.name=Provisioning Fixture", "-c", "user.email=noreply", "commit", "-m", "provisioning fixture");
   await git(checkout, "remote", "add", "origin", remote);
@@ -176,12 +168,22 @@ async function verifyFixtureLane(origin, checkout, remote, git, env, holdReply) 
   let faultEntry;
   let interrupted = false;
   let faultVerified = false;
-  let awaitingFirstStage = false;
-  const label = holdReply ?? "release";
+  let waitingForFirstAttempt = false;
+  const fixture = holdReply ?? "release";
   const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    const response = await fetch(`${origin}/api/pipelines/${encodeURIComponent(laneId)}`, { headers, signal: AbortSignal.timeout(5_000) });
-    const lane = (await response.json()).pipeline;
+  while (true) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    const signal = AbortSignal.timeout(Math.min(5_000, remaining));
+    let lane;
+    try {
+      const response = await fetch(`${origin}/api/pipelines/${encodeURIComponent(laneId)}`, { headers, signal });
+      lane = (await response.json()).pipeline;
+    } catch (error) {
+      if (Date.now() >= deadline || (signal.aborted && remaining <= 5_000)) break;
+      throw error;
+    }
+    if (Date.now() >= deadline) break;
     if (holdReply && !interrupted && await lstat(gateEntry).then(() => true, error => {
       if (error.code === "ENOENT") return false;
       throw error;
@@ -228,12 +230,16 @@ async function verifyFixtureLane(origin, checkout, remote, git, env, holdReply) 
       && !(holdReply && faultVerified && lane.provisioningStep.reason === "toolchain-reply-lost")) {
       throw new Error(`provisioning fixture interrupted at ${lane.provisioningStep.step} (${lane.provisioningStep.reason})`);
     }
-    const checkoutReady = lane && lane.state !== "provisioning" && !lane.provisioningStep && lane.lastPassedCommit === planned;
-    if (checkoutReady) {
+    const receiptConsumed = lane?.lastPassedCommit === planned && lane.state !== "provisioning" && !lane.provisioningStep;
+    const attemptCount = lane?.runs?.[0]?.attempts?.length ?? 0;
+    // Provisioning commits the running lane before the controller records its first attempt.
+    waitingForFirstAttempt = receiptConsumed && attemptCount === 0 && lane.state === "running" && lane.cursor?.state === "pending";
+    if (receiptConsumed && !waitingForFirstAttempt) {
       if (holdReply && !faultVerified) throw new Error(`${holdReply} fixture never verified the held reply transition`);
-      awaitingFirstStage = !firstStageFixtureReady(lane, label);
-    }
-    if (checkoutReady && !awaitingFirstStage) {
+      if (attemptCount !== 1) {
+        const detail = lane.stateDetail ? `: ${lane.stateDetail}` : "";
+        throw new Error(`${fixture} fixture observed ${attemptCount} first-stage attempts (expected one, lane ${lane.state})${detail}`);
+      }
       if (holdReply) {
         const events = (await readFile(eventsFile, "utf8")).trim().split("\n").filter(Boolean).map(line => JSON.parse(line));
         const adds = events.filter(event => event.type === "worktree-add" && event.pipelineId === laneId);
@@ -252,9 +258,12 @@ async function verifyFixtureLane(origin, checkout, remote, git, env, holdReply) 
       if (receipt.key !== key) throw new Error("release fixture graph has no matching receipt");
       return { lane: laneId, planned, graph: key, workerEntry: workerPath, ...(holdReply ? { heldReply: holdReply } : {}) };
     }
-    await new Promise(resolve => setTimeout(resolve, 150));
+    const pollDelay = Math.min(150, deadline - Date.now());
+    if (pollDelay > 0) await new Promise(resolve => setTimeout(resolve, pollDelay));
   }
-  if (awaitingFirstStage) throw new Error(`${label} fixture did not record its first-stage attempt inside 60 s`);
+  if (waitingForFirstAttempt) {
+    throw new Error(`${fixture} fixture consumed its provisioning receipt but no first-stage attempt appeared within 60 s`);
+  }
   throw new Error("release fixture did not consume its cold provisioning receipt inside 60 s");
 }
 

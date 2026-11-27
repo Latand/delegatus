@@ -1,6 +1,6 @@
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { engineMemoryOff } from "@/lib/memory/source";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -41,6 +41,8 @@ export interface MemoryEngineStart {
 type Selection = Pick<ReturnType<typeof learnedRulesSnapshot>, "block" | "scopes" | "rules"> & { reason?: string; shadowIds?: string[]; removed?: import("./roleSelection").SelectionRemoval[]; evidence?: import("./roleSelectionProvider").SelectionEvidence };
 export interface MemoryDelivery {
   schemaVersion: 1;
+  confirmed?: boolean;
+  receiptToken?: string;
   conversationId: string;
   attempt?: MemoryEngineStart["attempt"];
   engine: MemoryEngineStart["engine"];
@@ -54,6 +56,7 @@ export interface MemoryDelivery {
   evidence?: import("./roleSelectionProvider").SelectionEvidence;
   engineMemory: { kind: "claude-index" | "codex-summary"; hash: string; bytes: number; loadedBytes: number }[];
 }
+export type MemoryDeliveryReceipt = { sequence: number; token: string };
 const hash = (value: Uint8Array) => createHash("sha256").update(value).digest("hex");
 async function optionalFile(file: string): Promise<Buffer | null> {
   try {
@@ -124,6 +127,7 @@ async function engineMemory(start: MemoryEngineStart, clean: boolean) {
 const deliveryLedgerIndexes = declaredIndexes([
   `CREATE INDEX IF NOT EXISTS files_hash ON files(hash)`,
   `CREATE INDEX IF NOT EXISTS deliveries_attempt ON deliveries(json_extract(body,'$.attempt.pipelineId'), json_extract(body,'$.attempt.stageId'), json_extract(body,'$.attempt.attempt'), json_extract(body,'$.conversationId'))`,
+  `CREATE INDEX IF NOT EXISTS deliveries_conversation ON deliveries(json_extract(body,'$.conversationId'))`,
 ]);
 const indexPreparations = new Map<string, Promise<void>>();
 
@@ -194,7 +198,7 @@ export async function prepareDeliveryLedgerIndexes(options: { workerStartedBarri
 /** One owner, no module cache: rows, private content-addressed copies and their
  * eviction commit together. Readers page by sequence. No ledger content is
  * included in prompts, known values, or public API responses. */
-export async function recordMemoryDelivery(start: MemoryEngineStart, clean: boolean, select: () => Selection | undefined): Promise<string | undefined> {
+export async function recordMemoryDelivery(start: MemoryEngineStart, clean: boolean, select: () => Selection | undefined): Promise<{ block: string | undefined; receipt: MemoryDeliveryReceipt }> {
   return withViewerOperation("memory.engine-start", async () => {
     await prepareDeliveryLedgerIndexes();
     const directory = statePath("role-memory");
@@ -226,7 +230,8 @@ export async function recordMemoryDelivery(start: MemoryEngineStart, clean: bool
             // Select after asynchronous admission; rules and their ordered metadata
             // are captured together, including omissions at the byte ceiling.
             const selection = select();
-            const row: MemoryDelivery = { schemaVersion: 1, conversationId: start.conversationId, ...(start.attempt ? { attempt: start.attempt } : {}), engine: start.engine, at: new Date().toISOString(), scopes: selection?.scopes ?? [], rules: selection?.rules ?? [], bytes: Buffer.byteLength(selection?.block ?? ""), ...(selection?.reason ? { reason: selection.reason, shadowIds: selection.shadowIds, removed: selection.removed } : {}), engineMemory: files.map(({ kind, hash, bytes, loadedBytes }) => ({ kind, hash, bytes, loadedBytes })) };
+            const token = randomUUID();
+            const row: MemoryDelivery = { schemaVersion: 1, confirmed: false, receiptToken: token, conversationId: start.conversationId, ...(start.attempt ? { attempt: start.attempt } : {}), engine: start.engine, at: new Date().toISOString(), scopes: selection?.scopes ?? [], rules: selection?.rules ?? [], bytes: Buffer.byteLength(selection?.block ?? ""), ...(selection?.reason ? { reason: selection.reason, shadowIds: selection.shadowIds, removed: selection.removed } : {}), engineMemory: files.map(({ kind, hash, bytes, loadedBytes }) => ({ kind, hash, bytes, loadedBytes })) };
             if (selection?.evidence) row.evidence = selection.evidence;
             const body = JSON.stringify(row);
             if (Buffer.byteLength(body) > 256 * 1024) throw Error("memory delivery metadata exceeds ledger limit");
@@ -247,12 +252,29 @@ export async function recordMemoryDelivery(start: MemoryEngineStart, clean: bool
             }
             if (cutoff) { db.query("DELETE FROM deliveries WHERE sequence<=?").run(cutoff); collect(); }
             db.exec("COMMIT");
-            return selection?.block;
+            return { block: selection?.block, receipt: { sequence, token } };
           } catch (error) { db.exec("ROLLBACK"); throw error; }
         } finally { db.close(); }
       });
     });
   });
+}
+
+/** Prepared memory is not delivery proof until the host start call succeeds. */
+export async function confirmMemoryDelivery(receipt: MemoryDeliveryReceipt | undefined): Promise<void> {
+  if (!receipt) return;
+  const filename = statePath("role-memory", "delivery.sqlite");
+  if (!fs.existsSync(filename)) return;
+  await waitForStateLock("memory.delivery-confirm", () => stateLockAttempt("memory.delivery-confirm", () => {
+    const Database = sqliteDatabase();
+    const db = new Database(filename);
+    try {
+      db.exec("PRAGMA busy_timeout=0");
+      db.query(`UPDATE deliveries SET body=json_set(body,'$.confirmed',json('true'))
+        WHERE sequence=? AND json_extract(body,'$.receiptToken')=? AND json_extract(body,'$.confirmed')=0`)
+        .run(receipt.sequence, receipt.token);
+    } finally { db.close(); }
+  }));
 }
 
 /** Private analysis seam. A sequence cursor never materializes the full ledger. */
@@ -278,9 +300,28 @@ export function deliveredRuleIds(attempt: NonNullable<MemoryEngineStart["attempt
     const rows = db.query<{ body: string }, [string, string, number, string]>(`SELECT body FROM deliveries
       WHERE json_extract(body,'$.attempt.pipelineId')=? AND json_extract(body,'$.attempt.stageId')=?
       AND json_extract(body,'$.attempt.attempt')=? AND json_extract(body,'$.conversationId')=?`).all(attempt.pipelineId, attempt.stageId, attempt.attempt, conversationId);
-    return new Set(rows.flatMap(row => (JSON.parse(row.body) as MemoryDelivery).rules.map(rule => rule.id)));
+    return new Set(rows.flatMap(row => {
+      const delivery = JSON.parse(row.body) as MemoryDelivery;
+      // Stage reports already accepted v1 rows written before confirmation
+      // existed. Keep that contract for those retained stage receipts only.
+      const legacy = delivery.schemaVersion === 1 && !Object.hasOwn(delivery, "confirmed") && !Object.hasOwn(delivery, "receiptToken");
+      return delivery.confirmed === true || legacy ? delivery.rules.map(rule => rule.id) : [];
+    }));
   } finally { db.close(); }
 }
+/** Conversation-level evidence includes starts outside pipelines. */
+export function deliveredRuleToConversation(conversationId: string, id: string, hash: string): boolean {
+  const filename = statePath("role-memory", "delivery.sqlite");
+  if (!fs.existsSync(filename)) return false;
+  const Database = sqliteDatabase();
+  const db = new Database(filename, { readonly: true });
+  try {
+    return !!db.query(`SELECT 1 FROM deliveries d CROSS JOIN json_each(d.body,'$.rules') rule
+      WHERE json_extract(d.body,'$.confirmed')=1 AND json_extract(d.body,'$.conversationId')=? AND json_extract(rule.value,'$.id')=?
+        AND json_extract(rule.value,'$.hash')=? LIMIT 1`).get(conversationId, id, hash);
+  } finally { db.close(); }
+}
+
 export function engineMemoryVersion(hash: string): Buffer | null {
   if (!/^[a-f0-9]{64}$/.test(hash)) throw Error("invalid engine memory hash");
   const filename = statePath("role-memory", "delivery.sqlite");

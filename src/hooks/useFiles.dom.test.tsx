@@ -679,3 +679,44 @@ test("an urgent spawned row survives a starved background deadline", async () =>
     host.remove();
   }
 });
+
+test("a settled card becomes idle on its own timer without another catalog read or bus frame", async () => {
+  const { emptyStore } = await import("@/components/runtime/runtimeModel");
+  const id = "quiet-conversation", path = "/fixture/quiet.jsonl";
+  const clock = Date.now, nativeTimer = globalThis.setTimeout;
+  let now = 2_000_000_000_000;
+  Date.now = () => now;
+  const store = emptyStore();
+  store.sessions[id] = { conversationId:id, sessionKey:{engine:"claude",sessionId:id}, artifactPath:path,
+    hostKind:"claude-broker",host:"hosted",turn:"idle",provenance:"structured",revision:1,
+    attentionIds:[],recentReceipts:[],activeTurnId:null,settledTurnId:"ended",capabilities:{steer:false,structuredAttention:true},
+    accountId:null,parentConversationId:null,flowId:null,workflowId:null,cwd:null };
+  testRuntimeBus = {getState:() => ({ store,enabled:true,structuredHostsEnabled:true,connection:"live",resyncedAt:null,lastEventAt:now }),
+    subscribe:() => () => {},subscribeFilesRevision:() => () => {},start() {},stop() {},refresh:async () => true};
+  const scanned: FileEntry = { path,conversationId:id,root:"claude-projects",engine:"claude",fmt:"claude",kind:"session",
+    name:"quiet",title:"Quiet",project:"atlas",parent:null,mtime:now/1000,size:2,activity:"live",proc:"running",pid:null,model:null,
+    pendingQuestion:null,waitingInput:null };
+  let reads = 0;
+  globalThis.fetch = mock(async () => { reads++; return Response.json({files:[scanned]}); }) as unknown as typeof fetch;
+  let fireExpiry: (() => void) | undefined;
+  const capture = (fn: () => void, ms?: number, ...args: unknown[]) => {
+    const timer = nativeTimer(fn, ms, ...args);
+    if (ms === 900_000) fireExpiry = () => { clearTimeout(timer); fn(); };
+    return timer;
+  };
+  globalThis.setTimeout = Object.assign(capture,nativeTimer) as typeof setTimeout;
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  try {
+    flushSync(() => root.render(<TurnStatusProbe now={now/1000} />));
+    await Bun.sleep(50);
+    expect(container.querySelector("[data-card-state]")?.getAttribute("data-card-state")).toBe("recent");
+    expect(fireExpiry).toBeDefined();
+    now += 900_000;
+    flushSync(() => fireExpiry!());
+    await Bun.sleep(30);
+    expect(container.querySelector("[data-card-state]")?.getAttribute("data-card-state")).toBe("idle");
+    expect(reads).toBe(1);
+  } finally { flushSync(() => root.unmount()); globalThis.setTimeout = nativeTimer; Date.now = clock; }
+});

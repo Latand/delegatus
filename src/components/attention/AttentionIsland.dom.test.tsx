@@ -65,7 +65,7 @@ test("the control reads «● Needs you N» in the bar's own outlined style, and
   const count = host.querySelector("[data-attention-count]")!;
   expect(count.textContent).toBe("Needs you6");
   expect(count.querySelector("[data-attention-dot]")).not.toBeNull();
-  expect(count.getAttribute("aria-label")).toBe("6 waiting");
+  expect(count.getAttribute("aria-label")).toBe("Needs you · 6");
   expect(count.getAttribute("aria-expanded")).toBe("false");
   /* The bar's control, not the amber uppercase pill. */
   expect(count.className).toContain("h-8");
@@ -111,16 +111,19 @@ test("with no toggle handed in, the island offers no filter and keeps its count"
   expect(host.querySelector("[data-attention-count]")!.textContent).toContain("1");
 });
 
-test("the zero state stays on screen, muted and without the dot, still opening the panel", async () => {
+test("the zero state stays on screen, muted, with no dot and no number, still opening the panel", async () => {
   const toggles: string[] = [];
   const host = await render(island({ count: 0, onToggleFilter: undefined, onTogglePanel: () => toggles.push("panel") }));
   const zero = host.querySelector("[data-attention-island]")!;
   expect(zero.hasAttribute("data-attention-zero")).toBeTrue();
   const count = host.querySelector("[data-attention-count]")!;
-  expect(count.textContent).toBe("Needs you0");
-  expect(count.getAttribute("aria-label")).toBe("0 waiting");
+  expect(count.textContent).toBe("Needs you");
+  expect(count.querySelector(".tabular-nums")).toBeNull();
+  expect(count.getAttribute("aria-label")).toBe("Needs you");
   expect(count.querySelector("[data-attention-dot]")).toBeNull();
   expect(count.className).toContain("text-muted");
+  /* One ink: the outlined style's primary text would win over the muted one. */
+  expect(count.className).not.toContain("text-primary");
   expect(count.className).not.toContain("animate");
   await click(count);
   expect(toggles).toEqual(["panel"]);

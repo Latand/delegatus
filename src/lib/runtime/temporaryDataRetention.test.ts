@@ -64,6 +64,31 @@ test("Cleaner applies the seven-day tree-age guard to ownerless copies before an
   }
 });
 
+test.each(["indirect-tree", "identity-changed", "keep-marker"])("a Cleaner pass keeps a candidate held for %s with that reason and no error", async reason => {
+  const f = fixture(true, true), prior = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(f.root, "state");
+  try {
+    if (reason === "indirect-tree") fs.symlinkSync(path.join(f.root, "elsewhere"), path.join(f.row.directory, "link"));
+    else if (reason === "keep-marker") plantKeepMarker(path.join(f.row.directory, ".delegatus-keep"), "hold");
+    else { fs.renameSync(f.row.directory, f.row.directory + "-original"); fs.mkdirSync(f.row.directory); }
+    const pass = fixturePass(reason);
+    createCleanerJournal(pass);
+    f.store.record(f.row.directory, 0, 0, "fixture");
+    const database = new TemporaryDataStore(f.store.filename); stores.push(database);
+    const row = { ...f.row, scope: statePath("evidence"), directory: statePath("evidence", "lane", "captures") };
+    fs.mkdirSync(path.dirname(row.directory), { recursive: true });
+    fs.renameSync(f.row.directory, row.directory);
+    const stat = fs.lstatSync(row.directory);
+    database.forget(f.row.directory);
+    database.register({ ...row, identity: reason === "identity-changed" ? f.row.identity : `${stat.dev}:${stat.ino}` });
+    const report = await sweepTemporaryData(database, { ...f.ports, mode: "on",
+      cleaner: { id: pass, allowed: () => true, journal: cleanerJournal(pass, "evidence"), processClear: () => true } });
+    expect(report).toMatchObject({ checked: 1, removed: 0, errors: 0, kept: { [reason]: 1 } });
+    expect(report.keptRows).toEqual([expect.objectContaining({ path: row.directory, reason })]);
+    expect(fs.existsSync(row.directory)).toBeTrue();
+  } finally { if (prior === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = prior; }
+});
+
 async function runRecovery(f: ReturnType<typeof fixture>, mode: string, time: number, pass?: string) {
   const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "temporaryDataRetention.fixture.ts"), f.store.filename, mode, String(time),
     ...(pass ? [pass] : [])], { stdout: "pipe", stderr: "pipe" });

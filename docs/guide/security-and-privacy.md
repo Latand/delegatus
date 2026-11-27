@@ -27,8 +27,9 @@ boot. It is on by default. The JSON body contains exactly `id` (an independently
 created random UUID stored in the state directory), `v` (version), `os`, `arch`
 and `kind` (`packaged`, `checkout` or `docker`). The id is separate from the
 linked-install identity. The Worker adds Cloudflare's country code and stores
-these values in Analytics Engine, with no IP address. The endpoint receives the
-network connection as any HTTPS service does.
+these values in a Worker-bound SQLite store, with one row per install per UTC
+day and no IP address. The endpoint receives the network connection as any
+HTTPS service does.
 
 Turn it off in the sidebar's ⋯ menu under **Settings → Privacy**, or start Delegatus with
 `DELEGATUS_TELEMETRY=0` or `DO_NOT_TRACK=1`. Environment opt-outs always override

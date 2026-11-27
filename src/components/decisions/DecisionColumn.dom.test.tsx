@@ -76,9 +76,11 @@ async function render(node: React.ReactNode) {
 }
 const click = async (element: Element | null) => { expect(element).not.toBeNull(); await act(async () => (element as HTMLElement).click()); };
 
-test("the Decisions tab counts the same waiting forms and undelivered cards as the panel", async () => {
+test("the Decisions tab and the strip count the waiting forms and leave out an answer whose delivery is stuck", async () => {
   const notice: PrototypeReviewNotice = { id: `prototype:${SEAT}`, project: "project-a", taskId: null, reviewId: SEAT,
     title: "Deploy tonight?", createdAt: "2026-10-11T14:42:00.000Z", target: { kind: "seat-decision", project: "project-a", reviewId: SEAT } };
+  const stuck: PrototypeReviewNotice = { ...notice, id: "prototype:pr_stuck", reviewId: "pr_stuck", title: "Move the release?", undelivered: true,
+    target: { kind: "seat-decision", project: "project-a", reviewId: "pr_stuck" } };
   function Counts() {
     const count = DecisionColumn.useOpenDecisionCount("project-a");
     return <><output>{count}</output><DecisionStripLine count={count} onOpen={() => {}} />
@@ -87,13 +89,35 @@ test("the Decisions tab counts the same waiting forms and undelivered cards as t
   publishPrototypeNotices([notice, { ...notice, id: "other", project: "project-b" }]);
   const host = await render(<Counts />);
   expect(host.querySelector("output")!.textContent).toBe("1");
+  expect(host.querySelector("[data-decision-strip]")!.getAttribute("data-decision-strip")).toBe("1");
+  expect(host.querySelector("[data-decision-tab-count]")!.textContent).toBe("1");
+  /* The same form answered and stuck in delivery: nothing waits, so no badge and no strip. */
   await act(async () => publishPrototypeNotices([{ ...notice, undelivered: true }]));
+  expect(host.querySelector("output")!.textContent).toBe("0");
+  expect(host.querySelector("[data-decision-strip]")).toBeNull();
+  expect(host.querySelector("[data-decision-tab-count]")).toBeNull();
+  /* A stuck answer beside a waiting form: the waiting one alone counts. */
+  await act(async () => publishPrototypeNotices([stuck, notice]));
   expect(host.querySelector("output")!.textContent).toBe("1");
-  expect(host.querySelector("[data-decision-strip]")).not.toBeNull();
+  expect(host.querySelector("[data-decision-strip]")!.getAttribute("data-decision-strip")).toBe("1");
   expect(host.querySelector("[data-decision-tab-count]")!.textContent).toBe("1");
-  await act(async () => publishPrototypeNotices([notice]));
-  expect(host.querySelector("output")!.textContent).toBe("1");
-  expect(host.querySelector("[data-decision-tab-count]")!.textContent).toBe("1");
+});
+
+test("an answer whose delivery is stuck counts nothing and stays in the Decisions list as its record with Retry", async () => {
+  publishPrototypeNotices([{ id: `prototype:${SEAT}`, project: "project-a", taskId: null, reviewId: SEAT, title: "Deploy tonight?",
+    createdAt: "2026-10-11T14:42:00.000Z", undelivered: true, target: { kind: "seat-decision", project: "project-a", reviewId: SEAT } }]);
+  const held = seatDecision({ decision: { chosen: [], comment: "", answers: [{ questionId: "when", options: [0] }, { questionId: "why", options: [0] }], at: "2026-10-16T08:00:00Z", delivery: { state: "failed", retryable: true } } });
+  globalThis.fetch = (async () => new Response(JSON.stringify({ project: "project-a", decisions: [held] }))) as unknown as typeof fetch;
+  function Column() {
+    const count = DecisionColumn.useOpenDecisionCount("project-a");
+    return <><output>{count}</output><DecisionColumn.DecisionTabs count={count} tab="decisions" onTab={() => {}} />
+      <DecisionList project="project-a" initial={[held]} /></>;
+  }
+  const host = await render(<Column />);
+  expect(host.querySelector("output")!.textContent).toBe("0");
+  expect(host.querySelector("[data-decision-tab-count]")).toBeNull();
+  expect(host.querySelector('[data-decision-card="answered"] [data-decision-delivery="failed"]')).not.toBeNull();
+  expect(host.querySelectorAll("[data-decision-retry]")).toHaveLength(1);
 });
 
 test("rejecting variants in a decision form requires corrections and keeps the rejected draft after a refused write", async () => {

@@ -2455,6 +2455,10 @@ describe("original-key recovery (#1490)", () => {
     }, store, {
       evidence: { outcome: "accepted", evidence: "delivery-record", reason: "accepted", ids: { operationId: "op_lineage" } },
     });
+    expect(await successor.service.callTool("spawn_agent", SPAWN)).toMatchObject({
+      ok: false, code: "recovery_not_permitted", retryable: false,
+    });
+    expect(successor.recoverCalls).toHaveLength(0);
     expect(await successor.service.callTool("spawn_agent", { ...SPAWN, recoveryOnly: true })).toMatchObject({
       ok: true,
       recovered: true,
@@ -2942,7 +2946,7 @@ describe("original-key recovery (#1490)", () => {
     expect(deadHarness.bindingCalls).toHaveLength(0);
   });
 
-  test("a legacy claim without a binding discloses its result only when downstream evidence establishes ownership", async () => {
+  test("legacy recovery reports only downstream evidence that establishes ownership", async () => {
     const store = new MemoryMcpReceiptStore();
     /* Seed the row a pre-#1490 server wrote, without today's custody fields. */
     const digest = requestDigest("send_message", SEND);
@@ -2967,7 +2971,10 @@ describe("original-key recovery (#1490)", () => {
     const owned = recoveryHarness(OWNER, store, {
       evidence: { outcome: "settled", evidence: "spawn-receipt", reason: null, ids: { launchId: "launch_legacy" }, ownership: "established" },
     });
-    expect(await owned.service.callTool("send_message", SEND)).toMatchObject({ ok: true, operationId: "op_legacy", replayed: true });
+    const recovered = await owned.service.callTool("send_message", SEND);
+    expect(recovered).toMatchObject({ ok: true, recovered: true, launchId: "launch_legacy", replayed: true });
+    expect(recovered).not.toHaveProperty("operationId");
+    expect(recovered).not.toHaveProperty("original");
     expect(await owned.service.callTool("send_message", { ...SEND, recoveryOnly: true })).toMatchObject({ ok: true, recovered: true, outcome: "settled", launchId: "launch_legacy" });
     expect(await owned.service.callTool("send_message", { ...SEND, text: "changed" })).toMatchObject({ ok: false, code: "idempotency_conflict" });
   });

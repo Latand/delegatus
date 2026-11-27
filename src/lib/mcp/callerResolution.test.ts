@@ -10,7 +10,7 @@ import { attentionCallerAuthority } from "@/lib/attention/callerAuthority";
 import { resolveNativeCaller, type NativeCallerSources } from "@/lib/attention/nativeCaller";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { hostedConversationsFromSnapshot, attentionCallerSources, productionDomainDependencies, viewerMcpBindings, viewerMcpRecoverableTools, viewerMcpToolPolicy } from "./bindings";
-import { runAsMcpHttpCaller } from "./callerContext";
+import { resolveMcpCallerValue, runAsMcpHttpCaller, runWithMcpCallerResolution } from "./callerContext";
 import { nativePeerProof, verifyNativePeer } from "./nativePeer";
 import { createMcpToolService, MemoryMcpReceiptStore, MCP_TOOL_NAMES, MUTATING_MCP_TOOL_NAMES, type McpToolBindings } from "./server";
 import { withWorkspaceMcpFence } from "./workspaceFence";
@@ -64,6 +64,28 @@ test("one caller resolution serves a mutating tool's policy and binding", async 
   expect(resolutions).toBe(1);
   await service.callTool("update_task", { taskId: "task_missing", clientRequestId: "caller-count-next", text: "Fixture task" });
   expect(resolutions).toBe(2);
+});
+
+test("keyed receipt calls resolve identity at most three times across claim fences", async () => {
+  const owner = {};
+  let resolutions = 0;
+  const binding = Object.assign(async () => ({ presetCount: 0 }), {
+    receiptIdentity: () => resolveMcpCallerValue(owner, "receipt", () => {
+      resolutions++;
+      return "fixture-caller/project-a";
+    }),
+  });
+  const bindings = { role_presets: binding } as unknown as McpToolBindings;
+  const service = createMcpToolService(bindings, new MemoryMcpReceiptStore());
+  const calls = 50;
+  for (let index = 0; index < calls; index++) {
+    await runWithMcpCallerResolution(() => service.callTool("role_presets", {
+      clientRequestId: `identity-cost-${index}`,
+    }));
+  }
+  // One invocation capture plus the claim transaction's two fence checks.
+  // Fresh scopes around every response check previously multiplied this work.
+  expect(resolutions).toBeLessThanOrEqual(calls * 3);
 });
 
 test.skipIf(process.platform !== "linux")("an unwatchable retained host path leaves the Viewer available and native verification closed", async () => {

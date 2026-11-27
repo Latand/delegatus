@@ -22,11 +22,11 @@ if (process.env.MECHANICAL_STATE) test("restart observation", async () => {
       let rejectNext = false, armed = false, rejected = 0, cancelled = 0;
       let proofUnavailable = false, noteRefusals = 0;
       const ownerId = process.env.MECHANICAL_PIPELINE_ID!;
-      const readerSpy = spyOn(ownership, "stageBranchOwnershipReader").mockImplementation(id => {
-        const reader = buildReader(id), read = reader.read;
+      const readerSpy = spyOn(ownership, "stageBranchOwnershipReader").mockImplementation(owner => {
+        const reader = buildReader(owner), read = reader.read;
         reader.read = async () => {
-          if (id === ownerId && rejectNext) { rejectNext = false; rejected++; throw new Error("authority read interrupted"); }
-          if (id === ownerId && proofUnavailable) throw new Error("authority proof unavailable");
+          if (owner.id === ownerId && rejectNext) { rejectNext = false; rejected++; throw new Error("authority read interrupted"); }
+          if (owner.id === ownerId && proofUnavailable) throw new Error("authority proof unavailable");
           return read();
         };
         return reader;
@@ -61,6 +61,10 @@ if (process.env.MECHANICAL_STATE) test("restart observation", async () => {
               const peer = buildPipeline({ id: "mechanical-authority-peer", task: "peer authority", project: owner.project,
                 repoDir: owner.repoDir, stages: owner.stages, srcPath: null, srcConversationId: null,
                 now: ${JSON.stringify(h.ports.now())}, state: "draft" });
+              peer.delivery = {
+                target: owner.delivery?.target ?? { repository: "fixture-repo", remote: "origin", branch: "refs/heads/" + owner.branch },
+                disposition: "comparison", active: false, publish: "disabled", ownerId: owner.id, epoch: owner.delivery?.epoch ?? 1, journal: [],
+              };
               await withPipelineMutation(async (rows, persist) => { rows.push(peer); await persist([peer]); });`;
             const written = await realExec(process.execPath, ["-e", script], process.cwd(), { ...process.env }, { timeoutMs: 30_000 });
             expect(written.code, written.stderr).toBe(0);
