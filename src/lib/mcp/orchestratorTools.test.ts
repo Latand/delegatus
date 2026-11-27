@@ -3,12 +3,14 @@ import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { statePath } from "@/lib/configDir";
 import { createManualProject } from "@/lib/projects/curation";
 import { advanceProjectStart } from "@/lib/projects/start";
+import { assertProjectStartLaunch } from "@/lib/projects/startAuthority";
 import { projectStartKey } from "@/lib/projects/startContract";
 import { preparePipelineRepository } from "@/lib/pipelines/initializeRepository";
 import { normalizeStages } from "@/lib/pipelines/engine";
 import { pipelineRoleLookup } from "@/lib/pipelines/roles";
 import { buildPipeline, createPipelineWithDelivery } from "@/lib/pipelines/store";
 import { saveRoleOverrides } from "@/lib/roles/store";
+import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDelivery";
 import { defaultStartHost } from "@/lib/runtime/structuredSpawn";
 import { projectForCwd } from "@/lib/scanner/describe";
 import { loadTasksByIds } from "@/lib/tasks/store";
@@ -25,7 +27,7 @@ import { POST as rotatePOST } from "@/app/api/orchestrator/rotate/route";
 import { POST as messagePOST } from "@/app/api/orchestrator/message/route";
 import { POST as seatPOST } from "@/app/api/orchestrator/seat/route";
 
-import { AgentRegistry, agentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
+import { AgentRegistry, agentRegistry, setAgentRegistryForTests, type AgentRegistryEntry } from "@/lib/agent/registry";
 import { executeSpawnRequest, productionSpawnCommandDependencies } from "@/lib/agent/spawnCommand";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
@@ -98,12 +100,14 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
       let launchCount = 0;
       let preparedExec = 0;
       let execCalls = 0;
+      let mandate = "";
       setSeatCommandDependenciesForTests({
         ...productionSeatCommandDependencies,
         engineReadiness: () => "connected",
         spawn: async (body, _autonomous, admission) => {
           admission?.assertProjectStart?.();
           launchCount += 1;
+          mandate = String(body.prompt ?? "");
           const cwd = String(body.cwd);
           const engine = preExecEngine ?? (body.engine === "codex" || body.engine === "antigravity" ? body.engine : "claude");
           const launchProfile = emptyLaunchProfile({ cwd, project: String(body.project), title: "Fixture orchestrator" });
@@ -205,28 +209,29 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
       receipts.close();
       receipts = new SqliteMcpReceiptStore(file);
       service = createMcpToolService(bindings, receipts);
-      let sent = 0;
+      const sent: string[] = [];
       let beforeWrite = 0;
-      const runtime: (() => RuntimeHostClient) | undefined = existing && (() => ({
+      let recipient: { conversationId: string; project: string; entry: AgentRegistryEntry } | undefined = existing;
+      const runtime = (): RuntimeHostClient => ({
         readSession: async () => ({
-          conversationId: existing!.conversationId, sessionKey: existing!.entry.key, hostKind: "claude-broker",
+          conversationId: recipient!.conversationId, sessionKey: recipient!.entry.key, hostKind: recipient!.entry.structuredHost!.kind,
           host: "hosted", turn: "idle", provenance: "structured", revision: 1, attentionIds: [],
-          recentReceipts: [], accountId: existing!.entry.accountId, parentConversationId: null,
-          flowId: null, workflowId: null, cwd: targetRoot, artifactPath: existing!.entry.artifactPath,
+          recentReceipts: [], accountId: recipient!.entry.accountId, parentConversationId: null,
+          flowId: null, workflowId: null, cwd: targetRoot, artifactPath: recipient!.entry.artifactPath,
           capabilities: { steer: true, structuredAttention: true }, activeTurnId: null,
         }),
         command: async (command, authorizeBeforeWrite) => {
           beforeWrite += 1;
           if (mode === "recipient-replaced") testRegistry.upsert({ ...existing!.entry, claimOwner: "recipient-replacement" });
           authorizeBeforeWrite?.();
-          sent += 1;
+          sent.push(command.operationId);
           return { operationId: command.operationId, replayed: false, receipt: {
             operationId: command.operationId, idempotencyKey: command.idempotencyKey,
             conversationId: command.conversationId, kind: command.kind, status: "delivered",
             at: AT,
           } };
         },
-      } satisfies Pick<RuntimeHostClient, "readSession" | "command">) as RuntimeHostClient);
+      } satisfies Pick<RuntimeHostClient, "readSession" | "command">) as RuntimeHostClient;
       if (mode === "ambiguous-folder") {
         const child = Bun.spawn([process.execPath, "--eval", `
           import { AgentRegistry, setAgentRegistryForTests } from "./src/lib/agent/registry";
@@ -244,7 +249,7 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
         const stderr = await new Response(child.stderr).text();
         expect(await child.exited, stderr).toBe(0);
       } else {
-        await advanceProjectStart(receipts, key, runtime);
+        await advanceProjectStart(receipts, key, existing ? runtime : undefined);
       }
       if (mode === "changed-caller") {
         expect(fs.existsSync(targetRoot)).toBe(false);
@@ -263,7 +268,7 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
       const replay = await service.callTool("start_project", { ...args, recoveryOnly: true });
       if (mode === "recipient-replaced") {
         expect(beforeWrite).toBe(1);
-        expect(sent).toBe(0);
+        expect(sent).toEqual([]);
         expect(replay).toMatchObject({ ok: false, code: "target_changed" });
         return;
       }
@@ -284,33 +289,56 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
       if (existing) {
         expect(replay.seat).toMatchObject({ conversationId: existing.conversationId, reused: true });
         expect(beforeWrite).toBe(1);
-        expect(sent).toBe(1);
+        expect(sent).toEqual([projectStartKey("message", String(accepted.operationId))]);
         expect(launchCount).toBe(0);
         expect(launch).toBeNull();
         expect(fs.readFileSync(path.join(targetRoot, "readme.txt"), "utf8")).toBe("Uncommitted fixture\n");
         expect(fs.readFileSync(path.join(targetRoot, ".git", "refs", "heads", "main"), "utf8").trim()).toBe(gitHead!);
-        const { stages, error } = normalizeStages([
-          { id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Run the first task", next: null },
-        ], pipelineRoleLookup, undefined, 1, existing.project);
-        if (!stages) throw new Error(`fixture pipeline rejected its stage: ${error}`);
-        const work = buildPipeline({
-          id: "f1240099", task: "First task work", taskIds: [String(replay.taskId)], project: existing.project, repoDir: targetRoot,
-          stages,
-          srcConversationId: existing.conversationId, srcPath: existing.entry.artifactPath, now: new Date().toISOString(),
-          publication: "internal",
-        });
-        work.creationRequest = { key: "fixture-receiver-work", digest: "e".repeat(64) };
-        await createPipelineWithDelivery(work, { repository: existing.project, remote: "", branch: `refs/heads/${work.branch}` });
       } else {
+        if (!launch || !mandate) throw new Error("seat command did not reserve the fixture launch and mandate");
         expect(launchCount).toBe(1);
-        expect(launch?.launchId).toBe(replay.launchId);
+        expect(launch.launchId).toBe(replay.launchId);
         expect(fs.existsSync(path.join(targetRoot, ".git"))).toBe(true);
+        expect(sent).toEqual([]);
+        const sessionId = crypto.randomUUID();
+        const artifactPath = path.join(sandbox, `${sessionId}.jsonl`);
+        fs.writeFileSync(artifactPath, JSON.stringify(launch.engine === "codex"
+          ? { type: "session_meta", payload: { id: sessionId, cwd: targetRoot } }
+          : { type: "user", sessionId, cwd: targetRoot, message: { role: "user", content: mandate } }) + "\n");
+        const entry: AgentRegistryEntry = { ...source.entry, key: { engine: launch.engine, sessionId }, artifactPath,
+          cwd: targetRoot, launchProfile: launch.launchProfile, accountId: launch.accountId,
+          structuredHost: { ...source.entry.structuredHost, kind: launch.engine === "codex" ? "codex-app-server" : "claude-broker" } };
+        recipient = { conversationId: launch.conversationId, project: String(replay.project), entry };
+        expect(testRegistry.stageStructuredSpawn(launch.launchId, entry).kind).toBe("settled");
+        const mandateOperationId = `spawn_message_${launch.launchId}`;
+        const first = await enqueueStructuredMessage({ path: artifactPath, conversationId: launch.conversationId, text: mandate,
+          clientMessageId: `spawn_${launch.launchId}`, operationId: mandateOperationId, launchId: launch.launchId }, {
+          client: runtime, registry: () => testRegistry, enabled: () => true,
+          authorizeBeforeWrite: () => assertProjectStartLaunch(launch, testRegistry),
+        });
+        expect(first).toMatchObject({ ok: true, outcome: "delivered" });
+        expect(testRegistry.finalizeStructuredSpawn(launch.launchId).kind).toBe("settled");
+        await advanceProjectStart(receipts, key, runtime);
+        expect(await service.callTool("start_project", args)).toMatchObject({ state: "in-progress", phase: "work", arrival: "confirmed",
+          seat: { conversationId: launch.conversationId, reused: false } });
+        expect(sent).toEqual([mandateOperationId, projectStartKey("message", String(accepted.operationId))]);
       }
+      if (!recipient) throw new Error("fixture destination was unavailable");
+      const { stages, error } = normalizeStages([
+        { id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Run the first task", next: null },
+      ], pipelineRoleLookup, undefined, 1, recipient.project);
+      if (!stages) throw new Error(`fixture pipeline rejected its stage: ${error}`);
+      const work = buildPipeline({
+        id: "f1240099", task: "First task work", taskIds: [String(replay.taskId)], project: recipient.project, repoDir: targetRoot,
+        stages, srcConversationId: recipient.conversationId, srcPath: recipient.entry.artifactPath, now: new Date().toISOString(), publication: "internal",
+      });
+      work.creationRequest = { key: "fixture-receiver-work", digest: "e".repeat(64) };
+      await createPipelineWithDelivery(work, { repository: recipient.project, remote: "", branch: `refs/heads/${work.branch}` });
       await advanceProjectStart(receipts, key);
       const final = await service.callTool("start_project", args);
       if (!final.ok) throw new Error(`fixture project start lookup refused: ${final.code}`);
       expect(final.taskId).toBe(replay.taskId);
-      if (existing) expect(final).toMatchObject({ state: "started", work: { state: "admitted", pipelineIds: ["f1240099"] } });
+      expect(final).toMatchObject({ state: "started", work: { state: "admitted", pipelineIds: ["f1240099"] } });
       expect(launchCount).toBe(existing ? 0 : 1);
     } finally {
       setSeatCommandDependenciesForTests(null);
