@@ -9550,6 +9550,32 @@ export function viewerMcpBindings(
     voice_tools: (args, context) => voiceTools(args, viewerControlForCall(controlDependencies, context), attributionOf(domainDependencies).conversationId ?? null),
     account_limits: async (args) => accountLimitsTool(args, domainDependencies),
     create_orchestrator: orchestratorProjectBinding(domainDependencies, (args, context) => createOrchestrator(args, viewerControlForCall(controlDependencies, context)), false, false),
+    start_project: async (args, context) => {
+      const { projectStartAuthority, ProjectStartRefusal } = await import("@/lib/projects/startAuthority");
+      const { startProject } = await import("@/lib/projects/start");
+      const { startProjectInput } = await import("@/lib/projects/startContract");
+      const deny = () => new McpToolRefusal("only a verified current orchestrator may start a project", { code: "caller_forbidden", status: 403, retryable: false });
+      const original = domainDependencies.attentionAuthority();
+      if (original.kind === "unidentified" || !original.conversationId
+        || (original.evidence !== "native-session" && callerCapability() === undefined)) throw deny();
+      const id = original.conversationId;
+      const assertCaller = () => {
+        context?.assertCaller?.();
+        const current = domainDependencies.attentionAuthority();
+        if (current.kind === "unidentified" || current.conversationId !== id || current.kind !== original.kind
+          || current.evidence !== original.evidence || current.nativeProof !== original.nativeProof) throw deny();
+      };
+      if (!context?.projectStartReceipts) throw new McpToolRefusal("project start receipts are unavailable", { code: "receipts_not_ready", retryable: true });
+      assertCaller();
+      try {
+        const source = projectStartAuthority(id);
+        return await startProject(startProjectInput.parse(args), source, assertCaller, context.projectStartReceipts,
+          check => retainResponseAuthority(context, check));
+      } catch (error) {
+        if (error instanceof ProjectStartRefusal) throw new McpToolRefusal(error.code, { code: error.code, status: error.status, retryable: error.retryable });
+        throw error;
+      }
+    },
     send_message_to_orchestrator: async (args, context) => {
       const attribution = attributionOf(domainDependencies);
       const ownerConversationId = ownerRelayCaller(domainDependencies) ? attribution.conversationId : null;

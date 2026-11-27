@@ -273,7 +273,8 @@ export function placeProject(store: TeamStore, actor: Member, project: unknown, 
  * `placeProject`'s manager rule protects. For the same reason a project already
  * holding a placement is refused, so this can never move one.
  */
-export function placeCreatedProject(store: TeamStore, actor: Member, project: unknown, workspaceId: unknown, options: WorkspaceOptions = {}): { project: string; workspaceId: string } {
+export function placeCreatedProject(store: TeamStore, actor: Member, project: unknown, workspaceId: unknown,
+  options: WorkspaceOptions & { assertCurrent?(): void } = {}): { project: string; workspaceId: string } {
   const key = projectKey(project);
   const target = workspaceIdFrom(workspaceId);
   const resolve = resolverOf(options);
@@ -286,6 +287,7 @@ export function placeCreatedProject(store: TeamStore, actor: Member, project: un
     if (live.role !== "owner" && !store.workspaceMemberships(live.id).some((row) => row.workspaceId === target)) throw refused();
     if (!store.workspaceRows().some((row) => row.id === target)) throw new TeamError("workspace_gone", "this workspace was deleted", 404);
     if (store.workspaceProjectRows().some((row) => resolve(row.project) === canonical)) throw refused();
+    options.assertCurrent?.();
     writePlacement(store, resolve, canonical, target, live, at);
   });
   return { project: canonical, workspaceId: target };

@@ -49,6 +49,7 @@ import { writeSeatTickState } from "@/lib/monitor/seatTickState";
 import { OperationLease } from "@/lib/operationLease";
 import { conversationDeliverabilityFromRecord } from "@/lib/conversation/deliverability";
 import { agentLivenessSnapshot, productionLivenessSources } from "@/lib/lifecycle/liveness";
+import { projectStartKey } from "@/lib/projects/startContract";
 
 type UnsequencedEvent = RuntimeEvent extends infer Event
   ? Event extends RuntimeEvent ? Omit<Event, "seq"> : never
@@ -6900,7 +6901,7 @@ test("issue 1071: a stage retry supersedes its queued predecessor even though it
 });
 
 
-test.each(["healthy", "uncertain acknowledgement", "payload timeout"] as const)("a recreated controller recovers durable identity without its continuation closure (%s)", async (fault) => {
+test.each(["healthy", "uncertain acknowledgement", "payload timeout", "missing project start link"] as const)("a recreated controller recovers durable identity without its continuation closure (%s)", async (fault) => {
   const id = crypto.randomUUID();
   const cwd = path.join(sandbox, `durable-staged-${id}`);
   fs.mkdirSync(cwd, { recursive: true });
@@ -6911,7 +6912,8 @@ test.each(["healthy", "uncertain acknowledgement", "payload timeout"] as const)(
   const host = new RoundTripHost("codex", artifactPath, id);
   const key = { engine: "codex" as const, sessionId: id };
   await bindStructuredDeliveryQueue([], { registry, client });
-  const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd, transport: "structured", accountId: "work" });
+  const clientAttemptId = fault === "missing project start link" ? projectStartKey("seat", "7".repeat(64)) : undefined;
+  const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd, transport: "structured", accountId: "work", clientAttemptId });
   if (begun.kind !== "created") throw new Error("fixture reservation failed");
   let starts = 0;
   const stages = spyOn(registry, "stageStructuredSpawn");
@@ -6964,6 +6966,18 @@ test.each(["healthy", "uncertain acknowledgement", "payload timeout"] as const)(
   const firstRecovery = stagedLaunchRecovery(reopened.snapshot().receipts[begun.receipt.launchId])!;
   await recoverStagedStructuredLaunch(begun.receipt.launchId, reopened, client, { now: () => firstRecovery.nextTryAt });
   await kickStructuredDeliveryQueue();
+  if (fault === "missing project start link") {
+    try {
+      expect(host.sent).toEqual([]);
+      expect(await client.operationStatus(`spawn_message_${begun.receipt.launchId}`)).toBeNull();
+      expect(reopened.spawnReceipt(begun.receipt.launchId)).toMatchObject({ state: "path-pending", clientAttemptId, key });
+      expect(starts).toBe(1);
+    } finally {
+      await bindStructuredDeliveryQueue([]);
+      journal.close();
+    }
+    return;
+  }
   await waitFor(() => host.sent.length === 1);
   const recovery = stagedLaunchRecovery(reopened.snapshot().receipts[begun.receipt.launchId])!;
   await recoverStagedStructuredLaunch(begun.receipt.launchId, reopened, client, { now: () => recovery.nextTryAt });

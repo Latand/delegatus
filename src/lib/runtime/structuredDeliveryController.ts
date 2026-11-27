@@ -1,6 +1,7 @@
 import { viewerMcpOwnerForEntry, type SeatTickConversation } from "@/lib/agent/registry";
 import { boardFor } from "@/lib/board/store";
 import { readOrchestratorSeatFileOrNull } from "@/lib/orchestrator/seats";
+import { assertProjectStartLaunch, assertProjectStartSend } from "@/lib/projects/startAuthority";
 import { cancelSendFailureNotice, initializeSendFailureNotices, recordSendFailureNotice, sendFailureWarningSuppressed, sweepSendFailureNotices } from "./sendFailureNotice";
 import { recordedAgentScope, recordedScopeProcess, sameAgentScope } from "./agentScope";
 import { withHostStopOrigin } from "./hostExit";
@@ -1293,6 +1294,8 @@ export async function bindStructuredDeliveryQueue(
       },
       diagnosticError: (...args: unknown[]) => spawnDiagnosticErrorForRegistry(registry, ...args),
       authorizeDispatch: (operationId: string, conversationId: string, origin) => {
+        try { assertProjectStartSend(operationId, conversationId, registry); }
+        catch { throw new StructuredSendRefusedError("project start authority changed"); }
         if (origin?.kind === "agent" && origin.role === "seat-tick") {
           const observation = structuredDeliveryMcpObservation(conversationId, registry);
           if (observation?.unverified || observation?.denied.length) {
@@ -1304,6 +1307,10 @@ export async function bindStructuredDeliveryQueue(
           throw new StructuredSendRefusedError("owner relay continuation authorization revoked");
         if (!operationId.startsWith("spawn_message_")) return;
         const receipt = registry.spawnReceipt(operationId.slice("spawn_message_".length));
+        if (receipt) {
+          try { assertProjectStartLaunch(receipt, registry); }
+          catch { throw new StructuredSendRefusedError("project start launch authority changed"); }
+        }
         if (!ownerRelaySpawnAuthorized(receipt?.clientAttemptId))
           throw new StructuredSendRefusedError("owner relay first prompt authorization revoked");
       },

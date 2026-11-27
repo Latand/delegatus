@@ -35,9 +35,12 @@ import { recordedCheckInput } from "@/lib/recordedChecks/input";
 import { pipelineResumeConditionSchema } from "@/lib/pipelines/pauseMetadata";
 import { prototypePublishSchema } from "@/lib/prototypeReview/input";
 import { MCP_MAX_TOOL_INPUT_ELEMENTS } from "./inputLimits";
+import { receiptKey, requestDigest } from "./receiptIdentity";
+export { receiptKey, requestDigest } from "./receiptIdentity";
 
 import { FOCUS_TARGET_SHAPES } from "@/lib/attention/targets";
 import { statePath } from "@/lib/configDir";
+import { projectStartCheckpoint, startProjectInput, type ProjectStartCheckpoint } from "@/lib/projects/startContract";
 import { openCurrentDatabase } from "@/lib/state/currentDatabase";
 import { stateDatabaseBusy, stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
 import { deferredBeforeAnyWriter, witnessStoreWriters } from "./admittedWriters";
@@ -96,6 +99,7 @@ const RETIRED_FLOW_TOOL_REPLACEMENT = ["create_pipeline", "list_pipelines", "get
 const RETIRED_FLOW_TOOL_ANSWER = `${FLOW_RETIREMENT.error} Call ${RETIRED_FLOW_TOOL_REPLACEMENT.join(", ")}: a review runs as a reviewer run stage with a fail edge to a fix stage.`;
 
 export const MCP_TOOL_NAMES = [
+  "start_project",
   "grant_agent_browser_access",
   "voice_tools",
   "spawn_agent",
@@ -170,6 +174,7 @@ export type McpToolName = typeof MCP_TOOL_NAMES[number];
 type ReceiptRetention = "bounded" | "durable";
 
 export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
+  "start_project",
   "grant_agent_browser_access",
   "recorded_check",
   "voice_tools",
@@ -300,6 +305,7 @@ export const isMutatingMcpTool = (tool: McpToolName): boolean => MUTATING_MCP_TO
  * between pipeline persistence and receipt completion.
  */
 const INTERRUPTED_RECOVERABLE_TOOLS: ReadonlySet<McpToolName> = new Set<McpToolName>([
+  "start_project",
   "recorded_check",
   // Deployment admission persists the key before starting work. A lost control
   // reply can therefore be reconciled through that same admission key.
@@ -381,6 +387,8 @@ export interface McpBoardRead {
 }
 
 export interface McpToolCallContext {
+  /** In-process access to the serving Viewer's original-key receipt. */
+  projectStartReceipts?: ProjectStartReceiptStore;
   responseAuthority?: McpResponseAuthority;
   /** Board selection and current authority captured before normalization can await. */
   boardRead?: McpBoardRead;
@@ -805,6 +813,7 @@ export interface McpRequestBinding extends McpRequestBindingInput {
   /** Original arguments beneath a seat retry's nonce-bound storage digest. */
   seatMessageDigest?: string;
   claimedAt: string;
+  projectStart?: ProjectStartCheckpoint;
 }
 
 export interface McpReceiptRecord {
@@ -863,6 +872,34 @@ export interface McpRecoveryReceiptStore extends McpReceiptStore {
       row holds afterwards — the first terminal answer always wins. Recovery
       may save stronger terminal evidence alongside an ordinary acceptance. */
   settle(key: string, digest: string, result: McpToolResult, stage?: "settled" | "not-executed", recovery?: boolean, expectedBinding?: McpRequestBinding): McpToolResult | Promise<McpToolResult>;
+}
+
+export interface ProjectStartReceiptStore extends McpRecoveryReceiptStore {
+  updateProjectStart(key: string, digest: string, expected: McpRequestBinding, next: McpRequestBinding, assertCurrent: () => void): boolean | Promise<boolean>;
+  pendingProjectStarts(at: number, after: string, limit: number): string[] | Promise<string[]>;
+}
+
+export function supportsProjectStart(store: McpReceiptStore): store is ProjectStartReceiptStore {
+  const candidate = store as Partial<ProjectStartReceiptStore>;
+  return supportsMcpRecovery(store) && typeof candidate.updateProjectStart === "function"
+    && typeof candidate.pendingProjectStarts === "function";
+}
+
+function projectStartTransition(receipt: Receipt | undefined, digest: string, expected: McpRequestBinding,
+  next: McpRequestBinding, assertCurrent: () => void): Receipt | null {
+  if (!receipt || receipt.digest !== digest || receipt.result || !expected.projectStart || !next.projectStart
+    || (receipt.stage !== "claimed" && receipt.stage !== "dispatching")
+    || expected.projectStart.operationId !== next.projectStart.operationId
+    || JSON.stringify(receipt.binding) !== JSON.stringify(expected)) return null;
+  assertCurrent();
+  return { ...receipt, binding: next, stage: next.projectStart.nextAt === null ? "settled" : "dispatching" };
+}
+
+function pendingProjectStartKeys(entries: Iterable<[string, Receipt]>, at: number, after: string, limit: number): string[] {
+  return Array.from(entries).filter(([key, receipt]) => {
+    const due = receipt.binding?.projectStart?.nextAt;
+    return key > after && due != null && due <= at;
+  }).map(([key]) => key).sort().slice(0, limit);
 }
 
 export function supportsMcpRecovery(store: McpReceiptStore): store is McpRecoveryReceiptStore {
@@ -962,6 +999,17 @@ function receiptSettlement(
 
 export class MemoryMcpReceiptStore implements McpRecoveryReceiptStore {
   private readonly receipts = new Map<string, Receipt>();
+
+  updateProjectStart(...[key, digest, expected, next, assertCurrent]: Parameters<ProjectStartReceiptStore["updateProjectStart"]>): boolean {
+    const updated = projectStartTransition(this.receipts.get(key), digest, expected, next, assertCurrent);
+    if (!updated) return false;
+    this.receipts.set(key, updated);
+    return true;
+  }
+
+  pendingProjectStarts(at: number, after: string, limit: number): string[] {
+    return pendingProjectStartKeys(this.receipts, at, after, limit);
+  }
 
   claim(key: string, digest: string, _retention?: ReceiptRetention, binding?: McpRequestBinding, beforeClaim?: () => void): ReceiptClaim {
     beforeClaim?.();
@@ -1097,14 +1145,6 @@ function hasExactKeys(value: Record<string, unknown>, expected: string[]): boole
   return keys.length === expected.length && keys.every((key, index) => key === expected[index]);
 }
 
-/** A receipt's key: the tool, the owner its binding's `receiptScope` named
-    (hashed, so the key carries no identity), and the caller's request id. */
-function receiptKey(toolName: McpToolName, requestId: string, scope: string | null): string {
-  return scope === null
-    ? `${toolName}:${requestId}`
-    : `${toolName}@${crypto.createHash("sha256").update(scope).digest("hex").slice(0, 32)}:${requestId}`;
-}
-
 function receiptKeyParts(key: string): { toolName: McpToolName; requestId: string } | null {
   const separator = key.indexOf(":");
   if (separator <= 0) return null;
@@ -1164,6 +1204,9 @@ export function validRequestBinding(value: unknown, toolName?: McpToolName, requ
   if (value.seatMessageDigest !== undefined && (typeof value.seatMessageDigest !== "string" || !/^[a-f0-9]{64}$/.test(value.seatMessageDigest)
     || !value.seatMessageFence || value.toolName !== "send_message_to_orchestrator")) return false;
   if (value.claimGeneration !== undefined && (typeof value.claimGeneration !== "string" || !value.claimGeneration)) return false;
+  if (value.toolName === "start_project"
+    ? !projectStartCheckpoint.safeParse(value.projectStart).success
+    : value.projectStart !== undefined) return false;
   return true;
 }
 
@@ -1834,6 +1877,14 @@ function writeReceiptFile(filePath: string, state: ReceiptFile): void {
 export class FileMcpReceiptStore implements McpRecoveryReceiptStore {
   constructor(private readonly filePath: string) {}
 
+  updateProjectStart(...[key, digest, expected, next, assertCurrent]: Parameters<ProjectStartReceiptStore["updateProjectStart"]>): Promise<boolean> {
+    return this.transition(key, digest, receipt => projectStartTransition(receipt, digest, expected, next, assertCurrent));
+  }
+
+  pendingProjectStarts(at: number, after: string, limit: number): Promise<string[]> {
+    return withFileLock(this.filePath, () => pendingProjectStartKeys(Object.entries(readReceiptFile(this.filePath).mutationReceipts), at, after, limit));
+  }
+
   async claim(key: string, digest: string, retention: ReceiptRetention, binding?: McpRequestBinding, beforeClaim?: () => void): Promise<ReceiptClaim> {
     return withFileLock(this.filePath, () => {
       beforeClaim?.();
@@ -1969,6 +2020,12 @@ const receiptIndexes = declaredIndexes([
   `CREATE INDEX IF NOT EXISTS mcp_receipts_retention_sequence
         ON mcp_receipts(retention, sequence)`,
 ]);
+const projectStartReceiptIndexes = declaredIndexes([
+  `CREATE INDEX IF NOT EXISTS mcp_project_start_id ON mcp_receipts(json_extract(binding_json, '$.projectStart.operationId'))
+    WHERE receipt_key GLOB 'start_project@*'`,
+  `CREATE INDEX IF NOT EXISTS mcp_project_start_pending ON mcp_receipts(receipt_key, json_extract(binding_json, '$.projectStart.nextAt'))
+    WHERE receipt_key GLOB 'start_project@*' AND stage IN ('claimed', 'dispatching')`,
+]);
 
 export class McpReceiptsNotReadyError extends Error {
   constructor() {
@@ -2002,6 +2059,37 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
   private readonly readReceiptByteCap: number;
   private readonly boundedPendingTtlMs: number;
   private readonly now: () => number;
+
+  updateProjectStart(...[key, digest, expected, next, assertCurrent]: Parameters<ProjectStartReceiptStore["updateProjectStart"]>): boolean {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const row = this.selectRow(key);
+      const record = row && this.recordOfRow(key, row);
+      const updated = projectStartTransition(record ? {
+        digest: record.digest, binding: record.binding ?? undefined, result: record.result ?? undefined,
+        stage: record.stage ?? undefined,
+      } : undefined, digest, expected, next, assertCurrent);
+      if (updated) {
+        const json = JSON.stringify(next);
+        this.db.query("UPDATE mcp_receipts SET binding_json = ?, stage = ?, storage_bytes = ? WHERE receipt_key = ?")
+          .run(json, updated.stage!, this.storageBytes(key, digest, null, json), key);
+      }
+      this.db.exec("COMMIT");
+      return updated !== null;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  pendingProjectStarts(at: number, after: string, limit: number): string[] {
+    return this.db.query<{ receipt_key: string }, [string, number, number]>(`
+      SELECT receipt_key FROM mcp_receipts
+      WHERE receipt_key GLOB 'start_project@*' AND stage IN ('claimed', 'dispatching')
+        AND receipt_key > ? AND json_extract(binding_json, '$.projectStart.nextAt') <= ?
+      ORDER BY receipt_key LIMIT ?
+    `).all(after, at, limit).map(row => row.receipt_key);
+  }
 
   constructor(readonly filename: string, options: SqliteMcpReceiptStoreOptions = {}) {
     const prepare = mayRunStateStartupMutation(path.dirname(filename));
@@ -2322,6 +2410,7 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
       if (!columns.has("binding_json")) this.db.exec("ALTER TABLE mcp_receipts ADD COLUMN binding_json TEXT");
       if (!columns.has("stage")) this.db.exec("ALTER TABLE mcp_receipts ADD COLUMN stage TEXT");
       if (!columns.has("recovery_result_json")) this.db.exec("ALTER TABLE mcp_receipts ADD COLUMN recovery_result_json TEXT");
+      projectStartReceiptIndexes.install(this.db, path.dirname(this.filename));
       this.db.exec("COMMIT");
     } catch (error) {
       try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
@@ -2466,7 +2555,7 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
 export async function openAsyncMcpReceiptStore(
   filename: string,
   options: Omit<SqliteMcpReceiptStoreOptions, "busyTimeoutMs"> = {},
-): Promise<McpRecoveryReceiptStore & { close(): void }> {
+): Promise<ProjectStartReceiptStore & { close(): void }> {
   const attempt = <T>(phase: string, operation: () => T): Promise<T> =>
     withViewerOperation("mcp.receipts", () => waitForStateLock(`mcp.receipts.${phase}`,
       () => stateLockAttempt(`mcp.receipts.${phase}`, operation, "mcp-receipts"),
@@ -2481,20 +2570,10 @@ export async function openAsyncMcpReceiptStore(
     bindCreatedTarget: (...args) => attempt("bind", () => store.bindCreatedTarget(...args)),
     fenceUndispatched: (...args) => attempt("fence", () => store.fenceUndispatched(...args)),
     settle: (...args) => attempt("settle", () => store.settle(...args)),
+    updateProjectStart: (...args) => attempt("project-start-checkpoint", () => store.updateProjectStart(...args)),
+    pendingProjectStarts: (...args) => attempt("project-start-pending", () => store.pendingProjectStarts(...args)),
     close: () => store.close(),
   };
-}
-
-function stable(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stable);
-  if (!value || typeof value !== "object") return value;
-  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([key, child]) => [key, stable(child)]));
-}
-
-export function requestDigest(toolName: McpToolName, args: McpToolArgs): string {
-  return crypto.createHash("sha256").update(JSON.stringify(stable({ toolName, args }))).digest("hex");
 }
 
 function clientRequestId(args: McpToolArgs): string | null {
@@ -2970,7 +3049,7 @@ export function createMcpToolService(
         // The consumer must receive the exact bytes the custody ledger stores.
         // Media SHA-256 is content verification data used by the caller.
         const exactHistoryMedia = typedTool === "relay_service_tools" || typedTool === "relay_owner_history" && effectiveArgs.action === "media";
-        if (effectiveArgs.full !== true && typedTool !== "recorded_check" && typedTool !== "relay_trusted_requesters" && !exactHistoryMedia && !(typedTool === "curate_rules" && effectiveArgs.action === "apply")) result = shortIdsInAnswer(result);
+        if (effectiveArgs.full !== true && typedTool !== "recorded_check" && typedTool !== "start_project" && typedTool !== "relay_trusted_requesters" && !exactHistoryMedia && !(typedTool === "curate_rules" && effectiveArgs.action === "apply")) result = shortIdsInAnswer(result);
         if (rawRelayResults && result && typeof result === "object") {
           Object.defineProperty(result, MCP_PAGE_CURSOR_RAW_RELAY_RESULTS, { value: rawRelayResults });
         }
@@ -3043,6 +3122,23 @@ export function createMcpToolService(
       const verdict = permit();
       if (verdict && !verdict.allowed) {
         return finish(failure(typedTool, requestId, verdict.code, verdict.error, false), "failure");
+      }
+      if (typedTool === "start_project") {
+        const parsed = startProjectInput.safeParse(effectiveArgs);
+        if (!parsed.success) return finish(failure(typedTool, requestId, "invalid_request", "start_project arguments are invalid", false), "failure");
+        if (!supportsProjectStart(receipts)) {
+          return finish(failure(typedTool, requestId, "receipts_not_ready", "project start receipts are unavailable", true), "failure");
+        }
+        try {
+          const payload = await bindings.start_project(parsed.data, { ...context, projectStartReceipts: receipts });
+          return finish({ ...payload, ok: true, toolName: typedTool, clientRequestId: requestId, replayed: payload.replayed === true }, "success");
+        } catch (error) {
+          const refusal = error instanceof McpToolRefusal ? error.details : {};
+          return finish(failure(typedTool, requestId,
+            typeof refusal.code === "string" ? refusal.code : "outcome_unknown",
+            error instanceof McpToolRefusal ? error.message : "project start could not be resolved",
+            refusal.retryable === true, false, refusal), "failure");
+        }
       }
       try {
         const authorize = bindings[typedTool].authorizeReceipt;
@@ -4175,6 +4271,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   bridge_directive: "Relay the user's intent to the designated manager. The recipient and the delivery id are derived server-side, so a retry of the same root turn is one instruction, never two.",
   get_orchestrator: "Read a project's designated orchestrator: designation, health and activity, model and prompt version, transcript size, message/tool/compaction counts, context usage against its model's configured window (clearly labelled when estimated), predecessor lineage, and a bounded rotation recommendation — STRONGLY_RECOMMEND_ROTATION once usage reaches the configured threshold. Compact by default: the seat record without its mandate and role table, and counts for intentHistory and lineage; full:true returns them whole. Words only: it never rotates, creates, or interrupts anything itself.",
   create_orchestrator: "Create a project's orchestrator or adopt one eligible registered conversation: designate it as the project's selected orchestrator and deliver the approved versioned mandate (editable). Idempotent by clientRequestId.",
+  start_project: "From the current designated orchestrator, start an explicitly new or existing local project and convey its initial task. Returns a durable operation ID and observed progress. Use the identical clientRequestId and inputs with recoveryOnly to look up that operation.",
   send_message_to_orchestrator: [
     "A designated orchestrator seat may relay to another project's designated seat. The recipient sees the sending project and agent authorship, never operator authority. A live owner-tier relay verified by the paired service may also hand the owner's request to a designated seat with operator authority; the server quotes the original owner request and retains agent authorship. A resolved Telegram report reply includes the stored report and is bound to its project and source seat; forward the approval verbatim. Ask one short question for an unresolved ambiguous approval before creating work. Other workers, non-owner relays, pipeline stages, deputies and unidentified callers are refused. If a handoff fails, carry on with your available tools or explain the failure and the owner's concrete next action. Owner relay board tasks default to assigned so the seat tick can wake on unstarted-task; report the task and project, checking that a seat and its tick are enabled. Seat relays must omit Delegatus authority markers and bridge trailers; a seat cannot create a missing recipient. The operator's voice gateway keeps its existing path.",
     "Only a live owner-tier relay may omit project. The Viewer uses the project configured for the relay target and requires its designated seat. For explicit cross-project requests or report replies, pass the intended project. When the project cannot be resolved, ask the owner which project should receive the request.",
@@ -4471,6 +4568,7 @@ const taskSummaryInputSchema = z.object({
 });
 
 export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
+  start_project: startProjectInput,
   github_app_connect: z.object({ clientRequestId: clientRequestIdSchema, repository: z.string().min(1).max(1024), owner: z.string().min(1).max(39).optional(),
     permissions: z.record(z.string().regex(/^[a-z][a-z_]{0,63}$/), z.enum(["read", "write"])).optional() }).strict(),
   pipeline_checks: z.object({ clientRequestId: clientRequestIdSchema, pipelineId: entityIdSchema, stageId: entityIdSchema.optional(), scope: z.enum(["stage", "lane", "project"]), execution: z.enum(["cloud", "local"]).nullable() }),

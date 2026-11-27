@@ -80,6 +80,8 @@ import { AntigravityAcpHost, type AntigravityAcpHostOptions } from "./antigravit
 import { CopilotAcpHost, type CopilotAcpHostOptions } from "./copilotAcpHost";
 import { publishStructuredDeliveryHost, releaseStructuredDeliveryHost, settleHostlessSessionProjections, structuredDeliveryLastError, structuredDeliveryHostForConversation, retainUnpublishedStructuredLaunchHost, StructuredDeliveryControllerUnavailableError } from "./structuredDeliveryController";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
+import { assertProjectStartLaunch } from "@/lib/projects/startAuthority";
+import { projectStartSeatOperation } from "@/lib/projects/startContract";
 import { runtimeImageCapability } from "./runtimeImageStore";
 import { publishFilesRevision } from "./filesRevision";
 import { parseStructuredImageRefs, structuredContent, type StructuredImageRef } from "./structuredContent";
@@ -955,10 +957,16 @@ export async function reconcileStructuredSpawnReplay(
   let operation = initialOperation;
   let effectHistoryUnavailable = false;
   if (!operation && current.state === "path-pending" && current.artifactPath) {
+    const projectStartCurrent = projectStartSeatOperation(current.clientAttemptId)
+      ? () => { assertActive(); assertProjectStartLaunch(current, registry); } : undefined;
+    if (projectStartCurrent) {
+      try { projectStartCurrent(); }
+      catch { return { ...current, initialMessage: "pending" }; }
+    }
     /* Effect history can be unavailable during the same runtime-journal outage
        this replay is meant to bound. Missing evidence remains unconfirmed so
        the normal deadline path can settle the placeholder retry-safely. */
-    const effect = await evidenceOrNull(structuredSpawnEffectForLaunch(client, launchId, assertActive).catch(error => {
+    const effect = await evidenceOrNull(structuredSpawnEffectForLaunch(client, launchId, projectStartCurrent ?? assertActive).catch(error => {
       assertActive();
       effectHistoryUnavailable = true;
       throw error;
@@ -982,12 +990,13 @@ export async function reconcileStructuredSpawnReplay(
         launchId,
         text: prompt,
         imageRefs,
-        admissionGuard: assertActive,
+        admissionGuard: projectStartCurrent ?? assertActive,
         ...(readmittedOrigin ? { origin: readmittedOrigin } : {}),
       }, {
         client: () => client,
         registry: () => registry,
         enabled: () => true,
+        ...(projectStartCurrent ? { authorizeBeforeWrite: projectStartCurrent } : {}),
       });
       assertActive();
       if (readmitted?.ok && readmitted.outcome !== "held") {
@@ -1901,6 +1910,7 @@ function admittedStructuredLaunchInput(input: StructuredSpawnInput): StructuredS
   const receipt = input.registry.spawnReceipt(input.receipt.launchId);
   if (!receipt) throw new Error("structured spawn receipt is unavailable before launch");
   assertMemberLaunchAllowed(receipt);
+  assertProjectStartLaunch(receipt, input.registry);
   if (!receipt.key && input.receipt.admissionOwner && (!receipt.admissionOwner
     || !sameRecordedProcessIdentity(input.receipt.admissionOwner, receipt.admissionOwner))) {
     throw new Error("structured spawn admission ownership changed");
@@ -2432,6 +2442,10 @@ async function recoverPendingStructuredSpawnPass(
     }
     if (prompt.trim() || imageRefs.length) {
       const origin = spawnMessageOrigin(receipt, registry);
+      const projectStartCurrent = projectStartSeatOperation(receipt.clientAttemptId)
+        ? () => { assertActive(); assertProjectStartLaunch(receipt, registry); } : undefined;
+      try { projectStartCurrent?.(); }
+      catch { continue; }
       const delivered = await enqueueStructuredMessage({
         path: receipt.artifactPath,
         conversationId: receipt.conversationId,
@@ -2441,12 +2455,13 @@ async function recoverPendingStructuredSpawnPass(
         text: prompt,
         imageRefs,
         ...(typeof roleMemoryRevision === "string" ? { roleMemoryRevision } : {}),
-        admissionGuard: assertActive,
+        admissionGuard: projectStartCurrent ?? assertActive,
         ...(origin ? { origin } : {}),
       }, {
         client: () => client,
         registry: () => registry,
         enabled: () => true,
+        ...(projectStartCurrent ? { authorizeBeforeWrite: projectStartCurrent } : {}),
       });
       assertActive();
       if (!delivered?.ok) throw new Error(delivered?.error ?? `structured spawn recovery could not admit ${receipt.launchId}`);
@@ -2893,7 +2908,10 @@ async function defaultDeliverFirst(input: StructuredSpawnInput, artifactPath: st
     ...(input.firstMessageAdmissionGuard ? { admissionGuard: input.firstMessageAdmissionGuard } : {}),
     ...(input.firstMessageAdmissionGuardAsync ? { admissionGuardAsync: input.firstMessageAdmissionGuardAsync } : {}),
     authorizeDispatch: input.authorize,
-    authorizeBeforeWrite: input.firstMessageBeforeWrite,
+    authorizeBeforeWrite: projectStartSeatOperation(input.receipt.clientAttemptId) ? () => {
+      input.firstMessageBeforeWrite?.();
+      assertProjectStartLaunch(input.receipt, input.registry);
+    } : input.firstMessageBeforeWrite,
     admissionDeadline: input.firstMessageAdmissionDeadline,
   });
   if (!delivered?.ok) {
@@ -3159,6 +3177,15 @@ export async function recoverStagedStructuredLaunch(
     if (!options.eligible && pipelineMember) return receipt;
     if (!recovery || receipt.state !== "path-pending" || recovery.stopped || now() < recovery.nextTryAt
       || options.eligible?.() === false) return receipt;
+    if (projectStartSeatOperation(receipt.clientAttemptId)) {
+      try { assertProjectStartLaunch(receipt, registry); }
+      catch { return receipt; }
+      const assertActive = options.assertActive;
+      options = { ...options, assertActive: () => {
+        assertActive?.();
+        assertProjectStartLaunch(receipt, registry);
+      } };
+    }
     const continuation = stagedContinuations.get(launchId);
     const host = continuation?.host ?? structuredDeliveryHostForConversation(receipt.conversationId);
     const writer = receipt.key ? startupHostSnapshot(registry, receipt.key).entries[sessionKeyId(receipt.key)] : null;

@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants, fstatSync, mkdirSync, openSync, promises as fs, type BigIntStats } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
-import { createRequire } from "node:module";
 import path from "node:path";
+import { renameDirectoryNoReplace } from "@/lib/state/renameDirectoryNoReplace";
 import { containedDependencyExec } from "./lockedDependencies";
 import { observeLegacyInstaller, type LegacyInstallerObservation } from "./provisionLegacyInstaller";
 import { hasCheckoutRelativeDependencies, stageWorktreeDependencyCopy, worktreeDependencyInputs } from "./worktreeDependencies";
@@ -30,7 +30,6 @@ type PrivateInstallPorts = {
 };
 
 class UnverifiedPrivateInstall extends Error {}
-const requireRuntime = createRequire(import.meta.url);
 const sameDirectory = (left: BigIntStats, right: BigIntStats | null) => right !== null && right.isDirectory()
   && left.dev === right.dev && left.ino === right.ino;
 const directoryFlags = constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;
@@ -56,20 +55,8 @@ async function fileBytes(file: string, limit: number): Promise<Buffer> {
 }
 
 function publishNoReplace(source: string, target: string): boolean {
-  if (process.platform !== "linux" && process.platform !== "darwin") throw new UnverifiedPrivateInstall();
-  try {
-    const ffi = requireRuntime(`bun:${"ffi"}`) as typeof import("bun:ffi");
-    const { ptr, i32, u32 } = ffi.FFIType;
-    const from = Buffer.from(source + "\0"), to = Buffer.from(target + "\0");
-    if (process.platform === "linux") {
-      const library = ffi.dlopen("libc.so.6", { renameat2: { args: [i32, ptr, i32, ptr, u32], returns: i32 } });
-      try { return library.symbols.renameat2(-100, ffi.ptr(from), -100, ffi.ptr(to), 1) === 0; }
-      finally { library.close(); }
-    }
-    const library = ffi.dlopen("/usr/lib/libSystem.B.dylib", { renamex_np: { args: [ptr, ptr, u32], returns: i32 } });
-    try { return library.symbols.renamex_np(ffi.ptr(from), ffi.ptr(to), 4) === 0; }
-    finally { library.close(); }
-  } catch { throw new UnverifiedPrivateInstall(); }
+  try { return renameDirectoryNoReplace(source, target); }
+  catch { throw new UnverifiedPrivateInstall(); }
 }
 
 async function supportsNoReplacePublish(directory: string): Promise<boolean> {

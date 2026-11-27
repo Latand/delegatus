@@ -35,6 +35,32 @@ function inertBindings(overrides: Partial<McpToolBindings> = {}): McpToolBinding
   } as McpToolBindings;
 }
 
+test("start_project sends one strict target union through the MCP protocol", async () => {
+  const calls: unknown[] = [];
+  const input = {
+    clientRequestId: "project-fixture-new",
+    operatorRequest: "Start the project and its first task.",
+    target: { kind: "new_project", name: "Sample", folder: { mode: "by_name" } },
+    task: { text: "Prepare the first plan", dueAt: "2030-01-15T12:00:00Z" },
+  };
+  await withProtocolClient(inertBindings({ start_project: async args => {
+    calls.push(args);
+    return { operationId: "operation-fixture", accepted: true, state: "partial", phase: "seat", cause: { code: "launch_held_for_update" } };
+  } }), async client => {
+    expect((await client.listTools()).tools.some(tool => tool.name === "start_project")).toBe(true);
+    expect((await client.callTool({ name: "start_project", arguments: input })).structuredContent)
+      .toMatchObject({ accepted: true, operationId: "operation-fixture", state: "partial", cause: { code: "launch_held_for_update" } });
+    for (const arguments_ of [
+      { ...input, target: { ...input.target, project: "other" } },
+      { ...input, target: { ...input.target, folder: { mode: "by_name", root: "foreign" } } },
+      { ...input, accountId: "other" },
+    ]) {
+      expect((await client.callTool({ name: "start_project", arguments: arguments_ })).isError).toBe(true);
+    }
+    expect(calls).toEqual([input]);
+  });
+});
+
 test.each([100, 101])("pipeline_action account id with %i supplementary characters keeps its UTF-16 bound before dispatch", async count => {
   const received: unknown[] = [];
   const resumeCondition = { kind: "account-usage", engine: "codex", accountId: "🎵".repeat(count), window: "weekly", belowPercent: 80 };

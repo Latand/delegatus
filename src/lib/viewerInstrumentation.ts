@@ -130,6 +130,7 @@ interface CurrentReleaseControllerLoaders {
   loadVoiceTimers?: () => Promise<{ startVoiceTimers: () => void }>;
   loadSelfUpdateAuto?: () => Promise<{ startSelfUpdateAuto: () => Promise<void> | void }>;
   loadCloudEnvironmentController?: () => Promise<{ startCloudEnvironmentController: () => void }>;
+  loadProjectStart?: () => Promise<{ startProjectController: () => void }>;
 }
 
 interface ViewerRuntimeActivationSteps {
@@ -429,6 +430,7 @@ export async function startCurrentReleaseControllers(
     loadVoiceTimers: () => import("@/lib/voiceCompanion/voiceTimersServer"),
     loadSelfUpdateAuto: () => import("@/lib/selfUpdate/auto"),
     loadCloudEnvironmentController: () => import("@/lib/projects/cloudEnvironmentController"),
+    loadProjectStart: () => import("@/lib/projects/start"),
   },
   options: { beforeSeatTick?: Promise<unknown> } = {},
 ): Promise<void> {
@@ -455,6 +457,8 @@ export async function startCurrentReleaseControllers(
   }
   const { startFlowPipelineController } = await loaders.loadFlowPipelineController();
   startFlowPipelineController();
+  try { (await loaders.loadProjectStart?.())?.startProjectController(); }
+  catch { console.error("[project start] controller unavailable"); }
   try { (await loaders.loadCloudEnvironmentController?.())?.startCloudEnvironmentController(); }
   catch { console.error("[cloud environments] preparation controller unavailable"); }
   /* The shared Telegram connector dies with the viewer container it is a child

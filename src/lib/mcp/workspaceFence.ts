@@ -31,6 +31,7 @@ function denied(check: string): never {
 // Closed vocabulary: new installation-wide tools cannot accidentally widen a
 // member's reach. Project tools resolve every supplied identity before receipts.
 const PROJECT_TOOLS = new Set([
+  "start_project",
   "grant_agent_browser_access",
   "spawn_agent", "send_message", "message_receipt", "create_task", "update_task", "create_pipeline", "pipeline_action", "pipeline_checks",
   "stage_report", "leave_lesson", "link_task_to_pipeline", "list_conversations", "search_transcripts", "search_memory", "get_conversation", "conversation_deliverability",

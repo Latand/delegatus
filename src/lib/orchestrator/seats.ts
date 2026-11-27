@@ -1,4 +1,5 @@
 import { workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
+import { assertProjectStartActivation } from "@/lib/projects/startAuthority";
 import { TeamError } from "@/lib/team/members";
 import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { reportHeaderName } from "@/lib/projects/settings";
@@ -599,6 +600,7 @@ export interface BeginSeatIntentInput {
   /** Finish this key's own intent only: a mandate that failed preflight may
       still replay what its first attempt admitted, and never begins anew. */
   replayOnly?: boolean;
+  assertCurrent?(): void;
   now?: string;
 }
 
@@ -621,6 +623,7 @@ export function beginOrchestratorSeatIntent(input: BeginSeatIntentInput): BeginS
   return withAccountMutationLock(() => {
     if (input.workspace && !workspacePrincipalAllows(input.workspace, input.project)) throw new TeamError("workspace_forbidden", "workspace access denied", 403);
     return mutateSeats<BeginSeatIntentResult | NotReplayedSeatIntent>((file) => {
+    input.assertCurrent?.();
     const project = canonicalOrchestratorProject(input.project);
     const active = file.seats[project];
     if (active && active.intent.clientRequestId === input.clientRequestId) {
@@ -746,6 +749,7 @@ export function completeOrchestratorSeatIntent(input: {
     }
     const pending = file.pending[project];
     if (!pending || pending.seatEpoch !== observed?.seatEpoch || pending.intent.clientRequestId !== input.clientRequestId) return { write: false, result: { kind: "missing" } };
+    assertProjectStartActivation(project, input.clientRequestId, input.conversationId, input.launchId);
     const now = input.now ?? new Date().toISOString();
     let revoked: OrchestratorRevocation | null = null;
     if (active && active.conversationId && active.conversationId !== input.conversationId) {

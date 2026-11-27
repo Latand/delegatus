@@ -28,6 +28,7 @@ import { structuredHostsEnabled } from "@/lib/runtime/flags";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { projectCurationSnapshot } from "@/lib/projects/curation";
 import { projectSuccessionFor, recordProjectSuccessions } from "@/lib/projects/succession";
+import { projectStartSeatOperation } from "@/lib/projects/startContract";
 import { projectForCwd } from "@/lib/scanner/describe";
 import { projectDirectoryFallbacks } from "@/lib/scanner/projectDirectories";
 import { pathAllowed } from "@/lib/scanner/roots";
@@ -154,6 +155,8 @@ function seatWorkspaceInput(reach: WorkspaceReach): { workspace?: WorkspacePrinc
 }
 
 export interface SeatLaunchAdmission {
+  /** Trusted serving-Viewer project start authority, never read from the body. */
+  assertProjectStart?(): void;
   workspaceMemberId?: string;
   workspace?: import("@/lib/team/workspacePrincipal").WorkspacePrincipal;
   autonomous?: boolean;
@@ -316,6 +319,7 @@ function resolveOrchestratorCwd(project: string, requested: unknown, dependencie
 
 async function postSpawnInProcess(body: Record<string, unknown>, autonomous = false, admission?: SeatLaunchAdmission): Promise<{ status: number; body: Record<string, unknown> }> {
   const { executeSpawnRequest, productionSpawnCommandDependencies } = await import("@/lib/agent/spawnCommand");
+  admission?.assertProjectStart?.();
   /* An in-process call the VIEWER makes, on its own authority: the designation
      surfaces have already made their authority decision — the seat route by
      refusing an agent, the rotation route by naming one (#1402) — so this
@@ -339,6 +343,7 @@ async function postSpawnInProcess(body: Record<string, unknown>, autonomous = fa
     // scheduler explicitly; operator requests keep response-close deferral.
     defer: autonomous ? startDeferredSpawnWork : productionSpawnCommandDependencies.defer,
     autonomousAdmissionHeld: () => autonomous && !!activeDrain(),
+    projectStartAdmission: admission?.assertProjectStart,
     assertAccountAdmission: admission?.assertAccount,
     prepareAccountAdmission: admission?.prepareAccount });
   return { status: response.status, body: await response.json() as Record<string, unknown> };
@@ -1132,6 +1137,9 @@ async function runOrchestratorSeatRequest(
 ): Promise<SeatCommandResult> {
   const namedProject = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
   if (!namedProject) return { status: 400, body: { error: "project must be a valid project key", admission: "refused" } };
+  if (projectStartSeatOperation(text(rawBody.clientRequestId)) && !admission?.assertProjectStart)
+    return { status: 403, body: { error: "project start admission unavailable", code: "project_start_admission", admission: "refused" } };
+  admission?.assertProjectStart?.();
   /* #1874: a key the named checkout has since moved on from (the folder gained
      a repository or an origin) is recorded as succeeded first, so the seat is
      designated under the key its lanes will be written to. */
@@ -1368,6 +1376,7 @@ async function runOrchestratorSeatRequest(
     automaticReplacement: admission?.automaticReplacement,
     promptVersion,
     triggeredBy,
+    assertCurrent: admission?.assertProjectStart,
     replayOnly: tooLarge !== null,
     now: dependencies.now(),
   });
@@ -1465,6 +1474,7 @@ async function runOrchestratorSeatRequest(
     return () => { commitCaller?.(); commitBaseline(); };
   } };
   const spawned = await dependencies.spawn(spawnBody, admission?.autonomous || begun.seat.triggeredBy?.kind === "agent", spawnAdmission);
+  admission?.assertProjectStart?.();
   if (spawned.body.code === "AUTO_UPDATE_DRAIN") {
     // No receipt was admitted: keep the pending intent and its downstream key.
     return { status: 409, body: { ...spawned.body, code: "launch_held_for_update", seat: begun.seat } };
@@ -1627,7 +1637,7 @@ export function setSeatCommandDependenciesForTests(dependencies: SeatCommandDepe
   seatCommandDependenciesForTests = dependencies;
 }
 
-function activeSeatCommandDependencies(): SeatCommandDependencies {
+export function activeSeatCommandDependencies(): SeatCommandDependencies {
   return seatCommandDependenciesForTests ?? productionSeatCommandDependencies;
 }
 

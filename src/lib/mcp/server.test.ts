@@ -12,6 +12,8 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { PIPELINE_ACTIONS } from "@/lib/pipelines/types";
 import { SNAPSHOT_CALLER_KEYS, SNAPSHOT_SCOPE_KEYS, SNAPSHOT_TEXT_KEYS, SNAPSHOT_VIEW_KEYS } from "@/lib/view/types";
 import { DeadlineExceededError } from "@/lib/deadline";
+import { captureProcessIdentity } from "@/lib/processIdentity";
+import type { ProjectStartCheckpoint } from "@/lib/projects/startContract";
 
 import {
   MCP_TOOL_NAMES,
@@ -24,10 +26,12 @@ import {
   openAsyncMcpReceiptStore,
   createViewerMcpServer,
   validRequestBinding,
+  receiptKey,
   requestDigest,
   createMcpToolService,
   type McpToolBindings,
   type McpReceiptStore,
+  type McpRequestBinding,
   type McpToolResult,
 } from "./server";
 import { fixturePidAlive, ownFixtureChild, ownedFixturePids, reapFixtureChildren } from "./ownedFixtureChildren";
@@ -113,6 +117,56 @@ async function childResult(child: { exited: Promise<number>; stderr: ReadableStr
 }
 
 describe("MCP tool service", () => {
+  test("the project start checkpoint retains custody and a consistent pending cursor across adapters", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-project-checkpoint-"));
+    scratch.push(directory);
+    const json = path.join(directory, "receipts.json");
+    const sqlite = path.join(directory, "receipts.sqlite");
+    const identity = { dev: 1, ino: 2 };
+    const source = { conversationId: "conversation_fixture", generation: "generation", owner: "owner", epoch: 1,
+      process: "process", seatEpoch: 1, project: "repo-source", workspace: null };
+    const owner = captureProcessIdentity(process.pid);
+    if (!owner) throw new Error("fixture process identity unavailable");
+    const fixture = (suffix: string, operationId: string, nextAt: number) => {
+      const clientRequestId = `checkpoint-${suffix}`;
+      const input = { clientRequestId, operatorRequest: "Prepare the project", target: { kind: "existing_project", project: "repo-target" } as const,
+        task: { text: "Start work", dueAt: "2030-01-15T12:00:00Z" } };
+      const checkpoint: ProjectStartCheckpoint = {
+        version: 1, operationId, input, source, root: directory, parent: { path: directory, identity }, directory: identity,
+        folderToken: crypto.randomUUID(), repositoryPresent: true, placement: "reused", prepared: null,
+        originalProject: "repo-target", project: "repo-target", reservedTaskId: crypto.randomUUID(), taskId: null,
+        seat: null, launchId: null, messageOperationId: null,
+        relay: { text: "Start work", origin: { kind: "agent", role: "orchestrator", project: source.project, conversationId: source.conversationId } },
+        phase: "admission", effects: { folder: "not-started", repository: "not-started", registration: "not-started",
+          task: "not-started", seat: "not-started", delivery: "not-started" },
+        arrival: "pending", arrivedAt: null, work: { state: "pending", pipelineIds: [], launchIds: [] },
+        disposition: "accepted", cause: null, dueTimeZone: null, mandate: "", mandateVersion: 1, runtimeDigest: null, nextAt, deadline: 100,
+      };
+      const binding: McpRequestBinding = { version: 1, clientRequestId, toolName: "start_project", owner, claimedAt: "2030-01-01T00:00:00Z",
+        claimGeneration: "first-owner", caller: { kind: "worker", conversationId: source.conversationId, project: source.project },
+        target: { project: checkpoint.originalProject, identity: operationId }, downstreamKey: operationId, projectStart: checkpoint };
+      return { key: receiptKey("start_project", clientRequestId, source.conversationId), digest: requestDigest("start_project", input), binding, checkpoint };
+    };
+    const first = fixture("a", "a".repeat(64), 15);
+    const second = fixture("b", "b".repeat(64), 12);
+    const db = new SqliteMcpReceiptStore(sqlite);
+    try {
+      for (const store of [new MemoryMcpReceiptStore(), new FileMcpReceiptStore(json), db]) {
+        for (const { key, digest, binding } of [first, second]) {
+          expect(await store.claim(key, digest, "durable", binding)).toMatchObject({ kind: "fresh" });
+          expect((await store.lookup(key))?.binding).toEqual(binding);
+        }
+        expect(await store.pendingProjectStarts(25, "", 1)).toEqual([first.key]);
+        expect(await store.pendingProjectStarts(25, first.key, 1)).toEqual([second.key]);
+        const advanced: McpRequestBinding = { ...first.binding, claimGeneration: "successor", projectStart: { ...first.checkpoint, nextAt: null } };
+        expect(await store.updateProjectStart(first.key, first.digest, first.binding, advanced, () => {})).toBe(true);
+        expect(await store.updateProjectStart(first.key, first.digest, first.binding, advanced, () => { throw new Error("stale guard reached"); })).toBe(false);
+        expect((await store.lookup(first.key))?.binding).toEqual(advanced);
+        expect(await store.pendingProjectStarts(25, "", 2)).toEqual([second.key]);
+      }
+    } finally { db.close(); }
+  });
+
   test("production-shaped legacy receipts import once and stay bounded", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-receipts-sqlite-"));
     scratch.push(directory);

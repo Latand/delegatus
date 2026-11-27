@@ -2,6 +2,7 @@ import { preflightCodexProtocol } from "@/lib/accounts/codexPinnedProtocol";
 import { hardenedRedact } from "@/lib/view/compactText";
 import { assertProactiveTaskExecution, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
 import type { SpawnReceipt } from "./registry";
+import { projectStartSeatOperation } from "@/lib/projects/startContract";
 import { RegistryWriterBusyError } from "./registry";
 import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { recordActualSpawnAccountOffLoop } from "./spawnAccountSettlement";
@@ -160,6 +161,7 @@ function pinFallbackTitle(req: Pick<NextRequest, "headers">): string {
 }
 
 export interface SpawnCommandDependencies {
+  projectStartAdmission?(): void;
   /** Trusted in-process service authority; never read from the request body.
       `null` launches unbound, and absent leaves the launch to inherit its
       actor's or its parent's reach. */
@@ -561,6 +563,14 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
 
   const registry = registryForCaller ?? await prepareAgentRegistry(req.signal, () => dependencies.registry());
   const clientAttemptId = typeof body.clientAttemptId === "string" ? body.clientAttemptId : null;
+  if (projectStartSeatOperation(clientAttemptId)) {
+    try {
+      if (!dependencies.projectStartAdmission) throw new Error("project start requires serving Viewer admission");
+      dependencies.projectStartAdmission();
+    } catch {
+      return NextResponse.json({ error: "project start admission unavailable", code: "project_start_admission", admission: "refused" }, { status: 403 });
+    }
+  }
   const existingAttempt = clientAttemptId ? registry.spawnReceiptForClientAttempt(clientAttemptId) : null;
   if (!explicitTitle && !derivedTitle && !existingAttempt) {
     return NextResponse.json({ error: SPAWN_TITLE_REQUIRED_ERROR }, { status: 400 });
@@ -636,6 +646,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
   let workspacePrincipal: WorkspacePrincipal | null = null;
   let workspaceAccountId: string | null = null;
   const authorizeLaunch = (receipt: SpawnReceipt | null = existingAttempt) => {
+    dependencies.projectStartAdmission?.();
     if (workspacePrincipal && (!workspacePrincipalAllows(workspacePrincipal, explicitProject ?? projectForCwd(cwd))
       || !workspacePrincipalAllows(workspacePrincipal, projectForCwd(cwd))
       || !workspacePrincipalAllows(workspacePrincipal, projectForCwd(fs.realpathSync(cwd))))) throw new TeamError("workspace_forbidden", "workspace access denied", 403);

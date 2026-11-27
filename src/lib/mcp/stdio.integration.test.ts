@@ -473,6 +473,57 @@ test("the packaged stdio host publishes and invokes the expanded read surface", 
   }
 });
 
+test("packaged stdio reconnects to the same Viewer project start receipt", async () => {
+  const sandbox = sandboxDir("llv-mcp-project-start-");
+  const environment = isolatedEnvironment(sandbox);
+  const seed = ownFixtureChild(Bun.spawn([process.execPath, "-e", `
+    import fs from "node:fs";
+    import path from "node:path";
+    import { AgentRegistry } from "./src/lib/agent/registry";
+    import { projectStartFixtureSeat } from "./src/lib/mcp/projectStart.fixture";
+    import { createManualProject } from "./src/lib/projects/curation";
+    const state = process.env.LLV_STATE_DIR;
+    const registry = new AgentRegistry(path.join(state, "agent-registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+    const source = path.join(process.env.HOME, "Projects", "source");
+    const target = path.join(process.env.HOME, "Projects", "target");
+    try {
+      for (const directory of [source, target]) fs.mkdirSync(directory, { recursive: true });
+      if (!createManualProject("Target fixture", target).ok) throw new Error("target fixture registration refused");
+      const pid = Number(process.env.FIXTURE_HOST_PID);
+      const caller = projectStartFixtureSeat(registry, state, source, 61, pid);
+      const recipient = projectStartFixtureSeat(registry, state, target, 62, pid);
+      console.log(JSON.stringify({ capability: registry.rotateSpawnCapabilityForReceipt(caller.launchId), project: recipient.project }));
+    } finally { registry.close(); }
+  `], { cwd: process.cwd(), env: { ...environment, FIXTURE_HOST_PID: String(process.pid) }, stdin: "ignore", stdout: "pipe", stderr: "pipe" }));
+  const [exit, output, error] = await Promise.all([seed.exited, new Response(seed.stdout).text(), new Response(seed.stderr).text()]);
+  expect(exit, error).toBe(0);
+  const { capability, project } = JSON.parse(output) as { capability: string; project: string };
+  const forwarded = await viewerBridge({ ...environment, LLV_SPAWN_CAPABILITY: capability });
+  const args = {
+    clientRequestId: "stdio-project-start-original", operatorRequest: "Start the project and its first task.",
+    target: { kind: "existing_project", project }, task: { text: "Prepare the first plan", dueAt: "2030-01-15T12:00:00Z" },
+  };
+  const first = await startMcp(forwarded, "project-start-first");
+  let accepted: Awaited<ReturnType<Client["callTool"]>>;
+  try {
+    accepted = await first.client.callTool({ name: "start_project", arguments: args });
+    expect(accepted.structuredContent).toMatchObject({ ok: true, accepted: true, state: "accepted", operationId: expect.any(String) });
+  } finally { await first.close(); }
+  const second = await startMcp(forwarded, "project-start-reconnected");
+  try {
+    const replay = await second.client.callTool({ name: "start_project", arguments: { ...args, recoveryOnly: true } });
+    expect(replay.structuredContent).toEqual({ ...accepted.structuredContent, replayed: true });
+    const changed = await second.client.callTool({ name: "start_project", arguments: { ...args, task: { ...args.task, text: "Different task" } } });
+    expect(changed.structuredContent).toMatchObject({ ok: false, code: "idempotency_conflict" });
+    const db = new Database(path.join(environment.LLV_STATE_DIR!, "mcp-receipts.sqlite"), { readonly: true });
+    try {
+      const rows = db.query<{ binding_json: string }, []>("SELECT binding_json FROM mcp_receipts WHERE receipt_key GLOB 'start_project@*'").all();
+      expect(rows).toHaveLength(1);
+      expect(JSON.parse(rows[0]!.binding_json)).toMatchObject({ clientRequestId: args.clientRequestId, projectStart: { input: args } });
+    } finally { db.close(); }
+  } finally { await second.close(); }
+}, 20_000);
+
 test("a packaged MCP spawn is dispatched once: a Viewer restart mid-request answers unknown and nothing is re-POSTed", async () => {
   /* #1490: this used to be the reconnect-and-repeat test. A spawn whose
      response is lost after the Viewer may hold the request is now reported as

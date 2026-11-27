@@ -52,6 +52,7 @@ export interface CreateProjectOptions {
       the route always passes them, so what can be created is exactly what can
       be offered (issue #1223). */
   allowedRoots?: readonly string[];
+  projectStart?: { id: string; assertCurrent(): void };
 }
 
 export type CreateProjectResult =
@@ -67,6 +68,11 @@ export function projectCurationSnapshot(): ProjectCurationSnapshot {
     crowned: [...snapshot.crowned],
     manualProjects: snapshot.manualProjects.map((entry) => ({ ...entry })),
   };
+}
+
+export function projectStartRegistration(project: string, id: string): ManualProject | null {
+  const row = projectCurationStore.readRow(curationFile(), `manual:${project}`)?.value as { entry: ManualProject; projectStartId?: string } | undefined;
+  return row?.projectStartId === id ? row.entry : null;
 }
 
 /** Crown or uncrown one project in a serialized transaction. */
@@ -152,10 +158,14 @@ export function createManualProject(
     return projectCurationStore.patchRows<CreateProjectResult>(curationFile(), 2, tx => {
       const rowKey = `manual:${identity.project}`;
       if (existingProjects.has(identity.project) || tx.get(rowKey)) return { ok: false, code: "DUPLICATE_PROJECT", message: "a project with this identity already exists" };
-      tx.put({ key: rowKey, value: { entry, order: Date.now() } });
+      options.projectStart?.assertCurrent();
+      tx.put({ key: rowKey, value: { entry, order: Date.now(), ...(options.projectStart ? { projectStartId: options.projectStart.id } : {}) } });
       return { ok: true, entry };
     });
-  } catch { return { ok: false, code: "STORE_ERROR", message: "could not persist the project" }; }
+  } catch (error) {
+    if (options.projectStart) throw error;
+    return { ok: false, code: "STORE_ERROR", message: "could not persist the project" };
+  }
 }
 
 export function resetProjectCurationForTests(): void {

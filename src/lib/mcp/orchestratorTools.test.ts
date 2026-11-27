@@ -1,4 +1,18 @@
 import crypto from "node:crypto";
+import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
+import { statePath } from "@/lib/configDir";
+import { createManualProject } from "@/lib/projects/curation";
+import { advanceProjectStart } from "@/lib/projects/start";
+import { projectStartKey } from "@/lib/projects/startContract";
+import { preparePipelineRepository } from "@/lib/pipelines/initializeRepository";
+import { normalizeStages } from "@/lib/pipelines/engine";
+import { pipelineRoleLookup } from "@/lib/pipelines/roles";
+import { buildPipeline, createPipelineWithDelivery } from "@/lib/pipelines/store";
+import { saveRoleOverrides } from "@/lib/roles/store";
+import { defaultStartHost } from "@/lib/runtime/structuredSpawn";
+import { projectForCwd } from "@/lib/scanner/describe";
+import { loadTasksByIds } from "@/lib/tasks/store";
+import type { RuntimeHostClient } from "@/lib/runtime/client";
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
@@ -18,16 +32,17 @@ import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { requireOperatorAuthority, rotationActor, setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, failOrchestratorSeatIntent, orchestratorSeatFor } from "@/lib/orchestrator/seats";
-import { executeOrchestratorSeatRequest, productionSeatCommandDependencies, type SeatCommandDependencies } from "@/lib/orchestrator/seatCommand";
+import { executeOrchestratorSeatRequest, productionSeatCommandDependencies, setSeatCommandDependenciesForTests, type SeatCommandDependencies } from "@/lib/orchestrator/seatCommand";
 import { persistProjectAliases } from "@/lib/projects/aliases";
 import { setBridgeReports } from "@/lib/projects/settings";
 import { readDeputies } from "@/lib/orchestrator/deputies";
 import { CODEX_TOKEN_COUNT } from "@/lib/orchestrator/codexUsage.fixture";
 import { setDeputyRootResolverForTests } from "@/lib/orchestrator/deputyAsker";
 
-import { viewerMcpBindings, viewerMcpRecoverableTools, productionViewerControlDependencies, type ViewerControlDependencies, type ViewerMcpDomainDependencies } from "./bindings";
+import { viewerMcpBindings, viewerMcpRecoverableTools, productionDomainDependencies, productionViewerControlDependencies, type ViewerControlDependencies, type ViewerMcpDomainDependencies } from "./bindings";
 
-import { createMcpToolService, McpDispatchUncertainError, MemoryMcpReceiptStore } from "./server";
+import { createMcpToolService, McpDispatchUncertainError, MemoryMcpReceiptStore, receiptKey, SqliteMcpReceiptStore } from "./server";
+import { projectStartFixtureSeat } from "./projectStart.fixture";
 
 /*
  * The two-axis orchestration surface: get / create / send / rotate. All four
@@ -61,6 +76,249 @@ const SEATED_ID = "conversation_66666666-6666-4666-8666-666666666666";
 function seatActive(project: string, conversationId: string, transcriptPath: string | null, promptVersion: number | null = null): void {
   beginOrchestratorSeatIntent({ project, mandate: "own the board", clientRequestId: "seed_0000001", mode: "spawn", promptVersion, now: AT });
   completeOrchestratorSeatIntent({ project, clientRequestId: "seed_0000001", conversationId, path: transcriptPath, now: AT });
+}
+
+for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "hostile", "recipient-replaced", "recipient-replaced-after-claim", "codex-pre-exec", "claude-pre-exec"] as const) {
+  test(`project start keeps original-key custody through the real Viewer's ${mode} path`, async () => {
+    const oldHome = process.env.HOME;
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "project-start-home-"));
+    process.env.HOME = home;
+    const parent = path.join(process.env.HOME, "Projects");
+    fs.mkdirSync(parent, { recursive: true });
+    const sourceRoot = path.join(parent, "source");
+    fs.mkdirSync(sourceRoot);
+    let receipts: SqliteMcpReceiptStore | undefined;
+    try {
+      const source = projectStartFixtureSeat(testRegistry, sandbox, sourceRoot, 51);
+      const targetRoot = path.join(parent, "sample");
+      const preExecEngine = mode === "codex-pre-exec" ? "codex" : mode === "claude-pre-exec" ? "claude" : null;
+      if (preExecEngine) saveRoleOverrides({ orchestrator: { config: preExecEngine === "codex"
+        ? { engine: "codex", model: "gpt-6.1-sol", effort: "medium" }
+        : { engine: "claude", model: "opus", effort: "high" } } });
+      let launchCount = 0;
+      let preparedExec = 0;
+      let execCalls = 0;
+      setSeatCommandDependenciesForTests({
+        ...productionSeatCommandDependencies,
+        engineReadiness: () => "connected",
+        spawn: async (body, _autonomous, admission) => {
+          admission?.assertProjectStart?.();
+          launchCount += 1;
+          const cwd = String(body.cwd);
+          const engine = preExecEngine ?? (body.engine === "codex" || body.engine === "antigravity" ? body.engine : "claude");
+          const launchProfile = emptyLaunchProfile({ cwd, project: String(body.project), title: "Fixture orchestrator" });
+          const begun = testRegistry.beginSpawnRequest({
+            cwd, engine, role: "orchestrator", clientAttemptId: String(body.clientAttemptId), transport: "structured",
+            launchProfile,
+          });
+          if (begun.kind !== "created") throw new Error("fixture launch reservation refused");
+          if (preExecEngine) {
+            const retireWriter = () => {
+              preparedExec += 1;
+              testRegistry.upsert({ ...source.entry, claimOwner: "replacement-at-native-preparation" });
+            };
+            const spawnProcess = () => {
+              execCalls += 1;
+              throw new Error("fixture engine was executed");
+            };
+            await expect(defaultStartHost({
+              engine: preExecEngine, receipt: begun.receipt, registry: testRegistry, client: {} as RuntimeHostClient,
+              "prompt": "", spec: { cwd, engine: preExecEngine, command: preExecEngine, windowName: "project start", launchProfile },
+              account: { engine: preExecEngine, accountId: "fixture-account", kind: "legacy", home, transcriptRoot: home, env: { NODE_ENV: "test" } },
+            }, "fixture-capability", {
+              codex: { readProtocolVersion: () => { retireWriter(); return "0.162.1"; }, spawnProcess },
+              claude: { readAuthStatus: async () => { retireWriter(); return { loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }; }, spawnProcess },
+            })).rejects.toThrow("authority_changed");
+          }
+          return { status: 202, body: { ok: true, launchId: begun.receipt.launchId, conversationId: begun.receipt.conversationId } };
+        },
+      });
+      let existing: ReturnType<typeof projectStartFixtureSeat> | undefined;
+      let gitHead: string | undefined;
+      if (mode === "existing" || mode === "recipient-replaced" || mode === "recipient-replaced-after-claim") {
+        fs.mkdirSync(targetRoot);
+        fs.writeFileSync(path.join(targetRoot, "readme.txt"), "Existing fixture\n");
+        const prepared = await preparePipelineRepository(targetRoot);
+        if (!prepared.ok || !prepared.repositoryInitialization) throw new Error("fixture repository refused");
+        gitHead = prepared.repositoryInitialization.commit;
+        expect(createManualProject("Existing sample", targetRoot).ok).toBe(true);
+        existing = projectStartFixtureSeat(testRegistry, sandbox, targetRoot, 52);
+        fs.writeFileSync(path.join(targetRoot, "readme.txt"), "Uncommitted fixture\n");
+      }
+      if (mode === "hostile") fs.symlinkSync(sourceRoot, targetRoot, "dir");
+      const args = {
+        clientRequestId: "fixture-project-start-key",
+        operatorRequest: "Start the project and its first task.",
+        target: existing ? { kind: "existing_project", project: existing.project }
+          : { kind: "new_project", name: "Sample", folder: { mode: "by_name" } },
+        task: { text: "Prepare the first implementation plan", dueAt: "2030-01-15T12:00:00Z" },
+      };
+      const file = statePath("mcp-receipts.sqlite");
+      receipts = new SqliteMcpReceiptStore(file);
+      if (mode === "recipient-replaced-after-claim" && existing) {
+        const recipient = existing.entry;
+        const claim = receipts.claim.bind(receipts);
+        receipts.claim = (...parameters) => {
+          const committed = claim(...parameters);
+          if (committed.kind === "fresh") testRegistry.upsert({ ...recipient, claimOwner: "replacement-at-admission" });
+          return committed;
+        };
+      }
+      const bindings = viewerMcpBindings(undefined, undefined, {
+        ...productionDomainDependencies, attentionAuthority: () => ({
+          kind: "worker", conversationId: source.conversationId, role: "orchestrator", evidence: "native-session",
+        }),
+      });
+      let service = createMcpToolService(bindings, receipts);
+      const accepted = await service.callTool("start_project", args);
+      if (mode === "recipient-replaced-after-claim") {
+        expect(accepted).toMatchObject({ ok: false, code: "target_changed" });
+        expect(accepted).not.toHaveProperty("seat");
+        expect(await service.callTool("start_project", { ...args, recoveryOnly: true })).toMatchObject({ ok: false, code: "target_changed" });
+        expect(launchCount).toBe(0);
+        return;
+      }
+      if (mode === "hostile") {
+        expect(accepted).toMatchObject({ ok: false, code: "OUTSIDE_ROOTS" });
+        expect(fs.lstatSync(targetRoot).isSymbolicLink()).toBe(true);
+        expect(launchCount).toBe(0);
+        return;
+      }
+      if (!accepted.ok) throw new Error(`fixture project start refused: ${accepted.code}`);
+      expect(accepted).toMatchObject({ ok: true, accepted: true, state: "accepted", phase: "admission" });
+      expect(JSON.stringify(accepted)).not.toContain(targetRoot);
+      expect(await service.callTool("start_project", { ...args, operatorRequest: "Changed request" })).toMatchObject({ ok: false, code: "idempotency_conflict" });
+      const key = receiptKey("start_project", args.clientRequestId, source.conversationId);
+      const recorded = receipts.lookup(key);
+      if (!recorded?.binding?.projectStart) throw new Error("missing project start claim");
+      if (mode === "ambiguous-folder") {
+        const previous = recorded.binding;
+        const checkpoint = previous.projectStart!;
+        expect(receipts.updateProjectStart(key, recorded.digest, previous, { ...previous, projectStart: {
+          ...checkpoint, phase: "folder", effects: { ...checkpoint.effects, folder: "dispatching" },
+        } }, () => {})).toBe(true);
+        fs.mkdirSync(targetRoot);
+      }
+      if (mode === "changed-caller") {
+        testRegistry.upsert({ ...source.entry, claimOwner: "replacement-writer" });
+      }
+      receipts.close();
+      receipts = new SqliteMcpReceiptStore(file);
+      service = createMcpToolService(bindings, receipts);
+      let sent = 0;
+      let beforeWrite = 0;
+      const runtime: (() => RuntimeHostClient) | undefined = existing && (() => ({
+        readSession: async () => ({
+          conversationId: existing!.conversationId, sessionKey: existing!.entry.key, hostKind: "claude-broker",
+          host: "hosted", turn: "idle", provenance: "structured", revision: 1, attentionIds: [],
+          recentReceipts: [], accountId: existing!.entry.accountId, parentConversationId: null,
+          flowId: null, workflowId: null, cwd: targetRoot, artifactPath: existing!.entry.artifactPath,
+          capabilities: { steer: true, structuredAttention: true }, activeTurnId: null,
+        }),
+        command: async (command, authorizeBeforeWrite) => {
+          beforeWrite += 1;
+          if (mode === "recipient-replaced") testRegistry.upsert({ ...existing!.entry, claimOwner: "recipient-replacement" });
+          authorizeBeforeWrite?.();
+          sent += 1;
+          return { operationId: command.operationId, replayed: false, receipt: {
+            operationId: command.operationId, idempotencyKey: command.idempotencyKey,
+            conversationId: command.conversationId, kind: command.kind, status: "delivered",
+            at: AT,
+          } };
+        },
+      } satisfies Pick<RuntimeHostClient, "readSession" | "command">) as RuntimeHostClient);
+      if (mode === "ambiguous-folder") {
+        const child = Bun.spawn([process.execPath, "--eval", `
+          import { AgentRegistry, setAgentRegistryForTests } from "./src/lib/agent/registry";
+          import { SqliteMcpReceiptStore } from "./src/lib/mcp/server";
+          import { advanceProjectStart } from "./src/lib/projects/start";
+          const registry = new AgentRegistry(process.env.FIXTURE_REGISTRY!);
+          setAgentRegistryForTests(registry);
+          const receipts = new SqliteMcpReceiptStore(process.env.FIXTURE_RECEIPTS!);
+          try { await advanceProjectStart(receipts, process.env.FIXTURE_KEY!); }
+          finally { receipts.close(); registry.close(); }
+        `], {
+          env: { ...process.env, FIXTURE_REGISTRY: path.join(sandbox, "registry.json"), FIXTURE_RECEIPTS: file, FIXTURE_KEY: key },
+          stdin: "ignore", stdout: "ignore", stderr: "pipe",
+        });
+        const stderr = await new Response(child.stderr).text();
+        expect(await child.exited, stderr).toBe(0);
+      } else {
+        await advanceProjectStart(receipts, key, runtime);
+      }
+      if (mode === "changed-caller") {
+        expect(fs.existsSync(targetRoot)).toBe(false);
+        expect(receipts.lookup(key)?.binding?.projectStart?.cause?.code).toBe("authority_changed");
+        expect(await service.callTool("start_project", { ...args, recoveryOnly: true })).toMatchObject({ ok: false, code: "authority_changed" });
+        return;
+      }
+      if (preExecEngine) {
+        expect(launchCount).toBe(1);
+        expect(preparedExec).toBe(1);
+        expect(execCalls).toBe(0);
+        expect(receipts.lookup(key)?.binding?.projectStart?.effects.seat).toBe("unknown");
+        expect(await service.callTool("start_project", { ...args, recoveryOnly: true })).toMatchObject({ ok: false, code: "authority_changed" });
+        return;
+      }
+      const replay = await service.callTool("start_project", { ...args, recoveryOnly: true });
+      if (mode === "recipient-replaced") {
+        expect(beforeWrite).toBe(1);
+        expect(sent).toBe(0);
+        expect(replay).toMatchObject({ ok: false, code: "target_changed" });
+        return;
+      }
+      if (!replay.ok) throw new Error(`fixture project start replay refused: ${replay.code}`);
+      expect(replay).toMatchObject({ ok: true, replayed: true, operationId: accepted.operationId });
+      if (mode === "ambiguous-folder") {
+        expect(replay).toMatchObject({ state: "unknown", effects: { folder: "unknown" } });
+        expect(fs.readdirSync(targetRoot)).toEqual([]);
+        expect(launchCount).toBe(0);
+        return;
+      }
+      expect(replay).toMatchObject({
+        state: "in-progress", effects: { folder: existing ? "reused" : "observed", repository: existing ? "reused" : "observed", task: "observed" },
+        project: projectForCwd(targetRoot), arrival: existing ? "confirmed" : "pending",
+      });
+      expect(loadTasksByIds(new Set([String(replay.taskId)]))).toMatchObject([{ project: replay.project, status: "inbox" }]);
+      const launch = testRegistry.spawnReceiptForClientAttempt(projectStartKey("seat", String(accepted.operationId)));
+      if (existing) {
+        expect(replay.seat).toMatchObject({ conversationId: existing.conversationId, reused: true });
+        expect(beforeWrite).toBe(1);
+        expect(sent).toBe(1);
+        expect(launchCount).toBe(0);
+        expect(launch).toBeNull();
+        expect(fs.readFileSync(path.join(targetRoot, "readme.txt"), "utf8")).toBe("Uncommitted fixture\n");
+        expect(fs.readFileSync(path.join(targetRoot, ".git", "refs", "heads", "main"), "utf8").trim()).toBe(gitHead!);
+        const { stages, error } = normalizeStages([
+          { id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Run the first task", next: null },
+        ], pipelineRoleLookup, undefined, 1, existing.project);
+        if (!stages) throw new Error(`fixture pipeline rejected its stage: ${error}`);
+        const work = buildPipeline({
+          id: "f1240099", task: "First task work", taskIds: [String(replay.taskId)], project: existing.project, repoDir: targetRoot,
+          stages,
+          srcConversationId: existing.conversationId, srcPath: existing.entry.artifactPath, now: new Date().toISOString(),
+          publication: "internal",
+        });
+        work.creationRequest = { key: "fixture-receiver-work", digest: "e".repeat(64) };
+        await createPipelineWithDelivery(work, { repository: existing.project, remote: "", branch: `refs/heads/${work.branch}` });
+      } else {
+        expect(launchCount).toBe(1);
+        expect(launch?.launchId).toBe(replay.launchId);
+        expect(fs.existsSync(path.join(targetRoot, ".git"))).toBe(true);
+      }
+      await advanceProjectStart(receipts, key);
+      const final = await service.callTool("start_project", args);
+      if (!final.ok) throw new Error(`fixture project start lookup refused: ${final.code}`);
+      expect(final.taskId).toBe(replay.taskId);
+      if (existing) expect(final).toMatchObject({ state: "started", work: { state: "admitted", pipelineIds: ["f1240099"] } });
+      expect(launchCount).toBe(existing ? 0 : 1);
+    } finally {
+      setSeatCommandDependenciesForTests(null);
+      receipts?.close();
+      if (oldHome === undefined) delete process.env.HOME; else process.env.HOME = oldHome;
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
 }
 
 function controlStub(responses: Record<string, Record<string, unknown>> = {}) {

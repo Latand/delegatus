@@ -16,6 +16,9 @@ import { clearPipelinePreflightCache } from "./preflight";
 import { realProvisionExec } from "./git";
 import { realExec } from "@/lib/workflows/provision";
 import { POST as preflight } from "@/app/api/pipelines/preflight/route";
+import {
+  preparePipelineRepository, recoverProjectRepository, type RepositoryInitializationOperation,
+} from "./initializeRepository";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-init-"));
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -36,6 +39,52 @@ function ports() {
   h.ports.provisionExec = realProvisionExec;
   return h;
 }
+
+test.each(["prepared", "ignore", "installed"] as const)("project start recovers its prepared repository after %s", async stopAfter => {
+  const dir = folder();
+  const nested = path.join(dir, "nested");
+  const original = "ignored-output/\n";
+  fs.mkdirSync(nested);
+  fs.writeFileSync(path.join(dir, ".gitignore"), original);
+  fs.writeFileSync(path.join(nested, ".gitignore"), original);
+  fs.writeFileSync(path.join(nested, ".env"), "private fixture\n");
+  let recorded: RepositoryInitializationOperation["prepared"] = null;
+  let interrupted = false;
+  let resume = false;
+  const operation: RepositoryInitializationOperation = {
+    id: ({ prepared: "a", ignore: "b", installed: "c" })[stopAfter].repeat(64), prepared: null,
+    assertCurrent: () => {
+      if (resume) return;
+      if (stopAfter === "ignore" && fs.readFileSync(path.join(nested, ".gitignore"), "utf8") !== original
+        || stopAfter === "installed" && fs.existsSync(path.join(dir, ".git"))) {
+        interrupted = true;
+        throw new Error("fixture authority replaced");
+      }
+    },
+    recordPrepared: async value => {
+      recorded = value;
+      if (stopAfter === "prepared") {
+        interrupted = true;
+        throw new Error("fixture driver stopped after recording preparation");
+      }
+    },
+  };
+  expect((await preparePipelineRepository(dir, true, {}, operation)).ok).toBe(false);
+  expect(interrupted).toBe(true);
+  expect(recorded).not.toBeNull();
+  expect(fs.existsSync(path.join(dir, ".git"))).toBe(stopAfter === "installed");
+  expect(fs.readFileSync(path.join(dir, ".gitignore"), "utf8") === original).toBe(stopAfter !== "installed");
+  resume = true;
+  const recovered = await recoverProjectRepository(dir, { ...operation, prepared: recorded });
+  expect(recovered).toMatchObject({ ok: true, repoDir: dir });
+  for (const filename of [path.join(dir, ".gitignore"), path.join(nested, ".gitignore")]) {
+    const actual = fs.readFileSync(filename, "utf8");
+    expect(actual.startsWith(original)).toBe(true);
+    expect(actual.match(/Delegatus baseline exclusions/g)).toHaveLength(1);
+  }
+  expect(git(dir, "rev-list", "--count", "HEAD")).toBe("1");
+  expect(git(dir, "ls-tree", "-r", "--name-only", "HEAD")).not.toContain("nested/.env");
+});
 
 test("A: board eligibility is read-only; creation initializes main and reports its safe baseline", async () => {
   const dir = folder();

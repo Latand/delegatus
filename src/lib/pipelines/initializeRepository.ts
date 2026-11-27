@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { constants } from "node:fs";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 
@@ -11,6 +12,7 @@ import { projectSuccessionFor, recordProjectSuccessions } from "@/lib/projects/s
 import { globalCache } from "@/lib/scanner/caches";
 import { withFileTransaction } from "@/lib/state/fileTransaction";
 import { waitForStateLock } from "@/lib/state/lockWait";
+import { renameDirectoryNoReplace } from "@/lib/state/renameDirectoryNoReplace";
 import { canonicalSensitiveText } from "@/lib/privacy/canonicalText";
 import { knownProviderSecretOffset } from "@/lib/accounts/providerSecretRedaction";
 import { AUTHORIZATION_HEADER, BEARER_TOKEN, COOKIE_HEADER, JWT_PATTERN, TOKEN_FAMILY_PATTERN } from "@/lib/view/compactText";
@@ -74,7 +76,7 @@ async function assertNoRepositoryAncestor(candidate: string): Promise<void> {
   }
 }
 
-async function safeRoot(candidate: string): Promise<void> {
+export async function assertSafeRepositoryRoot(candidate: string): Promise<void> {
   const homes = [os.homedir(), os.userInfo().homedir, process.env.HOME].filter((value): value is string => !!value);
   for (const home of homes) if (inside(await canonical(home), candidate)) throw new Error("initialization refused for the home directory or its ancestors");
   const configs = [process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config")];
@@ -92,8 +94,8 @@ async function safeRoot(candidate: string): Promise<void> {
 }
 
 type Snapshot = { relative: string; data: Buffer; mode: number; dev: number; ino: number; mtimeMs: number; size: number };
-async function readFile(root: string, relative: string, maxBytes = limit("LLV_PIPELINE_INIT_MAX_FILE_BYTES", 2 * 1024 * 1024)): Promise<Snapshot> {
-  if (await fs.realpath(path.dirname(path.join(root, relative))) !== path.dirname(path.join(root, relative))) throw new Error("project directory identity changed during initialization; retry");
+async function readFile(root: string, relative: string, maxBytes = limit("LLV_PIPELINE_INIT_MAX_FILE_BYTES", 2 * 1024 * 1024), realRoot = root): Promise<Snapshot> {
+  if (await fs.realpath(path.dirname(path.join(root, relative))) !== path.dirname(path.join(realRoot, relative))) throw new Error("project directory identity changed during initialization; retry");
   const file = await fs.open(path.join(root, relative), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const stat = await file.stat();
@@ -164,7 +166,8 @@ function gitEnvironment(): Partial<NodeJS.ProcessEnv> {
   for (const key of Object.keys(process.env)) if (key.startsWith("GIT_")) env[key] = undefined;
   return { ...env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null", ...controllerCommitIdentityEnv() };
 }
-async function git(cwd: string, args: string[]) {
+async function git(cwd: string, args: string[], assertCurrent?: () => void) {
+  assertCurrent?.();
   const result = await realExec("git", args, cwd, gitEnvironment(), { timeoutMs: 15_000, maxOutputBytes: 256_000 });
   if (result.code !== 0) throw new Error("local repository preparation failed; no file contents were reported");
   return result.stdout.trim();
@@ -187,21 +190,24 @@ function completeReport(initialization: RepositoryInitialization) {
   ] };
 }
 
-async function appendIgnore(root: string, original: Snapshot, text: string) {
+async function appendIgnore(root: string, original: Pick<Snapshot, "relative" | "dev" | "ino" | "size" | "mtimeMs">, text: string, assertCurrent?: () => void) {
   const file = await fs.open(path.join(root, original.relative), constants.O_WRONLY | constants.O_APPEND | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const stat = await file.stat();
-    if (!stat.isFile() || stat.dev !== original.dev || stat.ino !== original.ino || stat.size !== original.size || stat.mtimeMs !== original.mtimeMs) throw new Error("project gitignore changed during initialization; retry");
+    if (!stat.isFile() || stat.nlink !== 1 || stat.dev !== original.dev || stat.ino !== original.ino || stat.size !== original.size || stat.mtimeMs !== original.mtimeMs) throw new Error("project gitignore changed during initialization; retry");
+    assertCurrent?.();
     await file.writeFile(text);
   } finally { await file.close(); }
 }
 
-async function report(root: string, initialization: RepositoryInitialization) {
+async function report(root: string, initialization: RepositoryInitialization, assertCurrent?: () => void) {
   return waitForStateLock("pipelines.repository-initialization", () => {
+    assertCurrent?.();
     globalCache("project-info-cwd-v2").delete(root);
     recordProjectSuccessions([projectSuccessionFor(directoryProjectId(root), root)]);
     // Channels must be initialized before the report's SQL transaction opens.
     readBridgeChannel();
+    assertCurrent?.();
     appendBridgeReports([{
       key: "repository-initialized:" + initialization.commit, project: initialization.project,
       class: "status", at: new Date().toISOString(),
@@ -209,6 +215,99 @@ async function report(root: string, initialization: RepositoryInitialization) {
       complete: completeReport(initialization),
     }]);
   });
+}
+
+interface PreparedRepository {
+  id: string;
+  root: { dev: number; ino: number };
+  initialization: RepositoryInitialization;
+  ignores: { relative: string; original: Pick<Snapshot, "dev" | "ino" | "size" | "mtimeMs"> & { digest: string } | null; suffix: string }[];
+}
+
+type PreparedIdentity = { directory: { dev: number; ino: number }; digest: string };
+export interface RepositoryInitializationOperation {
+  id: string;
+  assertCurrent(): void;
+  prepared: PreparedIdentity | null;
+  recordPrepared(value: PreparedIdentity): Promise<void>;
+}
+
+const digest = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
+const preparedName = (root: string, id: string) => path.join(path.dirname(root), `.delegatus-initialization-${id}`);
+const PREPARED_MANIFEST = ".delegatus-initialization-manifest";
+
+async function installedPreparation(root: string, manifest: PreparedRepository, assertCurrent: () => void): Promise<PipelineRepoPreflight> {
+  const directory = await fs.lstat(root);
+  if (!directory.isDirectory() || directory.dev !== manifest.root.dev || directory.ino !== manifest.root.ino) throw new Error("project directory changed");
+  const marker = await readFile(root, ".git/" + MARKER, 16_000);
+  const value: unknown = JSON.parse(marker.data.toString("utf8"));
+  if (typeof value !== "object" || !value || Reflect.get(value, "operationId") !== manifest.id
+    || Reflect.get(value, "commit") !== manifest.initialization.commit
+    || await git(root, ["rev-parse", "--verify", "HEAD"], assertCurrent) !== manifest.initialization.commit) throw new Error("project initialization custody changed");
+  await report(root, manifest.initialization, assertCurrent);
+  const ready = await preflightPipelineRepo(root);
+  assertCurrent();
+  return ready.ok ? { ...ready, repositoryInitialization: manifest.initialization } : ready;
+}
+
+async function installPreparedRepository(root: string, stableRoot: string, prepared: string, manifest: PreparedRepository, assertCurrent: () => void): Promise<PipelineRepoPreflight> {
+  try {
+    const metadata = await fs.lstat(path.join(stableRoot, ".git"));
+    if (!metadata.isDirectory()) throw new Error("project Git metadata changed");
+    return await installedPreparation(root, manifest, assertCurrent);
+  } catch (error) {
+    if (!missing(error)) throw error;
+    // The metadata may exist without this operation's marker. Only the probe
+    // below, against the real root, allows installation of a prepared baseline.
+  }
+  if (await git(prepared, ["rev-parse", "--verify", "HEAD"], assertCurrent) !== manifest.initialization.commit)
+    throw new Error("project initialization preparation changed");
+  for (const item of manifest.ignores) {
+    const absolute = path.join(stableRoot, item.relative);
+    const original = item.original;
+    let current: Snapshot | undefined;
+    try { current = await readFile(stableRoot, item.relative, 4 * 1024 * 1024, root); }
+    catch (error) { if (!missing(error)) throw error; }
+    assertCurrent();
+    const suffix = Buffer.from(item.suffix);
+    if (original === null) {
+      if (!current) await fs.writeFile(absolute, suffix, { flag: "wx" });
+      else if (!current.data.equals(suffix)) throw new Error("project gitignore changed");
+      continue;
+    }
+    if (!current || current.dev !== original.dev || current.ino !== original.ino
+      || digest(current.data.subarray(0, original.size)) !== original.digest) throw new Error("project gitignore changed");
+    if (current.size === original.size) await appendIgnore(stableRoot, { ...original, relative: item.relative }, item.suffix, assertCurrent);
+    else if (!current.data.subarray(original.size).equals(suffix)) throw new Error("project gitignore changed");
+  }
+  await assertNoRepositoryAncestor(root);
+  assertCurrent();
+  if (!renameDirectoryNoReplace(path.join(prepared, ".git"), path.join(stableRoot, ".git")))
+    throw new Error("project Git metadata changed");
+  return installedPreparation(root, manifest, assertCurrent);
+}
+
+export async function recoverProjectRepository(root: string, operation: RepositoryInitializationOperation): Promise<PipelineRepoPreflight | null> {
+  if (!operation.prepared) return null;
+  const prepared = preparedName(root, operation.id);
+  const observed = await fs.lstat(prepared);
+  if (!observed.isDirectory() || observed.dev !== operation.prepared.directory.dev || observed.ino !== operation.prepared.directory.ino)
+    throw new Error("project initialization preparation changed");
+  const saved = await readFile(prepared, PREPARED_MANIFEST, 8 * 1024 * 1024);
+  if (digest(saved.data) !== operation.prepared.digest) throw new Error("project initialization manifest changed");
+  const manifest = JSON.parse(saved.data.toString("utf8")) as PreparedRepository;
+  if (manifest.id !== operation.id) throw new Error("project initialization operation changed");
+  await assertSafeRepositoryRoot(root);
+  operation.assertCurrent();
+  const directory = process.platform === "linux" ? await fs.open(root, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW) : undefined;
+  const stableRoot = directory ? "/proc/self/fd/" + directory.fd : root;
+  try {
+    const identity = await (directory?.stat() ?? fs.lstat(root));
+    if (identity.dev !== manifest.root.dev || identity.ino !== manifest.root.ino) throw new Error("project directory changed");
+    operation.assertCurrent();
+    return await withFileTransaction(path.join(stableRoot, ".delegatus-initialization"), "project initialization is already in progress", () =>
+      installPreparedRepository(root, stableRoot, prepared, manifest, operation.assertCurrent));
+  } finally { await directory?.close(); }
 }
 
 export async function readRepositoryInitialization(root: string): Promise<RepositoryInitialization | undefined> {
@@ -229,9 +328,11 @@ export async function preparePipelineRepository(
   rawPath: string,
   initialize = true,
   options: Parameters<typeof preflightPipelineRepo>[2] = {},
+  operation?: RepositoryInitializationOperation,
 ): Promise<PipelineRepoPreflight> {
   return withViewerOperation("pipelines.repository-initialization", async () => {
     const admission = await preflightPipelineRepo(rawPath, undefined, options);
+    operation?.assertCurrent();
     if (admission.ok) {
       const requested = rawPath.trim();
       const expanded = requested === "~" || requested.startsWith("~/") ? path.join(os.homedir(), requested.slice(1)) : requested;
@@ -240,7 +341,7 @@ export async function preparePipelineRepository(
         ok: false, code: "initialization_refused", path: candidate,
         detail: "initialization refused inside an existing repository's working tree; select its repository root",
       };
-      const previous = initialize ? await readRepositoryInitialization(admission.repoDir) : undefined;
+      const previous = initialize && !operation ? await readRepositoryInitialization(admission.repoDir) : undefined;
       if (previous) { await report(admission.repoDir, previous); return { ...admission, repositoryInitialization: previous }; }
       return admission;
     }
@@ -249,7 +350,7 @@ export async function preparePipelineRepository(
     let temporary: string | undefined;
     let directory: Awaited<ReturnType<typeof fs.open>> | undefined;
     try {
-      await safeRoot(candidate);
+      await assertSafeRepositoryRoot(candidate);
       await assertNoRepositoryAncestor(candidate);
       try {
         await fs.access(candidate, constants.W_OK | constants.X_OK);
@@ -262,6 +363,7 @@ export async function preparePipelineRepository(
         const current = await fs.lstat(candidate);
         const held = directory ? await directory.stat() : initialRoot;
         if (!current.isDirectory() || current.dev !== initialRoot.dev || current.ino !== initialRoot.ino || held.dev !== initialRoot.dev || held.ino !== initialRoot.ino) throw new Error("project directory identity changed during initialization; retry");
+        operation?.assertCurrent();
       };
       await assertRoot();
       try { await fs.lstat(path.join(candidate, ".git")); throw new Error("Git metadata already exists; initialization refused"); }
@@ -272,8 +374,15 @@ export async function preparePipelineRepository(
       } catch (error) { if (!missing(error)) throw error; }
       const data = await snapshot(candidate);
       if (!initialize) return { ok: true, repoDir: candidate, gitCommonDir: path.join(candidate, ".git"), worktreeParent: path.dirname(candidate) };
-      temporary = await fs.mkdtemp(path.join(path.dirname(candidate), ".delegatus-initial-repository-"));
-      await git(temporary, ["init", "--initial-branch=main", "--template="]);
+      operation?.assertCurrent();
+      if (operation) {
+        const target = preparedName(candidate, operation.id);
+        await fs.mkdir(target, { mode: 0o700 });
+        temporary = target;
+      } else {
+        temporary = await fs.mkdtemp(path.join(path.dirname(candidate), ".delegatus-initial-repository-"));
+      }
+      await git(temporary, ["init", "--initial-branch=main", "--template="], operation?.assertCurrent);
       const originalIgnore = data.files.find(file => file.relative === ".gitignore");
       const prefix = originalIgnore?.data.toString("utf8") ?? "";
       const appended = baselineIgnore(data.ignored);
@@ -285,6 +394,7 @@ export async function preparePipelineRepository(
         await fs.mkdir(path.dirname(destination), { recursive: true });
         await fs.writeFile(destination, file.data, { mode: file.mode & 0o777 });
       }
+      operation?.assertCurrent();
       const ignored = data.files.length ? await realExec("git", ["-c", "core.quotePath=false", "check-ignore", "--no-index", "--", ...data.files.map(file => "./" + file.relative)], temporary, gitEnvironment()) : { code: 1, stdout: "" };
       if (ignored.code !== 0 && ignored.code !== 1) throw new Error("local repository ignore check failed");
       const userIgnored = new Set(ignored.stdout.split("\n").filter(Boolean).map(line => (line.startsWith('"') ? JSON.parse(line) as string : line).replace(/^\.\//, "")));
@@ -307,13 +417,13 @@ export async function preparePipelineRepository(
       if (sizes.reduce((total, size) => total + size, 0) > limit("LLV_PIPELINE_INIT_MAX_BYTES", 32 * 1024 * 1024)) throw new Error("project exceeds the initial commit size bound");
       // Hash the inspected bytes directly. Repository attributes must not transform
       // them or run filters while preparing the first commit.
-      const hashes = (await git(temporary, ["hash-object", "--no-filters", "-w", "--", ...committedFiles])).split("\n");
+      const hashes = (await git(temporary, ["hash-object", "--no-filters", "-w", "--", ...committedFiles], operation?.assertCurrent)).split("\n");
       if (hashes.length !== committedFiles.length || hashes.some(hash => !/^[a-f0-9]{40}$/.test(hash))) throw new Error("local repository snapshot hashing failed");
       const modes = new Map(selected.map(file => [file.relative, file.mode]));
       await git(temporary, ["update-index", "--add", ...committedFiles.flatMap((file, index) =>
-        ["--cacheinfo", ((modes.get(file) ?? 0o644) & 0o111 ? "100755" : "100644") + "," + hashes[index] + "," + file])]);
-      await git(temporary, ["-c", "commit.gpgsign=false", "commit", "-m", "Initialize project with a safe Delegatus baseline"]);
-      const commit = await git(temporary, ["rev-parse", "HEAD"]);
+        ["--cacheinfo", ((modes.get(file) ?? 0o644) & 0o111 ? "100755" : "100644") + "," + hashes[index] + "," + file])], operation?.assertCurrent);
+      await git(temporary, ["-c", "commit.gpgsign=false", "commit", "-m", "Initialize project with a safe Delegatus baseline"], operation?.assertCurrent);
+      const commit = await git(temporary, ["rev-parse", "HEAD"], operation?.assertCurrent);
       const project = localRepositoryProjectId(candidate);
       if (!project) throw new Error("local repository identity could not be resolved");
       const initialization: RepositoryInitialization = {
@@ -323,12 +433,14 @@ export async function preparePipelineRepository(
       catch { throw new Error("project exceeds the initial commit path-list bound"); }
       const prepared = temporary;
       return await withFileTransaction(path.join(stableRoot, ".delegatus-initialization"), "project initialization is already in progress; retry", async () => {
-        await fs.writeFile(path.join(prepared, ".git", MARKER), JSON.stringify(initialization), { flag: "wx" });
+        operation?.assertCurrent();
+        await fs.writeFile(path.join(prepared, ".git", MARKER), JSON.stringify({ ...initialization, ...(operation ? { operationId: operation.id } : {}) }), { flag: "wx" });
         // A fresh repository probe and file identities fence changes during preparation.
         const current = await preflightPipelineRepo(candidate);
-        if (current.ok) return preparePipelineRepository(candidate);
+        if (current.ok && !operation) return preparePipelineRepository(candidate);
+        if (current.ok) throw new Error("repository identity changed during initialization");
         if (current.code !== "not_git") throw new Error("repository identity changed during initialization; retry");
-        await safeRoot(candidate);
+        await assertSafeRepositoryRoot(candidate);
         for (const directory of data.directories) {
           const current = await fs.lstat(path.join(candidate, directory.relative));
           if (!current.isDirectory() || current.dev !== directory.dev || current.ino !== directory.ino) throw new Error("project directory identity changed during initialization; retry");
@@ -344,6 +456,26 @@ export async function preparePipelineRepository(
         catch (error) { if (!missing(error)) throw error; }
         await assertRoot();
         await assertNoRepositoryAncestor(candidate);
+        if (operation) {
+          const original = (file: Snapshot) => ({ dev: file.dev, ino: file.ino, size: file.size, mtimeMs: file.mtimeMs, digest: digest(file.data) });
+          const manifest: PreparedRepository = {
+            id: operation.id,
+            root: { dev: initialRoot.dev, ino: initialRoot.ino },
+            initialization,
+            ignores: [
+              ...selected.filter(file => file.relative !== ".gitignore" && path.basename(file.relative) === ".gitignore").map(file =>
+                ({ relative: file.relative, original: original(file), suffix: baselineIgnore(data.ignored, path.posix.dirname(file.relative)) })),
+              { relative: ".gitignore", original: originalIgnore ? original(originalIgnore) : null, suffix: appended },
+            ],
+          };
+          const bytes = JSON.stringify(manifest);
+          const identity = await fs.lstat(prepared);
+          operation.assertCurrent();
+          await fs.writeFile(path.join(prepared, PREPARED_MANIFEST), bytes, { flag: "wx", mode: 0o600 });
+          await operation.recordPrepared({ directory: { dev: identity.dev, ino: identity.ino }, digest: digest(bytes) });
+          operation.assertCurrent();
+          return installPreparedRepository(candidate, stableRoot, prepared, manifest, operation.assertCurrent);
+        }
         for (const file of selected.filter(file => file.relative !== ".gitignore" && path.basename(file.relative) === ".gitignore")) {
           await appendIgnore(stableRoot, file, baselineIgnore(data.ignored, path.posix.dirname(file.relative)));
         }
@@ -363,7 +495,7 @@ export async function preparePipelineRepository(
           ? error.message : "repository initialization refused; the folder could not be prepared safely" };
     } finally {
       await directory?.close();
-      if (temporary) await fs.rm(temporary, { recursive: true, force: true });
+      if (temporary && !operation) await fs.rm(temporary, { recursive: true, force: true });
     }
   });
 }

@@ -458,6 +458,14 @@ must re-read the then-current published and unpublished diff. No inferred
 success for that line, its unknown custody or any held neighboring task is
 included in this design.
 
+The implementation uses the synchronous engine-host assertions now present
+in `src/lib/runtime/structuredSpawn.ts`. The seat launch attempt key resolves
+its checkpoint in the MCP receipt database for native startup, seat activation
+and first-message recovery. The task relay uses its own original key and keeps
+the exact attributed payload in the checkpoint for queue dispatch and recovery.
+Creation of a local baseline uses exclusive Git metadata installation on Linux
+and macOS.
+
 ## Exact existing verification files
 
 Extend existing fixtures and production consumers. Create no parallel capture
