@@ -573,30 +573,34 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
         if (refusal) throw new Error(`${label}: ${file}: runner did not finish (124); ${refusal.trim()}`);
         throw new BudgetExhausted(`${label}: ${file}: runner did not finish (124); ${budgetLabel} budget exhausted`);
       }
-      if (exitCode === 124 && output.includes("owned runner: deadline expired")) {
-        throw new BudgetExhausted(`${label}: ${file}: runner did not finish (124); file budget exhausted`);
-      }
-      if (result.signalCode || ![0, 1].includes(exitCode)) {
+      const fileTimedOut = exitCode === 124 && output.includes("owned runner: deadline expired");
+      if (fileTimedOut) {
+        if (filtered) throw new Error(`${label}: ${file}: runner did not finish (124); file budget exhausted`);
+        failures.push({ file, suite: "", name: `${RUNNER_ERROR}runner did not finish (124)`, kind: "error", selection });
+        if (survivors) appendOwnershipFailure(failures, file, survivors, selection);
+        options.onFailure?.();
+      } else if (result.signalCode || ![0, 1].includes(exitCode)) {
         const evidence = runnerAbortEvidence(output, root, privateRoot);
         if (!evidence) throw new Error(`runner did not finish (${result.signalCode ?? exitCode}); cause unavailable`);
         throw new Error(`runner did not finish (${result.signalCode ?? exitCode}): ${evidence}`);
+      } else {
+        const parsed = parseReport(readFileSync(report, "utf8"), output, file, root, selection);
+        // A complete report still needs the service's ownership verdict.
+        // Retain it so cleanup fixed on head can recover a broken baseline.
+        if (survivors && exitCode !== 0) {
+          appendOwnershipFailure(parsed.failures, file, survivors, selection);
+        }
+        if ((exitCode === 0) !== (parsed.failures.length === 0)) {
+          throw new Error(`runner exit disagrees with its report${survivors ? `; ${survivors}` : ""}`);
+        }
+        // Portable cleanup is best effort and can miss detached descendants.
+        // Its result remains observable but cannot certify later file reuse.
+        cleanupConfirmed = confirmedFileCleanup({ platform: process.platform, exitCode, survivors, taskPeak: task.peak, output,
+          cloudCleanup: env.LLV_GATE_CHECKPOINT_CLEANUP === "cloud-owned-runner",
+          receipt: existsSync(cleanupReceipt) ? readFileSync(cleanupReceipt, "utf8") : undefined, token: cleanupToken });
+        failures.push(...parsed.failures); passed.push(...parsed.passed); completed.push(file);
+        if (parsed.failures.length) options.onFailure?.();
       }
-      const parsed = parseReport(readFileSync(report, "utf8"), output, file, root, selection);
-      // A complete report still needs the service's ownership verdict.
-      // Retain it so cleanup fixed on head can recover a broken baseline.
-      if (survivors && exitCode !== 0) {
-        appendOwnershipFailure(parsed.failures, file, survivors, selection);
-      }
-      if ((exitCode === 0) !== (parsed.failures.length === 0)) {
-        throw new Error(`runner exit disagrees with its report${survivors ? `; ${survivors}` : ""}`);
-      }
-      // Portable cleanup is best effort and can miss detached descendants.
-      // Its result remains observable but cannot certify later file reuse.
-      cleanupConfirmed = confirmedFileCleanup({ platform: process.platform, exitCode, survivors, taskPeak: task.peak, output,
-        cloudCleanup: env.LLV_GATE_CHECKPOINT_CLEANUP === "cloud-owned-runner",
-        receipt: existsSync(cleanupReceipt) ? readFileSync(cleanupReceipt, "utf8") : undefined, token: cleanupToken });
-      failures.push(...parsed.failures); passed.push(...parsed.passed); completed.push(file);
-      if (parsed.failures.length) options.onFailure?.();
     } catch (error) {
       if (error instanceof BudgetExhausted) throw error;
       if (cutShort) throw error;
@@ -859,12 +863,22 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     // of the run with a clipped deadline can turn run exhaustion into a file
     // timeout and interrupt its nested runner during cleanup.
     const reserveFileBudget = !!headCache && budgets.runMs > budgets.fileMs + SUPERVISOR_MARGIN_MS;
-    const freshHead = await runFiles(root, pending, sandbox, inherited, "head", { ...runOptions, workers, reserveFileBudget,
-      onFile: headCache ? (run, cleanupConfirmed) => {
-        if (!cleanupConfirmed || !isGreenHeadFile(run)) return;
-        if (sameHeadInputs()) headCache.write(headKey(run.completed[0]!), run);
-        else inputsChanged = true;
-      } : undefined });
+    let freshHead: TestRun;
+    try {
+      freshHead = await runFiles(root, pending, sandbox, inherited, "head", { ...runOptions, workers, reserveFileBudget,
+        onFile: headCache ? (run, cleanupConfirmed) => {
+          if (!cleanupConfirmed || !isGreenHeadFile(run)) return;
+          if (sameHeadInputs()) headCache.write(headKey(run.completed[0]!), run);
+          else inputsChanged = true;
+        } : undefined });
+    } catch (error) {
+      if (error instanceof BudgetExhausted && error.partial?.failures.length) {
+        const observed = error.partial.failures.map(site =>
+          `NEW ${site.file}: ${site.suite ? `${site.suite} > ` : ""}${diagnosticName(site)}`);
+        throw new Error([error.message, ...observed].join("\n"));
+      }
+      throw error;
+    }
     const head: TestRun = { failures: freshHead.failures, passed: [...reused.flatMap(run => run.passed), ...freshHead.passed],
       completed: [...reused.flatMap(run => run.completed), ...freshHead.completed], elapsedMs: freshHead.elapsedMs };
     log(`touched-tests: head ${head.elapsedMs.toFixed(0)}ms`);
