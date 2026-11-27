@@ -2577,6 +2577,35 @@ test.each(["pure", "assertion", "cleanup"] as const)("publication timeout recove
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 }, 60_000);
 
+test.each(["clean-comparator", "new-test-failure", "other-check-failure", "cleanup-failure"] as const)(
+  "a completed comparison separates baseline failures from a later publication deadline: %s", async kind => {
+    const box = await publishSandbox();
+    try {
+      const head = await box.commit("change.txt", "accepted work\n");
+      const hooks = path.join(box.root, "hooks"); fs.mkdirSync(hooks);
+      const clean = kind === "clean-comparator" || kind === "other-check-failure" || kind === "cleanup-failure";
+      const summary = clean
+        ? "touched-tests: 0 new failures, 92 pre-existing failures, 0 fixed, 83 removed/skipped, 10 flaky"
+        : "touched-tests: 1 new failures, 92 pre-existing failures, 0 fixed, 83 removed/skipped, 10 flaky";
+      const refusal = kind === "new-test-failure" ? "NEW src/work.test.ts: newly failing assertion"
+        : kind === "other-check-failure" ? "pre-push: eslint: failed (1)"
+          : kind === "cleanup-failure" ? "owned runner: budget cleanup failed: child still running" : "";
+      const output = ["pre-push: touched tests", "(fail) src/base.test.ts: known base failure [1ms]", summary,
+        "pre-push: touched tests: passed in 881 s", refusal,
+        "pre-push: no verdict within the push budget of 826 s: \"Linux tests\" could not start; nothing was judged"].filter(Boolean).join("\n");
+      fs.writeFileSync(path.join(hooks, "pre-push"), `#!/bin/sh\ncat <<'EVIDENCE'\n${output}\nEVIDENCE\nexit 75\n`, { mode: 0o700 });
+      await git(box.subject.worktreeDir, "config", "core.hooksPath", hooks);
+      const result = await publishPipelineBranch(box.subject, realExec, { acceptedSha: head });
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error("expected publication deadline");
+      const retryable = kind === "clean-comparator";
+      expect(result.failure?.retryableDeadline).toBe(retryable);
+      expect(result.outcome).toBe(retryable ? "not-landed" : undefined);
+      expect(recoverablePublication(result)).toBe(retryable);
+      expect(await box.originHead()).toBe("");
+    } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+  }, 60_000);
+
 for (const scenario of [
   { name: "ordinary repository", adapter: false, file: "src/lib/pipelines/engine.ts", refused: false, unreadable: null, ms: 900_000 },
   { name: "ordinary gate change", adapter: true, file: "docs/change.md", refused: false, unreadable: null, ms: 900_000 },

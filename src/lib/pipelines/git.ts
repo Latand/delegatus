@@ -1854,6 +1854,20 @@ export function hookBudgetStop(output: string): { ms: number; check: string } | 
   return match ? { ms: Number(match[1]) * 1000, check: match[2]! } : null;
 }
 
+/** A completed comparator can print branch-side assertion failures that its
+ * base comparison has explicitly classified as pre-existing. Those lines do
+ * not veto a later hook-budget deadline; every other decisive refusal still
+ * does. */
+function publicationDeadlineAfterCleanComparison(output: string): "execution" | null {
+  if (!hookBudgetStop(output)) return null;
+  const lines = output.split("\n").map(line => line.trim());
+  const reports = lines.filter(line => line.startsWith("touched-tests: "));
+  if (reports.length !== 1 || !/^touched-tests: 0 new failures, \d+ pre-existing failures, \d+ fixed, \d+ removed\/skipped, \d+ flaky$/.test(reports[0]!)) return null;
+  if (!lines.some(line => /^pre-push: touched tests: passed in \d+ s$/.test(line))) return null;
+  if (lines.some(line => decisiveRefusal(line) && !line.startsWith("(fail) "))) return null;
+  return "execution";
+}
+
 /** A push that was stopped before it reached the remote, in one line: what
     ended it and which phase the hook had announced. Evidence is absent when
     the Viewer itself died with the push. */
@@ -2356,7 +2370,8 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         // Redaction may discard a stream containing decisive refusal evidence.
         // Only the classification survives; raw bytes are never persisted.
         const rawOutput = `${executed.stdout}\n${executed.stderr}`;
-        const classifiedDeadline = preparingDependencies ? null : publicationDeadlineKind(rawOutput);
+        const classifiedDeadline = preparingDependencies ? null
+          : publicationDeadlineKind(rawOutput) ?? publicationDeadlineAfterCleanComparison(rawOutput);
         const deadlineKind = classifiedDeadline === "memory" && (!preparingChecks || executed.code !== 75) ? null : classifiedDeadline;
         const rawPhase = preparingDependencies ? null : publicationFailurePhase({ outputTail: rawOutput });
         const privacyConfigurationFault = rawPhase === "privacy" && publicationPrivacyConfigurationFault(rawOutput)
