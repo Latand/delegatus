@@ -2341,6 +2341,37 @@ function registryReceiptsReferencing(file: RegistryFile, id: string): SpawnRecei
 
 const CLAIMABLE_RECEIPT_STATES = new Set(["starting", "pane-bound", "host-verified", "prompt-delivered", "path-pending"]);
 
+type LaunchSetupReceipt = Pick<SpawnReceipt, "hostSetup" | "key" | "state" | "admissionOwner">;
+
+function unconfirmedLaunchSetup(receipt: LaunchSetupReceipt) {
+  return !receipt.key && !receipt.hostSetup?.cleanupConfirmed ? receipt.hostSetup : undefined;
+}
+
+function missingSetupProcess(setup: NonNullable<SpawnReceipt["hostSetup"]>): boolean {
+  return (setup.phase === "executing" || setup.execPermitGranted === true) && setup.processes.length === 0;
+}
+
+export function launchSetupIdentities(receipt: LaunchSetupReceipt): ProcessIdentity[] {
+  const setup = unconfirmedLaunchSetup(receipt);
+  // Failed launches, including cancellations, retain their native process
+  // evidence. The controller that admitted them may serve for days after exit.
+  const admission = CLAIMABLE_RECEIPT_STATES.has(receipt.state) || (receipt.state !== "failed" && setup)
+    ? receipt.admissionOwner : null;
+  return [admission, ...(setup?.processes ?? [])].filter((identity): identity is ProcessIdentity =>
+    !!identity && Number.isInteger(identity.pid) && identity.pid > 0);
+}
+
+function failedLaunchSetupCanBeConfirmed(receipt: SpawnReceipt) {
+  const setup = unconfirmedLaunchSetup(receipt);
+  return receipt.state === "failed" && receipt.transport === "structured" && setup
+    && !receipt.pane && !receipt.verifiedHost && !receipt.artifactPath && !receipt.completionMode
+    && receipt.artifactLifecycle !== "materialized"
+    && setup.adoptionClaimEpoch === undefined && !missingSetupProcess(setup)
+    && setup.processes.every(identity => processIdentityStatus(identity) === "dead");
+}
+
+const LAUNCH_SETUP_CLEANUP_BATCH = 32;
+
 /** The same provisioning states in keyed reads and held startup views. */
 export function registryOpenSpawnReceipts(file: RegistryFile): SpawnReceipt[] {
   return registryRowsMatching(file, "receipts", "state", [...CLAIMABLE_RECEIPT_STATES]);
@@ -5687,6 +5718,7 @@ export class AgentRegistry {
   private readonly sqliteMode: AgentRegistrySqliteMode;
   private readonly writerDeadlineMs: number | undefined;
   private writerAdmissionTail: Promise<void> = Promise.resolve();
+  private launchSetupCleanupAfter = "";
   private readonly mcpGrantPolicy: McpGrantPolicy | undefined;
   private readonly sqliteStore: SqliteAgentRegistryStore | null;
   private antigravityStuckCount: number | undefined;
@@ -7702,6 +7734,58 @@ export class AgentRegistry {
 
   openSpawnReceipts(): SpawnReceipt[] {
     return this.readKeyed(file => clone(registryOpenSpawnReceipts(file)));
+  }
+
+  /** Fresh custody at the deploy cut, including exec with missing evidence. */
+  launchSetupBlocker(): string | null {
+    return this.readKeyed(file => {
+      const keys = (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
+        ? this.sqliteStore!.launchSetupKeys() : Object.keys(file.receipts);
+      for (const key of keys) {
+        const receipt = file.receipts[key];
+        if (!receipt) continue;
+        const setup = unconfirmedLaunchSetup(receipt);
+        if ((setup && missingSetupProcess(setup)) || launchSetupIdentities(receipt).some(identity => processIdentityMayOwn(identity))) {
+          return receipt.launchId;
+        }
+      }
+      return null;
+    }, { skipColdKeyInitialization: true });
+  }
+
+  /** Advance even past live and unverifiable receipts so a later dead setup
+      gets a turn. The cursor only schedules work; the receipt grants custody. */
+  async reconcileFailedLaunchSetup(waitDeadlineAt: number): Promise<void> {
+    const after = this.launchSetupCleanupAfter;
+    const candidates = this.readKeyed(file => {
+      const keys = (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
+        ? this.sqliteStore!.launchSetupKeys({ after, limit: LAUNCH_SETUP_CLEANUP_BATCH })
+        : Object.keys(file.receipts).filter(key => key > after && file.receipts[key]!.state === "failed"
+          && unconfirmedLaunchSetup(file.receipts[key]!)).sort().slice(0, LAUNCH_SETUP_CLEANUP_BATCH);
+      this.launchSetupCleanupAfter = keys.length === LAUNCH_SETUP_CLEANUP_BATCH ? keys.at(-1)! : "";
+      return keys.flatMap(key => {
+        const receipt = file.receipts[key];
+        return receipt && failedLaunchSetupCanBeConfirmed(receipt) ? [{
+          launchId: receipt.launchId, conversationId: receipt.conversationId,
+          owner: detachedRow(receipt.admissionOwner), setup: detachedRow(receipt.hostSetup),
+        }] : [];
+      });
+    }, { skipColdKeyInitialization: true });
+    if (!candidates.length || Date.now() >= waitDeadlineAt) return;
+    const correlation = { label: "spawn.reconcile-setup-cleanup", operationId: candidates[0]!.launchId, waitDeadlineAt };
+    const confirm = () => this.mutate(file => {
+      for (const observed of candidates) {
+        if (Date.now() >= waitDeadlineAt) break;
+        const current = file.receipts[observed.launchId];
+        if (!current || current.conversationId !== observed.conversationId
+          || !isDeepStrictEqual(detachedRow(current.admissionOwner), observed.owner)
+          || !isDeepStrictEqual(detachedRow(current.hostSetup), observed.setup)
+          || !failedLaunchSetupCanBeConfirmed(current)) continue;
+        current.hostSetup!.cleanupConfirmed = true;
+      }
+    }, { deliveryOnly: true, skipColdKeyInitialization: true });
+    if (this.sqliteMode === "read" || this.sqliteMode === "sqlite") await this.whenWriterHeld(correlation, confirm);
+    else this.deliveryWriteNow(correlation, confirm);
   }
 
   /** Includes terminal setup that still owns cleanup; the liveness index

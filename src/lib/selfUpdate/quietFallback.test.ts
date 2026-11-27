@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
+import { registryLockHolder } from "@/lib/agent/registryLockHolderFixture";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { agentLivenessSnapshot, productionLivenessSources, livenessRecordIsLive } from "@/lib/lifecycle/liveness";
@@ -96,7 +97,7 @@ function journalRow(overrides: Partial<RuntimeSession> = {}) {
       writerClaim: "fixture:0", ...overrides } });
 }
 
-test("automatic self-update waits for a failed launch's unreleased setup process", async () => {
+test.each(["live", "unverified", "unrecorded", "cancelled"] as const)("automatic self-update waits for failed launch setup (%s)", async (kind) => {
   await fallback("dead");
   child.kill();
   await child.exited;
@@ -106,23 +107,95 @@ test("automatic self-update waits for a failed launch's unreleased setup process
   f.registry.beginStructuredHostSetup(launchId, admissionOwner!, Date.now());
   const helper = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"]);
   try {
-    f.registry.recordStructuredHostSetup(launchId, admissionOwner!, captureProcessIdentity(helper.pid));
-    f.registry.failStructuredSpawn(launchId, "launch setup interrupted");
+    if (kind === "cancelled") f.registry.recordStructuredHostSetupWaiter(launchId, admissionOwner!, captureProcessIdentity(helper.pid));
+    else f.registry.recordStructuredHostSetup(launchId, admissionOwner!, kind === "unrecorded" ? undefined
+      : captureProcessIdentity(helper.pid, undefined, kind === "unverified" ? null : undefined));
+    f.registry.failStructuredSpawn(launchId, kind === "cancelled" ? "stage activation cancelled before dispatch" : "launch setup interrupted", { announce: false });
     const p = ports(f.journal);
     p.pipelines = () => [stage({ launchId, conversationId }, "needs_decision", "spawning")];
-    expect(p.launchSetupPending!()).toBe(true);
+    await p.reconcileLaunchSetup!(Date.now() + 1_000);
+    expect(p.launchSetupBlocker!()).toBe(launchId);
+    expect(f.registry.spawnReceipt(launchId)!.hostSetup!.cleanupConfirmed).toBeUndefined();
     expect(await probeQuiet(snapshot, p, Date.now(), true, "live")).toMatchObject({
-      quiet: false, blockers: { launchSetup: true, turns: 1, turnList: [{ conversationId, reason: "setup" }] },
+      quiet: false, blockers: { launchSetup: true },
     });
     helper.kill("SIGKILL");
     await helper.exited;
-    f.registry.confirmStructuredHostSetupCleanup(launchId, admissionOwner!);
-    f.registry.releaseStructuredSpawnAdmissionOwner(launchId, admissionOwner!);
-    expect(p.launchSetupPending!()).toBe(false);
-    expect(await probeQuiet(snapshot, p, Date.now(), true, "live")).toMatchObject({ quiet: true });
+    await p.reconcileLaunchSetup!(Date.now() + 1_000);
+    expect(p.launchSetupBlocker!()).toBe(kind === "unrecorded" ? launchId : null);
+    expect(f.registry.spawnReceipt(launchId)!.hostSetup!.cleanupConfirmed).toBe(kind === "unrecorded" ? undefined : true);
+    expect(await probeQuiet(snapshot, p, Date.now(), true, "live")).toMatchObject({ quiet: kind !== "unrecorded" });
   } finally {
     if (helper.exitCode === null && helper.signalCode === null) helper.kill("SIGKILL");
     await helper.exited;
+  }
+});
+
+test.each(["unchanged", "new-process", "published"] as const)("a failed standalone launch with dead setup processes (%s)", async (change) => {
+  const at = Date.parse("2026-01-01T00:00:00Z");
+  const filename = join(f.dir, "launch-registry.json");
+  const options = { sqliteMode: "sqlite", now: () => at } as const;
+  const registry = new AgentRegistry(filename, undefined, undefined, options);
+  setAgentRegistryForTests(registry);
+  try {
+    const { receipt: { launchId, admissionOwner, conversationId } } = beginLegacySpawnFixture(registry, {
+      engine: "codex", cwd: f.dir, transport: "structured", clientAttemptId: "standalone-deploy-gate",
+    });
+    registry.beginStructuredHostSetup(launchId, admissionOwner!, at);
+    const helper = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"]);
+    try {
+      registry.recordStructuredHostSetupWaiter(launchId, admissionOwner!, captureProcessIdentity(child.pid));
+      registry.recordStructuredHostSetup(launchId, admissionOwner!);
+      registry.recordStructuredHostSetup(launchId, admissionOwner!, captureProcessIdentity(helper.pid));
+      registry.failStructuredSpawn(launchId, "registry writer busy at spawn.setup-custody", { announce: false });
+      child.kill();
+      helper.kill();
+      await Promise.all([child.exited, helper.exited]);
+
+      const file = registry.readOnlySnapshot();
+      expect(file.conversations[conversationId]).toBeUndefined();
+      expect(file.receipts[launchId]).toMatchObject({ key: null, state: "failed", admissionOwner: { pid: process.pid },
+        hostSetup: { phase: "executing", execPermitGranted: true } });
+      expect(file.receipts[launchId]!.hostSetup!.processes).toHaveLength(2);
+      const p = ports(f.journal);
+      const writer = new AgentRegistry(filename, undefined, undefined, options);
+      const late = change === "new-process" ? Bun.spawn(["sleep", "60"]) : null;
+      try {
+        if (change === "unchanged") {
+          const holder = registryLockHolder(join(f.dir, "launch-registry.sqlite"));
+          try {
+            await holder.hold();
+            await p.reconcileLaunchSetup!(Date.now() + 100);
+            expect(writer.spawnReceipt(launchId)!.hostSetup!.cleanupConfirmed).toBeUndefined();
+          } finally { await holder.close(); }
+        }
+        // The cleanup read selects its candidates synchronously, then yields
+        // for SQLite writer admission. A competing writer can win that gap.
+        const cleanup = p.reconcileLaunchSetup!(Date.now() + 1_000);
+        try {
+          if (late) writer.recordStructuredHostSetup(launchId, admissionOwner!, captureProcessIdentity(late.pid));
+          if (change === "published") {
+            expect(writer.recoverStructuredSpawnFromEvidence(launchId, {
+              key: { engine: "codex", sessionId: "recovered-session" }, artifactPath: join(f.dir, "recovered.jsonl"), cwd: f.dir,
+              accountId: null, status: "unhosted", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
+            }).kind).toBe("settled");
+          }
+        } finally { await cleanup; }
+        expect(p.launchSetupBlocker!()).toBe(late ? launchId : null);
+        const current = writer.spawnReceipt(launchId)!;
+        expect(current.state).toBe(change === "published" ? "completed" : "failed");
+        expect(current.hostSetup!.cleanupConfirmed).toBe(change === "unchanged" ? true : undefined);
+        if (change === "unchanged") expect(current.admissionOwner?.pid).toBe(process.pid);
+      } finally {
+        if (late) { late.kill(); await late.exited; }
+        writer.close();
+      }
+    } finally {
+      if (helper.exitCode === null && helper.signalCode === null) helper.kill();
+      await helper.exited;
+    }
+  } finally {
+    registry.close();
   }
 });
 
@@ -256,14 +329,14 @@ test.each(["live", "unowned", "dead", "reused"] as const)("a hidden %s setup rec
   snapshotSelection(true, receipt.conversationId);
   const p = ports(f.journal), now = Date.now();
   const held = kind === "live" || kind === "unowned";
-  expect(p.launchSetupPending!()).toBe(kind === "live");
+  expect(p.launchSetupBlocker!()).toBe(kind === "live" ? receipt.launchId : null);
   expect(await probeQuiet(snapshot, p, now, true)).toMatchObject({ quiet: !held, blockers: { turns: held ? 1 : 0 } });
   expect(await probeQuiet(snapshot, p, now + 300_000, true)).toMatchObject({ quiet: kind !== "live",
     blockers: { turns: kind === "live" ? 1 : 0, unresolved: kind === "unowned" ? 1 : 0, unresolvedBlocking: 0 } });
   if (kind === "live") {
     child.kill();
     await child.exited;
-    expect(p.launchSetupPending!()).toBe(false);
+    expect(p.launchSetupBlocker!()).toBeNull();
     expect(await probeQuiet(snapshot, p, now + 300_000, true)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
   }
 });

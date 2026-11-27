@@ -157,7 +157,8 @@ export type OwnerRead = <T>(reference: OwnerReference, read: () => Promise<T>) =
 
 export interface QuietPorts {
   /** Fresh registry custody for an operator update about to stop the Viewer. */
-  launchSetupPending?(): boolean;
+  launchSetupBlocker?(): string | null;
+  reconcileLaunchSetup?(deadlineAt: number): Promise<void>;
   /** Admission identities, excluding completion and controller activity. */
   admissionStarts?(): readonly string[];
   /** Synchronous durable admission/start evidence; changing it invalidates an awaited probe. */
@@ -560,10 +561,11 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
     if (controller && !blockers.busyReason) { blockers.busy = true; blockers.busyReason = controller; }
     const latest = ports.presence(now).filter((session) => now - session.lastInteractionAt < blockers.operatorWindowMs!).sort((a, b) => b.lastInteractionAt - a.lastInteractionAt)[0];
     blockers.operatorActiveAt = latest ? new Date(latest.lastInteractionAt).toISOString() : null;
+    if (!blockers.launchSetup && ports.launchSetupBlocker?.()) blockers.launchSetup = true;
   } catch (error) {
     blockers.unreadable = error instanceof Error ? error.message : String(error);
   }
-  return { quiet: !blockers.turns && !blockers.stages && !(turnPolicy === "live" && blockers.unresolvedBlocking) && !blockers.operatorActiveAt && !blockers.busy && !blockers.unreadable && blockers.memoryMb === null, blockers, work };
+  return { quiet: !blockers.turns && !blockers.stages && !blockers.launchSetup && !(turnPolicy === "live" && blockers.unresolvedBlocking) && !blockers.operatorActiveAt && !blockers.busy && !blockers.unreadable && blockers.memoryMb === null, blockers, work };
 }
 
 /**

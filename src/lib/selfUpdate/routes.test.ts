@@ -741,12 +741,17 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     await wait(() => existsSync(readLauncherRecord(h.recordFile)!.requestFile));
   }
 
-  test("a checkout update holds fresh stage reservations while the original setup settles", async () => {
+  test.each(["settles", "times out"] as const)("a checkout update holds fresh stage reservations while the original setup %s", async outcome => {
     const h = harness({ relaunch: true, holdBuild: true });
     const sawSetup = Promise.withResolvers<void>();
     let pending = true;
+    const clock = spyOn(performance, "now");
     h.deps.quiet = { runtimeSnapshot: async () => ({ sessions: [] }), pipelines: () => [], presence: () => [],
-      launchSetupPending: () => { sawSetup.resolve(); return pending; } };
+      launchSetupBlocker: () => {
+        if (pending && outcome === "times out") clock.mockReturnValueOnce(performance.now() + 60_001);
+        sawSetup.resolve();
+        return pending ? "stage-launch" : null;
+      } };
     setSelfUpdateServiceForTests(h.service);
     const record = readLauncherRecord(h.recordFile)!;
     try {
@@ -756,14 +761,21 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
       await until(() => h.releaseBuild !== null);
       h.releaseBuild!(); h.releaseBuild = null;
       await sawSetup.promise;
-      const intent = JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8"));
-      expect(intent.state).toBe("ready");
-      expect(JSON.parse(readFileSync(join(h.deps.dir, "auto-drain.json"), "utf8"))).toMatchObject({ id: intent.requestId });
       expect(existsSync(record.requestFile)).toBe(false);
-      pending = false;
-      await until(() => existsSync(record.requestFile));
-      expect(JSON.parse(readFileSync(record.requestFile, "utf8"))).toMatchObject({ requestId: intent.requestId, role: "relaunch" });
-    } finally { pending = false; h.releaseBuild?.(); h.service.stop(); }
+      if (outcome === "times out") {
+        const applyFile = join(h.deps.dir, "apply.json");
+        await until(() => JSON.parse(readFileSync(applyFile, "utf8")).state === "failed");
+        expect(JSON.parse(readFileSync(applyFile, "utf8")).detail).toContain("launch stage-launch");
+        expect(existsSync(record.requestFile)).toBe(false);
+      } else {
+        const intent = JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8"));
+        expect(intent.state).toBe("ready");
+        expect(JSON.parse(readFileSync(join(h.deps.dir, "auto-drain.json"), "utf8"))).toMatchObject({ id: intent.requestId });
+        pending = false;
+        await until(() => existsSync(record.requestFile));
+        expect(JSON.parse(readFileSync(record.requestFile, "utf8"))).toMatchObject({ requestId: intent.requestId, role: "relaunch" });
+      }
+    } finally { clock.mockRestore(); pending = false; h.releaseBuild?.(); h.service.stop(); }
   });
 
   test.each(["optional-red", "empty-required-optional-red", "required-red", "unreadable-protection", "ruleset-required-red", "ruleset-required-green", "malformed-protection", "set-less-protection", "null-protection", "unreadable-rules"] as const)("manual checkout Update uses required CI on the equal-tree PR head: %s", async scenario => {
