@@ -3,7 +3,7 @@ import { scopeProject } from "./roleScopes";
 import { canonicalProject } from "@/lib/projects/aliases";
 
 /** Live reads keep rewrites, moves and archives visible without an index copy. */
-export function searchRoleRules(input: { project?: string; terms?: string[]; id?: string; limit: number }) {
+export function searchRoleRules(input: { project?: string; reader?: "legatus"; terms?: string[]; id?: string; limit: number }) {
   return activeRoleRuleRows(input).map(rule => {
     const project = scopeProject(rule.scope);
     return {

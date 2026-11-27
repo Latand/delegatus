@@ -7909,6 +7909,10 @@ export const uk: Record<keyof typeof en, Message> = {
   "memoryProfile.runningText": "Читаю правила й збираю підсумок: загальний і за кожним рівнем пам’яті.",
 
   "roleMemory.line.rewrote": "Переписав {count} правило → {targets}",
+  "roleMemory.legatus": "Легат",
+  "roleMemory.decision.typed": "рішення оператора · текст",
+  "roleMemory.decision.voice": "рішення оператора · голос",
+  "roleMemory.decision.clicked": "рішення оператора · вибір",
   "roleMemory.kept": "залишили ви",
   "roleMemory.unreviewed": "очікує куратора",
   "roleMemory.versions": "Попередній текст · {count}",

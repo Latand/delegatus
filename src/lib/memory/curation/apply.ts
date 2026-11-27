@@ -10,12 +10,13 @@ import path from "node:path";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { ROLE_IDS } from "@/lib/roles/types";
 import { roleIsClean } from "../eligibility";
-import { swarmRulesEnabled } from "../settings";
+import { roleMemoryEnabled, swarmRulesEnabled } from "../settings";
 import { swarmRulesForRole } from "../swarmPack";
 import { archivedRule, lettersAndDigits, scopeChars } from "../roleConsolidate";
 import { taskIdentifier } from "../roleStage";
 import { assertGenericRule, problemInput } from "../roleProblems";
 import { canonicalScope, joinMovedScopes, newRuleId, refreshLessonKnownValues, lessonKnownValuesFile, roleMemoryCollection, RoleMemoryRefusal, versionedRule, rulePrivacyHints } from "../roleStore";
+import { decisionRuleSource, LEGATUS_SCOPE } from "./decisionEvidence";
 import { scopeKind, scopeProject, scopeRole, isCrossProjectRoleScope } from "../roleScopes";
 import { lessonText, lessonTextLength, ROLE_MEMORY_BOUND, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS, type CuratorReason, type RoleMemoryRule, type RoleMemoryRow, type RoleMemoryScopeRow, type ProblemInput } from "../roleTypes";
 import { patchPass, readPass, readPassAuthority, passIsLive, curationCollection, curationOperationId, validCurationOperation, type CurationOperation, type CuratorPass } from "./store";
@@ -30,6 +31,7 @@ export interface CurationApply {
   adopt?: { candidate: string; occurrences: string[]; parts: { to: string; rule: string; why: string }[]; note: string }[];
   drop?: { candidate: string; occurrences: string[]; reason: CuratorReason; where?: string; note: string; forRoom?: boolean }[];
   defer?: { candidate: string; occurrences: string[] }[];
+  adoptDecision?: { evidence: string; quote?: string; to: string; rule: string; why: string; note: string }[];
   restore?: string[];
   problem?: (ProblemInput & { id: string; note: string })[];
 }
@@ -85,7 +87,7 @@ function reaches(to: string, from: string) {
     || isCrossProjectRoleScope(to) && scopeKind(from) === "role" && scopeRole(to) === scopeRole(from);
 }
 function noRoleReader(role: string | null) {
-  return role && (!(ROLE_IDS as readonly string[]).includes(role) || roleIsClean(role));
+  return role && role !== "legatus" && (!(ROLE_IDS as readonly string[]).includes(role) || roleIsClean(role));
 }
 function evidence(repo: string | null, where: string | undefined) {
   if (!repo || !where) return refuse("CURATE_EVIDENCE", "in-code and in-instructions require a repository file, optionally with a line");
@@ -170,6 +172,23 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
       if (protectedOperation && rule.keptByOperatorAt) refuse("CURATE_KEPT", "the operator returned this rule; keep it whole and active");
       dispositions.add(id); touched.add(id); return work.get(id)!;
     };
+    if (input.adoptDecision?.length && !roleMemoryEnabled()) refuse("CURATE_DECISION", "role memory is switched off");
+    for (const item of input.adoptDecision ?? []) {
+      const ref = fresh.decisionEvidence?.find(ref => ref.id === item.evidence);
+      if (!ref) refuse("CURATE_DECISION", "decision evidence must belong to this pass");
+      const source = decisionRuleSource(ref, item.quote);
+      if (!source) refuse("CURATE_DECISION", "the operator evidence changed or is unavailable");
+      if (item.to !== LEGATUS_SCOPE && (!("reviewId" in ref) || item.to !== `project:${source.project}`)) {
+        refuse("CURATE_SCOPE", "a decision belongs to Legatus or to its form's project");
+      }
+      target(item.to);
+      if (created.has(ref.id) || tx.get(`r:${ref.id}`)) refuse("CURATE_DECISION", "this decision evidence already has a rule");
+      const row: RoleMemoryRule = { kind: "rule", id: ref.id, scope: item.to, state: "active",
+        ...text(item.rule, item.why), note: note(item.note), source, createdAt: now, changedAt: now };
+      created.set(row.id, row);
+      work.set(row.id, row);
+      placeholders[`decision:${ref.id}`] = row.id;
+    }
     const importRows = prepareImportEdits(fresh, input, now, { work, created, placeholders, get: tx.get, target, text, note, evidence: where => evidence(fresh.repoDir, where) });
     for (const id of input.restore ?? []) {
       if (work.has(id)) refuse("CURATE_PARTITION", "restore ids must be distinct archived rules");
@@ -199,6 +218,9 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
         else {
           const id = newRuleId({ get: key => created.has(key.slice(2)) ? created.get(key.slice(2))! : tx.get(key) });
           const row: RoleMemoryRule = { ...rule, ...fields, id, scope: part.to, createdAt: now, changedAt: now, versions: [], splitFrom: rule.id, splitAt: now, note: item.note };
+          if (row.rule !== rule.rule || row.why !== rule.why) {
+            row.revisedBy = row.wordingRevision = { by: "curator", at: now };
+          }
           // A new part has left nothing yet: the source's departures stay the source's.
           delete row.keptByOperatorAt; delete row.versionOf; delete row.departures;
           created.set(id, row); work.set(id, row); placeholders[`split:${item.id}:${index}`] = id;
@@ -291,10 +313,19 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
       const next = work.get(id)!;
       const edited = next.rule !== rule || next.why !== why;
       const saved = edited ? versionedRule(tx, row, next, { by: "curator", at: now }) : null;
-      tx.put({ ...next, versions: saved?.updated.versions ?? row.versions, revisedBy: touched.has(id) ? { by: "curator", at: now } : row.revisedBy, changedAt: now, curatedAt: now });
+      tx.put({ ...next, versions: saved?.updated.versions ?? row.versions,
+        revisedBy: saved?.updated.revisedBy ?? (touched.has(id) && row.revisedBy?.by !== "agent" ? { by: "curator", at: now } : row.revisedBy),
+        changedAt: now, curatedAt: now });
       prior.set(id, { id, version: saved?.version ?? null, fields });
     }
-    for (const row of created.values()) tx.put({ ...row, curatedAt: now, changedAt: now });
+    for (const [id, original] of created) {
+      const next = work.get(id)!;
+      const edited = next.rule !== original.rule || next.why !== original.why;
+      const revision = edited ? { by: "curator" as const, at: now } : undefined;
+      const saved = revision ? versionedRule(tx, original, next, revision) : undefined;
+      tx.put({ ...next, ...(saved ? { versions: saved.updated.versions, revisedBy: revision, wordingRevision: revision } : {}),
+        curatedAt: now, changedAt: now });
+    }
     const counts = { calls: 1, changed: touched.size + created.size, rewritten: input.rewrite?.length ?? 0, merged: input.merge?.reduce((n, m) => n + m.from.length, 0) ?? 0, moved: input.move?.length ?? 0, split: input.split?.length ?? 0, archived: (input.archive?.length ?? 0) + (input.problem?.length ?? 0), restored: input.restore?.length ?? 0 };
     for (const [scope, row] of scopes) {
       const revision = row.revision + 1;
@@ -437,7 +468,9 @@ export function revertCuratorPass(id: string, now = new Date().toISOString(), op
            erases a departure; undoing a restore records the rule leaving again. */
         const leaves = prior.fields.state === "archived" && row.state !== "archived";
         const departures = leaves ? [...row.departures ?? [], { at: now, reason: prior.fields.reason ?? "undone", curated: !!row.curatedAt }] : row.departures;
-        tx.put({ ...prior.fields, ...(departures ? { departures } : {}), rule: version.rule, why: version.why, hints: version.hints, versions: updated.versions, revisedBy: { by: "operator", at: now, ...(prior.version ? { revertedTo: version.id } : {}) }, changedAt: now });
+        tx.put({ ...prior.fields, ...(departures ? { departures } : {}), rule: version.rule, why: version.why, hints: version.hints,
+          versions: updated.versions, revisedBy: { by: "operator", at: now, ...(prior.version ? { revertedTo: version.id } : {}) },
+          ...(prior.version ? { wordingRevision: updated.wordingRevision } : {}), changedAt: now });
       }
       for (const rule of history.created ?? []) if (eligible.has(rule)) {
         const row = tx.get(`r:${rule}`); if (row?.kind === "rule") tx.put(archivedRule(row, now, "undone"));
