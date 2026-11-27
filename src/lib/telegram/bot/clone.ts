@@ -9,6 +9,7 @@ export interface ClonePostingPort {
   discoverChats?(): Promise<DiscoveredCloneChat[]>;
   route(chatId: string, options?: { discoverFileCapabilities?: boolean }): Promise<CloneRoute | null>;
   peek(chatId: string): CloneRoute | null;
+  confirmationSender(chatId: string): string | null;
   valid(route: CloneRoute, chatId: string): boolean;
   invalidate(route: CloneRoute, kind: "stale" | "unsupported"): void;
   send(route: CloneRoute, input: CloneSendInput, options: CloneSendOptions): Promise<CloneSendResult>;
@@ -16,6 +17,7 @@ export interface ClonePostingPort {
 export const productionClonePosting: ClonePostingPort = {
   discoverChats: () => cloneDirectory().discoverChats(),
   route: (chat, options) => cloneDirectory().route(chat, options), peek: chat => cloneDirectory().peek(chat),
+  confirmationSender: chat => cloneDirectory().confirmationSender(chat),
   valid: (route, chat) => cloneDirectory().valid(route, chat), invalidate: (route, kind) => cloneDirectory().invalidate(route, kind),
   send: (route, input, options) => sendAsClone(route.relay, route.targetId, input, options),
 };
@@ -75,10 +77,15 @@ export function cloneTransport(port: ClonePostingPort, route: CloneRoute, caller
     }
     const input = payload?.input ?? common;
     await persistKey?.(common, options?.partIndex ?? 0);
+    let confirmationRefusal: TelegramBotError | undefined;
     const result = await port.send(route, common, { signal: options?.signal, partIndex: options?.partIndex ?? 0,
       ...(payload ? { payload } : {}),
       beforeSend: async () => {
-        await authorize();
+        try { await authorize(); }
+        catch (error) {
+          if (error instanceof TelegramBotError && error.code === "confirmation_invalid") confirmationRefusal = error;
+          throw error;
+        }
         if (!port.valid(route, String(params.chat_id))) throw new TelegramBotError("chat_not_allowed", "clone coverage changed");
       } });
     if (result.kind === "sent") {
@@ -86,7 +93,10 @@ export function cloneTransport(port: ClonePostingPort, route: CloneRoute, caller
         chat: { id: input.chat_id }, ...(input.message_thread_id ? { message_thread_id: input.message_thread_id } : {}) }));
       return { ok: true as const, result: (method === "sendMediaGroup" ? messages : messages[0]) as T };
     }
-    if (result.kind === "refused" && result.invalidate) port.invalidate(route, result.invalidate);
+    if (result.kind === "refused") {
+      if (confirmationRefusal) throw confirmationRefusal;
+      if (result.invalidate) port.invalidate(route, result.invalidate);
+    }
     return { ok: false as const, kind: result.kind === "uncertain" ? "network_failed" as const : "http" as const,
       status: null, description: null, migrateToChatId: null,
       retryAfterSeconds: result.kind === "refused" ? result.retryAfterSeconds ?? null : null,

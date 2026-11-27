@@ -7,8 +7,8 @@ import { writeRelayFile, type PairedRelay } from "./store";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 
 const TTL = 60000;
-const descriptor = z.object({ features: z.array(z.string()), api_base: z.string(),
-  limits: z.object({ clone_send: cloneSendLimitsSchema }).optional() });
+const descriptor = z.object({ features: z.array(z.string()).default([]), api_base: z.string(),
+  limits: z.object({ clone_send: cloneSendLimitsSchema.optional() }).optional().catch(undefined) });
 const rightsPage = z.object({ chats: z.array(z.object({ chat_id: z.number().int().safe().negative(),
   send_rights: cloneSendRightsSchema.nullish().catch(null) })).max(25), next_cursor: z.string().max(4096).nullable() });
 const entrySchema = z.object({ identity: z.string(), attemptedAt: z.number(), fetchedAt: z.number(),
@@ -17,7 +17,7 @@ const entrySchema = z.object({ identity: z.string(), attemptedAt: z.number(), fe
     chats: z.record(z.string(), cloneSendRightsSchema.nullable()).refine(c => Object.keys(c).length <= 100) })).refine(t => Object.keys(t).length <= 100),
 });
 type Entry = z.infer<typeof entrySchema>;
-const identity = (r: PairedRelay) => createHash("sha256").update(JSON.stringify([r.id, r.origin, r.api_base, r.pairedAt, r.credential])).digest("hex");
+export const clonePairingIdentity = (r: PairedRelay) => createHash("sha256").update(JSON.stringify([r.id, r.origin, r.api_base, r.pairedAt, r.credential])).digest("hex");
 export interface CloneCapabilities { limits: CloneSendLimits; rights: CloneSendRights | null }
 
 /** Independent, hard-expiring rights and descriptor caches. Persist the page
@@ -29,17 +29,18 @@ export class CloneCapabilitiesDirectory {
     try {
       if (fs.statSync(file).size > 16 * 1024 * 1024) return;
       const data = z.array(entrySchema).max(100).parse(JSON.parse(fs.readFileSync(file, "utf8")));
-      for (const entry of data) if (relays().some(r => identity(r) === entry.identity)) this.#entries.set(entry.identity, entry);
+      for (const entry of data) if (relays().some(r => clonePairingIdentity(r) === entry.identity)) this.#entries.set(entry.identity, entry);
     } catch { /* No valid artifact means no file capability. */ }
   }
   private active(relay: PairedRelay) {
     // Pairing metadata may predate the relay's file-method descriptor. The
     // signed pairing and pinned API base authorize discovery; the live
     // descriptor itself decides whether clone methods are supported.
-    return !relay.paused && this.relays().some(r => !r.paused && identity(r) === identity(relay));
+    const key = clonePairingIdentity(relay);
+    return !relay.paused && this.relays().some(r => !r.paused && clonePairingIdentity(r) === key);
   }
   private persist() {
-    const live = new Set(this.relays().slice(0, 100).map(identity));
+    const live = new Set(this.relays().slice(0, 100).map(clonePairingIdentity));
     for (const key of this.#entries.keys()) if (!live.has(key)) this.#entries.delete(key);
     // Evict the oldest target as the bounded artifact fills. Admissions and
     // descriptor evidence survive eviction; only rights need another read.
@@ -53,7 +54,7 @@ export class CloneCapabilitiesDirectory {
   }
   peek(relay: PairedRelay, targetId: string, chatId: string): CloneCapabilities | null {
     if (!this.active(relay)) return null;
-    const entry = this.#entries.get(identity(relay));
+    const entry = this.#entries.get(clonePairingIdentity(relay));
     if (!entry?.limits || this.now() - entry.fetchedAt >= TTL || entry.fetchedAt > this.now()) return null;
     const rights = entry.targets[targetId]?.chats[chatId];
     const time = rights ? Date.parse(rights.read_at) : 0;
@@ -61,11 +62,11 @@ export class CloneCapabilitiesDirectory {
   }
   descriptorHasNoFileMethods(relay: PairedRelay): boolean {
     if (!this.active(relay)) return false;
-    const entry = this.#entries.get(identity(relay));
+    const entry = this.#entries.get(clonePairingIdentity(relay));
     return entry?.descriptorFeature === false && this.now() - entry.fetchedAt < TTL && entry.fetchedAt <= this.now();
   }
   invalidate(relay: PairedRelay, targetId: string) {
-    const entry = this.#entries.get(identity(relay));
+    const entry = this.#entries.get(clonePairingIdentity(relay));
     const target = entry?.targets[targetId];
     if (!target) return;
     target.chats = {};
@@ -73,7 +74,7 @@ export class CloneCapabilitiesDirectory {
   }
   async refresh(relay: PairedRelay, targetId: string): Promise<void> {
     if (!this.active(relay)) return;
-    const key = identity(relay), held = this.#flights.get(key);
+    const key = clonePairingIdentity(relay), held = this.#flights.get(key);
     if (held) { await held; return this.refresh(relay, targetId); }
     const work = withViewerOperation("external-relay.clone-directory", () => this.fetch(relay, targetId, key));
     this.#flights.set(key, work);
@@ -83,25 +84,24 @@ export class CloneCapabilitiesDirectory {
     const now = this.now();
     let entry = this.#entries.get(key);
     if (!entry) {
-      const live = new Set(this.relays().map(identity));
+      const live = new Set(this.relays().map(clonePairingIdentity));
       for (const previous of this.#entries.keys()) if (!live.has(previous)) this.#entries.delete(previous);
       if (this.#entries.size >= 100) return;
       entry = { identity: key, attemptedAt: 0, fetchedAt: 0, limits: null, descriptorFeature: null, admissions: [], targets: {} };
       this.#entries.set(key, entry);
     }
-    const authorize = () => { if (!this.active(relay) || identity(relay) !== key) throw new Error("pairing changed"); };
+    const authorize = () => { if (!this.active(relay) || clonePairingIdentity(relay) !== key) throw new Error("pairing changed"); };
     const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 25000);
     try {
       if (now - entry.attemptedAt >= TTL) {
-        entry.attemptedAt = now; entry.limits = null; this.persist();
+        entry.attemptedAt = now; entry.limits = null; entry.descriptorFeature = null; this.persist();
         const raw = descriptor.parse(await readRelayJsonUrl(`${relay.origin}/.well-known/delegatus-relay.json`, { signal: controller.signal }));
         authorize(); checkApiBase(relay.origin, raw.api_base);
         if (raw.api_base !== relay.api_base) return;
         entry.descriptorFeature = raw.features.includes("clone_send_methods");
         entry.fetchedAt = this.now();
-        if (!entry.descriptorFeature) { this.persist(); return; }
-        if (!raw.limits?.clone_send) { this.persist(); return; }
-        entry.limits = raw.limits.clone_send; this.persist();
+        entry.limits = entry.descriptorFeature ? raw.limits?.clone_send ?? null : null;
+        this.persist();
       }
       if (!entry.limits || this.now() - entry.fetchedAt >= TTL) return;
       if (entry.targets[targetId] && this.now() - entry.targets[targetId].attemptedAt < TTL) return;

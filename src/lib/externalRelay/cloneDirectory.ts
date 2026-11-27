@@ -5,7 +5,7 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { ExternalRelayError, relayCall } from "./client";
 import { knownRelay } from "./knownRelays";
 import { readRelayStore, writeRelayFile, type PairedRelay } from "./store";
-import { CloneCapabilitiesDirectory, type CloneCapabilities } from "./cloneCapabilities";
+import { clonePairingIdentity, CloneCapabilitiesDirectory, type CloneCapabilities } from "./cloneCapabilities";
 
 const chatSchema = z.object({ chat_id: z.number().int().safe().negative(), title: z.string().max(1024) });
 const targetSchema = z.object({ target_id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/), name: z.string().max(1024), active: z.boolean(),
@@ -20,6 +20,9 @@ const entrySchema = z.object({ relayId: z.string(), apiBase: z.string(), pairedA
 type Entry = z.infer<typeof entrySchema>;
 export interface CloneRoute { id: string; relay: PairedRelay; targetId: string; name: string;
   methodsFeature?: boolean; send?: CloneCapabilities | null; verifiedNoFileMethods?: boolean }
+export function cloneSenderIdentity({ relay, targetId }: Pick<CloneRoute, "relay" | "targetId">): string {
+  return `clone:${targetId}:${clonePairingIdentity(relay)}`;
+}
 export interface DiscoveredCloneChat { chatId: string; title: string }
 export interface CloneDirectoryPorts { file: string; relays(): PairedRelay[]; now(): number; origin: string }
 const same = (entry: Pick<Entry, "relayId" | "apiBase" | "pairedAt">, relay: PairedRelay) =>
@@ -129,20 +132,37 @@ export class CloneDirectory {
     this.#maps.set(snapshot, map);
     return map;
   }
-  peek(chatId: string): CloneRoute | null {
+  private coveredTarget(chatId: string, refresh: boolean) {
     if (!/^-[1-9]\d*$/.test(chatId)) return null;
     for (const relay of this.relays()) {
-      const snapshot = this.schedule(relay);
+      const snapshot = refresh ? this.schedule(relay) : this.snapshot(relay);
       if (!snapshot?.supported) continue;
       const target = this.chatMap(snapshot).get(chatId);
-      if (target?.active && relay.targets.some(t => t.id === target.target_id && t.enabled)) {
-        const send = this.#capabilities.peek(relay, target.target_id, chatId);
-        return { id: `clone:${relay.id}:${target.target_id}`, relay, targetId: target.target_id, name: target.name,
-          ...(send ? { methodsFeature: true, send } : {}),
-          ...(this.#capabilities.descriptorHasNoFileMethods(relay) ? { verifiedNoFileMethods: true } : {}) };
-      }
+      if (target?.active && relay.targets.some(t => t.id === target.target_id && t.enabled)) return { relay, target };
     }
     return null;
+  }
+  peek(chatId: string): CloneRoute | null {
+    const covered = this.coveredTarget(chatId, true);
+    if (!covered) return null;
+    const { relay, target } = covered;
+    const send = this.#capabilities.peek(relay, target.target_id, chatId);
+    return { id: `clone:${relay.id}:${target.target_id}`, relay, targetId: target.target_id, name: target.name,
+      ...(send ? { methodsFeature: true, send } : {}),
+      ...(this.#capabilities.descriptorHasNoFileMethods(relay) ? { verifiedNoFileMethods: true } : {}) };
+  }
+  confirmationSender(chatId: string): string | null {
+    const covered = this.coveredTarget(chatId, false);
+    if (covered) return cloneSenderIdentity({ relay: covered.relay, targetId: covered.target.target_id });
+    // A cold directory can bind an approval to the only configured sender.
+    // The live route must still prove that sender covers the chat before dispatch.
+    let sender: string | null = null;
+    for (const relay of this.relays()) for (const target of relay.targets) {
+      if (!target.enabled) continue;
+      if (sender) return null;
+      sender = cloneSenderIdentity({ relay, targetId: target.id });
+    }
+    return sender;
   }
   async route(chatId: string, options: { discoverFileCapabilities?: boolean } = {}): Promise<CloneRoute | null> {
     // A cold lookup has one five-second budget across pairings, not per pairing.
@@ -151,7 +171,9 @@ export class CloneDirectory {
     const route = this.peek(chatId);
     // The active pairing and its pinned API origin authorize descriptor
     // discovery; older pairing records may not store a features list.
-    if (route && options.discoverFileCapabilities) await this.#capabilities.refresh(route.relay, route.targetId);
+    if (route && (options.discoverFileCapabilities || route.relay.features?.includes("clone_send_methods"))) {
+      await this.#capabilities.refresh(route.relay, route.targetId);
+    }
     return this.peek(chatId);
   }
   async discoverChats(): Promise<DiscoveredCloneChat[]> {
@@ -160,6 +182,14 @@ export class CloneDirectory {
       const snapshot = this.snapshot(relay);
       return !snapshot || this.ports.now() - snapshot.fetchedAt >= SOFT_TTL ? this.refresh(relay) : Promise.resolve();
     }));
+    for (const relay of this.relays()) {
+      if (!relay.features?.includes("clone_send_methods")) continue;
+      for (const target of this.snapshot(relay)?.targets ?? []) {
+        if (target.active && relay.targets.some(binding => binding.id === target.target_id && binding.enabled)) {
+          await this.#capabilities.refresh(relay, target.target_id);
+        }
+      }
+    }
     const chats = new Map<string, DiscoveredCloneChat>();
     for (const relay of relays) {
       const snapshot = this.snapshot(relay);

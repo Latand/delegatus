@@ -246,7 +246,8 @@ export class BotSelector {
   }
 
   selection(chat: ChatRow, caller: string, key: string, capability: PostingCapability,
-    target: (botId: string) => PublicationTarget | null, authorize: () => void) {
+    target: (botId: string) => PublicationTarget | null, authorizePosting: () => void,
+    authorizeFile?: (bot?: PostingBot) => void) {
     chat = { ...chat };
     const connected = this.bots();
     let retryBot: string | null = null;
@@ -256,9 +257,10 @@ export class BotSelector {
     const attempts: BotAttempt[] = [];
     const available = (bot: PostingBot) => bot.clone ? this.clones?.valid(bot.clone, chat.chatId) === true : this.bots().some(b => b.id === bot.id);
     const assignedBot = () => this.assignedBot(chat.chatId);
-    const authorizeClone = async () => {
+    const authorize = (bot?: PostingBot) => authorizeFile ? authorizeFile(bot) : authorizePosting();
+    const authorizeClone = async (bot: PostingBot) => {
       if (await assignedBot()) throw new TelegramBotError("chat_not_allowed", "a bot was assigned to this chat");
-      authorize();
+      authorize(bot);
     };
     const fields = () => ({ ...(selected ? { sentBy: publicBot(selected) } : {}), ...(attempts.length ? { refusals: publicRefusals(attempts) } : {}) });
     const delivery = async (state: TelegramLastDelivery["state"]) => {
@@ -305,7 +307,7 @@ export class BotSelector {
       if (selected && !available(selected))
         throw new TelegramBotError("chat_not_allowed", "the selected bot was removed");
       if (pinned && selected) {
-        authorize();
+        authorize(selected);
         if (!available(selected)) throw new TelegramBotError("chat_not_allowed", "the selected bot was removed");
         const result = await selected.transport.call<T>(method, params, options);
         if (!result.ok) {
@@ -324,10 +326,11 @@ export class BotSelector {
       const candidates: Array<{ bot: PostingBot; checked?: boolean; membership?: Membership | null }> = bots.map(bot => ({ bot }));
       if (!assigned && chat.type !== "private" && this.clones) {
         const route = await this.clones.route(chat.chatId, { discoverFileCapabilities: capability !== "canPost" });
+        authorizeFile?.();
         if (route && !await assignedBot() && this.clones.valid(route, chat.chatId)
           && cloneSupportRefusal(route, caller, key, method, params, options?.partIndex ?? 0) === null) {
-          candidates.unshift({ bot: { id: route.id, name: route.name, username: null, receiving: false, tokenState: "ok", clone: route,
-            transport: cloneTransport(this.clones, route, caller, key, authorizeClone, async (input, part) => {
+          const clone: PostingBot = { id: route.id, name: route.name, username: null, receiving: false, tokenState: "ok", clone: route,
+            transport: cloneTransport(this.clones, route, caller, key, () => authorizeClone(clone), async (input, part) => {
               await outboundState(this.store.filename, true, db => {
                 const row = db.query<{ clone_keys: string }, [string, string]>("SELECT clone_keys FROM sends WHERE caller_key=? AND client_request_id=? AND state='pending'").get(caller, key);
                 if (!row) throw new TelegramBotError("send_uncertain", "the clone send claim is unavailable");
@@ -336,7 +339,8 @@ export class BotSelector {
                 keys[part] = input.client_key;
                 db.query("UPDATE sends SET clone_keys=? WHERE caller_key=? AND client_request_id=? AND state='pending'").run(JSON.stringify(keys), caller, key);
               });
-            }) }, checked: true });
+            }) };
+          candidates.unshift({ bot: clone, checked: true });
         }
       }
       for (const candidate of candidates) {
@@ -352,7 +356,7 @@ export class BotSelector {
           await record(bot, refusal, "check");
           continue;
         }
-        authorize();
+        authorize(bot);
         if (!available(bot)) continue;
         selected = bot;
         try { publicationTarget = bot.clone ? null : target(bot.id); }
@@ -361,12 +365,12 @@ export class BotSelector {
           throw error;
         }
         await outboundState(this.store.filename, true, db => {
-          authorize();
+          authorize(bot);
           if (!available(bot)) throw new TelegramBotError("chat_not_allowed", "the selected bot was removed");
           db.query("UPDATE sends SET bot_id=?, bot_identity=? WHERE caller_key=? AND client_request_id=? AND state='pending'")
             .run(bot.id, JSON.stringify(publicBot(bot)), caller, key);
         });
-        authorize();
+        authorize(bot);
         if (!available(bot)) throw new TelegramBotError("chat_not_allowed", "the selected bot was removed");
         retryBot = null;
         const result = await bot.transport.call<T>(method, params, options);
@@ -401,6 +405,7 @@ export class BotSelector {
       // Surface the clone's file refusal after local file senders are exhausted.
       if (capability !== "canPost" && chat.type !== "private" && this.clones && !await assignedBot()) {
         const route = await this.clones.route(chat.chatId, { discoverFileCapabilities: true });
+        authorizeFile?.();
         if (route && !await assignedBot() && this.clones.valid(route, chat.chatId)) {
           try {
             authorize();
@@ -438,6 +443,12 @@ export class BotSelector {
       });
       throw new TelegramBotError(first?.code ?? "bot_not_in_chat", first?.reason ?? "no connected bot can post here", { refusals: publicRefusals(attempts) });
       } catch (error) {
+        if (!pinned && error instanceof TelegramBotError && error.code === "confirmation_invalid") {
+          await outboundState(this.store.filename, true, db => {
+            db.query("UPDATE sends SET state='failed', error_code=? WHERE caller_key=? AND client_request_id=? AND state='pending'")
+              .run(error.code, caller, key);
+          });
+        }
         if (pinned && (!(error instanceof TelegramBotError) || error.code !== "send_uncertain"))
           throw new TelegramBotError("send_uncertain", "the selected bot's send could not finish; keep the same send key to avoid a duplicate", { refusals: publicRefusals(attempts) });
         throw error;

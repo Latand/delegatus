@@ -23,6 +23,7 @@ import { TelegramBotService, productionTelegramBotDependencies, setTelegramBotSe
 import { FakeBotTransport, fakeBotToken, ok } from "./fakeTransport";
 import { officeParts, officeZip } from "./officeDocuments.fixture";
 import { outboundState } from "./outbound";
+import { DOCUMENT_MAX_BYTES } from "./contracts";
 import { telegramBotTokenPath } from "./transport";
 import type { ClonePostingPort } from "./clone";
 
@@ -35,11 +36,14 @@ let sends: Array<{ input: Record<string, unknown>; files: Map<string, File>; raw
 let limits: ReturnType<typeof cloneMethodLimits>, rights: CloneSendRights | null, now: number, sequence = 0;
 let answer: () => { status?: number; body?: unknown; drop?: boolean };
 let pdf: string, photo: string, descriptors: number, rightsReads: number;
+let relayRequests: Array<string | undefined>;
+let confirmationSequence: number;
 let advertised: boolean, limitsPresent: boolean;
 let beforeReply: (() => Promise<void>) | null;
 let onUploadDisconnect: (() => void) | null;
 beforeEach(async () => {
   now = cloneMethodsNow; sends = []; limits = cloneMethodLimits(); rights = cloneMethodRights(); descriptors = 0; rightsReads = 0;
+  relayRequests = []; confirmationSequence = 0;
   beforeReply = null;
   onUploadDisconnect = null;
   advertised = true;
@@ -47,6 +51,7 @@ beforeEach(async () => {
   const home = path.join(root, String(++sequence), "home"), state = path.join(root, String(sequence), "state"); process.env.LLV_STATE_DIR = state;
   answer = () => ({ body: { ...cloneReceipt(100 + sends.length), message_ids: [100 + sends.length] } });
   server = await startTestRelay(async (req, body) => {
+    relayRequests.push(req.url);
     req.socket.once("close", () => onUploadDisconnect?.());
     if (req.url === "/.well-known/delegatus-relay.json") {
       descriptors++; const descriptor = cloneMethodDescriptor(server.origin, limits);
@@ -67,6 +72,8 @@ beforeEach(async () => {
   relay = clonePairing(server.origin); relay.features = ["clone_send_methods"];
   directory = new CloneDirectory({ file: path.join(state, "clones.json"), relays: () => [relay], now: () => now, origin: server.origin });
   port = { route: (chat, options) => directory.route(chat, options), peek: chat => directory.peek(chat), valid: (r, chat) => directory.valid(r, chat),
+    confirmationSender: chat => directory.confirmationSender(chat),
+    discoverChats: () => directory.discoverChats(),
     invalidate: (r, kind) => directory.invalidate(r, kind),
     send: (r, input, options) => sendAsClone(r.relay, r.targetId, input, { ...options, now: () => now, deadline: now + 500,
       sleep: async ms => { now += ms; } }) };
@@ -77,11 +84,12 @@ beforeEach(async () => {
   for (const [index, method] of ["sendMessage", "sendDocument", "sendPhoto", "sendRichMessage"].entries()) bot.handlers[method] = () => ok({ message_id: 200 + index, date: Math.floor(now / 1000) });
   bot.handlers.sendMediaGroup = () => ok([101, 102].map(message_id => ({ message_id, date: Math.floor(now / 1000) })));
   service = new TelegramBotService({ ...productionTelegramBotDependencies(), clones: port, now: () => new Date(now),
-    fileConfirmationId: () => "clone-methods-confirmation",
+    fileConfirmationId: () => `clone-methods-confirmation-${++confirmationSequence}`,
     transportFor: () => bot, documentEnvironment: () => ({ home, stateDir: state }) });
   await service.connect(fakeBotToken("4242424"));
   store = productionTelegramBotDependencies().openStore();
-  store.recordLookedUpChat(group, "member", new Date(now)); service.setChat(String(group.id), "reports", true);
+  store.recordLookedUpChat(group, "member", new Date(now));
+  expect(store.setChatSettings(String(group.id), { alias: "reports", postAllowed: true })).toBe("ok");
   const handoff = path.join(home, "handoff"); fs.mkdirSync(handoff, { recursive: true });
   pdf = path.join(handoff, "report.pdf"); fs.writeFileSync(pdf, clonePdfBytes());
   photo = path.join(handoff, "frame.png");
@@ -284,9 +292,11 @@ test("a pairing alone sends files without a local bot token", async () => {
   expect(await media()).toMatchObject({ messageIds: [102], sentBy: { name: "Report clone" } });
   expect(bot.calls).toHaveLength(before); expect(sends).toHaveLength(2);
 });
-test("a live descriptor without the file feature gets the generic pairing-only refusal", async () => {
-  fs.rmSync(telegramBotTokenPath()); relay.features = []; advertised = false;
-  await expect(document()).rejects.toMatchObject({ code: "clone_files_unsupported", message: expect.stringContaining("covers this chat but cannot send files yet") });
+test.each(["text-only", "missing-limits", "invalid-limits"] as const)("a %s descriptor yields the corresponding file refusal", async mode => {
+  fs.rmSync(telegramBotTokenPath()); relay.features = []; advertised = mode !== "text-only"; limitsPresent = mode === "invalid-limits";
+  if (mode === "invalid-limits") limits.files.document.max_bytes = 0;
+  await expect(document()).rejects.toMatchObject({ code: "clone_files_unsupported", message: expect.stringContaining(
+    advertised ? "has no verified current relay file capabilities" : "covers this chat but cannot send files yet") });
   expect(store.sendRow("document:fixture-writer", "pdf")).toMatchObject({ state: "failed", errorCode: "clone_files_unsupported", messageIds: [] });
   expect(sends).toEqual([]); expect(descriptors).toBe(1); expect(rightsReads).toBe(0);
   expect(await service.send({ ...common("legacy-pairing-text"), text: "Legacy" })).toMatchObject({ sentBy: { name: "Report clone" } });
@@ -301,11 +311,18 @@ test.each(["empty", "missing"] as const)("pairing-only Office send discovers liv
   expect(descriptors).toBe(1); expect(rightsReads).toBe(1); expect(sends).toHaveLength(1);
   expect(sends[0]!.files.get("document")).toMatchObject({ name: office.filename, type: mime });
 });
-test.each(["secret", "malformed", "outside-root", "dot-directory", "state-directory"] as const)(
-  "pairing-only %s document refusal happens before any relay request", async mode => {
+const documentGateCases = [
+  ["secret", "document_secret"], ["malformed", "document_invalid"], ["outside-root", "document_outside_roots"],
+  ["dot-directory", "document_forbidden_path"], ["state-directory", "document_forbidden_path"],
+  ["type", "document_type"], ["size", "document_too_large"], ["caption", "text_too_long"],
+] as const;
+test.each(documentGateCases.flatMap(([mode, code]) => [
+  [mode, "cold", code] as const, [mode, "stale", code] as const,
+]))("pairing-only %s document refusal makes zero relay requests with %s coverage", async (mode, coverage, code) => {
     fs.rmSync(telegramBotTokenPath());
     const [extension] = officeFormats[0];
     let filename = officeFile(extension).path;
+    let caption: string | undefined;
     if (mode === "secret") {
       filename = path.join(path.dirname(pdf), "secret.xlsx");
       const marker = ["-----BEGIN ", "PRIVATE KEY-----"].join("");
@@ -317,15 +334,26 @@ test.each(["secret", "malformed", "outside-root", "dot-directory", "state-direct
     } else if (mode === "dot-directory") {
       const hidden = path.join(path.dirname(pdf), ".hidden"); fs.mkdirSync(hidden, { recursive: true });
       filename = path.join(hidden, "hidden.xlsx"); fs.writeFileSync(filename, officeZip(officeParts(extension)));
-    } else {
+    } else if (mode === "state-directory") {
       fs.mkdirSync(process.env.LLV_STATE_DIR!, { recursive: true });
       filename = path.join(process.env.LLV_STATE_DIR!, "state.xlsx"); fs.writeFileSync(filename, officeZip(officeParts(extension)));
+    } else if (mode === "type") {
+      filename = path.join(path.dirname(pdf), "unsupported.bin"); fs.writeFileSync(filename, "Fixture");
+    } else if (mode === "size") {
+      fs.truncateSync(filename, DOCUMENT_MAX_BYTES + 1);
+    } else {
+      caption = "x".repeat(1025);
     }
-    await expect(service.sendDocument({ ...common(`blocked-${mode}`), document: { path: filename } })).rejects.toMatchObject({
-      code: mode === "secret" ? "document_secret" : mode === "malformed" ? "document_invalid"
-        : mode === "outside-root" ? "document_outside_roots" : "document_forbidden_path",
-    });
-    expect(descriptors).toBe(0); expect(rightsReads).toBe(0); expect(sends).toEqual([]);
+    if (coverage === "stale") {
+      await directory.route(String(group.id));
+      await directory.idle();
+      now += 900_001;
+      relayRequests = [];
+    }
+    await expect(service.sendDocument({ ...common("blocked-document"), document: { path: filename, caption } })).rejects.toMatchObject({ code });
+    await directory.idle();
+    expect(relayRequests).toEqual([]);
+    expect(sends).toEqual([]);
     expect(bot.callsOf("sendDocument")).toHaveLength(0);
   });
 test("document pixel-limit refusal names the attachment and dimension check", async () => {
@@ -337,18 +365,106 @@ test("document pixel-limit refusal names the attachment and dimension check", as
   });
   expect(sends).toEqual([]); expect(bot.callsOf("sendDocument")).toHaveLength(0);
 });
-test.each(["approve", "revoke"] as const)("pairing-only file confirmation can %s under current clone custody", async mode => {
+test.each(["approve", "revoke", "replace", "refresh"] as const)("pairing-only file confirmation handles %s", async mode => {
   fs.rmSync(telegramBotTokenPath());
-  const filename = path.join(path.dirname(path.dirname(pdf)), "outside.md"); fs.writeFileSync(filename, "Fixture report");
+  if (mode === "refresh") await document("warm-file-capabilities");
+  const before = sends.length;
+  const filename = path.join(path.dirname(path.dirname(pdf)), "outside.pdf"); fs.copyFileSync(pdf, filename);
   let id = "";
   try { await service.sendDocument({ ...common("pairing-confirmation"), document: { path: filename } }); }
   catch (error) { id = (error as { extra: { confirmation: { id: string } } }).extra.confirmation.id; }
-  expect(id).not.toBe(""); expect(sends).toEqual([]);
+  expect(id).not.toBe(""); expect(sends).toHaveLength(before);
   const confirmation = service.fileConfirmation(id);
   if (mode === "revoke") relay.paused = true;
+  if (mode === "replace") relay = { ...relay, id: "replacement-fixture", pairedAt: new Date(now).toISOString() };
+  if (mode === "refresh") {
+    now += 61_000;
+    rights = cloneMethodRights({ read_at: new Date(now).toISOString() });
+  }
   const decision = service.decideFileConfirmation(id, confirmation.digest, true, () => {});
-  if (mode === "approve") { expect(await decision).toMatchObject({ sentBy: { name: "Report clone" } }); expect(sends).toHaveLength(1); }
-  else { await expect(decision).rejects.toMatchObject({ code: "bot_not_in_chat" }); expect(sends).toEqual([]); }
+  if (mode === "approve" || mode === "refresh") {
+    expect(await decision).toMatchObject({ sentBy: { name: "Report clone" } });
+    expect(sends).toHaveLength(before + 1);
+    if (mode === "refresh") { expect(descriptors).toBe(2); expect(rightsReads).toBe(2); }
+  } else {
+    await expect(decision).rejects.toMatchObject({ code: "confirmation_invalid" });
+    expect(service.fileConfirmation(id).state).toBe("failed");
+    expect(sends).toHaveLength(before);
+    expect(bot.callsOf("sendDocument")).toHaveLength(0);
+  }
+});
+test("pairing replacement just before HTTP requires a fresh confirmation even with the same clone ID", async () => {
+  fs.rmSync(telegramBotTokenPath());
+  const filename = path.join(path.dirname(path.dirname(pdf)), "outside.pdf"); fs.copyFileSync(pdf, filename);
+  const input = { ...common("confirm-pairing-change"), document: { path: filename } };
+  async function requestConfirmation() {
+    const id = `clone-methods-confirmation-${confirmationSequence + 1}`;
+    await expect(service.sendDocument(input)).rejects.toMatchObject({ code: "document_outside_roots", extra: { confirmation: { id } } });
+    return service.fileConfirmation(id);
+  }
+  const original = await requestConfirmation();
+  const send = port.send;
+  port.send = (route, params, options) => {
+    const beforeSend = options.beforeSend;
+    return send(route, params, { ...options, beforeSend: async () => {
+      expect(route.relay).toBe(relay);
+      relay = { ...relay, credential: `${relay.credential} replacement` };
+      await beforeSend?.();
+    } });
+  };
+  await expect(service.decideFileConfirmation(original.id, original.digest, true, () => {}))
+    .rejects.toMatchObject({ code: "confirmation_invalid" });
+  expect(service.fileConfirmation(original.id).state).toBe("failed");
+  expect(store.sendRow("confirmed-document:fixture-writer", `file-confirmation:${original.id}`))
+    .toMatchObject({ state: "failed", errorCode: "confirmation_invalid", messageIds: [] });
+  expect(sends).toEqual([]);
+  expect(bot.callsOf("sendDocument")).toHaveLength(0);
+
+  port.send = send;
+  const fresh = await requestConfirmation();
+  expect(fresh.digest).not.toBe(original.digest);
+  expect(await service.decideFileConfirmation(fresh.id, fresh.digest, true, () => {}))
+    .toMatchObject({ messageIds: [101], sentBy: { name: "Report clone" } });
+  expect(sends).toHaveLength(1);
+});
+test("a cold directory with multiple possible clone senders requires coverage before confirmation", async () => {
+  fs.rmSync(telegramBotTokenPath());
+  relay.targets.push({ ...relay.targets[0]!, id: "another-clone" });
+  const filename = path.join(path.dirname(path.dirname(pdf)), "outside.pdf"); fs.copyFileSync(pdf, filename);
+  const input = { ...common("confirm-after-coverage"), document: { path: filename } };
+  await expect(service.sendDocument(input)).rejects.toMatchObject({
+    code: "document_outside_roots", message: expect.stringContaining("Refresh the chat's sender"),
+  });
+  await directory.idle();
+  expect(relayRequests).toEqual([]);
+  expect(confirmationSequence).toBe(0);
+
+  await service.discoverCloneChats();
+  const id = "clone-methods-confirmation-1";
+  await expect(service.sendDocument(input)).rejects.toMatchObject({ code: "document_outside_roots", extra: { confirmation: { id } } });
+  const confirmation = service.fileConfirmation(id);
+  expect(await service.decideFileConfirmation(id, confirmation.digest, true, () => {}))
+    .toMatchObject({ sentBy: { name: "Report clone" }, messageIds: [101] });
+  expect(sends).toHaveLength(1);
+});
+test("cold text routing honors a clone's explicit send denial before choosing the local bot", async () => {
+  rights = cloneMethodRights({ can_send_messages: false });
+  expect(await service.send({ ...common("denied-clone-text"), text: "Fixture text" }))
+    .toMatchObject({ messageIds: [200], sentBy: { name: "Fixture bot" } });
+  expect(descriptors).toBe(1);
+  expect(rightsReads).toBe(1);
+  expect(sends).toEqual([]);
+  expect(bot.callsOf("sendMessage")).toHaveLength(1);
+});
+test("cold chat listing includes the clone's current document and photo rights", async () => {
+  rights = cloneMethodRights({ status: "administrator", can_send_documents: true, can_send_photos: false });
+  await service.discoverCloneChats();
+  expect(service.listChats().chats.find(chat => chat.alias === "reports")?.bots).toContainEqual(expect.objectContaining({
+    name: "Report clone", status: "administrator", canSendDocuments: true, canSendPhotos: false, checkedAt: rights.read_at,
+  }));
+  expect(descriptors).toBe(1);
+  expect(rightsReads).toBe(1);
+  expect(sends).toEqual([]);
 });
 test("album receipts keep Telegram order and rich-message media are JSON", async () => {
   answer = () => ({ body: { ...cloneReceipt(107), message_ids: [107, 103] } });
