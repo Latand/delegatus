@@ -48,11 +48,25 @@ function productionFixture() {
     import { StateLockDeferredError } from ${JSON.stringify(path.join(import.meta.dir, "../state/lockWait.ts"))};
     const root = ${JSON.stringify(root)};
     fs.appendFileSync(path.join(root, "starts"), process.pid + "\\n");
+    // Walk admission reads host memory before each request. Keep these
+    // protocol tests independent of the operator's current pressure sample;
+    // tests that exercise pressure inject the sample at the checkpoint.
+    const realReadFileSync = fs.readFileSync.bind(fs);
+    fs.readFileSync = (file, ...args) => {
+      if (String(file) === "/proc/meminfo") return "MemTotal: 32768000 kB\\nMemAvailable: 12000000 kB\\nMemFree: 8000000 kB\\nBuffers: 1000000 kB\\nCached: 3000000 kB\\nSReclaimable: 500000 kB\\nShmem: 100000 kB\\nSwapTotal: 16000000 kB\\nSwapFree: 8000000 kB\\n";
+      if (String(file) === "/proc/pressure/memory") return "some avg10=0.00 avg60=0.00 avg300=0.00 total=0\\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\\n";
+      return realReadFileSync(file, ...args);
+    };
     if (process.env.SWEEP_FIXTURE_HIGH_RSS === "1") process.memoryUsage.rss = () => 257 * 1024 ** 2;
     const stderr = console.error.bind(console);
     console.error = (...args) => {
       fs.appendFileSync(path.join(root, "diagnostics"), args.join(" ") + "\\n");
       stderr(...args);
+    };
+    const stderrWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = function(chunk, ...args) {
+      fs.appendFileSync(path.join(root, "diagnostics"), String(chunk));
+      return stderrWrite(chunk, ...args);
     };
     const write = process.stdout.write.bind(process.stdout);
     let first = true;
@@ -96,6 +110,14 @@ async function waitForFile(file: string) {
   while (!fs.existsSync(file) && Date.now() < deadline) await Bun.sleep(5);
   expect(fs.existsSync(file)).toBeTrue();
 }
+async function waitForText(file: string, expected: string) {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(file) && fs.readFileSync(file, "utf8").includes(expected)) return;
+    await Bun.sleep(5);
+  }
+  expect(fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "").toContain(expected);
+}
 
 test.skipIf(process.platform !== "linux")("MemAvailable and both PSI thresholds independently defer a walk", () => {
   const pressured = (available: number, some: number, full: number) => sweepMemoryPressured(file =>
@@ -129,7 +151,7 @@ test.skipIf(process.platform !== "linux")("production helper serializes walks ac
       fs.readdirSync(here);
       fs.writeFileSync(here + "/walk-ready", "ready");
       await new Response(Bun.stdin.stream()).text();
-    });
+    }, () => false);
   `], { env, stdin: "pipe", stdout: "ignore", stderr: "pipe" });
   const holderError = new Response(holder.stderr).text();
   const preload = path.join(root, "pressure-preload.ts");
@@ -188,9 +210,10 @@ test("production helper returns attempt reports and survives its own abandoned l
     expect(await worker.attemptTemp()).toMatchObject({ checked: 0, removed: 0 });
     expect(fs.readFileSync(path.join(root, "release-holds"), "utf8")).toBe("1");
     expect(fs.readFileSync(path.join(root, "released"), "utf8")).toBe("done");
-    const diagnostics = fs.readFileSync(path.join(root, "diagnostics"), "utf8");
-    expect(diagnostics).toContain("[state lease] cleared abandoned pipelines");
-    expect(diagnostics).toContain("sweep retry settled");
+    await waitForText(path.join(root, "diagnostics"), "[state lease] cleared abandoned pipelines");
+    const settledDiagnostics = fs.readFileSync(path.join(root, "diagnostics"), "utf8");
+    expect(settledDiagnostics).toContain("[state lease] cleared abandoned pipelines");
+    expect(settledDiagnostics).toContain("sweep retry settled");
     expect(await worker.attemptTemp()).toMatchObject({ checked: 0, removed: 0 });
     const starts = fs.readFileSync(path.join(root, "starts"), "utf8").trim().split("\n");
     expect(starts).toHaveLength(1);
@@ -223,9 +246,9 @@ test("a helper at its RSS threshold is replaced before the next attempt request"
 }, 30_000);
 
 test("production maintenance keeps Docker dry and all ledger writes inside its fixture", async () => {
-  const { root, env } = productionFixture(), calls = path.join(root, "docker-calls");
+  const { root, env, command } = productionFixture(), calls = path.join(root, "docker-calls");
   fs.writeFileSync(path.join(root, "docker"), `#!/usr/bin/python3 -IB\nwith open(${JSON.stringify(calls)},'a') as f: f.write('unexpected call\\n')\nraise RuntimeError('unexpected Docker runner')\n`, { mode: 0o700 });
-  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "../worktreeSweep.worker.ts")], {
+  const child = Bun.spawn(command, {
     env: { ...env, PATH: root }, stdin: "pipe", stdout: "pipe", stderr: "pipe",
   });
   const stdout = new Response(child.stdout).text(), stderr = new Response(child.stderr).text();

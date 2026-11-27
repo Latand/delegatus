@@ -41,8 +41,8 @@ export function sweepPressureCheckpoint(checkRss = false, read?: (file: string) 
 
 /** Every leased cleaner uses the same state-root lease, including during
  * Viewer succession. Keep observations and queue waits outside the walk. */
-export async function withSweepWalk<T>(deadline: number, walk: () => Promise<T>): Promise<T> {
-  if (sweepMemoryPressured()) throw new SweepWalkDeferred("memory");
+export async function withSweepWalk<T>(deadline: number, walk: () => Promise<T>, isPressured = sweepMemoryPressured): Promise<T> {
+  if (isPressured()) throw new SweepWalkDeferred("memory");
   const { tryLockFenceExclusive } = await import("../../runtime-host/fenceLock");
   const filename = statePath("cleanup-walk.lock");
   await fs.promises.mkdir(statePath(), { recursive: true, mode: 0o700 });
@@ -53,7 +53,7 @@ export async function withSweepWalk<T>(deadline: number, walk: () => Promise<T>)
       const lease = tryLockFenceExclusive({ fd: handle.fd, filename });
       if (lease) {
         try {
-          if (sweepMemoryPressured()) throw new SweepWalkDeferred("memory");
+          if (isPressured()) throw new SweepWalkDeferred("memory");
           return await walk();
         } finally { lease.release(); }
       }
