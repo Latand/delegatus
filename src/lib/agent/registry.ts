@@ -6925,9 +6925,18 @@ export class AgentRegistry {
     return { versions, owners, conversationsByPath };
   }
 
-  worktreeProtectionSnapshot(): WorktreeProtection {
+  /** `within` lets SQLite skip the rows that work elsewhere; the JSON file
+      answers with every row. */
+  worktreeProtectionSnapshot(within?: readonly string[]): WorktreeProtection {
     return this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
-      ? this.sqliteStore.worktreeProtectionSnapshot() : worktreeProtection(this.readOnlySnapshot());
+      ? this.sqliteStore.worktreeProtectionSnapshot(within) : worktreeProtection(this.readOnlySnapshot());
+  }
+
+  /** Changes with every SQLite commit, from any process; null when the registry
+      answers from its JSON file and a snapshot has to be read again. */
+  worktreeProtectionStamp(): string | null {
+    return this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
+      ? this.sqliteStore.worktreeProtectionStamp() : null;
   }
 
   /** Prepare the recovery lookups through asynchronous writer admission. */

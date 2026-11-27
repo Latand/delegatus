@@ -618,12 +618,15 @@ function identityProofKey(identity: Readonly<ProcessIdentity>): string {
     registry. Drop that hold only with dead owners and a settled turn. Unknown
     ownership, setup and runnable deliveries continue protecting their cwd.
     Temp retention can also request the recorded time of positively ended
-    owners to reject a newer directory at a recycled cwd. */
+    owners to reject a newer directory at a recycled cwd. A caller that passes
+    part of the registry reuses the dead-owner proofs without rewriting them,
+    since the rewrite drops every proof the file does not name. */
 export function conversationCwdStatus(
   file: RegistryShape,
   now = Date.now(),
   provenDead: (identity: Readonly<ProcessIdentity>) => boolean = processIdentityProvenDead,
   endedCwds?: Map<string, number>,
+  rememberProofs = true,
 ): ConversationCwdStatus {
   const held = new Set<string>();
   const deferred = new Set<string>();
@@ -715,7 +718,7 @@ export function conversationCwdStatus(
     }
   }
   const liveProofs = [...new Set(cachedProofs.filter(key => currentIdentities.has(key)))].slice(-OWNER_PROOF_CACHE_LIMIT);
-  if (liveProofs.length !== loadedProofs.length || liveProofs.some((key, index) => key !== loadedProofs[index]))
+  if (rememberProofs && (liveProofs.length !== loadedProofs.length || liveProofs.some((key, index) => key !== loadedProofs[index])))
     writeJsonDurably(cacheFile, liveProofs);
   for (const delivery of Object.values(file.heldDeliveries ?? {})) {
     /* `delivery-uncertain` was written and never confirmed; the reaper counts
@@ -736,8 +739,9 @@ export function liveOrWaitingConversationCwds(
   file: RegistryShape,
   now = Date.now(),
   provenDead: (identity: Readonly<ProcessIdentity>) => boolean = processIdentityProvenDead,
+  rememberProofs = true,
 ): string[] {
-  const status = conversationCwdStatus(file, now, provenDead);
+  const status = conversationCwdStatus(file, now, provenDead, undefined, rememberProofs);
   return [...new Set([...status.held, ...status.deferred])];
 }
 

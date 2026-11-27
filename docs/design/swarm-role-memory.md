@@ -613,10 +613,12 @@ usage-metrics design recommend starting opt-in: a trust incident has no undo.
   counts swarm ids only, for the previous complete UTC day, and sends once with
   a 5-second timeout after claiming the day in its own file.
 - **Worker.** `POST /api/swarm/usage`: body at most 16 KB, the exact schema of
-  §2.4 (any other field answers 400 and writes nothing), and one data point
-  per entry into a new dataset. No country, no IP.
-- **Stats.** The Access-protected `/stats` page gains a table per swarm id over
-  30 days.
+  §2.4 (any other field answers 400 and writes nothing), and one aggregate
+  update per rule and UTC day in the `StatsStore` Durable Object table
+  `swarm_usage_days`. Store report, delivery, apply, misled and misled-report
+  counts. No country, no IP.
+- **Stats.** The passkey-protected `/stats` page reads the per-rule sums for the
+  past 30 UTC days from the `STATS` binding.
 - **Acceptance.** An unknown field, a non-swarm id, a count over 10 000 or
   more than 250 entries answers 400 and writes nothing. Two days of use send
   two requests, neither carrying a stable identifier. The environment
