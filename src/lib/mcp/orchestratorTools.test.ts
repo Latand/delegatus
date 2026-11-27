@@ -277,7 +277,7 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
       const sent: string[] = [];
       let beforeWrite = 0;
       let recipient: { conversationId: string; project: string; entry: StagedRegistryEntry } | undefined = existing;
-      const runtime = (): RuntimeHostClient => ({
+      const runtimeClient: Pick<RuntimeHostClient, "readSession" | "command"> = {
         readSession: async () => ({
           conversationId: recipient!.conversationId, sessionKey: recipient!.entry.key, hostKind: recipient!.entry.structuredHost!.kind,
           host: "hosted", turn: "idle", provenance: "structured", revision: 1, attentionIds: [],
@@ -296,10 +296,11 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
           return { operationId, replayed: false, receipt: {
             operationId, idempotencyKey: command.idempotencyKey,
             conversationId: command.conversationId, kind: command.kind, status: "delivered",
-            at: AT,
+            at: AT, revision: 1,
           } };
         },
-      } satisfies Pick<RuntimeHostClient, "readSession" | "command">) as RuntimeHostClient;
+      };
+      const runtime = () => runtimeClient as RuntimeHostClient;
       if (mode === "ambiguous-folder") {
         const child = Bun.spawn([process.execPath, "--eval", `
           import { AgentRegistry, setAgentRegistryForTests } from "./src/lib/agent/registry";
