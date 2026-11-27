@@ -13,6 +13,7 @@ import { claimInstall, signOutSession } from "@/lib/team/members";
 import { resetTeamStoreForTests, teamStore } from "@/lib/team/store";
 import { createWorkspace } from "@/lib/team/workspaces";
 import { conversationCatalogSnapshot, replaceConversationCatalog } from "@/lib/scanner/conversationCatalog";
+import { resetStateReadonlyReaderForTests } from "@/lib/state/sqliteStateStore";
 
 import { readEvidenceHtml } from "./readEvidenceHtml";
 
@@ -41,6 +42,7 @@ beforeEach(() => {
 afterEach(async () => {
   resetTeamStoreForTests();
   for (const response of responses.splice(0)) if (response.body && !response.body.locked) await response.body.cancel();
+  resetStateReadonlyReaderForTests();
   if (savedState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = savedState;
   process.env.HOME = savedHome;
   if (savedCache === undefined) delete process.env.XDG_CACHE_HOME; else process.env.XDG_CACHE_HOME = savedCache;
@@ -277,12 +279,14 @@ test("held HTML and IPv6 raster reads close with zero further reads after deadli
   `;
   const run = async (kind: "deadline" | "abort", raster: boolean) => {
     const child = Bun.spawn([process.execPath, "-e", script], {
-      cwd: process.cwd(), stdin: "pipe", stdout: "pipe", stderr: "pipe",
+      cwd: process.cwd(), stdin: "pipe", stdout: "pipe", stderr: "inherit",
       env: {
         ...process.env,
         LLV_HELD_REPORT: report,
         LLV_HELD_RASTER: raster ? "1" : "0",
-        LLV_ARTIFACT_TIME_BUDGET_MS: kind === "deadline" ? (raster ? "2000" : "350") : "10000",
+        // Leave time for filesystem admission and worker startup on Win32
+        // before the native response timer expires while the read is held.
+        LLV_ARTIFACT_TIME_BUDGET_MS: "5000",
       },
     });
     const reader = child.stdout.getReader();
