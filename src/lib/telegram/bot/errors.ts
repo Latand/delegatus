@@ -22,7 +22,7 @@ export function sendFailure(result: Extract<BotCallResult, { ok: false }>, chat:
   if (result.classified) return new TelegramBotError(result.classified.code,
     result.classified.code === "rate_limited" ? `Celestia is rate-limiting sends; retry after ${result.retryAfterSeconds ?? 1} s`
       : result.classified.code === "send_uncertain" ? "Celestia could not confirm the send; keep the same send key to avoid a duplicate"
-        : `Celestia refused the clone send (${result.classified.code})`,
+        : result.description ?? `Celestia refused the clone send (${result.classified.code})`,
     result.retryAfterSeconds === null ? {} : { retryAfterSeconds: result.retryAfterSeconds });
   // Keep the cause ahead of titles and advice in bounded bridge diagnostics.
   const detail = result.description ? `Telegram: ${result.description}; ` : "";
