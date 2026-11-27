@@ -191,7 +191,7 @@ import { isReviewGate, launchSizingRefusal, reviewGateRefusal, type Briefer, typ
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import { normalizeStageOutputPath } from "./stageAccess";
 import { settlePendingStageProvenance, stageProvenanceFence } from "./stageProvenance";
-import { commitAndAdoptStageBranch, observeStageBranchProtection, stageBranchOwnershipReader, type StageBranchProtection } from "./stageBranch";
+import { commitAndAdoptStageBranch, observeStageBranchProtection, StageBranchOwnershipChange, stageBranchOwnershipReader, type StageBranchProtection } from "./stageBranch";
 import { graphDigest, stageDigest } from "./stageDigest";
 import { matchesShortId, resolveShortId, shortId } from "@/lib/shortIds";
 import { pipelineStageRuntimeProfile, type PipelineStageRuntimeProfile } from "./stageSandbox";
@@ -6839,6 +6839,7 @@ async function retryPassedStageCommit(pipeline: Pipeline, ports: PipelinePorts):
       return { error: `the ${pending} may still be running or queued; wait for it to finish before retrying settlement`, status: 409 };
     }
   }
+  if (resumeParkedStageSettlement(pipeline, ports, true)) return { pipeline };
   if (attempt.commitRepair) {
     // Explicit retry renews permission for one commit after a rejected repair.
     // Keep the original refusal/request; no second repair turn is sent.
@@ -14138,10 +14139,12 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
     });
     const remaining = unixMs(waiting?.retryAfter ?? null) - unixMs(ports.now());
     if (remaining > 0) { ports.scheduleTick?.(remaining); throw preparationRefusal(); }
-    const ownership = stageBranchOwnershipReader(preview.id);
+    const ownership = stageBranchOwnershipReader(preview, attempt.branchAdoption?.branch ?? ports.stageBranchProtections?.get(preview.id)?.branch);
     let ownershipFence: string;
-    try { ownershipFence = await ownership.read(); }
-    catch (error) {
+    try {
+      ownershipFence = await ownership.read();
+      if (!ownership.current()) throw ownership.failure("settlement");
+    } catch (error) {
       await recordStageSettlementPreparationFailure(preview, preparationIdentity, ports, error);
       throw preparationRefusal();
     }
@@ -14149,14 +14152,15 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
     // before acquiring or dispatching any work for that selection.
     if (version() !== rowVersion || controllerTickFingerprint(reader.read()!) !== fingerprint) continue;
     let ownershipInvalidated = false;
-    let ownershipFailure: unknown = new Error("pipeline branch ownership changed during settlement");
+    let ownershipFailure: unknown;
     const ownershipCurrent = () => {
       if (ownership.current()) return true;
       ownershipInvalidated = true;
+      ownershipFailure = ownership.failure("settlement");
       return false;
     };
-    const matches = (current: Pipeline | null) => current !== null && version() === rowVersion
-      && ownershipCurrent() && controllerTickFingerprint(current) === fingerprint
+    const matches = (current: Pipeline | null) => current !== null && ownershipCurrent()
+      && version() === rowVersion && controllerTickFingerprint(current) === fingerprint
       && !(current.delivery?.operation?.state === "running" && proactivePipelineExecutionError(current, "prepare"))
       && (!attempt.flowId || JSON.stringify(ports.getFlow(attempt.flowId)) === flowFingerprint);
     const lock = path.join(pipelineArtifactsDir(preview.id), "remote-action.lock");
@@ -14180,9 +14184,10 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
     let validation: Promise<void> | undefined;
     const revalidate = () => validation ??= withViewerOperation("pipelines.revalidate", async () => {
       try {
-        if (version() !== rowVersion) { abort.abort(); return; }
+        if (version() !== rowVersion) { ownershipCurrent(); abort.abort(); return; }
         if (await ownership.read() !== ownershipFence) {
           ownershipInvalidated = true;
+          ownershipFailure = ownership.failure("settlement");
           abort.abort();
         }
         if (version() !== rowVersion
@@ -14344,6 +14349,36 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
 const STAGE_SETTLEMENT_ADMISSION_WAIT_MS = 15 * 60_000;
 const STAGE_SETTLEMENT_ADMISSION_SUPERSEDED = "publication admission superseded by the passed-stage settlement decision";
 const STAGE_SETTLEMENT_PREPARATION_DETAIL = "passed-stage settlement is waiting for fresh branch ownership evidence";
+const STAGE_SETTLEMENT_OWNERSHIP_PARK = "committing the passed stage: branch ownership preparation did not stabilize within 15 minutes: ";
+const LEGACY_SETTLEMENT_OWNERSHIP_CHANGE = "pipeline branch ownership changed during settlement";
+
+/** Recover parks written before ownership changes stayed on automatic backoff. */
+function resumeParkedStageSettlement(pipeline: Pipeline, ports: PipelinePorts, explicit = false): boolean {
+  const stage = currentStage(pipeline);
+  const attempt = stage && currentAttempt(pipeline, stage.id);
+  const wait = attempt?.settlementPreparationWait;
+  const operation = pipeline.delivery?.operation;
+  if (!stage || !attempt || wait?.reason !== LEGACY_SETTLEMENT_OWNERSHIP_CHANGE
+    || pipeline.state !== "needs_decision" || pipeline.cursor?.state !== "committing"
+    || pipeline.closedAt || pipeline.hiddenAt
+    || attempt.state !== "needs_decision" || attempt.verdict?.status !== "pass"
+    || pipeline.stateDetail !== attempt.error || !attempt.error?.startsWith(STAGE_SETTLEMENT_OWNERSHIP_PARK)
+    || wait.identity !== stageSettlementPreparationIdentity(pipeline, stage, attempt)
+    || operation?.state === "running" || pipeline.remoteAction?.state === "pending"
+    || (!explicit && unixMs(wait.retryAfter) > unixMs(ports.now()))) return false;
+  // Older parks lost the pre-park attempt state. An exact publication
+  // reservation for this pass proves the head already passed local settlement.
+  const accepted = operation?.sha === pipeline.lastPassedCommit && operation.epoch === pipeline.delivery?.epoch
+    && operation.requestKey === `pass:${stage.id}:${attempt.n}`;
+  attempt.state = accepted ? "passed" : "committing";
+  attempt.error = null;
+  delete attempt.settlementAdmissionRetry;
+  delete attempt.settlementPreparationWait;
+  pipeline.state = "running";
+  pipeline.pausedState = null;
+  pipeline.stateDetail = `${STAGE_SETTLEMENT_PREPARATION_DETAIL}: ${wait.reason}`;
+  return true;
+}
 
 function stageSettlementPreparationIdentity(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): string {
   const delivery = pipeline.delivery, operation = delivery?.operation;
@@ -14372,13 +14407,13 @@ async function recordStageSettlementPreparationFailure(preview: Pipeline, identi
     const reason = redactBounded(error instanceof Error ? error.message : String(error), 400);
     // Missing proof never retires the accepted pass or its publication
     // reservation. Persist the first failure and retry schedule across boot.
-    attempt.settlementPreparationWait = { ...prior, identity, startedAt: prior?.startedAt ?? now,
+    attempt.settlementPreparationWait = { identity, startedAt: prior?.startedAt ?? now,
       rounds: rounds + 1, retryAfter: new Date(unixMs(now) + delayMs).toISOString(), reason };
-    if (unixMs(now) - unixMs(attempt.settlementPreparationWait.startedAt) >= STAGE_SETTLEMENT_ADMISSION_WAIT_MS) {
-      // No Git result is accepted without fresh ownership. Stop this same
-      // intent instead of renewing it forever, retaining the accepted head
-      // and publication receipt. The commit retry resumes the same attempt.
-      const detail = `committing the passed stage: branch ownership preparation did not stabilize within 15 minutes: ${reason}; retry-stage to settle the preserved head`;
+    // A recorded competing write calls for another read. Keep the accepted
+    // attempt and its dismissal intact while the controller backs off.
+    if (!(error instanceof StageBranchOwnershipChange)
+      && unixMs(now) - unixMs(attempt.settlementPreparationWait.startedAt) >= STAGE_SETTLEMENT_ADMISSION_WAIT_MS) {
+      const detail = `${STAGE_SETTLEMENT_OWNERSHIP_PARK}${reason}; retry-stage to settle the preserved head`;
       stageSettlementEffects.set(current, notes);
       try { await park(current, detail, attempt); }
       finally { stageSettlementEffects.delete(current); }
@@ -14973,6 +15008,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           pipelineChanged = reconcileParkedUsageLimit(pipeline) || pipelineChanged;
           pipelineChanged = await reconcileParkedProviderRetry(pipeline, lanePorts, persistPipeline) || pipelineChanged;
           pipelineChanged = reconcileParkedVerdictMiss(pipeline, lanePorts) || pipelineChanged;
+          pipelineChanged = resumeParkedStageSettlement(pipeline, lanePorts) || pipelineChanged;
           pipelineChanged = await reconcileParkedPublicationRepair(pipeline, lanePorts) || pipelineChanged;
           pipelineChanged = await reconcileParkedDelivery(pipeline, lanePorts) || pipelineChanged;
           pipelineChanged = await reconcileParkedStructuredSpawn(pipeline, lanePorts) || pipelineChanged;
