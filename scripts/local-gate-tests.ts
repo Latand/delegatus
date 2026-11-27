@@ -87,7 +87,9 @@ export function comparisonFileWorkers(files: readonly string[], ceiling: number,
 
 export const FLAKY_RERUNS = 3;
 export const FLAKY_BUDGET_MS = 5 * 60 * 1000;
-export class BudgetExhausted extends Error {}
+export class BudgetExhausted extends Error {
+  partial?: TestRun;
+}
 
 export function comparatorEnding(error: unknown): { line: string; code: number } {
   const message = error instanceof Error ? error.message : String(error);
@@ -227,7 +229,12 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
       // Await both even on refusal so no owned runner outlives this round.
       const observed: Partial<Record<(typeof sides)[number], TestRun>> = {};
       const samples = await Promise.allSettled(sides.map(async side => {
-        const run = await rerun(side, sites);
+        let run: TestRun;
+        try { run = await rerun(side, sites); }
+        catch (error) {
+          if (error instanceof BudgetExhausted && error.partial) observed[side] = error.partial;
+          throw error;
+        }
         observed[side] = run;
         for (const item of pending) {
           const first = side === "base" ? base : head;
@@ -241,16 +248,15 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
       // A complete paired sample can compare hook and between-tests errors
       // alongside the filtered assertions. If either sample is unusable, a
       // newly observed diagnostic still prevents a capacity-only verdict.
-      const currentDiagnosticMatches = matchedDiagnosticCounts(
-        fileDiagnostics(observed.base ?? { failures: [], passed: [], completed: [], elapsedMs: 0 }),
-        fileDiagnostics(observed.head ?? { failures: [], passed: [], completed: [], elapsedMs: 0 }));
       const unpaired = sides.flatMap(side => {
         const run = observed[side];
         const seen = new Map<string, number>();
         const errors = run && fileDiagnostics(run).filter(site => {
           const identity = key(site), occurrence = (seen.get(identity) ?? 0) + 1;
           seen.set(identity, occurrence);
-          return occurrence > (establishedDiagnosticMatches.get(identity) ?? 0) + (currentDiagnosticMatches.get(identity) ?? 0);
+          const counterpart = observed[side === "base" ? "head" : "base"];
+          const counterpartCount = counterpart ? occurrenceCount(fileDiagnostics(counterpart), site) : 0;
+          return occurrence > Math.max(establishedDiagnosticMatches.get(identity) ?? 0, counterpartCount);
         });
         return errors?.length ? [`${side} rerun: incomplete runner or between-tests error: ${describeDiagnostics(errors)}`] : [];
       });
@@ -632,10 +638,20 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
       finally { if (useNested) nestedRunning--; }
     }
   }));
-  // All owned runners have settled. Completed file diagnostics and filtered
-  // worker rejections must both veto a capacity retry after budget expiry.
+  // All owned runners have settled. Preserve completed evidence when the
+  // shared deadline stopped a sibling so confirmation can judge it against
+  // the paired side before choosing a verdict.
   const diagnostics = results.flatMap(run => run?.failures.filter(site => site.kind === "error"
     && site.name !== `${RUNNER_ERROR}runner did not finish (124)`) ?? []);
+  const rejected = workers.filter((worker): worker is PromiseRejectedResult => worker.status === "rejected");
+  if (rejected.length && rejected.every(worker => worker.reason instanceof BudgetExhausted)) {
+    const partial: TestRun = { failures: results.flatMap(run => run?.failures ?? []),
+      passed: results.flatMap(run => run?.passed ?? []), completed: results.flatMap(run => run?.completed ?? []),
+      elapsedMs: performance.now() - started };
+    const deadline = rejected[0]!.reason as BudgetExhausted;
+    deadline.partial = partial;
+    throw deadline;
+  }
   assertWorkersSucceeded(workers, diagnostics.map(site => `${label}: ${site.file}: ${diagnosticName(site)}`));
   for (const run of results) { failures.push(...run.failures); passed.push(...run.passed); completed.push(...run.completed); }
   return { failures, passed, completed, elapsedMs: performance.now() - started, selections };

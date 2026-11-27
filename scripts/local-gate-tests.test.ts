@@ -1,7 +1,7 @@
 import { appendOwnershipFailure, compareTests, execFileSync, expect, fixture, gateTemporaryRoot, mkdirSync, parseReport, path, readFileSync, root, roots, source, spawnSync, spyOn, symlinkSync, test, type TestRun, type TestSite, writeFileSync } from "./local-gate-tests.fixture";
 import { existsSync } from "node:fs";
 import { GATE_TASKS_MAX } from "./gate-tasks";
-import { BudgetExhausted, comparatorEnding, comparisonFileWorkers, comparisonPhaseBudgetMs, confirmedFileCleanup } from "./local-gate-tests";
+import { BudgetExhausted, comparatorEnding, comparisonFileWorkers, comparisonPhaseBudgetMs, confirmedFileCleanup, confirmFailures } from "./local-gate-tests";
 
 test("comparison phase allowance scales from 15 minutes up to 40", () => {
   expect([1, 30, 31, 51, 102, 130, 1_000].map(comparisonPhaseBudgetMs))
@@ -120,6 +120,18 @@ test("a head crash is named and blocks without hiding results from other files",
   expect(result.introduced.some(site => site.name.startsWith("<runner error>"))).toBe(true);
   expect(f.logs.at(-1)).toContain("2 new failures, 0 pre-existing failures");
 });
+test("same-status runner aborts compare their reported causes", async () => {
+  const f = fixture('console.error("module import abort"); process.exit(2);');
+  writeFileSync(path.join(f.dir, "example.test.ts"), 'console.error("test startup abort"); process.exit(2);');
+  const distinct = await f.run();
+  expect(distinct.introduced.some(site => site.name.includes("test startup abort"))).toBe(true);
+  expect(distinct.preexisting).toHaveLength(0);
+
+  writeFileSync(path.join(f.dir, "example.test.ts"), 'console.error("module import abort"); process.exit(2);');
+  const shared = await f.run();
+  expect(shared.introduced).toHaveLength(0);
+  expect(shared.preexisting.some(site => site.name.includes("module import abort"))).toBe(true);
+});
 const taskControl = process.platform === "linux" && Bun.which("python3") && Bun.which("systemd-run")
   && spawnSync("systemctl", ["--user", "show-environment"], { stdio: "ignore", timeout: 5_000 }).status === 0
   && readFileSync("/proc/self/cgroup", "utf8").split("\n").some(line => line.startsWith("0::") && existsSync(path.join("/sys/fs/cgroup", line.slice(3), "pids.max")));
@@ -207,13 +219,36 @@ test("between-tests diagnostics retain text after a divider inside the thrown me
   expect(compareTests({ failures: [base], passed: [], completed: [base.file], elapsedMs: 0 },
     { failures: [same], passed: [], completed: [same.file], elapsedMs: 0 }).preexisting).toEqual([same]);
 });
+test("confirmation rounds retain selector-specific candidate diagnostics and paired base evidence", async () => {
+  const assertion: TestSite = { file: "f.test.ts", suite: "", name: "alpha", kind: "test", occurrence: 0 };
+  const diagnostic: TestSite = { file: assertion.file, suite: "", name: "<hook error> fixture teardown failed", kind: "error",
+    selection: "[alpha,beta]", provenance: "Error: fixture teardown failed\nat teardown (<checkout>/fixture.ts:4:1)" };
+  const base: TestRun = { failures: [], passed: [assertion], completed: [assertion.file], elapsedMs: 0 };
+  const head: TestRun = { failures: [assertion], passed: [], completed: [assertion.file], elapsedMs: 0 };
+  const sample = (side: "base" | "head", round: number, shared: boolean): TestRun => ({
+    failures: [...(side === "head" ? [assertion] : []), ...(round === 0 && (side === "head" || shared) ? [diagnostic] : [])],
+    passed: side === "base" ? [assertion] : [], completed: [assertion.file], elapsedMs: 0,
+  });
+  let candidateHeadRound = 0, candidateBaseRound = 0;
+  const candidateOnly = await confirmFailures(base, head, async side => sample(side,
+    side === "head" ? candidateHeadRound++ : candidateBaseRound++, false));
+  expect(candidateOnly.introduced).toContainEqual(diagnostic);
+
+  let sharedHeadRound = 0, sharedBaseRound = 0;
+  const shared = await confirmFailures(base, head, async side => {
+    return sample(side, side === "head" ? sharedHeadRound++ : sharedBaseRound++, true);
+  });
+  expect(shared.introduced).not.toContainEqual(diagnostic);
+  expect(shared.preexisting).toContainEqual(diagnostic);
+  expect(shared.baseDiagnostics).toContainEqual(diagnostic);
+});
 test("scope and service guards report an identical surviving tree once across the baseline", async () => {
   const file = "fixture.test.ts";
   const failures: TestSite[] = [{ file, suite: "", kind: "error",
     name: "<hook error> owned test scope children survived teardown: 22 (22:2), 21 (21:1)" }];
   appendOwnershipFailure(failures, file, "owned runner: surviving owned processes: 21 (21:1), 22 (22:2)");
   const base: TestRun = { failures: [{ file, suite: "", kind: "error",
-    name: "<ownership error> owned runner: surviving owned processes: 31 (31:3)" }], passed: [], completed: [file], elapsedMs: 0 };
+    name: "<ownership error> owned runner: surviving owned processes: 31 (31:3), 32 (32:4)" }], passed: [], completed: [file], elapsedMs: 0 };
   const result = compareTests(base, { ...base, failures });
   expect(result.introduced).toEqual([]);
   expect(result.preexisting).toHaveLength(1);
@@ -252,6 +287,28 @@ test("teardown comparison retains the guardian outcome", () => {
   const base: TestRun = { failures: [site(0)], passed: [], completed: ["fixture.test.ts"], elapsedMs: 0 };
   const head = { ...base, failures: [site(1)] };
   expect(compareTests(base, head)).toEqual({ introduced: head.failures, preexisting: [], fixed: base.failures, absent: [] });
+});
+test("runner abort matching requires the normalized cause as well as its exit status", () => {
+  const baseSite: TestSite = { file: "fixture.test.ts", suite: "", kind: "error",
+    name: "<runner error> runner did not finish (2): module import failed: missing dependency" };
+  const candidateSite: TestSite = { ...baseSite,
+    name: "<runner error> runner did not finish (2): test body failed: assertion setup crashed" };
+  const run = (site: TestSite): TestRun => ({ failures: [site], passed: [], completed: [], elapsedMs: 0 });
+  expect(compareTests(run(baseSite), run(candidateSite)).introduced).toEqual([candidateSite]);
+  expect(compareTests(run(baseSite), run({ ...baseSite })).preexisting).toEqual([baseSite]);
+});
+test("a paired deadline retains an extra candidate diagnostic occurrence as a refusal", async () => {
+  const assertion: TestSite = { file: "f.test.ts", suite: "", name: "alpha", kind: "test", occurrence: 0 };
+  const error: TestSite = { file: assertion.file, suite: "", name: "<hook error> fixture close failed", kind: "error",
+    selection: "full", provenance: "Error: fixture close failed\nat close (<checkout>/fixture.ts:8:1)" };
+  const base: TestRun = { failures: [error], passed: [assertion], completed: [assertion.file], elapsedMs: 0 };
+  const head: TestRun = { failures: [assertion, error, error], passed: [], completed: [assertion.file], elapsedMs: 0 };
+  await expect(confirmFailures(base, head, async side => {
+    if (side === "base") return { ...base, failures: [error], passed: [assertion] };
+    const deadline = new BudgetExhausted("confirmation budget exhausted");
+    deadline.partial = { ...head, failures: [assertion, error, error], passed: [], completed: [] };
+    throw deadline;
+  })).rejects.toThrow(/NEW f\.test\.ts: <hook error> fixture close failed/);
 });
 test("distinct scope identities and unrelated hook failures remain blocking", async () => {
   const file = "fixture.test.ts";
