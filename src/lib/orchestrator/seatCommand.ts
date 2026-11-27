@@ -583,6 +583,8 @@ async function activate(
   admission?: SeatLaunchAdmission,
 ): Promise<{ seat: OrchestratorSeat; hold?: never } | { hold: SeatCommandResult; seat?: never } | null> {
   let refused: SeatCommandResult | null = null;
+  const projectStart = projectStartSeatOperation(input.clientRequestId)
+    ? await import("@/lib/projects/startAuthority") : null;
   /* Activation follows an await (the spawn, the delivery), so nothing here
      depends on staying synchronous, and by now a launch may already be running
      for this intent. It therefore queues for the lock instead of asking once:
@@ -627,6 +629,8 @@ async function activate(
       model: input.model,
       now: dependencies.now(),
       preparedAuthCredentialBaseline,
+      assertProjectStart: projectStart ? project => projectStart.assertProjectStartActivation(project, input.clientRequestId,
+        input.conversationId, input.launchId) : undefined,
     });
     return result;
   }, { holder: "orchestrator seat activation", waitMs: dependencies.seatStoreWaitMs ?? SEAT_STORE_WAIT_MS });

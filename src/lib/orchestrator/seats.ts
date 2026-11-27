@@ -1,5 +1,5 @@
 import { workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
-import { assertProjectStartActivation } from "@/lib/projects/startAuthority";
+import { projectStartSeatOperation } from "@/lib/projects/startContract";
 import { TeamError } from "@/lib/team/members";
 import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { reportHeaderName } from "@/lib/projects/settings";
@@ -735,6 +735,7 @@ export function completeOrchestratorSeatIntent(input: {
   model?: string | null;
   now?: string;
   preparedAuthCredentialBaseline?: SeatAuthCredentialBaseline | null;
+  assertProjectStart?(project: string): void;
 }): CompleteSeatIntentResult {
   const observed = orchestratorSeatFor(input.project).pending;
   const baseline = observed && !observed.authCredentialBaseline
@@ -749,7 +750,10 @@ export function completeOrchestratorSeatIntent(input: {
     }
     const pending = file.pending[project];
     if (!pending || pending.seatEpoch !== observed?.seatEpoch || pending.intent.clientRequestId !== input.clientRequestId) return { write: false, result: { kind: "missing" } };
-    assertProjectStartActivation(project, input.clientRequestId, input.conversationId, input.launchId);
+    if (projectStartSeatOperation(input.clientRequestId)) {
+      if (!input.assertProjectStart) return { write: false, result: { kind: "missing" } };
+      input.assertProjectStart(project);
+    }
     const now = input.now ?? new Date().toISOString();
     let revoked: OrchestratorRevocation | null = null;
     if (active && active.conversationId && active.conversationId !== input.conversationId) {
