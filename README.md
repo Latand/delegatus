@@ -15,7 +15,7 @@ what passes review as well. It runs on its own and stops to ask you only when
 a decision is yours. You watch and steer from a board in your browser or on
 your phone.
 
-![A pipeline opened from its task: Build, Review and Verify stages, with Review's loop back to Build folded under it, and the builder's and the reviewer's conversations side by side](docs/media/readme/pipeline.svg)
+![A pipeline opened from its task: Build, Review and Verify as stage tabs, the rule that sends a failed Review back to Build under them, and the selected stage's conversation](docs/media/readme/pipeline.svg)
 
 New here? The [Delegatus guide](docs/guide/README.md) takes you from installation to your first pipeline.
 

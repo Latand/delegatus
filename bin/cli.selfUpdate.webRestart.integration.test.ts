@@ -581,7 +581,8 @@ for (const output of ["revision-ready", "crashing", "legacy"] as const) {
       .replace("return new Response(process.cwd());", `if (pathname === "/") return new Response(process.cwd() + '<script src="/_next/static/chunks/app.js"></script>');
         return new Response(process.cwd());`));
     const launcher = path.join(next.dir, "bin", "cli.mjs");
-    writeFileSync(launcher, readFileSync(launcher, "utf8").replace("const RESTART_READINESS_TIMEOUT_MS = 90_000", "const RESTART_READINESS_TIMEOUT_MS = 1_000"));
+    // The candidate must answer at least once before its silence limit, also on a loaded host.
+    writeFileSync(launcher, readFileSync(launcher, "utf8").replace("const VIEWER_READINESS_SILENCE_MS = 90_000", "const VIEWER_READINESS_SILENCE_MS = 5_000"));
     renameSync(path.join(fixture.checkout, ".git"), path.join(fixture.root, "saved-git"));
     const packageFile = path.join(fixture.checkout, "package.json");
     writeFileSync(packageFile, JSON.stringify({ ...JSON.parse(readFileSync(packageFile, "utf8")), gitHead: fixture.first }));
@@ -606,7 +607,11 @@ for (const output of ["revision-ready", "crashing", "legacy"] as const) {
     if (output === "legacy") {
       const readiness = JSON.parse(readFileSync(before.requestFile.replace("request-", "readiness-"), "utf8"));
       const candidate = readiness.runs.find((run: { revision: string }) => run.revision === next.sha);
-      expect(candidate.phases.files.observations.at(-1)).toMatchObject({ endpoint: "/api/ready", httpStatus: 404 });
+      // The last probe may be cut by the silence limit. Every probe stays on the
+      // revision route, which answered 404 and never fell back to the legacy one.
+      const observations: { endpoint: string; httpStatus?: number }[] = candidate.phases.files.observations;
+      expect(observations).toContainEqual(expect.objectContaining({ endpoint: "/api/ready", httpStatus: 404 }));
+      expect(observations.filter(observation => observation.endpoint !== "/api/ready" || observation.httpStatus === 200)).toEqual([]);
       expect(candidate.phases.page.attempts).toBe(0);
       const incumbent = readiness.runs.at(-1);
       expect(incumbent.status).toBe("ready");

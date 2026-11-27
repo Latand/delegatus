@@ -567,6 +567,18 @@ test("cooperative preparation publishes one complete frozen view and follows pee
   } finally { db.close(); }
 });
 
+test("a caller joining snapshot preparation sees its completed slices", async () => {
+  const { open } = fixture();
+  const store = open();
+  let slices = 0;
+  const preparation = store.prepareReadOnlySnapshot(undefined, { recoveryIndexes: false });
+  const concurrent = store.prepareReadOnlySnapshot(undefined, {
+    recoveryIndexes: false, onSlice: () => { slices++; },
+  });
+  expect((await concurrent).file).toBe((await preparation).file);
+  expect(slices).toBeGreaterThan(0);
+});
+
 test("a prepared reader cooperatively rebuilds its view after a peer archives a row", async () => {
   const { open, kept } = fixture();
   const reader = open();

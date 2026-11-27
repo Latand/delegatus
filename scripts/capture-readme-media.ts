@@ -178,6 +178,28 @@ async function alignReadersToMessages(page: Page, scope: string): Promise<void> 
   }, scope);
 }
 
+/* Rest a feed on the tail of its conversation with the step whose row names
+   `label` at its top edge: the feed gets just enough room under its tail to
+   scroll that step's row to the edge, so no earlier step shows a cut box. */
+async function restFeedOnStep(page: Page, scope: string, label: string): Promise<void> {
+  const rested = await page.evaluate(({ scope, label }) => {
+    for (const scroller of document.querySelectorAll<HTMLElement>(`${scope} [data-log-feed-scroller]`)) {
+      const row = [...scroller.querySelectorAll<HTMLElement>("li")].find((item) => item.textContent?.includes(label));
+      if (!row) continue;
+      const bottom = scroller.scrollHeight - scroller.clientHeight;
+      const start = Math.round(row.getBoundingClientRect().top - (scroller.getBoundingClientRect().top - scroller.scrollTop));
+      if (start > bottom) {
+        const padding = Number.parseFloat(getComputedStyle(scroller).paddingBottom) || 0;
+        scroller.style.setProperty("padding-bottom", `${padding + start - bottom}px`, "important");
+      }
+      scroller.scrollTop = scroller.scrollHeight;
+      return true;
+    }
+    return false;
+  }, { scope, label });
+  if (!rested) throw new Error(`no step row «${label}» in ${scope}`);
+}
+
 /* A reader resting on the tail of its conversation can stop with a line of
    text under its top edge, which the frame shows as loose glyph fragments.
    The feed gets just enough room under its tail for its top edge to fall in
@@ -340,6 +362,9 @@ export const SHOTS: ReadmeShot[] = [
       await page.waitForTimeout(500);
       await clickText(page, "wrote 1 file");
       await page.waitForTimeout(500);
+      /* The reader rests on the second step, whole: its top edge would
+         otherwise cut the first step's diff box under the pinned bar. */
+      await restFeedOnStep(page, ".reader.conv", "Edit handler.ts");
       await alignFeedsToWholeLines(page, ".reader.conv");
     },
     crop: cropTo(".reader.conv"),

@@ -4,6 +4,26 @@ import type {
   ViewerHealthProbeObservation,
 } from "@/lib/runtime/contracts";
 
+/* An adapter action writes diagnostics to stderr while it runs: its checkpoint
+   worker inherits the stream and reports lock waits and long leases there, on
+   successful work too. The refusal that ends a failed action is therefore one
+   marked line, and the record reads that line alone. */
+const ADAPTER_FAILURE_MARKER = "[deployment adapter failure] ";
+const ADAPTER_FAILURE_CHARS = 500;
+
+export function adapterFailureOutput(message: string): string {
+  return `\n${ADAPTER_FAILURE_MARKER}${message.replace(/[\r\n]+/g, " ")}\n`;
+}
+
+/** The refusal a failed adapter action reported. An adapter that died before it
+    could mark one, or that predates the marker, leaves its last words at the
+    end of the stream. */
+export function adapterFailureReason(stderr: string): string {
+  const marked = stderr.lastIndexOf(ADAPTER_FAILURE_MARKER);
+  if (marked === -1) return stderr.trim().slice(-ADAPTER_FAILURE_CHARS);
+  return stderr.slice(marked + ADAPTER_FAILURE_MARKER.length).split("\n", 1)[0]!.trim().slice(0, ADAPTER_FAILURE_CHARS);
+}
+
 /** The deploy driver prints one sentence for a terminal failure, and that
     sentence is all an operator gets. Everything the gate observed is already in
     the durable record, so the failure path renders it instead of leaving the

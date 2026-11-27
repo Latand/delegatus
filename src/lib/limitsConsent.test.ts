@@ -19,7 +19,7 @@ function isolated(enabled?: boolean) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "limits-consent-")); roots.push(root); process.env.LLV_STATE_DIR = root;
   if (enabled !== undefined) fs.writeFileSync(path.join(root, "subscription-api-consent.json"), JSON.stringify({ version: 1, enabled, source: "operator" }));
   const file = path.join(root, ".credentials.json");
-  fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: { accessToken: "fixture", subscriptionType: "max" } }), { mode: 0o600 });
+  fs.writeFileSync(file, JSON.stringify({ claudeAiOauth: { accessToken: "fixture", subscriptionType: "max", rateLimitTier: "default_claude_max_20x" } }), { mode: 0o600 });
   return file;
 }
 test("cache rewrites preserve the old installation's migration proof first", () => {
@@ -71,14 +71,17 @@ test("Claude CLI usage becomes durable fresh windows and a failed refresh retain
   const request = spyOn(globalThis, "fetch").mockImplementation((async () => { throw Error("unexpected provider call"); }) as unknown as typeof fetch);
   try {
     const observation = await claudeQuotaObservation(account, now, { authStatus: async () => ({ loggedIn: true }) });
-    const expected = { session: { usedPercent: 23, resetsAt: Date.parse(sessionReset) / 1000 },
+    const plan = { plan: "max", planTier: "default_claude_max_20x" };
+    const windows = { session: { usedPercent: 23, resetsAt: Date.parse(sessionReset) / 1000 },
       weekly: { usedPercent: 42, resetsAt: Date.parse(weeklyReset) / 1000 },
       tiers: [{ tier: "opus", usedPercent: 61, resetsAt: Date.parse(tierReset) / 1000 }] };
+    const expected = { ...plan, ...windows };
     expect(observation).toMatchObject({ authenticated: true, observedAt: now, provenance: { source: "live" }, limits: expected });
     const registryFile = path.join(path.dirname(file), "quota-registry.json");
     new AgentRegistry(registryFile).recordQuotaObservation(durableQuotaObservation(observation, "fixture-boot"));
     const saved = new AgentRegistry(registryFile).quotaObservations("claude")[0]!;
-    expect(accountProjection(saved, true, now)).toMatchObject({ limits: { state: "fresh", ...expected } });
+    expect(saved.limits).toMatchObject(expected);
+    expect(accountProjection(saved, true, now)).toMatchObject({ limits: { state: "fresh", ...windows } });
     const compact = (row: typeof saved, at: number) => accountLimitRows({
       engine: "claude", accounts: { claude: [{ accountId: account.id }], codex: [], copilot: [] },
       active: { claude: account.id, codex: null, copilot: null },
@@ -106,7 +109,8 @@ test("explicit consent permits the direct fallback, and revocation before dispat
   const file = isolated(true); let calls = 0;
   const request = spyOn(globalThis, "fetch").mockImplementation((async () => { calls++; return Response.json({ five_hour: { utilization: 17 } }); }) as unknown as typeof fetch);
   try {
-    expect((await fetchClaudeLimits(file, () => 1_800_000_000_000, 8000, { run: unavailable })).data?.session?.usedPercent).toBe(17);
+    expect((await fetchClaudeLimits(file, () => 1_800_000_000_000, 8000, { run: unavailable })).data)
+      .toMatchObject({ session: { usedPercent: 17 }, plan: "max", planTier: "default_claude_max_20x" });
     expect(calls).toBe(1);
     await fetchClaudeLimits(file, () => 1_800_000_000_000, 8000, { run: async () => {
       fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "subscription-api-consent.json"), JSON.stringify({ version: 1, enabled: false, source: "operator" }));

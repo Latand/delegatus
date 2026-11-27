@@ -31,7 +31,7 @@ test("read-only startup probes are allowed; logins and agent execution are refus
 const expected = {
   message: "Claude Code CLI and Codex CLI were not found",
   installer: "curl -fsSL https://claude.ai/install.sh | bash",
-  presence: { claude: "missing", codex: "missing" },
+  presence: { claude: "missing", codex: "missing", antigravity: "missing" },
 };
 const at = "2026-11-14T11:45:29.000Z";
 const cleanReceipt = { at, removed: [], kept: [], reclaimedCacheBytes: 0, errors: [] };
@@ -213,8 +213,9 @@ test("a failed first retention case remains in the report while the other cases 
       const caseHome = join(fixture, label); const state = join(fixture, `${label}-state`);
       const receipt = join(state, "self-update/retention.json"); const launcher = join(caseHome, ".bun/bin/delegatus");
       mkdirSync(dirname(launcher), { recursive: true }); mkdirSync(dirname(receipt), { recursive: true });
-      const presence = label === "neither-cli" ? { claude: "missing", codex: "missing" }
-        : label === "path-claude" ? { claude: "found", codex: "missing" } : { claude: "missing", codex: "found" };
+      const presence = label === "neither-cli" ? expected.presence
+        : label === "path-claude" ? { claude: "found", codex: "missing", antigravity: "missing" }
+          : { claude: "missing", codex: "found", antigravity: "missing" };
       const message = label === "neither-cli" ? expected.message : `Agent CLI: ${label === "path-claude" ? "claude" : "codex"}. Sign in`;
       writeFileSync(launcher, `#!/usr/bin/env node
 const { createServer } = require("node:http"); const { writeFileSync, renameSync } = require("node:fs");
@@ -240,6 +241,28 @@ process.on("SIGTERM", () => process.exit(0));
     expect(artifact.rows[0]).toMatchObject({ case: "neither-cli", passed: false, retention: { status: "completed", errorCount: 1 } });
     expect(artifact.rows.slice(1).every((row: { passed: boolean }) => row.passed)).toBe(true);
     expect(artifact.stubCommands).toEqual(["--version", "mcp add viewer viewer"]);
+  } finally { rmSync(fixture, { recursive: true, force: true }); }
+});
+
+test.each([
+  ["a found Antigravity", { ...expected.presence, antigravity: "found" }],
+  ["an unknown engine", { ...expected.presence, unknown: "missing" }],
+])("CLI presence with %s fails the exact comparison", async (_name, presence) => {
+  const fixture = mkdtempSync(join(tmpdir(), "newcomer-presence-"));
+  try {
+    const home = join(fixture, "home"); const launcher = join(home, ".bun/bin/delegatus");
+    mkdirSync(dirname(launcher), { recursive: true });
+    writeFileSync(launcher, `#!/usr/bin/env node
+const { createServer } = require("node:http");
+const server = createServer((req, res) => res.end(req.url === "/" ? "ready" : ${JSON.stringify(JSON.stringify(presence))}));
+server.listen(Number(process.argv[4]), "127.0.0.1", () => console.log(${JSON.stringify(expected.message)}));
+process.on("SIGTERM", () => process.exit(0));
+`, { mode: 0o755 });
+    const rows: unknown[] = [];
+    // A non-retention label keeps this on the presence check alone.
+    await expect(startCase("path-claude", { HOME: home, PATH: process.env.PATH }, expected, { directory: fixture, rows }))
+      .rejects.toThrow(`path-claude: expected CLI presence ${JSON.stringify(expected.presence)}, got ${JSON.stringify(presence)}`);
+    expect(rows).toEqual([]);
   } finally { rmSync(fixture, { recursive: true, force: true }); }
 });
 
