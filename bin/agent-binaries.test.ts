@@ -69,7 +69,7 @@ test("Windows candidates keep native exe launchers and never return npm cmd wrap
 test("Windows finds agy where the vendor's PowerShell installer writes it, from LOCALAPPDATA or under the home", () => {
   const home = path.join(root, "windows-home");
   const redirected = path.join(root, "redirected-local");
-  const windows = { home, platform: "win32", envPath: "" };
+  const windows = { home, platform: "win32" as const, envPath: "" };
   /* Nothing installed: the folder is searched and holds no file. */
   expect(agentBinaryCandidates("agy", { ...windows, localAppData: "" })).toContain(path.join(home, "AppData", "Local", "agy", "bin", "agy.exe"));
   expect(findAgentBinary("agy", { ...windows, localAppData: "" })).toBeNull();
