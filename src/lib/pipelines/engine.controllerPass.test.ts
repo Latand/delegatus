@@ -7,6 +7,7 @@ import { latch, until, withControllerAuditState } from "./fixtures/ownedStageCon
 import { pipelineControllerJobLanes, settlePipelineControllerJobs, startPipelineControllerJob, takePipelineControllerJobChanges } from "./controllerJobs";
 import { controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, acknowledgePipelineControllerWork, archiveSettledPipelines, controllerPipelineVersion, findControllerPipeline, pipelineControllerReady, selectControllerPipelines, selectPipelineControllerWork, withPipelineMutation, withDeliveryMutationAsync, withPipelineControllerMutation, controllerUnclaimedPublications, PipelineStoreError } from "./store";
 import { SqliteStateCollection, StateSnapshotChangedError, resetStateReadonlyConnectionCountForTests, stateReadonlyConnectionCountForTests } from "@/lib/state/sqliteStateStore";
+import { assertStateChildSuccess } from "@/lib/state/stateChildResult.fixture";
 import { setSystemTime, spyOn } from "bun:test";
 import { performanceSpans, performanceSites } from "@/lib/performanceSpans";
 import { instanceCpuAdmissionFile, instanceCpuAdmissionQueue } from "@/lib/runtime/cpuAdmissionScope";
@@ -1570,6 +1571,7 @@ async function auditPeerRotation(admission: "direct" | "queued", base: "pinned" 
     expect(queue.listQueuedPipelineCreations()).toEqual([]);
     const events = diagnostics.filter(event => event.pipelineId === lane.id);
     const { startedAt } = (await findControllerPipeline(lane.id))!.runs[0]!.attempts[0]!;
+    if (!startedAt) throw new Error("the first attempt has no start timestamp");
     expect(events[0]).toEqual({ pipelineId: lane.id, at: new Date(epoch).toISOString(), phase: "accepted", admission });
     expect(events[1]).toMatchObject({ phase: "scheduler-selected" });
     expect(events.filter(event => event.phase === "step").map(event => event.view?.step)).toEqual([
@@ -1587,7 +1589,7 @@ async function auditPeerRotation(admission: "direct" | "queued", base: "pinned" 
       const times = events.filter(event => (event.phase === "step") === stepEvents).map(event => Date.parse(event.at));
       expect(times).toEqual([...times].sort((a, b) => a - b));
     }
-    expect(Date.parse(startedAt!) - epoch).toBeLessThanOrEqual(4 * budget);
+    expect(Date.parse(startedAt) - epoch).toBeLessThanOrEqual(4 * budget);
   } finally {
     release.resolve();
     await settlePipelineStopReadLanes();
@@ -1636,7 +1638,7 @@ test.each(["recovers", "exhausts"] as const)("a classified provisioning lock ret
     try {
       await until(result, 10_000);
       const [exit, stdout, stderr] = await result;
-      expect({ exit, stderr }).toEqual({ exit: 0, stderr: "" });
+      assertStateChildSuccess(exit, stderr);
       return Number(stdout.trim());
     } finally {
       if (child.exitCode === null) child.kill();

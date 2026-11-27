@@ -44,6 +44,9 @@ function portableFixture(manager: "missing" | "unreachable") {
     env[key] = path.join(root, dir); fs.mkdirSync(env[key]!);
   }
   Object.assign(env, { NODE_ENV: "test", LLV_GATE_RUNNER: "off", DELEGATUS_CPU_PRESSURE: "off", DELEGATUS_AGENT_CPU: "off", LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_GATE_LOCK_DIR: path.join(root, "locks"), LLV_OWNED_RUN_TIMEOUT_MS: "12000" });
+  // The outer test already holds a machine permit. Exercise nested admission
+  // against a private queue so unrelated checks cannot delay fixture readiness.
+  env.LLV_CHECK_ADMISSION_FILE = path.join(root, "checks.sqlite");
   if (manager === "missing") {
     const bin = path.join(root, "bin"); fs.mkdirSync(bin);
     for (const name of ["bash", "date", "mkdir", "flock", "sleep", "dirname", "mktemp", "touch", "rm"]) fs.symlinkSync(`/usr/bin/${name}`, path.join(bin, name));
@@ -95,8 +98,8 @@ test("portable lifetime", async () => {
     let diagnostic = ""; runner.stderr!.on("data", chunk => { diagnostic += String(chunk); });
     let owned: ProcessIdentity[] = [];
     try {
-      await until(() => fs.existsSync(record) || runner.exitCode !== null);
-      if (!fs.existsSync(record)) throw new Error(diagnostic);
+      await until(() => fs.existsSync(record) || runner.exitCode !== null || runner.signalCode !== null);
+      if (!fs.existsSync(record)) throw new Error(`runner exited before readiness: ${diagnostic}`);
       owned = JSON.parse(fs.readFileSync(record, "utf8"));
       if (mode === "exit" || mode === "complete") fs.writeFileSync(release, "go");
       if (mode === "TERM" || mode === "INT" || mode === "KILL") runner.kill(mode === "TERM" ? "SIGTERM" : mode === "INT" ? "SIGINT" : "SIGKILL");
