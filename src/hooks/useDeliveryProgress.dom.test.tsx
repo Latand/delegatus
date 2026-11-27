@@ -1,6 +1,6 @@
 import { afterAll, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act } from "react";
+import { act, useLayoutEffect } from "react";
 import { createRoot } from "react-dom/client";
 
 import { installActEnv } from "@/test-helpers/actEnv";
@@ -56,6 +56,10 @@ test("65 subscriptions across consumers read every stall and retain other batche
     expect(container.querySelector('[data-reader="receipts"]')?.textContent).not.toContain("missing");
     expect(container.querySelector('[data-reader="message"]')?.textContent).toBe(ids[64]!);
     await act(async () => { root.render(<Reading name="message" operations={ids.slice(64)} />); await Bun.sleep(100); });
+    expect(container.textContent).toBe(ids[64]!);
+    await act(async () => root.render(null));
+    globalThis.fetch = Object.assign(async () => new Response(null, { status: 503 }), { preconnect() {} });
+    await act(async () => { root.render(<Reading name="message" operations={ids.slice(64)} />); await Bun.sleep(25); });
     expect(container.textContent).toBe(ids[64]!);
   } finally {
     await act(async () => root.unmount());
@@ -122,3 +126,43 @@ test("an answered batch publishes its stall while another batch stays pending th
     container.remove();
   }
 }, 10_000);
+
+test("an answered batch only commits the consumers of its operation ids, including a missing record", async () => {
+  const ids = Array.from({ length: 65 }, (_, i) => "isolated-poll-" + i);
+  const finish = new Map<string, (response: Response) => void>();
+  const commits = [0, 0];
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    const batch = new URL(String(input), "http://localhost").searchParams.getAll("operationId");
+    return new Promise<Response>((resolve, reject) => {
+      finish.set(batch[0]!, resolve);
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once:true });
+    });
+  }) as typeof fetch;
+  function Reader({ index }: { index: number }) {
+    const reading = useDeliveryProgress(index ? ids.slice(64) : ids.slice(0,64), true);
+    useLayoutEffect(() => { commits[index] = (commits[index] ?? 0) + 1; });
+    return <output data-batch={index}>{reading.readAt}</output>;
+  }
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => { root.render(<><Reader index={0}/><Reader index={1}/></>); });
+    expect(finish.has(ids[64]!)).toBe(true);
+    const mounted = [...commits];
+    await act(async () => { finish.get(ids[64]!)!(Response.json({ records: [] })); });
+    expect(Number(host.querySelector('[data-batch="1"]')!.textContent)).toBeGreaterThan(0);
+    expect(commits[0]).toBe(mounted[0]);
+    expect(commits[1]).toBeGreaterThan(mounted[1]!);
+    const afterSecond = commits[1];
+    await act(async () => { finish.get(ids[0]!)!(Response.json({ records: [] })); });
+    expect(Number(host.querySelector('[data-batch="0"]')!.textContent)).toBeGreaterThan(0);
+    expect(commits[1]).toBe(afterSecond);
+  } finally {
+    await act(async () => root.unmount());
+    globalThis.fetch = previousFetch;
+    resetDeliveryProgressPollerForTests();
+    host.remove();
+  }
+});

@@ -4,10 +4,103 @@ import * as stateStore from "@/lib/state/sqliteStateStore";
 import * as pipelineStore from "./store";
 import { withControllerPipelineScope, withoutControllerPipelineScope } from "./controllerScope";
 import { patchPipeline, settlePendingStageGit } from "./engine";
+import { publishPipelineBranch } from "./git";
 import { takeoverPipelineDelivery, withPipelineMutation } from "./store";
 import { tickPipelinesController } from "./controllerPass";
 import { settlePipelineControllerJobs, startPipelineControllerJob, PIPELINE_CONTROLLER_MAX_JOBS } from "./controllerJobs";
 import { realExec } from "@/lib/workflows/provision";
+
+test.each(["clean merge", "paused", "extra lane work"] as const)(
+  "a passed stage recovers from a publication refused after HEAD moved (%s)", async (mode) => {
+    const box = await realWorktreeLane("moved-publication-head", [
+      { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "audit" },
+      { id: "audit", kind: "run", role: { roleId: "reviewer" }, prompt: "Audit", next: null },
+    ], "remote-branch");
+    const { h, git, repo, worktree } = box;
+    const read = () => loadPipelines().find(row => row.id === box.id)!;
+    const action = (request: Parameters<typeof patchPipeline>[1]) => patchPipeline(box.id, request, h.ports);
+    const hostGit = async (...args: string[]) => {
+      const date = h.ports.now();
+      const result = await realExec("git", args, worktree, { GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date });
+      expect(result.code, result.stderr).toBe(0);
+    };
+    const hook = path.join(repo, ".git", "hooks", "pre-push");
+    try {
+      // Interrupt only the fixture push. The hook is removed before the host push.
+      fs.mkdirSync(path.dirname(hook), { recursive: true });
+      fs.writeFileSync(hook, '#!/bin/sh\nkill -KILL "$PPID"\n', { mode: 0o700 });
+      fs.writeFileSync(path.join(worktree, "stage.txt"), "passed output\n");
+      await tickPipelinesController([finishReported(h, "/codex/stage-1.jsonl", "pass", "Finished")], h.ports);
+      await settlePipelineControllerJobs();
+      // The next pass confirms the interrupted push never reached the remote.
+      await tickPipelinesController([], h.ports);
+      await settlePipelineControllerJobs();
+      const first = read();
+      const passed = await git(worktree, "rev-parse", "HEAD");
+      expect(first).toMatchObject({ state: "running", lastPassedCommit: passed,
+        cursor: { stageId: "build", state: "committing" },
+        delivery: { operation: { state: "settled", sha: passed, result: { ok: false, failure: { signal: "SIGKILL" } } } } });
+      expect(first.runs[0]!.attempts[0]).toMatchObject({ state: "passed", verdict: { status: "pass" } });
+      fs.unlinkSync(hook);
+
+      // In the paused case, HEAD moves after the retry has already been queued.
+      if (mode === "paused") expect((await action({ action: "publish" })).error).toBeUndefined();
+      fs.writeFileSync(path.join(repo, "main.txt"), "upstream output\n");
+      await git(repo, "add", "main.txt");
+      await git(repo, "commit", "-m", "Advance main");
+      const main = await git(repo, "rev-parse", "HEAD");
+      await git(repo, "push", "origin", "main");
+      // Host Git has no stage receipt binding.
+      await hostGit("merge", "--no-ff", "origin/main", "-m", "Merge main");
+      if (mode === "extra lane work") {
+        fs.writeFileSync(path.join(worktree, "extra.txt"), "unreviewed output\n");
+        await hostGit("add", "extra.txt");
+        await hostGit("commit", "-m", "Add lane work");
+      }
+      const moved = await git(worktree, "rev-parse", "HEAD");
+      const branch = first.delivery!.target.branch;
+      await hostGit("push", "origin", `HEAD:${branch}`);
+
+      if (mode !== "paused") expect((await action({ action: "publish" })).error).toBeUndefined();
+      const queued = read();
+      if (queued.delivery?.operation?.state === "pending") {
+        expect(await publishPipelineBranch(queued, h.ports.exec, { acceptedSha: queued.delivery.operation.sha, now: h.ports.now }))
+          .toMatchObject({ ok: false, error: expect.stringContaining("nothing was published") });
+      }
+      if (mode === "paused") {
+        expect((await action({ action: "pause", reason: "Hold publication" })).error).toBeUndefined();
+        expect(read().state).toBe("paused");
+        expect((await action({ action: "resume" })).error).toBeUndefined();
+      }
+      // No controller tick between the refusal (or resume) and acceptance.
+      expect(read()).toMatchObject({ state: "needs_decision", lastPassedCommit: passed,
+        stateDetail: expect.stringContaining("publish acceptedSha="), cursor: { stageId: "build", state: "committing" } });
+      const accepted = await action({ action: "publish", acceptedSha: moved });
+      if (mode === "extra lane work") {
+        expect(accepted).toMatchObject({ status: 409, error: expect.stringContaining("additional lane work beyond clean main merges") });
+        expect(read()).toMatchObject({ state: "needs_decision", lastPassedCommit: passed });
+        return;
+      }
+      expect(accepted.error).toBeUndefined();
+      const execute = h.ports.exec;
+      h.ports.exec = async (...args) => {
+        if (args[0] === "git" && args[1][0] === "push") throw new Error("the remote already has the accepted head");
+        return execute(...args);
+      };
+      await tickPipelinesController([], h.ports);
+      await settlePipelineControllerJobs();
+      await tickPipelinesController([], h.ports);
+      await settlePipelineControllerJobs();
+      const advanced = read();
+      expect(advanced).toMatchObject({ lastPassedCommit: moved, publishedCommit: moved, cursor: { stageId: "audit" },
+        delivery: { operation: { state: "settled", result: { ok: true, remote: "published", sha: moved } } } });
+      expect(advanced.runs[0]!.attempts).toHaveLength(1);
+      expect(advanced.runs[0]!.attempts[0]!.publicationIntegration).toEqual({ passedSha: passed, acceptedSha: moved, mainSha: main });
+    } finally {
+      await settlePipelineControllerJobs();
+      fs.rmSync(box.root, { recursive: true, force: true });
+    }
+  });
 
 async function passedStagePublication(holdPush?: { entered(): void; ready: Promise<void>; wait: Promise<void> }) {
   const box = await realWorktreeLane("settlement-preparation", [

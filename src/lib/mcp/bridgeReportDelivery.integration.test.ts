@@ -77,7 +77,9 @@ async function protocol(manager = true) {
     post: async () => { throw new Error("unexpected control post"); },
   }, {
     ...productionDomainDependencies,
+    attentionAuthority: () => ({ kind: "unidentified" as const }),
     callerProject: () => PROJECT,
+    workspaceProject: () => PROJECT,
     callerAttribution: () => manager ? { ...MANAGER, conversationId: activeManagerId, ...(activeDeputyId ? { via: { deputy: activeDeputyId } } : {}) } : { kind: "agent", conversationId: "conversation_worker", role: "builder" },
     authorizedSeats: () => [{ conversationId: activeManagerId, path: null, project: PROJECT }],
     operatorLocale: () => "en",

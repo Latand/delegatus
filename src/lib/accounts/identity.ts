@@ -7,28 +7,64 @@ export interface ConversationFileIndex {
   visible: readonly FileEntry[];
 }
 
-/** One index per immutable file projection. A new poll/revision supplies a new
- * array; weak keys let old revisions leave memory with their last consumer.
- * Input order is significant: preserve the scalar resolver's first-match and
- * archived-only fallback rules, including materialized-over-placeholder. */
+/** Runtime settlement can change row content while preserving every catalog identity
+ * and its position. Those projections share the catalog's layout. */
+interface CatalogPositions {
+  byConversation: Map<string, number[]>;
+  byPath: Map<string, number[]>;
+  current: Map<string, number>;
+}
+const layouts = new WeakMap<readonly FileEntry[], CatalogPositions>();
+
+export function catalogPositions(files: readonly FileEntry[]): CatalogPositions {
+  const cached = layouts.get(files);
+  if (cached) return cached;
+  const layout: CatalogPositions = { byConversation: new Map(), byPath: new Map(), current: new Map() };
+  function add(map: Map<string, number[]>, key: string, position: number) {
+    const positions = map.get(key);
+    if (positions) positions.push(position);
+    else map.set(key, [position]);
+  }
+  files.forEach((file, position) => {
+    add(layout.byPath, file.path, position);
+    if (!file.conversationId) return;
+    add(layout.byConversation, file.conversationId, position);
+    const prior = layout.current.get(file.conversationId);
+    const previous = prior === undefined ? undefined : files[prior];
+    if (preferredGeneration(file, previous)) {
+      layout.current.set(file.conversationId, position);
+    }
+  });
+  layouts.set(files, layout);
+  return layout;
+}
+
+/** Only for immutable overlays that preserve order, paths, conversation IDs and generations. */
+export function shareCatalogPositions(source: readonly FileEntry[], overlay: readonly FileEntry[]): void {
+  if (source !== overlay) layouts.set(overlay, catalogPositions(source));
+}
+
+export function indexedConversationFile(files: readonly FileEntry[], conversationId: string): FileEntry | undefined {
+  const position = catalogPositions(files).current.get(conversationId);
+  return position === undefined ? undefined : files[position];
+}
+
+export function firstFileAtPath(files: readonly FileEntry[], path: string): FileEntry | undefined {
+  const position = catalogPositions(files).byPath.get(path)?.[0];
+  return position === undefined ? undefined : files[position];
+}
+
 const identityStore = globalThis as typeof globalThis & { __llvFileIndexes?: WeakMap<readonly FileEntry[], ConversationFileIndex> };
 const fileIndexes = identityStore.__llvFileIndexes ??= new WeakMap();
 export function conversationFileIndex(files: readonly FileEntry[]): ConversationFileIndex {
   const cached = fileIndexes.get(files);
   if (cached) return cached;
+  const layout = catalogPositions(files);
   const byPath = new Map<string, FileEntry>();
   const currentByConversation = new Map<string, FileEntry>();
-  const visible: FileEntry[] = [];
-  const rank = (file: FileEntry) => isLaunchPlaceholder(file) ? 0 : isArchivedPredecessor(file) ? 1 : 2;
-  for (const file of files) {
-    if (!byPath.has(file.path)) byPath.set(file.path, file);
-    if (!isArchivedPredecessor(file)) visible.push(file);
-    if (!file.conversationId) continue;
-    const previous = currentByConversation.get(file.conversationId);
-    if (!previous || rank(file) > rank(previous)
-      || (rank(file) === 1 && rank(previous) === 1 && newerStandIn(file, previous))) currentByConversation.set(file.conversationId, file);
-  }
-  const index = { byPath, currentByConversation, visible };
+  for (const [path, positions] of layout.byPath) byPath.set(path, files[positions[0]!]!);
+  for (const [id, position] of layout.current) currentByConversation.set(id, files[position]!);
+  const index = { byPath, currentByConversation, visible: files.filter(file => !isArchivedPredecessor(file)) };
   fileIndexes.set(files, index);
   return index;
 }
@@ -140,23 +176,26 @@ function newerStandIn(candidate: Pick<FileEntry, "generation">, incumbent: Pick<
   return (candidate.generation ?? 0) > (incumbent.generation ?? 0);
 }
 
+function preferredGeneration(file: FileEntry, previous: FileEntry | undefined | null): boolean {
+  if (!previous) return true;
+  if (isLaunchPlaceholder(file)) return false;
+  if (isLaunchPlaceholder(previous)) return true;
+  return isArchivedPredecessor(previous) && (!isArchivedPredecessor(file) || newerStandIn(file, previous));
+}
+
 /** The current, visible entry for a stable id: the one generation that is not an
     archived predecessor. A materialized transcript always wins over the launch
     placeholder of the same conversation — the placeholder is that conversation's
     earlier state, never a second card (issue #569). */
 export function currentConversationFile(files: readonly FileEntry[], conversationId: string): FileEntry | null {
-  let placeholder: FileEntry | null = null;
-  let fallback: FileEntry | null = null;
+  let current: FileEntry | null = null;
   for (const file of files) {
-    if (file.conversationId !== conversationId) continue;
-    if (isLaunchPlaceholder(file)) {
-      placeholder = placeholder ?? file;
-      continue;
+    if (file.conversationId === conversationId && preferredGeneration(file, current)) {
+      current = file;
+      if (!isArchivedPredecessor(file) && !isLaunchPlaceholder(file)) break;
     }
-    if (!isArchivedPredecessor(file)) return file;
-    if (!fallback || newerStandIn(file, fallback)) fallback = file;
   }
-  return fallback ?? placeholder;
+  return current;
 }
 
 /**
