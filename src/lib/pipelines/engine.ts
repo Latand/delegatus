@@ -14329,27 +14329,25 @@ function resumeParkedStageSettlement(pipeline: Pipeline, ports: PipelinePorts, e
   const attempt = stage && currentAttempt(pipeline, stage.id);
   const wait = attempt?.settlementPreparationWait;
   const operation = pipeline.delivery?.operation;
-  if (!stage || !attempt || !wait || pipeline.state !== "needs_decision" || pipeline.cursor?.state !== "committing"
+  if (!stage || !attempt || wait?.reason !== LEGACY_SETTLEMENT_OWNERSHIP_CHANGE
+    || pipeline.state !== "needs_decision" || pipeline.cursor?.state !== "committing"
     || pipeline.closedAt || pipeline.hiddenAt
     || attempt.state !== "needs_decision" || attempt.verdict?.status !== "pass"
     || pipeline.stateDetail !== attempt.error || !attempt.error?.startsWith(STAGE_SETTLEMENT_OWNERSHIP_PARK)
     || wait.identity !== stageSettlementPreparationIdentity(pipeline, stage, attempt)
     || operation?.state === "running" || pipeline.remoteAction?.state === "pending"
     || (!explicit && unixMs(wait.retryAfter) > unixMs(ports.now()))) return false;
-  const legacy = !wait.resumeState && wait.reason === LEGACY_SETTLEMENT_OWNERSHIP_CHANGE;
-  if (!legacy && !wait.resumeState) return false;
   // Older parks lost the pre-park attempt state. An exact publication
   // reservation for this pass proves the head already passed local settlement.
   const accepted = operation?.sha === pipeline.lastPassedCommit && operation.epoch === pipeline.delivery?.epoch
     && operation.requestKey === `pass:${stage.id}:${attempt.n}`;
-  attempt.state = wait.resumeState ?? (accepted ? "passed" : "committing");
+  attempt.state = accepted ? "passed" : "committing";
   attempt.error = null;
   delete attempt.settlementAdmissionRetry;
-  if (legacy) delete attempt.settlementPreparationWait;
-  else if (explicit) wait.retryAfter = ports.now();
+  delete attempt.settlementPreparationWait;
   pipeline.state = "running";
   pipeline.pausedState = null;
-  pipeline.stateDetail = `${STAGE_SETTLEMENT_PREPARATION_DETAIL}: ${wait.reason ?? LEGACY_SETTLEMENT_OWNERSHIP_CHANGE}`;
+  pipeline.stateDetail = `${STAGE_SETTLEMENT_PREPARATION_DETAIL}: ${wait.reason}`;
   return true;
 }
 

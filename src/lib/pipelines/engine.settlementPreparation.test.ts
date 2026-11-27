@@ -575,7 +575,7 @@ test.each(["recover", "restart"] as const)("post-preparation recovery retains it
   } finally { race.restore(); await settlePipelineControllerJobs(); fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
-test.each(["legacy", "recorded resume state"] as const)("an ownership park with %s resumes the accepted pass", async parkVersion => {
+test.each(["controller pass", "retry-stage"] as const)("a legacy ownership park resumes the accepted pass through %s", async recovery => {
   const box = await passedStagePublication();
   let clock = Date.parse(box.h.ports.now());
   box.h.ports.now = () => new Date(clock).toISOString();
@@ -585,10 +585,8 @@ test.each(["legacy", "recorded resume state"] as const)("an ownership park with 
     race.restore();
     const saved = box.current();
     const wait = saved.runs[0]!.attempts[0]!.settlementPreparationWait!;
-    const legacy = parkVersion === "legacy";
-    const reason = legacy ? "pipeline branch ownership changed during settlement" : wait.reason!;
-    const action = legacy ? "retry-stage to settle the preserved head" : `automatic recheck of the preserved head at ${wait.retryAfter}`;
-    const detail = `committing the passed stage: branch ownership preparation did not stabilize within 15 minutes: ${reason}; ${action}`;
+    const reason = "pipeline branch ownership changed during settlement";
+    const detail = `committing the passed stage: branch ownership preparation did not stabilize within 15 minutes: ${reason}; retry-stage to settle the preserved head`;
     await withPipelineMutation(async (rows, persist) => {
       const lane = rows.find(row => row.id === box.id)!;
       const attempt = lane.runs[0]!.attempts[0]!;
@@ -598,15 +596,14 @@ test.each(["legacy", "recorded resume state"] as const)("an ownership park with 
       attempt.state = "needs_decision";
       attempt.error = detail;
       attempt.settlementPreparationWait!.reason = reason;
-      if (!legacy) attempt.settlementPreparationWait!.resumeState = "passed";
       await persist([lane]);
     });
-    if (legacy) clock = Date.parse(wait.retryAfter);
+    if (recovery === "controller pass") clock = Date.parse(wait.retryAfter);
     else {
       expect((await patchPipeline(box.id, { action: "retry-stage" }, box.h.ports)).error).toBeUndefined();
-      expect(box.current().runs[0]!.attempts[0]!.settlementPreparationWait).toMatchObject({
-        identity: wait.identity, startedAt: wait.startedAt, retryAfter: box.h.ports.now(),
-      });
+      const resumed = box.current().runs[0]!.attempts[0]!;
+      expect(resumed.state).toBe("passed");
+      expect(resumed.settlementPreparationWait).toBeUndefined();
     }
     await tickPipelinesController([], box.h.ports);
     await settlePipelineControllerJobs();
