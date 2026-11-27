@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 
-import { deriveSessionState, type RuntimeSnapshot } from "@/components/runtime/runtimeModel";
+import { activeDeliveryConversations } from "@/components/runtime/activeDeliveries";
+import { createRuntimeFilesStatusProjection } from "@/lib/client/runtimeFilesStatus";
+import { createFilesClientCache } from "./useFiles";
+import { deriveSessionState, openAttentions, sessionByArtifact, type RuntimeSnapshot, type RuntimeStore } from "@/components/runtime/runtimeModel";
 import { capabilitiesFor } from "@/components/agentCapabilities";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import type { FileEntry } from "@/lib/types";
@@ -327,6 +330,43 @@ describe("runtimeBus join", () => {
     expect(s?.turn).toBe("running");
     expect(s?.activeTurnId).toBe("t1");
     expect(h.bus.getState().store.cursor).toBe(101);
+  });
+
+  test("heartbeat and duplicate traffic refresh liveness without publishing another conversation frame", async () => {
+    h.bus.start();
+    await flush();
+    const stream = h.sources[0]!;
+    stream.open();
+    h.clock.advance(16);
+    let publications = 0, observations = 0;
+    const unsubscribe = h.bus.subscribe(() => { publications++; });
+    const stopObserving = h.bus.subscribe(() => { observations++; }, { activity: true });
+    try {
+      const initial = h.bus.getState().store;
+      stream.named("heartbeat", { publishedSeq: 100 });
+      expect(h.bus.getState().lastEventAt).toBe(h.clock.now());
+      h.clock.advance(16);
+      expect(h.bus.getState().store).toBe(initial);
+      expect(publications).toBe(0);
+      expect(observations).toBe(1);
+
+      const event = sessionEvent(101, 2, "running", "t1");
+      stream.message(event);
+      h.clock.advance(16);
+      expect(publications).toBe(1);
+      const applied = h.bus.getState().store;
+      stream.message(event);
+      expect(h.bus.getState().lastEventAt).toBe(h.clock.now());
+      h.clock.advance(16);
+      expect(h.bus.getState().store).toBe(applied);
+      expect(publications).toBe(1);
+      expect(observations).toBe(3);
+      stream.named("heartbeat", { publishedSeq: 101 });
+      stream.message(sessionEvent(102, 3, "running", "t2"));
+      h.clock.advance(16);
+      expect(publications).toBe(2);
+      expect(observations).toBe(4);
+    } finally { unsubscribe(); stopObserving(); h.bus.stop(); }
   });
 
   test("a 128-event replay converges synchronously with one subscriber publication", async () => {
@@ -1154,4 +1194,191 @@ describe("runtimeBus hidden-tab suspension", () => {
     h.sources.at(-1)!.open();
     expect(h.bus.getState().connection).toBe("live");
   });
+});
+
+test("a keyed frame follows both artifact paths and the addressed receipt across tabs", async () => {
+  const first = harness(), second = harness();
+  for (const h of [first, second]) {
+    const boot = snapshot(100);
+    h.setSnapshot({ ...boot, sessions: [{ ...boot.sessions[0]!, artifactPath: "/old" }] });
+    h.bus.start(); await flush(); h.sources[0]!.open(); h.clock.advance(16);
+  }
+  const counts = { old: 0, root: 0, foreign: 0, op: 0, both: 0, otherTab: 0 };
+  first.bus.subscribe(() => counts.old++, { keys: { artifact: "/old" } });
+  first.bus.subscribe(() => counts.root++, { keys: { artifact: "/new" } });
+  first.bus.subscribe(() => counts.foreign++, { keys: { conversation: "unrelated" } });
+  first.bus.subscribe(() => counts.op++, { keys: { operation: "command" } });
+  const subscriber = () => counts.both++;
+  first.bus.subscribe(subscriber, { keys: { conversation: "conv_a" } });
+  const detach = first.bus.subscribe(subscriber, { keys: { artifact: "/new", operation: "command" } });
+  second.bus.subscribe(() => counts.otherTab++, { keys: { conversation: "conv_a" } });
+  const move = { ...sessionEvent(101, 2, "running", "turn"), kind: "session-status", payload: { conversationId: "conv_a", turn: "running", artifactPath: "/new" } };
+  const receipt = { seq: 102, kind: "receipt", scope: { type: "operation", id: "command" }, revision: 1,
+    payload: { operationId: "command", conversationId: "conv_a", kind: "send", status: "queued", revision: 1 } };
+  for (const h of [first, second]) {
+    h.sources[0]!.message(move);
+    h.sources[0]!.message(receipt);
+    h.clock.advance(16);
+  }
+  expect(counts).toEqual({ old: 1, root: 1, foreign: 0, op: 1, both: 1, otherTab: 1 });
+  expect(second.bus.getState().store.sessions.conv_a?.recentReceipts[0]?.status).toBe("queued");
+  detach();
+  first.sources[0]!.message({ ...receipt, seq: 103, revision: 2, payload: { ...receipt.payload, conversationId: "other", status: "delivered" } });
+  first.clock.advance(16);
+  expect(counts.both).toBe(2);
+  expect(counts.op).toBe(2);
+  expect(counts.foreign).toBe(0);
+  let late = 0;
+  const stop = first.bus.subscribe(() => late++, { keys: { conversation: "other" } });
+  expect(first.bus.getState().store.sessions.other?.recentReceipts[0]?.status).toBe("delivered");
+  first.sources[0]!.message({ ...receipt, seq: 104, revision: 3 });
+  stop();
+  first.clock.advance(16);
+  expect(late).toBe(0);
+  // A hidden phone and its replacement snapshot invalidate otherwise untouched readers.
+  first.setHidden(true); first.clock.advance(HIDDEN_SUSPEND_MS + 16);
+  expect(counts.foreign).toBeGreaterThan(0);
+  const before = counts.foreign;
+  first.setHidden(false);
+  first.setSnapshot(snapshot(120, { structuredHostsEnabled: false }));
+  expect(await first.bus.refresh()).toBe(true);
+  first.clock.advance(16);
+  expect(counts.foreign).toBeGreaterThan(before);
+  expect(first.bus.getState().structuredHostsEnabled).toBe(false);
+  first.bus.stop(); second.bus.stop();
+});
+
+test("keyed readers and projected rows match full reads across a seeded envelope tape", async () => {
+  const h = harness();
+  const seed = snapshot(10);
+  const ids = ["left","right","new"];
+  const paths = ["/left","/right","/shared"];
+  seed.sessions = ids.map((id,i) => ({ ...seed.sessions[0]!, conversationId:id, artifactPath:paths[i]!, turn:"idle" }));
+  const rows = [file({ path:"/shared", conversationId:undefined }), file({ path:"/left", conversationId:"left" }),
+    file({ path:"spawn:queued", conversationId:"right" }), file({ path:"/old", conversationId:"left", migratedTo:"/left" })];
+  const cache = createFilesClientCache(async () => new Response(JSON.stringify({ files:rows })));
+  await cache.revalidate();
+  const raw = cache.read();
+  const fast = createRuntimeFilesStatusProjection(), full = createRuntimeFilesStatusProjection();
+  h.setSnapshot(seed); h.bus.start(); await flush(); h.sources[0]!.open(); h.clock.advance(16);
+  let view = fast(raw,h.bus.getState());
+  full(raw,h.bus.getState());
+  const detach = [h.bus.subscribe(frame => {
+    fast.updateRuntime(h.bus.getState(),frame);
+    view = fast(raw,h.bus.getState());
+  })];
+
+  const check: Array<() => void> = [];
+  function watch<T>(keys: NonNullable<Parameters<RuntimeBus["subscribe"]>[1]>["keys"],
+    select: (store: RuntimeStore) => T, oracle: (store: RuntimeStore) => T = select) {
+    const read = () => select(h.bus.getState().store);
+    let current = read();
+    detach.push(h.bus.subscribe(() => { current = read(); }, {keys}));
+    check.push(() => expect(current).toEqual(oracle(h.bus.getState().store)));
+  }
+  for (const id of ids) {
+    watch({conversation:id}, store => {
+      const session = store.sessions[id];
+      return [session,session && openAttentions(store,session),h.bus.getState().structuredHostsEnabled];
+    });
+  }
+  for (const path of paths) watch({artifact:path}, store => sessionByArtifact(store.sessions,path),
+    store => Object.values(store.sessions).find(row => row.artifactPath === path) ?? null);
+  watch({flow:"edge-or-flow"},store => store.flows["edge-or-flow"]);
+  watch({deployments:true},store => store.deployments);
+  for (const op of ["op-0","op-1"]) watch({operation:op}, store => store.operations[op]);
+  for (const id of ids) watch({deliveries:new Set([id])}, store => activeDeliveryConversations(store).has(id), store =>
+    ["running","interrupt_requested"].includes(store.sessions[id]?.turn ?? "")
+    || Object.values(store.operations).some(op => op.conversationId === id && ["send","steer","inject"].includes(op.kind)
+      && ["pending","delivering","applying","queued","uncertain"].includes(op.status)));
+
+  function verify() {
+    h.clock.advance(16);
+    // Keep terminal history, and present a newly admitted catalog on each frame.
+    // The oracle scans every position, including when the keyed reader stayed asleep.
+    const wanted = full({ ...raw, files: [...raw.files] },h.bus.getState());
+    expect(view).toEqual(wanted);
+    for (const read of check) read();
+  }
+  let randomState = 4785;
+  function random(n: number) { randomState = (Math.imul(randomState,1664525) + 1013904223) >>> 0; return Math.floor(randomState / 2**32 * n); }
+  let seq = seed.snapshotSeq;
+  function send(kind: string, id: string, payload: Record<string,unknown>, type = "session", scopeId = id) {
+    const store = h.bus.getState().store;
+    h.sources.at(-1)!.message({ kind, schemaVersion:1, eventId:"fixture-" + ++seq, seq,
+      scope:{ type, id:scopeId }, revision:(store.scopeHeads[type+":"+scopeId] ?? 0)+1,
+      payload:{...payload,conversationId:id} });
+    expect(h.bus.getState().store.cursor).toBe(seq);
+  }
+  try {
+    // An unkeyed read resolves the first artifact match. The row overlay requires a unique idle owner.
+    send("session-status","left",{artifactPath:"/shared"}); verify();
+    send("session-status","left",{artifactPath:"/left"}); verify();
+    send("turn-started","right",{turnId:"paired"}); send("turn-ended","right",{turnId:"paired"}); verify();
+    const kinds = ["session-status","turn-started","delta","item","native-queue-changed","voice-transcript","voice-chunk",
+      "turn-ended","voice-delivery-acknowledged","voice-delivery-progress","attention","attention-resolved","receipt",
+      "edge.created","flow.state","reconcile.drift","deployment.state","limits","files.revision","unknown"];
+    for (let n=0;n<180;n++) {
+      const kind = n < kinds.length ? kinds[n]! : kinds[random(kinds.length)]!;
+      const id = ids[random(ids.length)]!, op = "op-" + random(2), turnId = "turn-" + random(3);
+      const payload: Record<string,unknown> = {turnId};
+      switch (kind) {
+        case "session-status": Object.assign(payload,{artifactPath:paths[random(3)],turn:"idle"}); break;
+        case "delta": Object.assign(payload,{text:" hi"}); break;
+        case "item": Object.assign(payload,{phase:"completed",item:{type:"agentMessage",text:"result"}}); break;
+        case "voice-transcript": Object.assign(payload,{role:"user",segmentId:"s",text:"audio",final:true}); break;
+        case "voice-delivery-acknowledged": Object.assign(payload,{deliveryId:"del"}); break;
+        case "attention": Object.assign(payload,{id:"att-"+id,state:"open",kind:"decision",createdAt:"2026-01-02",request:{}}); break;
+        case "attention-resolved": Object.assign(payload,{attentionId:"att-"+id,state:"resolved"}); break;
+        case "edge.created": case "flow.state": Object.assign(payload,{id:"edge-or-flow"}); break;
+        case "deployment.state": Object.assign(payload,{deploymentId:"deploy"}); break;
+        case "files.revision": Object.assign(payload,{filesRevision:h.bus.getState().store.filesRevision+1}); break;
+        case "receipt": Object.assign(payload,{operationId:op,idempotencyKey:op,kind:"send",status:random(2) ? "queued" : "delivered",at:"2026-01-02"}); break;
+      }
+      send(kind,id,payload,kind === "receipt" ? "operation" : "session",kind === "receipt" ? op : id);
+      if (n % 4 !== 2) verify();
+      if (n === 70 || n === 125) {
+        h.setSnapshot({...seed,snapshotSeq:seq,structuredHostsEnabled:n===125});
+        expect(await h.bus.refresh()).toBe(true); verify();
+      }
+    }
+    verify();
+  } finally { detach.forEach(stop => stop()); h.bus.stop(); cache.dispose(); }
+});
+
+test("delivery membership publishes the net change in the frame and keeps overlapping reasons", async () => {
+  const h=harness();
+  h.bus.start(); await flush(); h.sources[0]!.open(); h.clock.advance(16);
+  const readings: boolean[] = [];
+  const stop=h.bus.subscribe(() => readings.push(activeDeliveryConversations(h.bus.getState().store).has("conv_a")),
+    {keys:{deliveries:new Set(["conv_a"])}});
+  const es=h.sources[0]!;
+  try {
+    es.message(sessionEvent(101,2,"running","short"));
+    es.message(sessionEvent(102,3,"idle","short"));
+    h.clock.advance(16); expect(readings).toEqual([]);
+    const receipt={kind:"receipt",scope:{type:"operation",id:"queued"},payload:{conversationId:"conv_a",operationId:"queued",kind:"inject",status:"queued"}};
+    es.message({...receipt,seq:103,revision:1}); h.clock.advance(16);
+    expect(readings).toEqual([true]);
+    es.message(sessionEvent(104,4,"running","other-turn")); h.clock.advance(16);
+    es.message({...receipt,seq:105,revision:2,payload:{...receipt.payload,status:"delivered"}}); h.clock.advance(16);
+    expect(readings).toEqual([true]);
+    es.message(sessionEvent(106,5,"idle","other-turn")); h.clock.advance(16);
+    expect(readings).toEqual([true,false]);
+  } finally {stop();h.bus.stop();}
+});
+
+
+test("a membership listener continues on a replacement snapshot before another component reads it", async () => {
+  const h=harness();
+  h.bus.start();await flush();h.sources[0]!.open();h.clock.advance(16);
+  let notifications=0;
+  const stop=h.bus.subscribe(()=>{notifications++;},{keys:{deliveries:new Set(["conv_a"])}});
+  try {
+    h.setSnapshot(snapshot(200));
+    expect(await h.bus.refresh()).toBe(true);h.clock.advance(16);
+    const before=notifications;
+    h.sources[0]!.message(sessionEvent(201,2,"running","resumed"));h.clock.advance(16);
+    expect(notifications).toBe(before+1);
+  } finally {stop();h.bus.stop();}
 });

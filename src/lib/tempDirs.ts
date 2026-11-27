@@ -50,11 +50,10 @@ export type ProcessTempRoot = {
  * it. The prefix must start with {@link OWNED_TEMP_PREFIX} so a root a killed
  * process could not release is one the sweeper recognizes.
  */
-export function claimProcessTempRoot(prefix: string, env: NodeJS.ProcessEnv = process.env): ProcessTempRoot {
+export function claimProcessTempRoot(prefix: string, env: NodeJS.ProcessEnv = process.env, parent = os.tmpdir()): ProcessTempRoot {
   if (!prefix.startsWith(OWNED_TEMP_PREFIX)) {
     throw new Error(`a process temp root must start with ${OWNED_TEMP_PREFIX}: ${prefix}`);
   }
-  const parent = os.tmpdir();
   fs.mkdirSync(parent, { recursive: true });
   const root = fs.mkdtempSync(path.join(parent, prefix));
   const hold = holdTempDirectory(root);
@@ -79,6 +78,29 @@ export function claimProcessTempRoot(prefix: string, env: NodeJS.ProcessEnv = pr
       }
     },
   };
+}
+
+/**
+ * A stage keeps its scratch on the state disk. Its inherited temp path can
+ * therefore pass through a dot-directory, which the document guard rejects.
+ * Give test fixtures a private root in the same process namespace under a
+ * visible OS temp path when the stage's path or its symlink target is hidden.
+ */
+export function claimTestTempRoot(env: NodeJS.ProcessEnv = process.env): ProcessTempRoot {
+  const parent = os.tmpdir();
+  if (process.platform === "win32") return claimProcessTempRoot(TEST_RUN_TEMP_PREFIX, env, parent);
+
+  const hasDotDirectory = (directory: string) => directory.split(/[\\/]+/).some(segment => segment.startsWith("."));
+  const visible = (directory: string) => !hasDotDirectory(directory) && !hasDotDirectory(fs.realpathSync.native(directory));
+  if (!hasDotDirectory(parent)) {
+    fs.mkdirSync(parent, { recursive: true });
+    if (visible(parent)) return claimProcessTempRoot(TEST_RUN_TEMP_PREFIX, env, parent);
+  }
+  for (const directory of ["/tmp", "/var/tmp"]) {
+    if (fs.existsSync(directory) && visible(directory))
+      return claimProcessTempRoot(TEST_RUN_TEMP_PREFIX, env, directory);
+  }
+  throw new Error("tests need an OS temp directory outside dot-directories");
 }
 
 /**

@@ -11,6 +11,7 @@ import {
   emptyStore,
   hasBlockingAttention,
   openAttentions,
+  sessionByArtifact,
   type ConnectionState,
   type OperationKind,
   type RuntimeAttention,
@@ -27,7 +28,8 @@ import { INGRESS_BOUNDARIES, INGRESS_STOP_REASONS, type IngressBoundary, type In
 
 import { awaitingReplies, type ReplyPolicy } from "@/lib/audio/fleetCues";
 
-import { getRuntimeBus, isRuntimeUiEnabled, type RuntimeBus, type RuntimeBusState } from "./runtimeBus";
+import { GLOBAL_RUNTIME_GATES, WITH_RUNTIME_ACTIVITY } from "./runtimeSubscriptions";
+import { getRuntimeBus, isRuntimeUiEnabled, type RuntimeBus, type RuntimeBusState, type RuntimeSubscription } from "./runtimeBus";
 
 const INERT: RuntimeBusState = {
   store: emptyStore(),
@@ -40,45 +42,44 @@ const INERT: RuntimeBusState = {
 const EMPTY_RECEIPTS: RuntimeReceipt[] = [];
 
 /**
- * Subscribe to one projection of the tab-wide runtime store. Every bus frame
- * still reaches the selector, while React wakes only when that projection
- * changes. This keeps high-rate text deltas scoped to their own conversation
- * instead of re-rendering the whole board and every mounted card.
+ * Subscribe to the facts the selector reads. Snapshot and authority changes
+ * invalidate every keyed reader, including readers without a current row.
  */
 export function useRuntimeSelector<T>(
   selector: (state: RuntimeBusState) => T,
   inert: T,
   equal: (left: T, right: T) => boolean = Object.is,
   active = true,
+  interest?: RuntimeSubscription,
 ): T {
   const enabled = isRuntimeUiEnabled();
   const bus: RuntimeBus | null = enabled && typeof window !== "undefined" ? getRuntimeBus() : null;
-  const selectorRef = useRef(selector);
-  const equalRef = useRef(equal);
-  const inertRef = useRef(inert);
-  const cachedRef = useRef<{ bus: RuntimeBus; value: T } | null>(null);
-  selectorRef.current = selector;
-  equalRef.current = equal;
-  inertRef.current = inert;
+  const committed = useRef<{ bus: RuntimeBus | null; value: T } | null>(null);
 
   useEffect(() => {
     if (bus) bus.start();
   }, [bus]);
 
   const subscribe = useCallback(
-    (listener: () => void) => (bus && active ? bus.subscribe(listener) : () => {}),
-    [bus, active],
+    (listener: () => void) => (bus && active ? bus.subscribe(listener, interest) : () => {}),
+    [bus, active, interest],
   );
-  const getSnapshot = useCallback(() => {
-    if (!bus) return inertRef.current;
-    const next = selectorRef.current(bus.getState());
-    const cached = cachedRef.current;
-    if (cached?.bus === bus && equalRef.current(cached.value, next)) return cached.value;
-    cachedRef.current = { bus, value: next };
-    return next;
-  }, [bus]);
-  const getServerSnapshot = useCallback(() => inertRef.current, []);
-  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  // A suspended render can select another conversation. The subscription still
+  // on screen must keep its own selector until that render actually commits.
+  const getSnapshot = useMemo(() => {
+    let memo: { value: T } | undefined;
+    return () => {
+      if (!bus) return inert;
+      const next = selector(bus.getState());
+      const previous = memo ?? (committed.current?.bus === bus ? committed.current : null);
+      const value = previous && equal(previous.value, next) ? previous.value : next;
+      memo = { value };
+      return value;
+    };
+  }, [bus, inert, selector, equal]);
+  const value = useSyncExternalStore(subscribe, getSnapshot, () => inert);
+  useEffect(() => { committed.current = { bus, value }; }, [bus, value]);
+  return value;
 }
 
 /**
@@ -96,7 +97,7 @@ export function useRuntimeBusState(active = true): RuntimeBusState {
   }, [bus]);
 
   const subscribe = useCallback(
-    (listener: () => void) => (bus && active ? bus.subscribe(listener) : () => {}),
+    (listener: () => void) => (bus && active ? bus.subscribe(listener, WITH_RUNTIME_ACTIVITY) : () => {}),
     [bus, active],
   );
   const getSnapshot = useCallback(() => (bus ? bus.getState() : INERT), [bus]);
@@ -122,8 +123,12 @@ export function useRuntime(): RuntimeView {
   };
 }
 
+function useSessionSubscription(conversation: string | null | undefined, artifact?: string | null): RuntimeSubscription {
+  return useMemo(() => ({ keys: { conversation, artifact } }), [conversation, artifact]);
+}
+
 export function useRuntimeEnabled(): boolean {
-  return useRuntimeSelector((state) => state.enabled, false);
+  return useRuntimeSelector((state) => state.enabled, false, Object.is, true, GLOBAL_RUNTIME_GATES);
 }
 
 export interface RuntimeSessionView {
@@ -175,7 +180,7 @@ export function useRuntimeSession(conversationId: string | null): RuntimeSession
   return useRuntimeSelector(
     (state) => runtimeSessionView(state, conversationId, null),
     null,
-    sameRuntimeSessionView,
+    sameRuntimeSessionView, true, useSessionSubscription(conversationId),
   );
 }
 
@@ -190,7 +195,7 @@ export function useRuntimeSessionByArtifact(artifactPath: string | null): Runtim
   return useRuntimeSelector(
     (state) => runtimeSessionView(state, null, artifactPath),
     null,
-    sameRuntimeSessionView,
+    sameRuntimeSessionView, true, useSessionSubscription(null, artifactPath),
   );
 }
 
@@ -211,7 +216,7 @@ export function useRuntimeSessionForConversation(
   return useRuntimeSelector(
     (state) => runtimeSessionView(state, conversationId, artifactPath),
     null,
-    sameRuntimeSessionView,
+    sameRuntimeSessionView, true, useSessionSubscription(conversationId, artifactPath),
   );
 }
 
@@ -225,7 +230,7 @@ export function sessionForConversation(
   artifactPath: string | null,
 ): RuntimeSession | null {
   if (conversationId && sessions[conversationId]) return sessions[conversationId];
-  if (artifactPath) return Object.values(sessions).find((s) => s.artifactPath === artifactPath) ?? null;
+  if (artifactPath) return sessionByArtifact(sessions, artifactPath);
   return null;
 }
 
@@ -239,7 +244,7 @@ export function useRuntimeReceiptsForArtifact(path: string | null, conversationI
     if (!state.enabled || (!path && !conversationId)) return EMPTY_RECEIPTS;
     const session = sessionForConversation(state.store.sessions, conversationId, path);
     return session?.recentReceipts ?? EMPTY_RECEIPTS;
-  }, EMPTY_RECEIPTS);
+  }, EMPTY_RECEIPTS, Object.is, true, useSessionSubscription(conversationId, path));
 }
 
 /**
@@ -249,9 +254,10 @@ export function useRuntimeReceiptsForArtifact(path: string | null, conversationI
  * without waiting out the poll interval (bus revision wins — Fable precedence).
  */
 export function useRuntimeFlow(flowId: string | null): Flow | null {
+  const interest = useMemo(() => ({ keys: { flow: flowId } }), [flowId]);
   return useRuntimeSelector(
     (state) => (state.enabled && flowId ? state.store.flows[flowId] ?? null : null),
-    null,
+    null, Object.is, Boolean(flowId), interest,
   );
 }
 

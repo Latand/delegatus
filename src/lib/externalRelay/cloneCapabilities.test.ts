@@ -16,7 +16,8 @@ async function fixture() {
   const rightsStarted = new Promise<void>(resolve => { entered = resolve; });
   let rights: unknown = cloneMethodRights(), features = ["clone_send_methods"], api: string | undefined;
   const server = await startTestRelay(async req => {
-    if (req.url === "/.well-known/delegatus-relay.json") { descriptors++; return { body: { ...cloneMethodDescriptor(server.origin), features, ...(api ? { api_base: api } : {}) } }; }
+    if (req.url === "/.well-known/delegatus-relay.json") { descriptors++; return { body: { ...cloneMethodDescriptor(server.origin), features,
+      ...(!features.includes("clone_send_methods") ? { limits: undefined } : {}), ...(api ? { api_base: api } : {}) } }; }
     calls++; entered(); await held;
     expect(req.url).toMatch(/\/chats\?include=rights&limit=25/);
     return { body: { chats: [{ chat_id: -1000000000101, send_rights: rights }], next_cursor: null } };
@@ -42,16 +43,24 @@ test("rights expire independently of coverage; failed or absent rights never con
   f.advance(60000); f.rights({ ...cloneMethodRights(), can_send_documents: "true" });
   await f.directory.refresh(f.relay, "fixture-clone"); expect(f.directory.peek(f.relay, "fixture-clone", chat)?.rights).toBeNull();
 });
-test("current descriptor feature and same-origin api_base are required; pairing changes revoke cached rights", async () => {
-  const f = await fixture(); f.features([]);
-  await f.directory.refresh(f.relay, "fixture-clone"); expect(f.calls()).toBe(0); expect(f.directory.peek(f.relay, "fixture-clone", chat)).toBeNull();
-  f.features(["clone_send_methods"]); f.api("https://example.invalid/api/relay/v1"); f.advance(60000);
-  await f.directory.refresh(f.relay, "fixture-clone"); expect(f.calls()).toBe(0);
+test("live descriptor can refresh stale pairing features, while same-origin api_base is required", async () => {
+  const f = await fixture(); f.relay.features = []; f.features(["clone_send_methods"]);
+  await f.directory.refresh(f.relay, "fixture-clone");
+  expect(f.calls()).toBe(1); expect(f.directory.peek(f.relay, "fixture-clone", chat)?.rights).not.toBeNull();
+  f.api("https://example.invalid/api/relay/v1"); f.advance(60000);
+  await f.directory.refresh(f.relay, "fixture-clone"); expect(f.calls()).toBe(1);
   f.api(`${f.origin}/api/relay/v1`); f.advance(60000); f.rights(cloneMethodRights({ read_at: new Date(f.now()).toISOString() }));
   await f.directory.refresh(f.relay, "fixture-clone");
-  expect(f.directory.peek(f.relay, "fixture-clone", chat)?.rights).not.toBeNull();
+  expect(f.directory.peek(f.relay, "fixture-clone", chat)?.rights).not.toBeNull(); expect(f.calls()).toBe(2);
   f.relay.credential += " rotated";
   expect(f.directory.peek(f.relay, "fixture-clone", chat)).toBeNull();
+});
+test("a descriptor that omits file methods is recorded as verified absence", async () => {
+  const f = await fixture(); f.features([]);
+  await f.directory.refresh(f.relay, "fixture-clone");
+  expect(f.directory.peek(f.relay, "fixture-clone", chat)).toBeNull();
+  expect(f.directory.descriptorHasNoFileMethods(f.relay)).toBe(true);
+  expect(f.descriptors()).toBe(1); expect(f.calls()).toBe(0);
 });
 test("rights response loses authority if the pairing changes during the read", async () => {
   const f = await fixture(); let release!: () => void;

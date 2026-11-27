@@ -16,7 +16,7 @@ import { persistProjectAliases } from "@/lib/projects/aliases";
 import { projectAliasStore } from "@/lib/projects/persistence";
 import { productionDomainDependencies, viewerMcpBindings, viewerMcpToolPolicy, type CallerAttribution, type ViewerMcpDomainDependencies } from "./bindings";
 import { createMcpToolService, MemoryMcpReceiptStore, SqliteMcpReceiptStore, type McpToolCallContext, type McpToolResult } from "./server";
-import { currentMcpHttpCaller } from "./callerContext";
+import { currentMcpHttpCaller, runWithMcpCallerResolution } from "./callerContext";
 import { setMcpHttpDependenciesForTests } from "./http";
 import { POST } from "@/app/api/mcp/route";
 
@@ -115,7 +115,8 @@ function receiptService(f: ReturnType<typeof fixture>, mode: "memory" | "sqlite"
   const open = () => createMcpToolService(f.bindings, store, viewerMcpToolPolicy(f.dependencies));
   let service = open();
   return {
-    call: (tool: string, args: Record<string, unknown>, context?: McpToolCallContext) => service.callTool(tool, args, context),
+    call: (tool: string, args: Record<string, unknown>, context?: McpToolCallContext) =>
+      runWithMcpCallerResolution(() => service.callTool(tool, args, context)),
     restart: () => {
       if (store instanceof SqliteMcpReceiptStore) { store.close(); store = new SqliteMcpReceiptStore(filename); }
       service = open();

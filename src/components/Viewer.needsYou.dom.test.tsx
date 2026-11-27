@@ -3,12 +3,16 @@ import { Window } from "happy-dom";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 
+import type { CueRequest } from "@/lib/audio/cues";
 import { MOBILE_LAYOUT_QUERY } from "@/lib/attention/eligibility";
+import { stampAttentionRoutes } from "@/lib/attention/routing";
+import type { DoneItemV1 } from "@/lib/done/types";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import { PRODUCT_NAME } from "@/lib/brand";
 import { FILES_CHANGED_EVENT } from "@/lib/filesEvents";
 import { translate } from "@/lib/i18n";
 import type { Pipeline } from "@/lib/pipelines/types";
+import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
@@ -31,6 +35,12 @@ setKanbanCardsOpenByDefault(true);
  * panel lists every project's rows under their project and only a click on a
  * row moves the operator; the rail's ⏸ reads the panel's grouping and the tab
  * title keeps the global count.
+ *
+ * Since slice 1 of docs/design/legatus/build-plan.md «Needs you» counts the
+ * decision forms that wait and the waits no seat answers yet: finished work
+ * («Готово») and a seated project's worker questions count nowhere, a
+ * seatless project's worker question still counts, and the done feed still
+ * sounds a failed deploy.
  */
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -72,6 +82,11 @@ Object.assign(dom, { matchMedia });
 });
 (dom.HTMLElement.prototype as unknown as { scrollIntoView: () => void }).scrollIntoView = () => {};
 
+/* The sounds the board plays, recorded instead of played. */
+const played: CueRequest[] = [];
+const actualAudio = await import("@/lib/audio/app");
+mock.module("@/lib/audio/app", () => ({ ...actualAudio, playCue: (request: CueRequest) => { played.push(request); return "played"; } }));
+
 mock.module("@/hooks/runtimeBus", () => ({
   SNAPSHOT_URL: "/api/runtime/snapshot",
   STREAM_URL: "/api/runtime/stream",
@@ -90,6 +105,7 @@ const { resetDismissalOverlayForTests } = await import("./attention/dismissalOve
 const { resetMobileNavForTests } = await import("./mobile/mobileNav");
 const { resetPhoneKanbanPlaces } = await import("./mobile/phoneKanbanPlace");
 const { resetOrchestratorSeatCacheForTests } = await import("./orchestrator/useOrchestratorSeat");
+const { resetDoneItemsForTests } = await import("./attention/doneItems");
 
 const NOW = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((NOW - secondsAgo) * 1_000).toISOString();
@@ -152,6 +168,13 @@ function lane(dismissed: boolean): Pipeline {
 }
 
 let laneDismissed = false;
+/** Whether the scan serves the ledger lane at all. */
+let laneServed = true;
+/** What the scan adds for one test: tasks, the seats' own forms. */
+let extraTasks: BoardTask[] = [];
+let seatDecisions: PrototypeReviewNotice[] = [];
+/** The «Готово» feed the done route serves. */
+let doneServed: DoneItemV1[] = [];
 const posted: Array<Record<string, unknown>> = [];
 /** Conversations a test adds to the scan after the Viewer mounts. */
 let laterFiles: FileEntry[] = [];
@@ -174,9 +197,11 @@ function stubFetch(): void {
         files: [...FILES, ...laterFiles],
         projectCatalog: [LEDGER, ATLAS].map((project) => ({ project, conversations: project === LEDGER ? 2 : 1, smt: NOW - 30 })),
         projectDisplayNames: NAMES,
-        flows: [], pipelines: [lane(laneDismissed)], workflows: [], tasks: TASKS, systemHealth: {},
+        flows: [], pipelines: laneServed ? [lane(laneDismissed)] : [], workflows: [], tasks: [...TASKS, ...extraTasks], systemHealth: {},
+        ...(seatDecisions.length ? { seatDecisions } : {}),
       });
     }
+    if (url.startsWith("/api/attention/done")) return Response.json({ ok: true, items: doneServed, revision: 1 });
     if (url.startsWith("/api/board")) {
       /* One board per project, written the way the server writes it: a write
          answered with an unchanged revision would read as never landing, and
@@ -213,6 +238,12 @@ let mounted: { unmount: () => void } | null = null;
 beforeEach(async () => {
   phone = false;
   laneDismissed = false;
+  laneServed = true;
+  extraTasks = [];
+  seatDecisions = [];
+  doneServed = [];
+  played.length = 0;
+  resetDoneItemsForTests();
   posted.length = 0;
   laterFiles = [];
   boardWrites.length = 0;
@@ -433,7 +464,7 @@ test("desktop: with only a lane waiting the bar's filter offers «Needs you», F
   expect(filterOn(host)).toBe(true);
 });
 
-test("desktop: a conversation that starts waiting lights its own card under the filter", async () => {
+test("desktop: a question in the operator's own session lights its own card under the filter and stays off «Needs you»", async () => {
   const host = await mountOn(LEDGER);
   await press("f");
   expect(filterOn(host)).toBe(true);
@@ -443,7 +474,11 @@ test("desktop: a conversation that starts waiting lights its own card under the 
     pendingQuestion: { kind: "question", toolUseId: "tool-ledger", transcriptPath: asking, pid: 1, askedAt: iso(540), questions: [{ question: "Which cutover date?", header: "Cutover", multiSelect: false, options: [] }] },
   } as Partial<FileEntry>)];
   await rescan();
-  await until(() => islandCount(host) === 2);
+  const asks = () => [...host.querySelectorAll(".card")].find((node) => (node.textContent ?? "").includes("Planner of the ledger cutover"));
+  await until(() => asks()?.getAttribute("data-attention") === "needs");
+  /* The operator is already in that conversation: its card says so, and the
+     button keeps counting only the lane (docs/design/legatus/build-plan.md, slice 1). */
+  expect(islandCount(host)).toBe(1);
   /* The state survives the re-render the scan caused. */
   expect(filterOn(host)).toBe(true);
   expect((await needsRow(host)).getAttribute("aria-checked")).toBe("true");
@@ -572,4 +607,132 @@ test("phone: the ⚠ sheet's funnel dims the cards that do not wait, and the lan
 
   await click(pressed);
   expect(filterOn(host)).toBe(false);
+});
+
+/*
+ * Slice 1 of docs/design/legatus/build-plan.md, on the operator's own numbers:
+ * 631 finished items and 9 waiting forms gave the header 646 on 2026-11-26.
+ * Now the header, the tab title, the panel head and the phone badge say 9; a
+ * seated project's worker question is its seat's; a seatless project's
+ * worker question still counts; and a failed deploy in the done feed still
+ * sounds its fault.
+ */
+
+const LEDGER_FORMS = ["pr_ledger_1", "pr_ledger_2", "pr_ledger_3", "pr_ledger_4"];
+const ATLAS_FORMS = ["pr_atlas_1", "pr_atlas_2", "pr_atlas_3", "pr_atlas_4", "pr_atlas_5"];
+const ATLAS_SEAT = "conversation_atlas_seat";
+/** A worker a seat or a lane started: delegation depth one. */
+const workerLineage = { kind: "spawn", role: "builder", depth: 1, parentConversationId: ATLAS_SEAT, reviewsConversationId: null, memberships: [] } as unknown as NonNullable<FileEntry["durableLineage"]>;
+const workerQuestion = (path: string, header: string) => ({
+  kind: "question", toolUseId: `toolu-${header}`, transcriptPath: path, pid: 1, askedAt: iso(540),
+  questions: [{ question: `${header}?`, header, multiSelect: false, options: [] }],
+}) as unknown as FileEntry["pendingQuestion"];
+const idleTurn = { activity: "idle", proc: null, lastTurn: { startedAt: (NOW - 900) * 1000, endedAt: (NOW - 600) * 1000 } } as Partial<FileEntry>;
+
+function doneFeed(): DoneItemV1[] {
+  const item = (key: string, over: Partial<DoneItemV1>): DoneItemV1 => ({
+    key, kind: "task", look: "closed", project: LEDGER, at: iso(3_600), createdAt: iso(3_600), title: `Finished ${key}`, icon: null, refs: {},
+    frame: null, frameCheckedAt: iso(3_600), acknowledgedAt: null, acknowledgedBy: null, ...over,
+  } as DoneItemV1);
+  return [
+    item("deploy:rel-failed", { kind: "deploy", look: "deploy", project: null, at: iso(30), title: "", refs: { deploymentId: "rel-failed", sha: "9f3e2a1".padEnd(40, "0"), phase: "failed" } }),
+    ...Array.from({ length: 630 }, (_, n) => item(`task:t-finished-${n}`, {})),
+  ];
+}
+
+function formsWorld(): void {
+  laneServed = false;
+  doneServed = doneFeed();
+  const round = (id: string) => ({ latestReviewId: id, waitingReviewId: id, title: `Round ${id}`, rounds: 1, createdAt: iso(1_800) });
+  extraTasks = LEDGER_FORMS.map((id, n) => ({ ...task(`t-form-${n}`, LEDGER, "inbox", `Choose the ledger layout ${n + 1}`, LEDGER_BUILDER), assignments: [], prototypeReview: round(id) }) as BoardTask);
+  seatDecisions = ATLAS_FORMS.map((id, n) => ({
+    id: `prototype:${id}`, project: ATLAS, taskId: null, reviewId: id, title: `Atlas question ${n + 1}`, createdAt: iso(1_700 - n),
+    target: { kind: "seat-decision", project: ATLAS, reviewId: id },
+  }));
+  /* The atlas worker asks, and the server routes it to the atlas seat. */
+  const asking = conversation(ATLAS_WORKER, ATLAS, "Worker on the atlas legend", { ...idleTurn, durableLineage: workerLineage, pendingQuestion: workerQuestion(ATLAS_WORKER, "Legend colours") });
+  stampAttentionRoutes([asking], [], NOW, {
+    seatFor: (project) => (project === ATLAS ? ATLAS_SEAT : null), canonicalProject: (project) => project,
+    isSeatConversation: (id) => id === ATLAS_SEAT, escalation: () => null, formWaiting: () => false,
+  });
+  expect(asking.attentionRoute).toMatchObject({ owner: "seat", seat: ATLAS_SEAT });
+  FILES.splice(FILES.findIndex((file) => file.path === ATLAS_WORKER), 1, asking);
+}
+const restoreAtlasWorker = () => FILES.splice(FILES.findIndex((file) => file.path === ATLAS_WORKER), 1, conversation(ATLAS_WORKER, ATLAS, "Worker on the atlas legend"));
+
+test("desktop: 631 finished items, nine forms and a seated project's worker question read 9 on the header, the tab title and the panel head; the panel lists forms only", async () => {
+  formsWorld();
+  try {
+    const host = await mountOn(LEDGER);
+    /* The done feed answered: its failed deploy sounds, and it adds nothing to any count. */
+    await until(() => played.some((request) => request.eventId === "done:deploy:rel-failed"));
+    expect(played.find((request) => request.eventId === "done:deploy:rel-failed")!.cue).toBe("fault");
+    await until(() => islandCount(host) === 9);
+    expect(dom.document.title).toBe(`(9) ${PRODUCT_NAME}`);
+    expect(host.querySelector("[data-attention-chip-label]")!.textContent).toBe(en("attention.chip"));
+    expect(host.querySelector("[data-attention-count]")!.getAttribute("aria-label")).toBe("Needs you · 9");
+    await openPanel(host);
+    expect(host.querySelector("[data-needs-you-title]")!.textContent).toBe("Needs you · 9");
+    expect(host.querySelector("[data-done-section]")).toBeNull();
+    const rows = [...host.querySelectorAll("[data-needs-you-row]")];
+    expect(rows.map((row) => row.getAttribute("data-needs-you-kind"))).toEqual(Array(4).fill("prototype"));
+    /* atlas is folded on the ledger board; its five forms are its count. */
+    expect(host.querySelector(`[data-needs-you-section="${ATLAS}"] [data-needs-you-section-count]`)!.textContent).toBe("5");
+    /* A form is answered or withdrawn in the column: nothing here dismisses. */
+    expect(host.querySelector("[data-needs-you-dismiss], [data-needs-you-dismiss-all], [data-needs-you-dismiss-section]")).toBeNull();
+    /* The seated worker's question is its seat's, and it is not a row. */
+    expect(host.querySelector('[data-needs-you-row="toolu-Legend colours"]')).toBeNull();
+    expect(railNeeds(host, ATLAS)).toBe(5);
+    expect(railNeeds(host, LEDGER)).toBe(4);
+
+    /* A seatless project's worker question still counts, with its «Dismiss». */
+    const builder = "/sessions/ledger-stage.jsonl";
+    laterFiles = [conversation(builder, LEDGER, "Builder of the ledger totals", { ...idleTurn, durableLineage: { ...workerLineage, parentConversationId: null }, pendingQuestion: workerQuestion(builder, "Rounding") })];
+    await rescan();
+    await until(() => islandCount(host) === 10);
+    expect(host.querySelector("[data-needs-you-title]")!.textContent).toBe("Needs you · 10");
+    expect(host.querySelector('[data-needs-you-dismiss="toolu-Rounding"]')).not.toBeNull();
+    expect(dom.document.title).toBe(`(10) ${PRODUCT_NAME}`);
+  } finally {
+    restoreAtlasWorker();
+  }
+});
+
+test("desktop: with nothing waiting the header button stays, muted, with no number", async () => {
+  laneServed = false;
+  doneServed = doneFeed();
+  const host = await mountOn(LEDGER);
+  await until(() => played.some((request) => request.eventId === "done:deploy:rel-failed"));
+  const button = host.querySelector("[data-attention-count]") as HTMLElement;
+  expect(island(host)!.hasAttribute("data-attention-zero")).toBe(true);
+  expect(button.textContent).toBe(en("attention.chip"));
+  expect(button.className).toContain("text-muted");
+  expect(button.querySelector("[data-attention-dot]")).toBeNull();
+  expect(button.getAttribute("aria-label")).toBe(en("attention.chip"));
+  expect(dom.document.title).toBe(PRODUCT_NAME);
+});
+
+test("phone: the ⚠ badge and its sheet read the same nine forms on the Overview, with no «Готово» in the sheet", async () => {
+  phone = true;
+  formsWorld();
+  try {
+    dom.localStorage.setItem("llvProject", "__overview__");
+    const host = dom.document.createElement("div");
+    dom.document.body.append(host);
+    const root = createRoot(host as unknown as HTMLElement);
+    mounted = root;
+    await act(async () => { root.render(<Viewer />); });
+    const page = host as unknown as HTMLElement;
+    await until(() => phoneBadge(page) === 9);
+    expect(page.querySelector("[data-mobile2-attention-count]")!.closest("button")!.getAttribute("aria-label")).toContain("Needs you · 9");
+    await click(page.querySelector("[data-mobile2-attention-count]")!.closest("button"));
+    await until(() => Boolean(dom.document.querySelector("[data-mobile2-sheet='attention']")));
+    const sheet = dom.document.querySelector("[data-mobile2-sheet='attention']")!;
+    expect(sheet.querySelector("h2")!.textContent).toBe("Needs you · 9");
+    expect(sheet.querySelector("[data-done-section]")).toBeNull();
+    expect(sheet.querySelectorAll("[data-attention-prototype]")).toHaveLength(9);
+    expect(sheet.querySelector("[data-needs-you-dismiss], [data-needs-you-dismiss-all]")).toBeNull();
+  } finally {
+    restoreAtlasWorker();
+  }
 });

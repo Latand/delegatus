@@ -98,6 +98,8 @@ function needsYouRequest(entry: MobileAttentionEntry, now: number): CueRequest |
         obligation: entry.notice.taskId ?? entry.id,
         caption: { what: "prototype", subject: subjectOf(entry.notice.title), target: { kind: "needs-you", entryId: entry.id, then: null } },
       };
+    case "secret-request":
+      return null;
     case "update":
       return {
         cue: "your-move",

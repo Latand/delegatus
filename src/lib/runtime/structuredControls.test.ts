@@ -803,6 +803,7 @@ test("structured kill enters the durable runtime command channel", async () => {
   expect(commands).toEqual([{
     kind: "kill",
     pendingSendIds: [],
+    targets: [{ sessionId: expect.any(String), claimEpoch: 1, process: expect.objectContaining({ pid: process.pid }) }],
     origin: { kind: "operator" },
     operationId: "kill-one",
     idempotencyKey: "kill-one",
@@ -855,6 +856,7 @@ test("structured kill addressed by conversationId enters the durable command cha
   expect(commands).toEqual([{
     kind: "kill",
     pendingSendIds: [],
+    targets: [{ sessionId: expect.any(String), claimEpoch: 1, process: expect.objectContaining({ pid: process.pid }) }],
     origin: { kind: "operator" },
     operationId: "kill-by-id",
     idempotencyKey: "kill-by-id",

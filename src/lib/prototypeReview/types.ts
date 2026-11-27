@@ -80,7 +80,7 @@ export interface PrototypeDecision {
   comment: string;
   at: string;
   /** The person who decided; the background delivery sends in their name. Local only. */
-  decidedBy?: { kind: "operator" } | { kind: "member"; memberId: string } | { kind: "agent"; conversationId: string };
+  decidedBy?: { kind: "operator" } | { kind: "member"; memberId: string } | { kind: "agent"; conversationId: string } | { kind: "legatus"; conversationId: string; ruleId?: string };
   /** Verified relay owner, local only; revalidated against the same member before dispatch. */
   telegramUserId?: string;
   /** Local proof recorded only after the native-association authorization gate. */
@@ -218,6 +218,7 @@ export interface OperatorDecisionView extends PrototypeRoundRead {
 export interface OperatorDecisionsRead {
   project: string;
   decisions: OperatorDecisionView[];
+  secretRequests?: import("@/lib/secretRequests/view").SecretRequestView[];
   /** The one round a read asked for by id, open or answered: the record the
       seat's feed draws where it asked. Null when the project holds no such round. */
   round?: OperatorDecisionView | null;

@@ -99,6 +99,7 @@ async function build(request: FilesResponseWorkerRequest): Promise<Record<string
     headers: new Headers(request.headers),
   }), {
     listFilesWithProjectCatalog: async () => snapshot,
+    secretRequestNotices: request.secretRequestNotices,
     ...(request.boardEpoch && request.deltaScope ? { encode: (data: import("@/lib/types").FilesResponse) => {
       encoded = boardEncoder.encode(request.deltaScope!, request.boardEpoch!, data as unknown as Record<string, unknown>, Date.now(),
         certified ? {
@@ -130,6 +131,7 @@ async function build(request: FilesResponseWorkerRequest): Promise<Record<string
     ?? { state: "ok", since: null, freeBytes: null };
   if (url.searchParams.get("view") === "summary" && !url.searchParams.get("path")?.trim()
     && !new Headers(request.headers).has(VIEWER_SPAWN_CAPABILITY_HEADER)
+    && !request.secretRequestNotices?.length
     && stateWrites.state === "ok") {
     try { await writeSummaryBootstrap(stateDir(), body, etag, encoded ? { scope: request.deltaScope!, epoch: request.boardEpoch! } : undefined); }
     catch { console.warn("[board bootstrap] cache write failed; live response remains available"); }

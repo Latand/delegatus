@@ -11,14 +11,14 @@ import { NativeQueueProtocolRefusal } from "./nativeCodexQueue";
 import { RetryBackoff } from "./retryBackoff";
 import { REGISTRY_WRITER_BUSY } from "@/lib/agent/registry";
 import type { NativeQueueCommand } from "./nativeQueueContracts";
-import { parseRuntimeCommand, parseRuntimeIdleKillFence, parseRuntimeProviderRecoveryRef, parseRuntimeSendSettings } from "./commands";
+import { parseRuntimeCommand, parseRuntimeIdleKillFence, parseRuntimeKillTargets, parseRuntimeProviderRecoveryRef, parseRuntimeSendSettings } from "./commands";
 import { withConversationActuation, type ActuationLease } from "@/lib/deliveryActuation";
 import { parseSelectedContextRef, type SelectedContextRef } from "@/lib/selection/selectedContext";
 
 import { parseMessageOrigin, type MessageOrigin } from "./messageOrigin";
 import { SEAT_QUOTA_RECOVERY_ROLE } from "./recoveryNotices";
 import { CHECKOUT_MERGER_OPERATION_PREFIX } from "./checkoutMergerRecovery";
-import type { RuntimeRetirementClaim, RuntimeTransitionOptions, RuntimeInjectionBinding, RuntimeSendSettings, RuntimeTransitionDetails } from "./contracts";
+import type { RuntimeKillTarget, RuntimeRetirementClaim, RuntimeTransitionOptions, RuntimeInjectionBinding, RuntimeSendSettings, RuntimeTransitionDetails } from "./contracts";
 import { captureProcessIdentity, processIdentityProvenDead, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { evidenceAgrees, readEvidence, readEvidenceWithin, readOptionalEvidence, type Evidence } from "./evidence";
 import type { CompactCapableHost, DeliveryAcceptanceObservation, DeliveryReceipt, DeliveryTimingMark, DeliveryTimingObserver, EngineHost, FirstDispatchEvidence, HostState, QueueEntry, RuntimeInjectOutcome, RuntimeSteerOutcome } from "./engineHost";
@@ -350,6 +350,7 @@ interface ControlEffect {
   turnId?: string | null;
   sessionKey?: { engine: "codex" | "claude" | "copilot" | "antigravity"; sessionId: string };
   pendingSendIds?: string[];
+  targets?: RuntimeKillTarget[];
   eventSeq: number;
 }
 
@@ -445,12 +446,13 @@ function controlSettlementDeadlineAt(receipt: StructuredOperationStatus | null):
 function expiredControlSettlement(
   effect: ControlEffect | CompactEffect | StructuredReconfigureEffect,
   receipt: StructuredOperationStatus | null,
-  now = Date.now(),
+  now: number,
 ): { status: "failed" | "uncertain"; reason: string } | null {
   if (!receipt) return null;
   const deadlineAt = controlSettlementDeadlineAt(receipt);
   if (deadlineAt === null || now < deadlineAt) return null;
   const action = effect.kind;
+  const wait = effect.kind === "kill" && effect.targets && receipt.reason ? ` (last wait: ${receipt.reason})` : "";
   if (receipt.status === "delivering" || receipt.status === "applying") {
     return {
       status: "uncertain",
@@ -459,7 +461,7 @@ function expiredControlSettlement(
   }
   return {
     status: "failed",
-    reason: `${action} control exceeded its 2-minute settlement deadline; retry from the current conversation state`,
+    reason: `${action} control exceeded its 2-minute settlement deadline; retry from the current conversation state${wait}`.slice(0, 240),
   };
 }
 
@@ -573,6 +575,7 @@ function controlEffect(effect: StructuredDeliveryEffect): ControlEffect | null {
   }
   if (effect.kind === "runtime.kill") {
     if (effect.payload.providerRecovery !== undefined && effect.payload.onlyIfIdle === undefined) return null;
+    if (effect.payload.targets !== undefined && effect.payload.onlyIfIdle !== undefined) return null;
     const key = effect.payload.sessionKey;
     if (!key || typeof key !== "object" || Array.isArray(key)) return null;
     const candidate = key as Record<string, unknown>;
@@ -581,11 +584,17 @@ function controlEffect(effect: StructuredDeliveryEffect): ControlEffect | null {
     const pendingSendIds = effect.payload.pendingSendIds;
     if (pendingSendIds !== undefined && (!Array.isArray(pendingSendIds)
       || pendingSendIds.some(id => typeof id !== "string" || !id || id.length > 200))) return null;
+    const sessionKey = { engine: candidate.engine, sessionId: candidate.sessionId } as const;
+    let targets: RuntimeKillTarget[] | undefined;
+    try {
+      if (effect.payload.targets !== undefined) targets = parseRuntimeKillTargets(effect.payload.targets, sessionKey);
+    } catch { return null; }
     return {
       operationId,
       conversationId,
       kind: "kill",
-      sessionKey: { engine: candidate.engine, sessionId: candidate.sessionId },
+      sessionKey,
+      ...(targets ? { targets } : {}),
       ...(pendingSendIds !== undefined ? { pendingSendIds: [...new Set(pendingSendIds as string[])] } : {}),
       ...(effect.payload.onlyIfIdle !== undefined
         ? { onlyIfIdle: parseRuntimeIdleKillFence(effect.payload.onlyIfIdle) } : {}),
@@ -956,6 +965,8 @@ export class StructuredDeliveryQueue {
       onlyIfIdle?: import("./contracts").RuntimeIdleKillFence,
       authority?: { operationId: string; claim: RuntimeRetirementClaim },
       providerRecovery?: import("./contracts").RuntimeProviderRecoveryRef,
+      explicit?: { target: RuntimeKillTarget; operationId: string; deadlineAt: number | null;
+        canActuate(): boolean; onFirstEffect(): void },
     ) => Promise<boolean> = async () => false,
     private readonly retrySoon: () => void = () => {},
     private readonly recoverHost: StructuredHostRecovery | null = null,
@@ -1846,7 +1857,7 @@ export class StructuredDeliveryQueue {
       // The acknowledgement may have vanished after journal admission. Recover
       // an unconditional kill's saved cohort before expiry or any actuation.
       // A refused fence leaves the kill owed, including across another restart.
-      if (effect.kind === "kill" && !effect.onlyIfIdle && effect.pendingSendIds?.length) {
+      if (effect.kind === "kill" && !effect.targets && !effect.onlyIfIdle && effect.pendingSendIds?.length) {
         const fenced = await readEvidence(async () => {
           if (!this.port.fencePendingSends) throw new Error("pending delivery fence is unavailable");
           await this.port.fencePendingSends(effect.pendingSendIds!);
@@ -1873,7 +1884,7 @@ export class StructuredDeliveryQueue {
       /* An account pick is an intent, and it waits for the next engagement however long that is (#1846):
          the settlement window is for a control that got stuck, which a switch nobody has engaged is not. */
       const expired = isRuntimeControlEffect(effect) && !isParkableSwitch(effect, durable.value)
-        ? expiredControlSettlement(effect, durable.value)
+        ? expiredControlSettlement(effect, durable.value, this.timing.now())
         : null;
       if (expired) {
         if (isReconfigureEffect(effect)) {
@@ -2157,7 +2168,11 @@ export class StructuredDeliveryQueue {
       if (isControlEffect(effect)) {
         const result = isCompactEffect(effect)
           ? await this.drainCompact(effect)
-          : await this.drainControl(effect);
+          : effect.kind === "kill" && effect.targets && effect.sessionKey
+            ? await this.drainConversationKill(effect, effect.sessionKey, effect.targets,
+              durableStatuses.get(effect.operationId) ?? null,
+              () => !lane?.released && !this.retirementExecutor.retired && !this.port.handoffHeld?.())
+            : await this.drainControl(effect);
         if (result.blocked) {
           this.scheduleControlSettlementCheck(durableStatuses.get(effect.operationId) ?? null);
           blockRest("conversation-busy", "event", `a ${effect.kind} control on this conversation is still settling`);
@@ -2165,7 +2180,9 @@ export class StructuredDeliveryQueue {
         }
         if (result.terminated && effect.kind === "kill") {
           if (effect.sessionKey) {
-            killedGenerations.add(`${effect.sessionKey.engine}:${effect.sessionKey.sessionId}`);
+            for (const target of effect.targets ?? [effect.sessionKey]) {
+              killedGenerations.add(`${effect.sessionKey.engine}:${target.sessionId}`);
+            }
           }
           const current = this.successfulKillBoundaries.get(effect.conversationId);
           if (!current || effect.eventSeq > current.eventSeq) {
@@ -3346,7 +3363,7 @@ export class StructuredDeliveryQueue {
       this.settleProgress(effect.operationId, durable.value.status, durable.value.reason);
       return true;
     }
-    const expired = expiredControlSettlement(effect, durable.value);
+    const expired = expiredControlSettlement(effect, durable.value, this.timing.now());
     if (expired) {
       return await this.transitionUnlessSettled(effect.operationId, expired.status, { reason: expired.reason }, undefined, owned);
     }
@@ -3874,6 +3891,61 @@ export class StructuredDeliveryQueue {
       retryInMs: spacingMs,
     });
     this.retrySoon();
+  }
+
+  private async drainConversationKill(
+    effect: ControlEffect,
+    sessionKey: NonNullable<ControlEffect["sessionKey"]>,
+    targets: RuntimeKillTarget[],
+    receipt: StructuredOperationStatus | null,
+    owned: () => boolean,
+  ): Promise<ControlDrainResult> {
+    const deadlineAt = controlSettlementDeadlineAt(receipt);
+    const canActuate = () => owned() && (deadlineAt === null || this.timing.now() < deadlineAt);
+    const transition = (status: StructuredDeliveryTransition, details?: RuntimeTransitionDetails) =>
+      this.transitionUnlessSettled(effect.operationId, status, details, undefined, owned);
+    const refusal = await this.killRefusal(effect.conversationId);
+    if (refusal) {
+      await transition("failed", { reason: refusal });
+      return { blocked: false, terminated: false };
+    }
+    if (!canActuate() || !await transition("delivering")) return { blocked: true, terminated: false };
+    let reason: string | undefined;
+    let terminationStarted = false;
+    try {
+      if (effect.pendingSendIds?.length && canActuate()) {
+        if (!this.port.fencePendingSends) throw new Error("pending delivery fence is unavailable");
+        await this.port.fencePendingSends(effect.pendingSendIds);
+      }
+    } catch (error) {
+      reason = failureReason(error);
+    }
+    if (!reason) {
+      for (const target of targets) {
+        if (!canActuate()) break;
+        try {
+          const stopped = await withHostStopOrigin({ path: "kill-action", operationId: effect.operationId },
+            () => this.terminateHost(effect.conversationId, { engine: sessionKey.engine, sessionId: target.sessionId },
+              undefined, undefined, undefined, { target, operationId: effect.operationId, deadlineAt, canActuate,
+                onFirstEffect: () => { terminationStarted = true; } }));
+          if (!stopped) reason ??= "waiting for the admitted structured host termination target";
+        } catch (error) {
+          reason ??= failureReason(error);
+        }
+      }
+    }
+    // A lock refusal can arrive at the deadline. Keep the wait durable when
+    // the pass ended without a stop effect. A pass that began a stop and ran
+    // out of time still needs the journal's uncertain settlement.
+    const beforeDeadline = canActuate();
+    if (reason || !beforeDeadline) {
+      if (beforeDeadline || !terminationStarted) {
+        await transition("queued", { reason: reason ?? receipt?.reason });
+      }
+      return { blocked: true, terminated: false };
+    }
+    const settled = await transition("delivered");
+    return { blocked: !settled, terminated: settled };
   }
 
   private async drainControl(effect: ControlEffect): Promise<ControlDrainResult> {

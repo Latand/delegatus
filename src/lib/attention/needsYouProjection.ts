@@ -16,11 +16,13 @@ import { DismissalError } from "./dismissalTypes";
 import type { DismissalTarget, DismissedBy } from "./dismissalTypes";
 import { laneRouteNow } from "./routeTypes";
 
-export const NEEDS_YOU_ROW_KINDS = ["decision", "question", "plan", "permission", "delivery", "launch", "memory", "ask", "lane-decision", "lane-review", "prototype", "update"] as const;
+export const NEEDS_YOU_ROW_KINDS = ["decision", "question", "plan", "permission", "delivery", "launch", "memory", "ask", "lane-decision", "lane-review", "prototype", "secret-request", "update"] as const;
 export type NeedsYouRowKind = typeof NEEDS_YOU_ROW_KINDS[number];
 export interface NeedsYouBody { prototypeReviewNotices?: readonly import("@/lib/prototypeReview/types").PrototypeReviewNotice[]; files: readonly FileEntry[]; pipelines: readonly Pipeline[]; tasks: readonly BoardTask[]; workLinks?: import("@/lib/forge/workLinks").FilesWorkLinks;
   /** The orchestrators' own open questions (docs/design/operator-decision-forms.md §2.2). */
-  seatDecisions?: readonly import("@/lib/prototypeReview/types").PrototypeReviewNotice[] }
+  seatDecisions?: readonly import("@/lib/prototypeReview/types").PrototypeReviewNotice[];
+  secretRequestNotices?: readonly import("@/lib/secretRequests/view").SecretRequestNotice[];
+}
 export interface NeedsYouEvidence { code: string; stale: boolean; at: string | null; detail: string; source: string }
 export interface NeedsYouRow {
   id: string; kind: NeedsYouRowKind; title: string;
@@ -29,7 +31,7 @@ export interface NeedsYouRow {
   /** The question in its author's words and its choices, when the row has them. */
   question?: string; options?: string[]; recommended?: number;
   since: string | null; taskId: string | null;
-  subject: { conversationId?: string; pipelineId?: string; stageId?: string; reportSeq?: number; reviewId?: string; decisionId?: string };
+  subject: { conversationId?: string; pipelineId?: string; stageId?: string; reportSeq?: number; reviewId?: string; decisionId?: string; secretRequestId?: string };
   target: DismissalTarget | null; stale: boolean; evidence: Array<string | NeedsYouEvidence>; path?: string;
 }
 export interface ClearedRow {
@@ -58,7 +60,7 @@ export interface NeedsYouReadOptions { kinds?: readonly NeedsYouRowKind[]; full?
 export function needsYouEntries(body: NeedsYouBody, decision: AutoView["decision"], now: number, project: string): MobileAttentionEntry[] {
   const key = canonicalOrchestratorProject(project);
   const notices = new Map((body.prototypeReviewNotices ?? []).map(notice => [notice.id, notice]));
-  return needsYouSections(buildNeedsYouQueue(withoutArchivedPredecessors([...body.files]), body.pipelines, now, [], decision, body.tasks, body.seatDecisions), key)
+  return needsYouSections(buildNeedsYouQueue(withoutArchivedPredecessors([...body.files]), body.pipelines, now, [], decision, body.tasks, body.seatDecisions, body.secretRequestNotices), key)
     .filter(section => canonicalOrchestratorProject(section.project) === key).flatMap(section => section.entries)
     .map(entry => entry.kind === "prototype" && notices.has(entry.id) ? { ...entry, notice: notices.get(entry.id)! } : entry);
 }
@@ -69,13 +71,14 @@ const after = (value: string | number | null | undefined, since: number) => (typ
 function taskOf(entry: MobileAttentionEntry, ports: NeedsYouEvidencePorts): BoardTask | undefined {
   if (entry.kind === "prototype") return ports.tasks.find(task => task.id === entry.notice.taskId);
   if (entry.kind === "pipeline") return ports.tasks.find(task => entry.row.pipeline.taskIds?.includes(task.id));
-  if (entry.kind === "update") return undefined;
+  if (entry.kind === "update" || entry.kind === "secret-request") return undefined;
   const canonical = ports.canonicalConversationId ?? ((id: string) => id);
   return ports.tasks.find(task => task.assignments.some(a => a.path === entry.item.file.path || !!a.conversationId && !!entry.item.file.conversationId && canonical(a.conversationId) === canonical(entry.item.file.conversationId) || entry.item.file.path.startsWith("spawn:") && a.launchId === entry.item.file.path.slice(6)));
 }
 
 /** Facts only. The seat decides what each fact means for this question. */
 export function needsYouEvidence(entry: MobileAttentionEntry, ports: NeedsYouEvidencePorts): NeedsYouEvidence[] {
+  if (entry.kind === "secret-request") return [];
   const facts: NeedsYouEvidence[] = [];
   const add = (code: string, stale: boolean, detail: string, source: string, at: string | null = null) => {
     if (!facts.some(f => f.code === code)) facts.push({ code, stale, detail: clip(detail, 140), source, at });
@@ -142,10 +145,12 @@ function rowOf(entry: MobileAttentionEntry, ports: NeedsYouEvidencePorts, option
   const task = taskOf(entry, ports);
   const subject: NeedsYouRow["subject"] = entry.kind === "conversation" ? { ...(entry.item.file.conversationId ? { conversationId: entry.item.file.conversationId } : {}), ...(entry.item.reason.report ? { reportSeq: entry.item.reason.report.seq } : {}) }
     : entry.kind === "pipeline" ? { pipelineId: entry.row.pipeline.id, ...(entry.row.pipeline.cursor?.stageId ? { stageId: entry.row.pipeline.cursor.stageId } : {}) }
-    : entry.kind === "prototype" ? { reviewId: entry.notice.reviewId } : { decisionId: entry.decision.id };
+    : entry.kind === "prototype" ? { reviewId: entry.notice.reviewId }
+    : entry.kind === "secret-request" ? { secretRequestId: entry.notice.id }
+    : { decisionId: entry.decision.id };
   const facts = needsYouEvidence(entry, ports);
   /* Every round has the same exact-round withdrawal target, including saved answers. */
-  const target: DismissalTarget | null = entry.kind === "update" ? null : entry.kind === "prototype" ? { kind: "prototype", taskId: entry.notice.taskId, reviewId: entry.notice.reviewId }
+  const target: DismissalTarget | null = entry.kind === "update" || entry.kind === "secret-request" ? null : entry.kind === "prototype" ? { kind: "prototype", taskId: entry.notice.taskId, reviewId: entry.notice.reviewId }
     : needsYouSubject(entry) as DismissalTarget;
   return { id: entry.id, kind: entry.kind === "conversation" ? entry.item.reason.kind : entry.kind === "pipeline" ? entry.row.pipeline.state === "needs_review" ? "lane-review" : "lane-decision" : entry.kind,
     title: clip(text.title, 90), line: clip(text.line, 400),
@@ -165,7 +170,7 @@ function clearedRows(body: NeedsYouBody, decision: AutoView["decision"], now: nu
     tasks: body.tasks.map(t => ({ ...t, prototypeReview: t.prototypeReview ? { ...t.prototypeReview, waitingDismissal: undefined } : undefined })) };
   const visible = new Set(needsYouEntries(body, decision, now, project).map(e => e.id));
   const live = needsYouEntries(raw, decision, now, project).flatMap((entry): ClearedRow[] => {
-    if (readEnded(options) || visible.has(entry.id) || entry.kind === "update") return [];
+    if (readEnded(options) || visible.has(entry.id) || entry.kind === "update" || entry.kind === "secret-request") return [];
     const row = rowOf(entry, ports, options);
     if (options.kinds && !options.kinds.includes(row.kind)) return [];
     let undo = row.target;
@@ -260,7 +265,7 @@ export function needsYouAnswer(body: NeedsYouBody, decision: AutoView["decision"
   const answer: NeedsYouAnswer = { project: canonicalOrchestratorProject(project), at: new Date(now * 1000).toISOString(), count: selected.length, staleCount: all.filter(r => r.stale).length,
     rows: [], cleared: readEnded(options) ? [] : clearedRows(body, decision, now, project, ports, options), omittedCount: filtered.length - start + projectionOmitted,
     ...(ports.unavailable.length ? { unavailable: [...new Set(ports.unavailable)] } : {}) };
-  const sections = readEnded(options) ? 0 : needsYouSections(buildNeedsYouQueue(withoutArchivedPredecessors([...body.files]), body.pipelines, now, [], decision, body.tasks, body.seatDecisions), project).filter(s => canonicalOrchestratorProject(s.project) === answer.project).length;
+  const sections = readEnded(options) ? 0 : needsYouSections(buildNeedsYouQueue(withoutArchivedPredecessors([...body.files]), body.pipelines, now, [], decision, body.tasks, body.seatDecisions, body.secretRequestNotices), project).filter(s => canonicalOrchestratorProject(s.project) === answer.project).length;
   if (sections > 1) answer.sections = sections;
   const routed = readEnded(options) ? 0 : routedToSeat(body, now, answer.project);
   if (routed) answer.routedToSeat = routed;

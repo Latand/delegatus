@@ -34,6 +34,7 @@ try {
   declaredIndexes([
     "CREATE INDEX IF NOT EXISTS files_hash ON files(hash)",
     "CREATE INDEX IF NOT EXISTS deliveries_attempt ON deliveries(json_extract(body,'$.attempt.pipelineId'), json_extract(body,'$.attempt.stageId'), json_extract(body,'$.attempt.attempt'), json_extract(body,'$.conversationId'))",
+    "CREATE INDEX IF NOT EXISTS deliveries_conversation ON deliveries(json_extract(body,'$.conversationId'))",
   ]).install(db, directory);
 } finally {
   db.close();

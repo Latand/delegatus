@@ -186,21 +186,22 @@ export function leaveLessonForConversation(pipelines: readonly Pipeline[], conve
 }
 
 /** The binding supplies the fresh server-authorized designation, never the caller's arguments. */
-export function leaveLessonForSeat(seat: { project: string | null; conversationId: string }, args: LessonAnswerArgs, now = new Date().toISOString()) {
+export function leaveLessonForSeat(seat: { project: string | null; conversationId: string; roleId?: "orchestrator" | "legatus" }, args: LessonAnswerArgs, now = new Date().toISOString()) {
   if (!seat.project || seat.project === "*") throw new RoleMemoryRefusal("LESSON_NOT_A_SEAT", "the designated seat has no concrete project");
   if (!roleMemoryEnabled()) throw new RoleMemoryRefusal("LESSON_SWITCHED_OFF", "learned rules are switched off on this installation");
   try {
     const usage = lessonUsage(args);
     if (usage.applied?.length || usage.misled?.length) throw new RoleMemoryRefusal("RULE_NOT_DELIVERED", "usage measurement belongs to a stage attempt's delivered rules");
-    const parsed = parseLessons(args, "orchestrator");
+    const roleId = seat.roleId ?? "orchestrator";
+    const parsed = parseLessons(args, roleId);
     if (parsed.none !== null) throw new RoleMemoryRefusal("LESSON_INVALID", "an unasked seat gives lesson or rewrite; there is no request to decline");
     if (parsed.problem) throw new RoleMemoryRefusal("LESSON_IS_PROBLEM", "a seat handles its own defects");
     if (parsed.rewrite) {
       const row = roleMemoryCollection()?.get(`r:${parsed.rewrite.id}`);
       if (row?.kind === "rule") assertGenericRule(parsed.rewrite.rule, scopeKind(row.scope));
     }
-    const result = leaveSeatLessons({ ...(args.correction ? { correction: true as const } : {}), source: { origin: "seat", project: seat.project, roleId: "orchestrator", fixRound: false, conversationId: seat.conversationId }, lessons: parsed.lessons, rewrite: parsed.rewrite, now });
-    return { project: seat.project, roleId: "orchestrator" as const, ...result };
+    const result = leaveSeatLessons({ ...(args.correction ? { correction: true as const } : {}), source: { origin: "seat", project: seat.project, roleId, fixRound: false, conversationId: seat.conversationId }, lessons: parsed.lessons, rewrite: parsed.rewrite, now });
+    return { project: seat.project, roleId, ...result };
   } catch (error) {
     if (error instanceof RoleMemoryRefusal && error.code === "LESSON_IS_PROBLEM") throw new RoleMemoryRefusal(error.code, "this names a defect: find or create its board task with create_task. Tell the operator in chat when it is critical. For a practice that holds on other tasks, express the generic check without the project's fact");
     if (error instanceof RoleMemoryRefusal && error.code === "LESSON_ABOUT_ONE_TASK") throw new RoleMemoryRefusal(error.code, "the rule names one task or run; it belongs on that task's card. If it holds elsewhere, say it without the identifier");

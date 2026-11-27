@@ -18,6 +18,7 @@ const { FakeBotTransport, fakeBotToken, ok, refused, unreachable } = await impor
 const { setCallerConversationResolverForTests } = await import("@/lib/agent/operatorAuthority");
 const { VIEWER_SPAWN_CAPABILITY_HEADER } = await import("@/lib/agent/capabilityHeader");
 const { clonePairing } = await import("@/lib/externalRelay/clone.fixture");
+const { cloneSenderIdentity } = await import("@/lib/externalRelay/cloneDirectory");
 
 const BOT_ID = 4242424;
 const TOKEN = fakeBotToken(String(BOT_ID));
@@ -283,6 +284,7 @@ test("paired clone discovery reaches the tokenless operator status and chat allo
     clones: {
       discoverChats: async () => { discoveries++; return [{ chatId: String(TEAM.id), title: TEAM.title }]; },
       route: async () => route, peek: () => route, valid: () => true, invalidate: () => {},
+      confirmationSender: chat => chat === String(TEAM.id) ? cloneSenderIdentity(route) : null,
       send: async () => { throw new Error("unused in status test"); },
     },
     transportFor: () => transport,

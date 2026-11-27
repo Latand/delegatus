@@ -1,11 +1,13 @@
 import { finishedWorkIndex } from "@/lib/attention/finishedWork";
 import { withFinishedAttention } from "@/lib/attention/finishedAttention";
+import { delegatedConversation, SEAT_CONVERSATION_KINDS } from "@/lib/attention/routing";
 import type { MobileBoardPipelineRow } from "@/components/mobile/mobileBoardModel";
 import { overviewPipelineRows } from "@/components/mobile/overviewPhone";
 import type { AutoView } from "@/lib/selfUpdate/auto";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { prototypeReviewNotices } from "@/lib/prototypeReview/model";
 import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
+import type { SecretRequestNotice } from "@/lib/secretRequests/view";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
@@ -33,7 +35,8 @@ export type MobileAttentionEntry =
   | { kind: "pipeline"; id: string; row: MobileBoardPipelineRow }
   | { kind: "update"; id: string; decision: NonNullable<AutoView["decision"]> }
   /** A task's prototype review that waits for the operator's choice. */
-  | { kind: "prototype"; id: string; notice: PrototypeReviewNotice };
+  | { kind: "prototype"; id: string; notice: PrototypeReviewNotice }
+  | { kind: "secret-request"; id: string; notice: SecretRequestNotice };
 
 /** Conversations first in queue order, then the pipelines — the board's
     Needs-you order (`buildMobileBoard`), so the sheet and the section under
@@ -67,12 +70,34 @@ export function buildNeedsYouQueue(
   tasks: readonly BoardTask[] = [],
   /** The orchestrators' own open questions, which no task carries. */
   seatDecisions: readonly PrototypeReviewNotice[] = [],
+  secretRequests: readonly SecretRequestNotice[] = [],
 ): MobileAttentionEntry[] {
   const finished = finishedWorkIndex(tasks, pipelines);
   const queue = buildMobileAttentionQueue(buildAttentionQueue(files.map(file => withFinishedAttention(file, now, finished)), now), overviewPipelineRows(pipelines, now, closing));
   for (const notice of prototypeReviewNotices(tasks, seatDecisions)) queue.push({ kind: "prototype", id: notice.id, notice });
+  for (const notice of secretRequests) queue.push({ kind: "secret-request", id: notice.id, notice });
   if (decision) queue.push({ kind: "update", id: `auto-update:${decision.id}`, decision });
   return queue;
+}
+
+/**
+ * Whether «Needs you» holds an entry (docs/design/legatus/build-plan.md,
+ * slice 1): the button counts the decision forms that wait for the operator,
+ * plus what nobody else answers yet. Every form and the update decision stay.
+ * A parked lane stays: one whose project has a seat already carries the seat's
+ * route and is not on the queue. A worker's question, plan, permission, memory
+ * kill or prose ask stays only in the same case, a project with no seat to
+ * route it to (`routing.ts`). An orchestrator's own questions are its reports
+ * and its forms; a question in the operator's own session, a stuck delivery
+ * and a failed launch stay on their cards' state lines. An answered form whose
+ * delivery needs attention waits on nobody: it stays as its record, where
+ * Retry lives, and leaves the count (needs-you-restructure.md §3).
+ */
+export function needsYouHolds(entry: MobileAttentionEntry): boolean {
+  if (entry.kind === "prototype") return !entry.notice.undelivered;
+  if (entry.kind !== "conversation") return true;
+  const { reason, file } = entry.item;
+  return !reason.report && SEAT_CONVERSATION_KINDS.has(reason.kind) && delegatedConversation(file);
 }
 
 /** The board key a lane is focused by: the card that holds the pipeline, the
@@ -84,6 +109,6 @@ export const laneFocusId = (path: string): string | null => (path.startsWith(LAN
 /** The project an entry belongs to. */
 export function attentionEntryProject(entry: MobileAttentionEntry): string {
   if (entry.kind === "update") return entry.decision.project;
-  if (entry.kind === "prototype") return entry.notice.project;
+  if (entry.kind === "prototype" || entry.kind === "secret-request") return entry.notice.project;
   return entry.kind === "conversation" ? entry.item.project : entry.row.pipeline.project;
 }

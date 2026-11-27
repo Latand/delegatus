@@ -217,6 +217,67 @@ test.each(["codex", "claude"] as const)("legacy %s seat profiles receive the cur
   expect(instructions).toContain(rule);
 });
 
+test.each(["codex", "claude"] as const)("a replacement %s boot host can cite the rule from its new instructions", async engine => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-legatus-"));
+  const savedState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(directory, "state");
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const sessionId = ["12222222", "2222", "4222", "8222", "222222222222"].join("-");
+  const key = { engine, sessionId };
+  const project = "boot-memory-project";
+  const instruction = "Consult the latest form before applying a retained review decision.";
+  const { leaveSeatLessons } = await import("@/lib/memory/roleStore");
+  const { legatusDecisionRule } = await import("@/lib/memory/legatusCitation");
+  const { memoryDeliveries } = await import("@/lib/memory/deliveryLedger");
+  const { conversation } = addStructuredRestartConversation(registry, directory, { engine, sessionId, status: "unhosted", turn: "busy" });
+  const left = leaveSeatLessons({
+    source: { origin: "seat", project, roleId: "legatus", fixRound: false, conversationId: conversation.id },
+    lessons: [{ scope: "role", rule: instruction, why: "An answer revised the earlier choice." }],
+    now: "2026-11-25T10:00:00.000Z",
+  }).left[0]!;
+  registry.upsert({ ...registry.hostEntry(key)!, pendingAction: "handoff",
+    launchProfile: emptyLaunchProfile({ cwd: directory, learnedRules: { project, roleId: "legatus" } }) });
+  const identity = captureProcessIdentity(process.pid);
+  const host = new FakeEngineHost(createFakeDeliveryLedger());
+  const state = await host.health();
+  Object.assign(host, {
+    health: async () => ({ ...state, pid: identity.pid, processStartIdentity: identity.startIdentity, sessionKey: sessionId }),
+    setWriterFence: () => {}, onStateChange: () => () => {},
+  });
+  const opened: string[] = [];
+  const open = async (text: string | undefined) => {
+    expect(text).toContain(instruction);
+    expect(memoryDeliveries().at(-1)?.delivery).toMatchObject({ conversationId: conversation.id, confirmed: false });
+    expect(() => legatusDecisionRule(project, conversation.id, left.id)).toThrow("received or opened");
+    opened.push(left.id);
+    return host as never;
+  };
+  try {
+    const adopted = await adoptStructuredHostsAtStartup({
+      registry, client: runtimeJournalClient(journal), orchestratorSeats: () => [], refreshTranscriptState: async () => {},
+      resolveCodexOwner: () => ({ home: directory, kind: "managed" }),
+      resolveClaudeOwner: () => ({ home: directory, kind: "managed", transcriptRoot: directory, env: { NODE_ENV: "test", HOME: directory } }),
+      adopt: engine === "codex" ? (store, options, env, filter, processed, hooks) =>
+        adoptCodexRegistryHosts(store, options, { ...env, NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" }, filter, processed, {
+          ...hooks, adoptHost: (_id, opts) => open(opts.developerInstructions),
+        }) : async () => [],
+      adoptClaude: engine === "claude" ? (store, options, env, filter, processed, hooks) =>
+        adoptClaudeRegistryHosts(store, options, { ...env, NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" }, filter, processed, {
+          ...hooks, adoptHost: (_id, opts) => open(opts.appendSystemPrompt),
+        }) : async () => [],
+    });
+    expect(adopted.map(item => item.key)).toEqual([key]);
+    expect(opened).toEqual([left.id]);
+    expect(legatusDecisionRule(project, conversation.id, left.id)).toBe(left.id);
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close(); registry.close();
+    if (savedState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = savedState;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test.each(["codex", "claude"] as const)("startup keeps an undesignated pipeline orchestrator clean on %s", async (engine) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), `llv-startup-pipeline-orchestrator-${engine}-`));
   const previousState = process.env.LLV_STATE_DIR;

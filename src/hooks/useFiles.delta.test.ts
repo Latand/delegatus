@@ -147,6 +147,7 @@ test("v2 multi-link reconstruction equals the full-summary client state, retaini
     tasks: [{ id: "t1", text: "Task", details: "complete editor text", assignments: [], prototypeReview: { status: "waiting", rounds: [1] } }],
     flows: [{ id: "f1", state: "waiting" }], workflows: [{ id: "w1", members: ["t1"] }],
     seatDecisions: [{ id: "s1", state: "waiting" }], prototypeReviewNotices: [{ id: "r1", state: "open" }],
+    secretRequestNotices: [{ id: "secret-fixture", project: "p", createdAt: 1, expiresAt: 2, target: "entry" }],
     workLinks: { tasks: { t1: { pr: 4 } }, pipelines: {} }, systemHealth: {},
     projectCatalog: [{ project: "p", conversations: 2 }], projectAliases: { old: "p" },
     conversationAliases: { old: "new" }, launchRoutes: { "spawn:x": "new" }, pipelinesError: "temporary store refusal",
@@ -159,6 +160,7 @@ test("v2 multi-link reconstruction equals the full-summary client state, retaini
   three.files = [{ path: "/b", tag: "three" }, { path: "/new" }];
   three.flows = [];
   three.prototypeReviewNotices = [];
+  delete three.secretRequestNotices;
   const { seen, fetcher } = scripted([boardFull(one, "b1"), () => new Response(JSON.stringify({ deltas: [
     diffBoard(one, two, "b1", "b2"), diffBoard(two, three, "b2", "b3"),
   ] }), { headers: { ETag: "b3", "x-llv-files-delta-base": "b1", "x-llv-board-protocol": "2" } })]);
@@ -166,11 +168,13 @@ test("v2 multi-link reconstruction equals the full-summary client state, retaini
   const cold = createFilesClientCache(scripted([boardFull(three, "b3")]).fetcher);
   try {
     await cache.revalidate();
+    expect(cache.read().secretRequestNotices).toEqual(one.secretRequestNotices as never);
     const pipeline = cache.read().pipelines[0];
     await cache.revalidate();
     await cold.revalidate();
     expect(seen[0].headers["x-llv-board-protocol"]).toBe("2");
     expect(cache.certifiedGlobal()?.raw).toEqual(three);
+    expect(cache.read().secretRequestNotices).toBeUndefined();
     expect(cache.read()).toEqual(cold.read());
     expect(cache.read().pipelines[0]).toBe(pipeline);
   } finally { cache.dispose(); cold.dispose(); }

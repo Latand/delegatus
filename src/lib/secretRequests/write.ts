@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
 import { isStagingMode } from "@/lib/staging";
-import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
+import { FileTransactionBusyError, withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { confirmPlace, destinationRevision, fsCode, gitStatus, inspectDestination, readExistingEnv, sameEntry, sameInode, secretStagingDirectory } from "./destination";
 import { composeEnvFile } from "./envFile";
 import { SecretParentDirectory } from "./parentDirectory";
@@ -20,14 +20,16 @@ export type WriteCheckpoint = "validated" | "writing" | "created" | "journaled" 
 interface WriteOptions {
   now?: () => number;
   checkpoint?: (step: WriteCheckpoint) => void | Promise<void>;
+  authorize?: () => void;
+  actor?: "owner" | "operator";
 }
 
-function lock<T>(filename: string, run: () => Promise<T>) {
+function lock<T>(filename: string, run: () => Promise<T>, waitMs = 5_000) {
   // Lock metadata lives in private state, whose parents are controlled by
   // Delegatus. An agent-selected directory is never used for lock creation.
   const key = createHash("sha256").update(destinationLockName(filename)).digest("hex");
   return withFileTransactionAsync(statePath("secret-request-locks", key), BUSY, run,
-    { waitMs: 5_000, label: "secret-request.write" });
+    { waitMs, label: "secret-request.write" });
 }
 
 function destinationLockName(filename: string) {
@@ -136,7 +138,7 @@ async function recoverLocked(record: Writing, now: number, refusal?: SecretRefus
   } finally { await dir?.handle.close(); await staged?.directory.handle.close(); }
 }
 
-export async function readSecretRequest(id: string, now = Date.now()): Promise<SecretRequestRecord | null> {
+export async function readSecretRequest(id: string, now = Date.now(), waitMs?: number): Promise<SecretRequestRecord | null> {
   try {
     const initial = findSecretRequestRecord(id);
     if (!initial || isStagingMode() || (initial.state !== "writing" && !dueToExpire(initial, now))) return initial;
@@ -145,8 +147,9 @@ export async function readSecretRequest(id: string, now = Date.now()): Promise<S
       const current = latest?.state === "writing" && latest.destination.path === initial.destination.path
         ? await recoverLocked(latest, now) : latest;
       return current && dueToExpire(current, now) ? expirePending(id, now) : current;
-    });
+    }, waitMs);
   } catch (error) {
+    if (waitMs !== undefined && error instanceof FileTransactionBusyError) return findSecretRequestRecord(id);
     throw secretError(error, fsCode(error) === "ELOOP" ? "secret_destination_link" : "secret_request_unavailable");
   }
 }
@@ -186,15 +189,32 @@ async function expirePending(id: string, now: number): Promise<SecretRequestReco
   return saved;
 }
 
+export async function declineSecretRequest(id: string, actor: "owner" | "operator", authorize: () => void): Promise<SecretRequestRecord> {
+  if (isStagingMode()) throw new SecretRequestError("staging");
+  if (!findSecretRequestRecord(id)) throw new SecretRequestError("secret_not_pending");
+  const saved = await updateSecretRequest(id, current => {
+    authorize();
+    const now = Date.now();
+    if (current.state !== "pending") throw new SecretRequestError("secret_not_pending");
+    if (dueToExpire(current, now)) return { ...current, state: "expired", transitions: transition(current, "expired", "expiry", now) };
+    return { ...current, state: "cancelled", transitions: transition(current, "cancelled", actor, now) };
+  }, Date.now());
+  auditTransition(saved);
+  if (saved.state === "expired") throw new SecretRequestError("secret_expired");
+  return saved;
+}
+
 /** Takes ownership of the supplied bytes and wipes them on every completion. */
 export async function writeSecretRequest(id: string, revision: string, value: Uint8Array, options: WriteOptions = {}): Promise<SecretRequestRecord> {
   const now = options.now ?? Date.now;
   const checkpoint = options.checkpoint;
+  const actor = options.actor ?? "operator";
   try {
     if (isStagingMode()) throw new SecretRequestError("staging");
     const first = findSecretRequestRecord(id);
     if (!first) throw new SecretRequestError("secret_not_pending");
     return await lock(first.destination.path, async () => {
+      options.authorize?.();
       // Recover the earlier write before a second request can replace its
       // inode and erase proof that the first rename landed.
       for (const record of await writingSecretRequests()) {
@@ -260,13 +280,14 @@ export async function writeSecretRequest(id: string, revision: string, value: Ui
         }
 
         writing = await updateSecretRequest(id, current => {
+          options.authorize?.();
           if (current.state !== "pending") throw new SecretRequestError("secret_not_pending");
           const at = now();
           if (current.expiresAt <= at) throw new SecretRequestError("secret_expired");
           return {
             ...current, destination, state: "writing", write: { id: randomBytes(16).toString("hex"), parent, length,
               stagingPath, stagingParent: staged!.identity },
-            transitions: transition(current, "writing", "operator", at),
+            transitions: transition(current, "writing", actor, at),
           };
         });
         auditTransition(writing);
@@ -300,6 +321,7 @@ export async function writeSecretRequest(id: string, revision: string, value: Ui
         if (!isPrivateFile(owned) || !sameInode(owned, inode) || !sameEntry(await dir.stat(name), existing)) {
           throw new SecretRequestError("secret_destination_changed");
         }
+        options.authorize?.();
         renameAttempted = true;
         await staged.directory.renameTo(tmp, dir, name);
         await checkpoint?.("renamed");
@@ -309,7 +331,7 @@ export async function writeSecretRequest(id: string, revision: string, value: Ui
         await dir.confirm();
         const installed = await dir.stat(name);
         if (!isPrivateFile(installed) || !sameInode(installed, inode)) throw new SecretRequestError("secret_destination_changed");
-        const result = await finish(writing, inode, "operator", now());
+        const result = await finish(writing, inode, actor, now());
         await checkpoint?.("entered");
         return result;
       } catch (error) {
@@ -333,7 +355,7 @@ export async function writeSecretRequest(id: string, revision: string, value: Ui
             // and its ownership before any later request reuses the path.
             throw refusal;
           }
-          await interrupt(writing, refusal.code, "operator", now());
+          await interrupt(writing, refusal.code, actor, now());
         } else if (!writing && !refreshed) {
           if (refusal.code === "secret_expired") await expirePending(id, now());
           else await refusePending(id, refusal.code, now());

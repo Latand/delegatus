@@ -39,7 +39,7 @@ export function NeedsYouAskText({ ask, size = "panel" }: { ask: OperatorAsk; siz
           ))}
         </span>
       ) : null}
-      <span data-attention-decision="" data-needs-you-sentence="" className={`block w-full ${text} text-muted [overflow-wrap:anywhere]`}>{ask.sentence}</span>
+      {ask.sentence ? <span data-attention-decision="" data-needs-you-sentence="" className={`block w-full ${text} text-muted [overflow-wrap:anywhere]`}>{ask.sentence}</span> : null}
     </>
   );
 }

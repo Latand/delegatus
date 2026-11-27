@@ -167,7 +167,8 @@
    before the chip, the groups' gaps or the panel group give anything up. */
 [data-project-bar][data-fit~="labels"] [data-testid="dash-search"] { min-width: 96px; }
 :is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="labels"] [data-orchestrator-toggle] { padding-left: 8px; padding-right: 8px; }
-:is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="chip"] [data-attention-chip-label] { display: none; }
+/* The needs-you control folds to its dot and number; at zero it has no number, so its word stays. */
+:is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="chip"] [data-attention-island]:not([data-attention-zero]) [data-attention-chip-label] { display: none; }
 /* Tight, the groups stand 8 px apart, and the spacer goes with its two gaps. The board's search
    fills what the spacer would hold; the leaf bar's find slot does not (at its last step it is a
    32 px icon), so there the trail is pushed to the right edge instead, as at every other step. */
@@ -350,7 +351,13 @@
 .kb .col-head .n { color: var(--color-muted); font-size: var(--text-ui); }
 .kb .col-head .live { display: inline-flex; align-items: center; gap: 5px; color: var(--color-success); font-size: var(--text-label); font-weight: 600; }
 .kb .col-head .live::before { content: ""; flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.kb .col-head .needs { display: inline-flex; align-items: center; gap: 5px; color: var(--color-warning); font-size: var(--text-label); font-weight: 600; }
+.kb .col-head .needs { display: inline-flex; align-items: center; gap: 3px; color: var(--color-warning); font-size: var(--text-label); font-weight: 600; }
+/* The column's waits are a mark and a number at every width, as the phone's tab draws them: the
+   words «Needs you» belong to the header's forms, and the cards they count are named for assistive
+   tech alone. */
+.kb .col-head .needs::before { content: "⚠"; }
+.kb .col-head .needs::after { content: attr(data-count); }
+.kb .col-head .needs > .ct { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 .kb .col-head :is([data-column-stopped], [data-column-no-reason]) { color: var(--color-muted); font-size: var(--text-label); }
 .kb .col-head > :is(.live, .needs) { flex-shrink: 1; min-width: 0; }
 .kb .col-head :is(.live, .needs) > .ct { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -361,9 +368,8 @@
   .kb .col-head > .spacer { margin-left: -8px; }
   .kb .col-head > :is(.live, .needs, [data-column-stopped], [data-column-no-reason]) { flex-shrink: 0; }
   .kb .col-head > h2 { flex-shrink: 1; }
-  .kb .col-head :is(.live, .needs) > .ct { display: none; }
-  .kb .col-head :is(.live, .needs)::after { content: attr(data-count); }
-  .kb .col-head .needs::before { content: "⚠"; }
+  .kb .col-head .live > .ct { display: none; }
+  .kb .col-head .live::after { content: attr(data-count); }
   .kb .col-head :is([data-column-stopped], [data-column-no-reason]) { font-size: 0; }
   .kb .col-head [data-column-stopped]::before { content: "■"; }
   .kb .col-head [data-column-no-reason]::before { content: "⏸"; }
@@ -1118,7 +1124,7 @@
    live-tail marker repeat the header's state and are left out (the "back to
    live" control still appears once the feed is scrolled up); the composer keeps 240 px of transcript
    above it in a tall pane and a smaller strip here, never squeezed shut. */
-.kb .seat [data-orchestrator-conversation] form { max-height: min(60%, 100% - 72px); }
+.kb .seat [data-orchestrator-conversation] > form { max-height: min(60%, 100% - 72px); }
 /* The seat on top takes whatever height the grip left it, down to 160 px, and
    the share above left its composer two rows there and a 9 px slit at the
    grip's lower stop (#1734). Here the transcript is what yields, down to 72 px
@@ -1128,7 +1134,7 @@
    (`seatComposerBudget`), so a draft alone never makes the form scroll. */
 .kb .seat:not(.side):not(.folded) { min-height: calc(var(--seat-h, var(--seat-default-h)) + var(--seat-grow)); max-height: max(var(--seat-h, var(--seat-default-h)), var(--seat-default-h)); }
 .kb .seat:not(.side) [data-orchestrator-conversation] > [data-composer-yields] { min-height: 72px; }
-.kb .seat:not(.side) [data-orchestrator-conversation] form { max-height: none; flex-shrink: 1; min-height: 0; }
+.kb .seat:not(.side) [data-orchestrator-conversation] > form { max-height: none; flex-shrink: 1; min-height: 0; }
 .kb .seat [data-orchestrator-conversation] :is([data-turn-status], [data-live-tail-pill]) { display: none; }
 /* Each panel keeps its scroll to itself: at its top or end the wheel, a
    trackpad or a key stops there and the page stays between the seat and the
@@ -1138,10 +1144,11 @@
 .kb .seat [data-orchestrator-conversation] [data-log-feed-scroller] { padding-top: 4px; padding-bottom: 0; overscroll-behavior-y: contain; }
 .kb .seat [data-orchestrator-conversation] [data-feed-state] { padding-bottom: 4px; }
 .kb .seat [data-orchestrator-conversation] [data-agent-control-strip] { padding-top: 2px; padding-bottom: 2px; }
-.kb .seat [data-orchestrator-conversation] form { padding-top: 4px; padding-bottom: 4px; }
+.kb .seat [data-orchestrator-conversation] > form { padding-top: 4px; padding-bottom: 4px; }
 /* The transcript, the control strip and the composer with its model row
    start on the seat's inset, where the head's avatar does (#2185). */
-.kb .seat [data-orchestrator-conversation] :is([data-feed-state], [data-agent-control-strip], form) { padding-left: var(--inset-seat); padding-right: var(--inset-seat); }
+.kb .seat [data-orchestrator-conversation] :is([data-feed-state], [data-agent-control-strip]),
+.kb .seat [data-orchestrator-conversation] > form { padding-left: var(--inset-seat); padding-right: var(--inset-seat); }
 .kb .seat-head [data-orchestrator-incumbent] { min-width: 0; }
 .kb .seat.folded [data-orchestrator-panel] > :not(.seat-head):not(.seat-rail) { display: none; }
 /* Two rows when the seat is open: the title, Previous seats and the seat's own

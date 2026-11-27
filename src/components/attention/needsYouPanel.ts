@@ -63,6 +63,7 @@ export function needsYouLaneLine(t: TFunction, pipeline: Pipeline): string {
 export function needsYouEntrySince(entry: MobileAttentionEntry): number | null {
   if (entry.kind === "update") return Date.parse(entry.decision.at) / 1000;
   if (entry.kind === "prototype") return Date.parse(entry.notice.createdAt) / 1000;
+  if (entry.kind === "secret-request") return entry.notice.createdAt / 1000;
   if (entry.kind === "conversation") return entry.item.since;
   return laneNeed(entry.row.pipeline)?.need.since ?? null;
 }
@@ -93,7 +94,7 @@ export function needsYouCounts(queue: readonly MobileAttentionEntry[]): Map<stri
 export function needsYouEntryRole(entry: MobileAttentionEntry, pipelines: readonly Pipeline[]): FrameRole {
   if (entry.kind === "update") return "orchestrator";
   /* A review waits on its task; no agent stands behind the row. */
-  if (entry.kind === "prototype") return "neutral";
+  if (entry.kind === "prototype" || entry.kind === "secret-request") return "neutral";
   if (entry.kind === "pipeline") {
     const lane = entry.row.pipeline;
     const stageId = laneStageId(lane);
@@ -121,6 +122,7 @@ function stageRole(stage: PipelineStage | null): { kind?: string; role?: { roleI
 export function needsYouSubject(entry: MobileAttentionEntry): DismissalSubjectRequest {
   if (entry.kind === "update") throw new Error("An update decision must be answered with its own choices");
   if (entry.kind === "prototype") throw new Error("A prototype review is cleared by its choice");
+  if (entry.kind === "secret-request") throw new Error("A secret request must be answered in Decisions");
   if (entry.kind === "pipeline") {
     return { kind: "pipeline", pipelineId: entry.row.pipeline.id, laneMovedAt: drawnLaneMovement(entry.row.pipeline) };
   }
@@ -137,7 +139,7 @@ export function needsYouSubject(entry: MobileAttentionEntry): DismissalSubjectRe
 
 /** System update choices stay actionable until the operator answers them, and
     a prototype review until its choice is saved. */
-const dismissible = (entry: MobileAttentionEntry) => entry.kind !== "update" && entry.kind !== "prototype";
+const dismissible = (entry: MobileAttentionEntry) => entry.kind === "pipeline" || entry.kind === "conversation";
 export function needsYouDismissibleCount(entries: readonly MobileAttentionEntry[]): number {
   return entries.filter(dismissible).length;
 }
@@ -150,7 +152,7 @@ export function needsYouDismissal(entries: readonly MobileAttentionEntry[]): { t
 
 /** The row the operator is looking at: the open conversation, or the focused lane card. */
 export function isFocusedNeedsYouEntry(entry: MobileAttentionEntry, focus: { path: string | null; laneId: string | null }): boolean {
-  if (entry.kind === "update" || entry.kind === "prototype") return false;
+  if (!dismissible(entry)) return false;
   if (entry.kind === "pipeline") return focus.laneId !== null && entry.row.pipeline.id === focus.laneId;
   return focus.path !== null && entry.item.file.path === focus.path;
 }
@@ -158,11 +160,22 @@ export function isFocusedNeedsYouEntry(entry: MobileAttentionEntry, focus: { pat
 /** A review round that waits for answers (a worker's question the seat
     escalated through a form) states what is being decided: the waiting
     round's title is the question, since the form's own questions are
-    answered in the form. */
+    answered in the form. A round titled as its form says nothing new, so it
+    draws no question line. The sentence is the project read's; the rows show
+    the kind's word in its place (`formRowAsk`). */
 export function prototypeNoticeAsk(t: TFunction, notice: PrototypeReviewNotice): OperatorAsk {
   if (notice.undelivered) return { question: null, options: [], recommended: null, sentence: t("proto.notice.open") };
   const questions = notice.asks === "questions";
-  return { question: questions && notice.roundTitle ? notice.roundTitle : null, options: [], recommended: null, sentence: t(questions ? "needs.ask.prototypeQuestions" : "needs.ask.prototype") };
+  const round = questions ? notice.roundTitle?.trim() : "";
+  return { question: round && round !== notice.title.trim() ? round : null, options: [], recommended: null, sentence: t(questions ? "needs.ask.prototypeQuestions" : "needs.ask.prototype") };
+}
+
+/** What a waiting form's row draws under its title, so the list stays
+    minimal: its kind's word above the title already says what to do, so the
+    row repeats no instruction; a decision whose message keeps failing keeps
+    its one action. */
+export function formRowAsk(ask: OperatorAsk, notice: Pick<PrototypeReviewNotice, "undelivered">): OperatorAsk {
+  return notice.undelivered ? ask : { ...ask, sentence: "" };
 }
 
 /** What a row asks of the operator (docs/design/attention-auto-resolve.md):
@@ -170,6 +183,7 @@ export function prototypeNoticeAsk(t: TFunction, notice: PrototypeReviewNotice):
     saying what to choose or do and what happens next. */
 export function needsYouEntryAsk(t: TFunction, entry: MobileAttentionEntry): OperatorAsk {
   if (entry.kind === "prototype") return prototypeNoticeAsk(t, entry.notice);
+  if (entry.kind === "secret-request") return { question: null, options: [], recommended: null, sentence: t("secretRequest.attention") };
   if (entry.kind === "update") return { question: null, options: [], recommended: null, sentence: t("selfUpdate.auto.decision.body") };
   return entry.kind === "conversation"
     ? conversationOperatorAsk(t, entry.item.reason, entry.item.file)
@@ -189,6 +203,7 @@ export interface NeedsYouRowText extends Omit<OperatorAsk, "sentence"> {
 export function needsYouRowText(t: TFunction, entry: MobileAttentionEntry): NeedsYouRowText {
   const { sentence, ...ask } = needsYouEntryAsk(t, entry);
   if (entry.kind === "prototype") return { title: entry.notice.title, line: entry.notice.undelivered ? t("proto.notice.undelivered") : sentence, label: t("proto.notice.open"), ...ask };
+  if (entry.kind === "secret-request") return { title: entry.notice.target, line: sentence, label: t("secretRequest.kind"), ...ask };
   if (entry.kind === "update") return { title: t("selfUpdate.auto.decision.title"), line: sentence, label: t("selfUpdate.auto.decision.title"), ...ask };
   return entry.kind === "conversation"
     ? { title: entry.item.reason.report?.body || cleanTitle(entry.item.file.title, 90), line: sentence, label: reasonLine(t, entry.item.reason), ...ask }

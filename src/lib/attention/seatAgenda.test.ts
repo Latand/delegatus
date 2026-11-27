@@ -55,6 +55,24 @@ test("a routed lane names the stage's own question, the decision answer path and
   expect(line!.label).toContain("pipeline_action resolve-decision");
 });
 
+test.each([
+  { launchId: "interrupted-launch", attemptError: null },
+  { launchId: "interrupted-launch", attemptError: "the clicked launch is still starting" },
+  { launchId: null, attemptError: null },
+])("an interrupted stage launch wake gives the seat a retry action (%j)", ({ launchId, attemptError }) => {
+  const detail = "structured spawn interrupted before runtime admission: interrupted-launch";
+  const lane = {
+    id: "lane", task: "Review changes", project: "project-a", state: "needs_decision", createdAt: at, stateDetail: detail,
+    stages: [{ id: "review", kind: "run" }], cursor: { stageId: "review", state: "spawning" },
+    runs: [{ stageId: "review", attempts: [{ n: 1, state: "needs_decision", launchId, error: attemptError ?? detail }] }],
+    attentionRoute: { key: "lane:lane:lane-decision:none", owner: "seat", seat: "conversation_seat" },
+  } as unknown as Pipeline;
+  const [line] = seatAgendaAsks({ files: [], pipelines: [lane] }, now, "project-a");
+  expect(line!.label).toContain(launchId
+    ? 'pipeline_action retry-stage with stageId "review" and launchId "interrupted-launch"'
+    : "pipeline_action retry-stage checks the original launch");
+});
+
 test.each(["fail-edge budget exhausted after 2 round(s)", "round limit reached"])("a failed visual gate with %s gets review advice", (detail) => {
   const lane = {
     id: "visual", task: "Check the panel", project: "project-a", state: "needs_decision", createdAt: at, stateDetail: detail,

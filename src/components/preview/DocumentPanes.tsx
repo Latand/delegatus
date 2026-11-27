@@ -24,7 +24,9 @@ export const MARKDOWN_RENDER_BYTES = 2 * 1024 * 1024;
     read the viewer's DOM, storage or cookies, and its API calls arrive
     cross-origin and are refused. The frame route sends the same sandbox as a
     CSP, so the page stays origin-less when opened in its own tab. */
+/** Project reports retain the interactions supported before evidence previews. */
 export const FRAME_SANDBOX = "allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals";
+export const EVIDENCE_FRAME_SANDBOX = "allow-scripts";
 
 export type DocumentMode = "rendered" | "source";
 
@@ -147,12 +149,12 @@ export function HtmlPane({
   onFailure: (failure: ArtifactFailure) => void;
 }) {
   const { t } = useLocale();
-  const [mode, setMode] = useState<DocumentMode>(line ? "source" : "rendered");
+  const [mode, setMode] = useState<DocumentMode>(line && !meta.frameOnly ? "source" : "rendered");
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <Toolbar>
+      {!meta.frameOnly ? <Toolbar>
         <ModeToggle mode={mode} onMode={setMode} mobile={mobile} />
-      </Toolbar>
+      </Toolbar> : null}
       {mode === "source" ? (
         <TextPane path={path} meta={meta} mobile={mobile} line={line} onFailure={onFailure} />
       ) : (
@@ -160,7 +162,7 @@ export function HtmlPane({
         <iframe
           key={anchor ?? ""}
           src={frameSource(meta.frame, anchor)}
-          sandbox={FRAME_SANDBOX}
+          sandbox={meta.frameOnly ? EVIDENCE_FRAME_SANDBOX : FRAME_SANDBOX}
           referrerPolicy="no-referrer"
           title={t("preview.frameTitle", { name: meta.name })}
           data-preview-frame
