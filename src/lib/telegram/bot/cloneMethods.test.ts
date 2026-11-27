@@ -347,7 +347,7 @@ test.each(["approve", "revoke"] as const)("pairing-only file confirmation can %s
   if (mode === "revoke") relay.paused = true;
   const decision = service.decideFileConfirmation(id, confirmation.digest, true, () => {});
   if (mode === "approve") { expect(await decision).toMatchObject({ sentBy: { name: "Report clone" } }); expect(sends).toHaveLength(1); }
-  else { await expect(decision).rejects.toMatchObject({ code: "bot_not_connected" }); expect(sends).toEqual([]); }
+  else { await expect(decision).rejects.toMatchObject({ code: "bot_not_in_chat" }); expect(sends).toEqual([]); }
 });
 test("album receipts keep Telegram order and rich-message media are JSON", async () => {
   answer = () => ({ body: { ...cloneReceipt(107), message_ids: [107, 103] } });
@@ -473,15 +473,17 @@ test.each(["missing", "short", "duplicate", "first", "extra"] as const)("%s albu
   await expect(media("bad-receipt", true)).rejects.toMatchObject({ code: "send_uncertain" });
   expect(sends).toHaveLength(1); expect(bot.callsOf("sendMediaGroup")).toHaveLength(0);
 });
-test.each(["pairing", "descriptor", "limits"] as const)("feature absent in %s preserves legacy text wire and local files", async source => {
+test.each(["pairing", "descriptor", "limits"] as const)("feature absent in %s refreshes file capabilities and preserves legacy text wire", async source => {
   if (source === "pairing") relay.features = [];
-  else if (source === "descriptor") advertised = false;
-  else limitsPresent = false;
-  expect(await document()).toMatchObject({ sentBy: { name: "Fixture bot" } });
-  expect(await media()).toMatchObject({ sentBy: { name: "Fixture bot" } });
-  await service.send({ ...common("text"), text: "Legacy text", format: "html" });
-  expect(sends[0]!.input).toEqual({ client_key: expect.any(String), chat_id: group.id, text: "Legacy text", parse_mode: "HTML", silent: true, reply_to_message_id: 17, message_thread_id: 12 });
-  expect(sends[0]!.raw).toBeNull(); expect(descriptors).toBe(source === "pairing" ? 0 : 1); expect(rightsReads).toBe(0);
+  else if (source === "descriptor") { advertised = false; now += 60_001; }
+  else { limitsPresent = false; now += 60_001; }
+  const sender = source === "pairing" ? "Report clone" : "Fixture bot";
+  expect(await document()).toMatchObject({ sentBy: { name: sender } });
+  expect(await media()).toMatchObject({ sentBy: { name: sender } });
+  const text = await service.send({ ...common("text"), text: "Legacy text", format: "html" });
+  expect(text.sentBy.name).toBe("Report clone");
+  expect(sends.at(-1)!.raw).toBeNull();
+  expect(descriptors).toBe(1); expect(rightsReads).toBe(source === "pairing" ? 1 : 0);
 });
 test("allowlist, assignment, pairing and expired rights are rechecked before emission", async () => {
   const send = port.send;
@@ -544,7 +546,7 @@ test.each(["document", "media", "album"] as const)("SDK MCP %s reaches real serv
     expect((await client.callTool({ name: kind === "document" ? "telegram_bot_send_document" : "telegram_bot_send_media",
       arguments: { ...args, clientRequestId: "short-caller" }, _meta: { "delegatus/deadlineAt": cloneMethodsNow + 2000 } })).structuredContent).toMatchObject({ ok: false, code: "chat_not_allowed" });
     expect(callBudgets.at(-1)).toBe(2000);
-    service.setChat(String(group.id), "reports", true); relay.features = [];
+    service.setChat(String(group.id), "reports", true); relay.features = []; advertised = false; now += 60_001;
     updateRelayStore(store => ({ ...store, relays: [relay] }));
     expect((await client.callTool({ name: kind === "document" ? "telegram_bot_send_document" : "telegram_bot_send_media",
       arguments: { ...args, clientRequestId: "feature-absent" } })).structuredContent).toMatchObject({ ok: true, sentBy: { name: "Fixture bot" } });

@@ -329,7 +329,7 @@ export class TelegramBotService {
     return () => {
       approval.authorize();
       const current = this.store().chat(chat.chatId);
-      if (Date.parse(approval.expiresAt) <= this.deps.now().getTime() || !botId || this.fileSenderIdentity(chat) !== botId)
+      if (Date.parse(approval.expiresAt) <= this.deps.now().getTime() || (botId && this.fileSenderIdentity(chat) !== botId))
         throw new TelegramBotError("confirmation_invalid", "This confirmation expired or the connected bot changed.");
       const refusal = current ? postRefusal(current) : null;
       if (!current || refusal) throw new TelegramBotError(refusal?.code ?? "chat_not_allowed", refusal?.reason ?? "The destination is no longer available.");
