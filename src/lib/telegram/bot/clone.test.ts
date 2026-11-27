@@ -194,7 +194,7 @@ test("media and documents stay on the bot even when a clone covers the group", a
   await service.sendDocument({ ...common, clientRequestId: "document", document: { path: document } });
   expect(sends).toHaveLength(0); expect(bot.callsOf("sendPhoto")).toHaveLength(1); expect(bot.callsOf("sendDocument")).toHaveLength(1);
 });
-test.each(["document", "media"] as const)("MCP %s explains clone file support without changing delivery", async kind => {
+test.each(["document", "media"] as const)("MCP %s reports unavailable clone file capabilities without changing delivery", async kind => {
   const handoff = path.join(root, "handoff"); fs.mkdirSync(handoff, { recursive: true });
   const file = path.join(handoff, kind === "document" ? "fixture-report.md" : "fixture-frame.png");
   if (kind === "document") fs.writeFileSync(file, "A clean fixture report.");
@@ -224,11 +224,11 @@ test.each(["document", "media"] as const)("MCP %s explains clone file support wi
     } })).structuredContent;
     const refusal = await call("clone-file-refused");
     expect(refusal).toMatchObject({ ok: false, code: "clone_files_unsupported", retryable: false,
-      error: 'The paired clone "Report clone" covers this chat but cannot send files yet.',
+      error: 'The paired clone "Report clone" has no verified current relay file capabilities.',
       details: { refusals: [
         expect.objectContaining({ bot: { name: "Fixture bot", username: "fixture_bot" }, code: "bot_not_in_chat" }),
         expect.objectContaining({ bot: { name: "Report clone", username: null }, code: "clone_files_unsupported",
-          reason: 'The paired clone "Report clone" covers this chat but cannot send files yet.', source: "check" }),
+          reason: 'The paired clone "Report clone" has no verified current relay file capabilities.', source: "check" }),
       ] } });
     expect(await call("clone-file-refused")).toMatchObject({ ...refusal as object, replayed: true });
     expect(store.sendRow(`${kind}:fixture-writer`, "clone-file-refused")).toMatchObject({ state: "failed",
@@ -286,7 +286,7 @@ test.each(["document", "media"] as const)("MCP %s explains clone file support wi
     try {
       port.route = async chat => { const found = await route(chat); return found && { ...found, name: "R".repeat(1024) }; };
       expect(await call("long-clone-name")).toMatchObject({ ok: false, code: "clone_files_unsupported",
-        error: `The paired clone "${"R".repeat(128)}" covers this chat but cannot send files yet.` });
+        error: `The paired clone "${"R".repeat(128)}" has no verified current relay file capabilities.` });
     } finally { port.route = route; }
     expect(bot.callsOf(method)).toHaveLength(1); expect(sends).toHaveLength(1);
   } finally {
@@ -296,7 +296,7 @@ test.each(["document", "media"] as const)("MCP %s explains clone file support wi
     if (oldToken === undefined) delete process.env.LLV_VIEWER_CONTROL_TOKEN; else process.env.LLV_VIEWER_CONTROL_TOKEN = oldToken;
   }
 });
-test.each(["document", "media"] as const)("pairing-only MCP %s explains the clone file limitation", async kind => {
+test.each(["document", "media"] as const)("pairing-only MCP %s reports unavailable clone file capabilities", async kind => {
   const handoff = path.join(root, "handoff"); fs.mkdirSync(handoff, { recursive: true });
   const file = path.join(handoff, kind === "document" ? "pairing-only-report.md" : "pairing-only-frame.png");
   if (kind === "document") fs.writeFileSync(file, "A clean fixture report.");
@@ -335,7 +335,7 @@ test.each(["document", "media"] as const)("pairing-only MCP %s explains the clon
       clientRequestId: `pairing-only-${kind}`, chat: "reports", ...payload,
     } });
     expect(refusal.structuredContent).toMatchObject({ ok: false, code: "clone_files_unsupported", retryable: false,
-      error: 'The paired clone "Report clone" covers this chat but cannot send files yet.',
+      error: 'The paired clone "Report clone" has no verified current relay file capabilities.',
       details: { refusals: [expect.objectContaining({ bot: { name: "Report clone", username: null }, code: "clone_files_unsupported" })] } });
     expect(store.sendRow(`${kind}:fixture-writer`, `pairing-only-${kind}`)).toMatchObject({ state: "failed", errorCode: "clone_files_unsupported", messageIds: [] });
     expect(sends).toEqual([]);
