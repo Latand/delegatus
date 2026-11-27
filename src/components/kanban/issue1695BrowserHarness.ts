@@ -824,7 +824,7 @@ export async function serveEvidenceFixture(
   outDir: string,
   entryFixture = "src/components/kanban/issue1695Evidence.fixture.tsx",
   responses: Record<string, unknown> = {},
-  options: { derivationTiming?: boolean; serialComposerPrerequisites?: boolean } = {},
+  options: { derivationTiming?: boolean; serialComposerPrerequisites?: boolean; hostname?: "127.0.0.1" | "::1" } = {},
 ): Promise<{ base: string; stop: () => void }> {
   /* Bundled in a separate process: inside the `bun test` process,
      `Bun.build` resolves the `@/` alias for some module graphs and not for
@@ -839,7 +839,7 @@ export async function serveEvidenceFixture(
   const entry = path.join(bundle, `${path.basename(entryFixture).replace(/\.tsx?$/, "")}.js`);
   const css = await postcss([tailwind()]).process(fs.readFileSync("src/app/globals.css", "utf8"), { from: path.resolve("src/app/globals.css") });
   const server = Bun.serve({
-    hostname: "127.0.0.1",
+    hostname: options.hostname ?? "127.0.0.1",
     port: 0,
     // Browser Stop aborts an in-flight HTTP response. Bun's fixture adapter
     // needs the same aborted-request boundary the Next adapter supplies.
@@ -866,7 +866,8 @@ export async function serveEvidenceFixture(
     },
   });
   adopt(() => server.stop(true));
-  return { base: `http://127.0.0.1:${server.port}/`, stop: () => server.stop(true) };
+  const hostname = options.hostname === "::1" ? "[::1]" : "127.0.0.1";
+  return { base: `http://${hostname}:${server.port}/`, stop: () => server.stop(true) };
 }
 
 export async function openFixture(

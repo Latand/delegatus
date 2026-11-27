@@ -24,10 +24,8 @@ test("a frame minted before member revocation is refused, including after restor
   const store = teamStore();
   const owner = claimInstall(store, "Owner", device, NOW).member;
   const person = redeemJoin(store, createInvite(store, owner, null, NOW).code, "Member A", device, NOW);
-  // The third argument binds the capability to a session; older versions ignore it.
-  const mint = mintFrameScope as (directory: string, now: number, sessionId: string) => string;
-  const scope = mint("/project/reports", NOW, person.session.id);
-  expect(verifyFrameScope(scope, NOW)).toBe("/project/reports");
+  const scope = mintFrameScope("/project/reports", NOW, person.session.id);
+  expect(verifyFrameScope(scope, NOW)).toEqual({ directory: "/project/reports", kind: "project", sessionId: person.session.id, workspaceProject: null, evidenceRoot: null, evidenceRootPath: null });
   revokeMember(store, owner, person.member, NOW + 1);
   expect(verifyFrameScope(scope, NOW + 2)).toBeNull();
   restoreMember(store, owner, store.member(person.member.id)!, NOW + 3);
@@ -41,12 +39,13 @@ test("sign-out revokes only that session's frames", () => {
   const store = teamStore();
   const owner = claimInstall(store, "Owner", device, NOW);
   const second = mintSession(store, owner.member.id, "approval", device, NOW);
-  const mint = mintFrameScope as (directory: string, now: number, sessionId: string) => string;
-  const firstFrame = mint("/project/reports", NOW, owner.session.id);
-  const secondFrame = mint("/project/reports", NOW, second.session.id);
+  const firstFrame = mintFrameScope("/state/evidence", NOW, owner.session.id, "evidence");
+  const secondFrame = mintFrameScope("/project/reports", NOW, second.session.id);
+  expect(verifyFrameScope(firstFrame, NOW)).toEqual({ directory: "/state/evidence", kind: "evidence", sessionId: owner.session.id, workspaceProject: null, evidenceRoot: null, evidenceRootPath: null });
+  expect(verifyFrameScope(firstFrame.replace(".evidence.", ".project."), NOW)).toBeNull();
   store.revokeSession(owner.session.id, new Date(NOW + 1).toISOString());
   expect(verifyFrameScope(firstFrame, NOW + 2)).toBeNull();
-  expect(verifyFrameScope(secondFrame, NOW + 2)).toBe("/project/reports");
+  expect(verifyFrameScope(secondFrame, NOW + 2)).toEqual({ directory: "/project/reports", kind: "project", sessionId: second.session.id, workspaceProject: null, evidenceRoot: null, evidenceRootPath: null });
 });
 
 test("a session's absolute expiry and idle bound are checked even within a new frame's lifetime", () => {
@@ -58,7 +57,7 @@ test("a session's absolute expiry and idle bound are checked even within a new f
   const session = { ...owner.session, id: "expired-session", expiresAt: new Date(NOW + 1).toISOString() };
   store.insertSession(session);
   const expiring = mintFrameScope("/project/reports", NOW, session.id);
-  expect(verifyFrameScope(expiring, NOW)).toBe("/project/reports");
+  expect(verifyFrameScope(expiring, NOW)).toEqual({ directory: "/project/reports", kind: "project", sessionId: session.id, workspaceProject: null, evidenceRoot: null, evidenceRootPath: null });
   expect(verifyFrameScope(expiring, NOW + 1)).toBeNull();
   const stale = { ...owner.session, id: "idle-session", lastSeenAt: new Date(NOW - SESSION_IDLE_MS).toISOString() };
   store.insertSession(stale);
@@ -77,4 +76,14 @@ test("unbound, altered and unreadable session authority grant no team frame", ()
   const read = spyOn(store, "session").mockImplementation(() => { throw Error("injected session read failure"); });
   try { expect(verifyFrameScope(scope, NOW)).toBeNull(); }
   finally { read.mockRestore(); }
+});
+
+test("signed native Windows evidence directories verify as absolute paths", () => {
+  directory = fs.mkdtempSync(path.join(os.tmpdir(), "frame-session-"));
+  process.env.LLV_STATE_DIR = directory;
+  resetTeamStoreForTests();
+  const windows = mintFrameScope("C:\\agent\\evidence\\report", NOW, null, "evidence");
+  const posix = mintFrameScope("/agent/evidence/report", NOW, null, "evidence");
+  expect(verifyFrameScope(windows, NOW)).toMatchObject({ directory: "C:\\agent\\evidence\\report", kind: "evidence" });
+  expect(verifyFrameScope(posix, NOW)).toMatchObject({ directory: "/agent/evidence/report", kind: "evidence" });
 });

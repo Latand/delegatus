@@ -692,6 +692,23 @@ async function main() {
     const safeOutput = () => scrubOutput(output, tempDirectory);
     await waitForOk(port, "/api/files", server, safeOutput);
     console.log("npm package smoke: /api/files returned 200.");
+    const report = path.join(stateDirectory, "evidence", "agents", "package-smoke", "report.html");
+    const heading = "<h1>Packaged evidence report</h1>";
+    await mkdir(path.dirname(report), { recursive: true });
+    await writeFile(report, `${heading}<script>document.body.remove()</script>`);
+    const metadata = await jsonRequest(port, `/api/artifact?${new URLSearchParams({ mode: "meta", path: report })}`);
+    if (metadata.status !== 200 || !metadata.body?.frameOnly || !metadata.body?.frame?.startsWith("/api/artifact/frame/")) {
+      throw new Error(`packed evidence report metadata failed with HTTP ${metadata.status}`);
+    }
+    const frame = await fetch(new URL(metadata.body.frame, `http://127.0.0.1:${port}`), {
+      redirect: "error",
+      signal: AbortSignal.timeout(5_000),
+    });
+    const reportBody = await frame.text();
+    if (frame.status !== 200 || !reportBody.includes(heading) || reportBody.includes("<script")) {
+      throw new Error(`packed evidence report frame failed with HTTP ${frame.status}: ${safeOutput()}`);
+    }
+    console.log(`npm package smoke: evidence metadata and frame returned HTTP ${metadata.status}/${frame.status}; body contained ${heading}.`);
     const cue = await probe(port, "/audio/cues/tool-tick-1.mp3");
     if (cue.status !== 200 || !(cue.bytes > 0) || cue.bytes !== Number(cue.headers["content-length"]) || !String(cue.headers["content-type"]).startsWith("audio/")) {
       throw new Error(`packed audio cue failed: status ${cue.status}, type ${cue.headers["content-type"]}`);
