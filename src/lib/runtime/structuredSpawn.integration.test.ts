@@ -6912,8 +6912,7 @@ test.each(["healthy", "uncertain acknowledgement", "payload timeout", "missing p
   const host = new RoundTripHost("codex", artifactPath, id);
   const key = { engine: "codex" as const, sessionId: id };
   await bindStructuredDeliveryQueue([], { registry, client });
-  const clientAttemptId = fault === "missing project start link" ? projectStartKey("seat", "7".repeat(64)) : undefined;
-  const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd, transport: "structured", accountId: "work", clientAttemptId });
+  const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd, transport: "structured", accountId: "work" });
   if (begun.kind !== "created") throw new Error("fixture reservation failed");
   let starts = 0;
   const stages = spyOn(registry, "stageStructuredSpawn");
@@ -6940,6 +6939,15 @@ test.each(["healthy", "uncertain acknowledgement", "payload timeout", "missing p
   // Lose every launch-local closure, as a replaced Viewer does. The host here
   // stands for startup's adopted host of the SAME session; recovery cannot start one.
   (process as typeof process & { __llvStagedContinuations?: Map<string, unknown> }).__llvStagedContinuations?.delete(begun.receipt.launchId);
+  const clientAttemptId = fault === "missing project start link" ? projectStartKey("seat", "7".repeat(64)) : null;
+  if (clientAttemptId) {
+    // On restart the launch ledger can retain a project-start key even when
+    // the original MCP receipt is gone. Inject that evidence after staging so
+    // the foreground admission check cannot settle the recovery fixture early.
+    const retained = registry.snapshot();
+    retained.receipts[begun.receipt.launchId]!.clientAttemptId = clientAttemptId;
+    fs.writeFileSync(registry.filename, JSON.stringify(retained));
+  }
   const reopened = new AgentRegistry(registry.filename, undefined, undefined, { sqliteMode: "off" });
   await bindStructuredDeliveryQueue([ { key, host } ], { registry: reopened, client });
   const { recoverStagedStructuredLaunch } = await import("./structuredSpawn");
