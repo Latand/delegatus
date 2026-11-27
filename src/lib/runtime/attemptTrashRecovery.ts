@@ -117,6 +117,8 @@ export class AttemptTrashRecovery {
   page(now: () => number, deadline: number, budgetNow = now,
     discovery: false | { unknown: (scratch: string, name: string) => string | undefined; complete: () => void } | undefined = undefined) {
     const result = { entries: 0, manifestEntries: 0, checks: 0, restored: 0, adopted: 0, recoveredDirectory: null as string | null,
+      /** A claimed tree only the ledger's own row names; the sweep decides. */
+      ledgerOwned: null as string | null,
       outcomes: [] as Array<{ directory: string; disposition: "held" | "deferred"; bytes: number; reason: string }> };
     if (budgetNow() >= deadline) return result;
     const scan = this.db.query<{ cursor: string; turn: number }, []>("SELECT cursor,turn FROM trash_recovery_scan WHERE id=1").get()!;
@@ -251,6 +253,12 @@ export class AttemptTrashRecovery {
       if (recorded.overflow) return hold();
       for (const value of recorded.bindings) offer(value);
       const current = readAttemptTempTrash(attemptTempJournalPath(candidate.directory), this.scratch);
+      // No copy or check names this tree, while the ledger row that owns it
+      // still records the same inode. A removal cut after it began looks
+      // exactly like this.
+      if (!conflict && !binding && current && current.identity === journal.identity && current.trash === journal.trash
+        && this.db.query("SELECT 1 FROM roots WHERE directory=? AND identity=? AND launchId<>'adopted'").get(journal.directory, journal.identity))
+        result.ledgerOwned = journal.directory;
       if (conflict || !binding || !current || current.identity !== journal.identity || current.trash !== journal.trash) return hold();
       const agreed: Binding = binding;
       const existing = this.db.query<{ pipelineId: string | null; launchId: string; identity: string }, [string]>(

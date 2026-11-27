@@ -1863,6 +1863,41 @@ test.each(["owned", "stray", "claimed", "emptied"] as const)("a finished interru
   }
 });
 
+test("replay checks a partial native claim for recent writes before resuming removal", async () => {
+  const root = tempRoot(), directory = strayFixture(root, "rev-claim-write");
+  const state = tempRoot(), previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = state;
+  const now = Date.now() + 2 * DAY;
+  const options: TempSweepOptions = { ...strayOptions(root), now: () => now };
+  try {
+    const interruptAfterPartialRemoval = async (trash: string, started: () => void) => removeTreeWithinAttemptBudget(trash, started,
+      (async (_exe: string, args: string[]) => {
+        fs.unlinkSync(path.join(args[2]!, "file.txt"));
+        throw new Error("fixture interrupted after partial native removal");
+      }) as never);
+    const cut = await realSweep({ ...options, remove: interruptAfterPartialRemoval });
+    expect(cut.errors).toHaveLength(1);
+    const journal = path.join(root, fs.readdirSync(root).find(name => name.startsWith(".delegatus-sweep-") && name.endsWith(".json"))!);
+    const claim = path.join(root, fs.readdirSync(root).find(name => name.startsWith(".delegatus-trash-claim-"))!);
+    const fresh = path.join(claim, "fresh-write");
+    fs.writeFileSync(fresh, "preserve");
+    fs.utimesSync(fresh, new Date(now + 1000), new Date(now + 1000));
+    const checked: string[] = [];
+    const replay = await realSweep({ ...options, now: () => now + 1000,
+      eligible: async target => {
+        checked.push(target);
+        const cutoff = now + 1000 - 3 * HOUR, tree = inspectTree(target, { threshold: cutoff, ignoreRootCtime: true });
+        return tree.hold === null && tree.newestMs <= cutoff;
+      } });
+    expect(checked).toEqual([claim]);
+    expect(replay.trashFinished).toBe(0);
+    expect(fs.readFileSync(path.join(claim, "fresh-write"), "utf8")).toBe("preserve");
+    expect(fs.existsSync(journal)).toBeTrue();
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+  }
+});
+
 test.each(["owned", "stray"] as const)("a replayed %s removal does not spend this pass's removal budget", async kind => {
   const root = tempRoot(), name = (suffix: string) => `${kind === "stray" ? "rev" : "llv"}-replay-${suffix}`;
   const first = strayFixture(root, name("first")), now = Date.now() + 2 * DAY;

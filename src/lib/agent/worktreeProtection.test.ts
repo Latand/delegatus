@@ -42,6 +42,44 @@ test("retention reads compact current evidence without hydrating terminal delive
   } finally { peer.close(); }
 });
 
+test("a view scoped to a directory holds everything the whole view holds at or below it", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "worktree-protection-scoped-")); roots.push(root);
+  const dataset = buildRegistryPerformanceDataset(root, scaledRegistryPerformanceShape(0.02));
+  const store = new SqliteAgentRegistryStore(dataset.filename, {
+    initialSnapshot: () => { throw new Error("already imported"); }, normalize: normalizeRegistry,
+  }); stores.push(store);
+  const whole = store.worktreeProtectionSnapshot();
+  const entries = Object.keys(whole.entries), conversations = Object.keys(whole.conversations)
+    .filter(key => whole.conversations[key]!.generations?.length);
+  const scope = "/scoped/namespace", sibling = `${scope}-sibling`;
+  const placed = [scope, `${scope}/root`, `${scope}/root/nested`, sibling, "/scoped"];
+  const peer = new Database(dataset.filename);
+  const stamp = store.worktreeProtectionStamp();
+  expect(store.worktreeProtectionStamp()).toBe(stamp);
+  try {
+    placed.forEach((cwd, index) => {
+      peer.query("UPDATE registry_rows SET value_json=json_set(value_json,'$.cwd',?) WHERE collection='entries' AND row_key=?")
+        .run(cwd, entries[index]!);
+      peer.query(`UPDATE registry_rows SET value_json=json_set(value_json,'$.generations[#-1].launchProfile.cwd',?,'$.migration',json(?))
+        WHERE collection='conversations' AND row_key=?`).run(cwd, JSON.stringify({ intentId: "scoped", phase: "preparing", targetId: "target",
+          revision: 1, error: null, updatedAt: "2026-11-01T00:00:00Z" }), conversations[index]!);
+    });
+  } finally { peer.close(); }
+  // A peer's commit changes the stamp a cached view was taken under.
+  expect(store.worktreeProtectionStamp()).not.toBe(stamp);
+  const scoped = store.worktreeProtectionSnapshot([scope]);
+  expect(Object.keys(scoped.entries).sort()).toEqual(entries.slice(0, 3).sort());
+  expect(Object.keys(scoped.conversations).sort()).toEqual(conversations.slice(0, 3).sort());
+  const at = Date.parse("2026-11-01T00:00:00Z");
+  const inside = (file: ReturnType<typeof store.worktreeProtectionSnapshot>) => {
+    const { held, deferred } = conversationCwdStatus(file, at, () => false, undefined, false);
+    return [...held, ...deferred].filter(cwd => cwd === scope || cwd.startsWith(`${scope}/`)).sort();
+  };
+  expect(inside(scoped)).toEqual(inside(store.worktreeProtectionSnapshot()));
+  expect(inside(scoped)).toEqual(placed.slice(0, 3));
+  expect(store.worktreeProtectionSnapshot([])).toMatchObject({ entries: {}, conversations: {} });
+});
+
 test("one protection view pins all collections while a peer changes owners, and the next read sees the commit", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "worktree-protection-peer-")); roots.push(root);
   const dataset = buildRegistryPerformanceDataset(root, scaledRegistryPerformanceShape(0.02));

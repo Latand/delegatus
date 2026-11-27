@@ -99,11 +99,11 @@ position comes back. PNGs go to `/tmp/landing-fullscreen-renders/`.
 `landing/wrangler.jsonc` is the source of the `delegatus-landing` Worker
 configuration. It retains the compatibility date, the two custom domains,
 `workers_dev: false` and static 404 handling of the existing deployment.
-Assets now come directly from `landing/site/dist/`. Only `/api/*` runs the
-script first; every other path remains a static asset. `ASSETS` is the asset
-fallback and `SITE_EVENTS` binds the Analytics Engine dataset `site_events`.
-The account id and tokens belong in the deployer's protected environment
-(`CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`), never in this config.
+Assets come from `landing/site/dist/`. The Worker handles `/api/*` and
+`/stats` (including subpaths) before the `ASSETS` fallback. Wrangler
+creates the SQLite-backed `STATS` binding through the first migration and
+provides the `STATS_VERSION` deployment identifier. Install and event
+writes and signed-in page reads use the object.
 
 From the repository root:
 
@@ -112,12 +112,13 @@ flock /var/tmp/llv-heavy-gate.lock bun landing/site/build.ts
 bunx wrangler deploy --config landing/wrangler.jsonc --dry-run
 ```
 
-After merge, the authorized deployer publishes with
-`bunx wrangler deploy --config landing/wrangler.jsonc` using the same protected
-environment. There is no need to copy the build into a separate deploy
-directory. The build and dry-run do not publish anything. Account eligibility
-for Analytics Engine is checked on publication; a binding refusal must be
-brought to the operator before continuing.
+The authorized seat publishes from the protected Wrangler environment
+(`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`). Keep the existing
+`STATS_AE_TOKEN` (Account Analytics Read) and `STATS_ACCOUNT_ID` secrets
+through the one-time history import. The rollout covers import completion,
+removal of those secrets and the edge Access application, passkey enrollment
+through `STATS_ENROLLMENT`, and revocation of the old token.
+See [the private stats rollout](../../docs/design/stats-private-login.md#5-rollout).
 
 ## Site event contract
 
@@ -137,14 +138,14 @@ Opening any frame full screen counts once, including the Safari overlay.
 
 Every extra field, unknown event, invalid value, malformed JSON or body over
 1024 bytes receives 400 and writes nothing. Valid events receive 204 and write
-exactly one point. The Worker adds only `request.cf.country` (a two-letter
+one increment to the day’s aggregate. The Worker adds only `request.cf.country` (a two-letter
 code, or an empty string when unavailable). It stores no cookie, id or IP.
 
-For the metrics reader, ordered fields in `site_events` are `blob1 = event`,
-`blob2 = agent` (empty for the other events), `blob3 = lang`, `blob4 = country`,
-`double1 = 1`, `index1 = event`. Use `SUM(_sample_interval * double1)` for
-counts so Analytics Engine sampling is represented. The footer discloses the
-existing Cloudflare Web Analytics beacon and these four actions in EN/UK.
+For the metrics reader, `site_event_days` stores totals by UTC day, event,
+agent (empty for the other events), language and country. `/stats` sums the
+totals across agent, language and country for each day and action. The
+footer discloses the Cloudflare Web Analytics beacon and the four actions in
+English and Ukrainian.
 
 Focused checks:
 
