@@ -206,7 +206,7 @@ for (const tool of ["leave_lesson", "bridge_report"] as const) {
     expect(sends).toBe(tool === "bridge_report" ? 1 : 0);
   });
 
-  test(`${tool} retains an older busy receipt and an interrupted claim`, async () => {
+  test(`${tool} preserves older unbound receipts without replaying their answers`, async () => {
     const client = await connect();
     const saved = { ok: false as const, toolName: tool, clientRequestId: args.clientRequestId, code: "tool_failed", error: busyMessage, retryable: true, replayed: false };
     const digest = requestDigest(tool, args);
@@ -214,7 +214,9 @@ for (const tool of ["leave_lesson", "bridge_report"] as const) {
     expect(await call(client, tool)).toMatchObject({ ok: false, code: "outcome_unknown", replayed: true });
     receipts[0]!.complete(receiptKey, digest, saved, "durable");
     serviceIndex = 1;
-    expect(await call(client, tool)).toEqual({ ...saved, replayed: true });
+    expect(await call(client, tool)).toEqual({ ok: false, toolName: tool, clientRequestId: args.clientRequestId, replayed: true,
+      code: "idempotency_conflict", error: "clientRequestId does not match the original call", retryable: false });
+    expect(receipts[1]!.lookup(receiptKey)?.result).toEqual(saved);
     expect(effect()).toHaveLength(0);
     expect(sends).toBe(0);
   });

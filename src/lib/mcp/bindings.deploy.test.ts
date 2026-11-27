@@ -23,7 +23,7 @@ import { RuntimeJournal } from "../../runtime-host/journal";
 import { RuntimeHost } from "../../runtime-host/host";
 import { serveRuntimeHost } from "../../runtime-host/socket";
 import { productionViewerControlDependencies, viewerMcpBindings, viewerMcpToolPolicy, type ViewerControlDependencies } from "./bindings";
-import { createMcpToolService, createViewerMcpServer, McpDeploymentPendingError, SqliteMcpReceiptStore } from "./server";
+import { createMcpToolService, createViewerMcpServer, McpDeploymentPendingError, SqliteMcpReceiptStore, type McpToolBinding, type McpToolBindings } from "./server";
 import { handleMcpHttpRequest, setMcpHttpDependenciesForTests } from "./http";
 import { recordSeatDeploymentAdmission, seatDeploymentsFile, seatDeploymentsFor } from "@/lib/orchestrator/seatDeployments";
 
@@ -44,6 +44,11 @@ const domain = {
   authorizedSeats: () => [{ conversationId: SEAT, project: PROJECT, path: null }],
   findDeploymentByIdempotencyKey: async () => { throw new Error("ledger read unavailable during reconnect"); },
 };
+
+// Replace the deployment outcome while keeping the real receipt authority.
+function serviceWithDeployOutcome(bindings: McpToolBindings, store: SqliteMcpReceiptStore, deploy: McpToolBinding) {
+  return createMcpToolService({ ...bindings, deploy_exact_sha: Object.assign(deploy, bindings.deploy_exact_sha) }, store);
+}
 
 describe.serial("deployment bindings", () => {
 test("startup timeouts leave durable deploy admission open and unsafe handoff fails", async () => {
@@ -274,18 +279,19 @@ test("an unknown receipt replays a closed module-realm admission as not-executed
   } });
   process.env.LLV_VIEWER_CONTROL_URL = control.url.origin;
   const store = new SqliteMcpReceiptStore(path.join(root, "mcp.sqlite"));
-  const legacy = createMcpToolService({ deploy_exact_sha: async () => { throw new McpDeploymentPendingError("control timeout"); } } as never, store);
+  const bindings = viewerMcpBindings(undefined, productionViewerControlDependencies(true), domain as never);
+  const lostReply = serviceWithDeployOutcome(bindings, store, async () => { throw new McpDeploymentPendingError("control timeout"); });
   try {
-    const service = createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true), domain as never), store);
+    const service = createMcpToolService(bindings, store);
     for (let index = 0; index < 50; index++) {
-      const args = { revision: SHA, clientRequestId: `legacy-unknown-closed-key-${index}` };
-      expect(await legacy.callTool("deploy_exact_sha", args)).toMatchObject({ code: "outcome_unknown" });
+      const args = { revision: SHA, clientRequestId: `unknown-closed-key-${index}` };
+      expect(await lostReply.callTool("deploy_exact_sha", args)).toMatchObject({ code: "outcome_unknown" });
       const answer = await service.callTool("deploy_exact_sha", args);
       expect(answer).toMatchObject({ code: "deploy_not_admitted", details: { outcome: "not-executed", nextAction: "new-request-permitted" } });
       expect(await service.callTool("deploy_exact_sha", args)).toMatchObject({ ...answer, replayed: true });
     }
     const pending = JSON.parse(fs.readFileSync(seatDeploymentsFile(), "utf8")).pending as { idempotencyKey: string }[];
-    expect(pending.filter(row => row.idempotencyKey.startsWith("legacy-unknown-closed-key-")).length).toBe(0);
+    expect(pending.filter(row => row.idempotencyKey.startsWith("unknown-closed-key-")).length).toBe(0);
     expect(await service.callTool("deploy_exact_sha", { revision: SHA, clientRequestId: "after-closed-new-key" }))
       .toMatchObject({ state: "accepted", wakeOnSettle: true });
     expect({ admissions, reconciliations }).toEqual({ admissions: 1, reconciliations: 50 });
@@ -562,16 +568,16 @@ test("an older Viewer without the admission fence refuses before deployment POST
   }
 });
 
-test("legacy stored reconnect failures resolve through the same admission key", async () => {
+test("a bound stored reconnect failure resolves through the same admission key", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "legacy-deploy-receipt-"));
   const file = path.join(root, "mcp.sqlite");
   let store = new SqliteMcpReceiptStore(file);
   const args = { revision: SHA, clientRequestId: "legacy-lost-reply" };
   try {
-    const legacy = createMcpToolService({ deploy_exact_sha: async () => {
+    const lostReply = serviceWithDeployOutcome(viewerMcpBindings(undefined, undefined, domain as never), store, async () => {
       throw new Error("Viewer control did not reconnect after 2 attempts (attempt timed out)");
-    } } as never, store);
-    expect(await legacy.callTool("deploy_exact_sha", args)).toMatchObject({ code: "tool_failed", retryable: true });
+    });
+    expect(await lostReply.callTool("deploy_exact_sha", args)).toMatchObject({ code: "tool_failed", retryable: true });
     store.close();
     store = new SqliteMcpReceiptStore(file);
     const keys: unknown[] = [];
@@ -622,13 +628,55 @@ test("a stored transient busy receipt is refreshed under the same key after its 
   const service = createMcpToolService(bindings, store);
   const args = { revision: SHA, clientRequestId: "busy-holder-retry" };
   try {
-    const legacy = createMcpToolService({ deploy_exact_sha: async () => ({ state: "busy", deploymentId: "checkout-finished", revision: "b".repeat(40), wakeOnSettle: false }) } as never, store);
-    expect(await legacy.callTool("deploy_exact_sha", args)).toMatchObject({ state: "busy", deploymentId: "checkout-finished" });
+    const busyReply = serviceWithDeployOutcome(bindings, store, async () => ({
+      state: "busy", deploymentId: "checkout-finished", revision: "b".repeat(40), wakeOnSettle: false,
+    }));
+    expect(await busyReply.callTool("deploy_exact_sha", args)).toMatchObject({ state: "busy", deploymentId: "checkout-finished" });
     expect(await service.callTool("deploy_exact_sha", args)).toMatchObject({ ok: true, state: "busy", holder: { kind: "retention" },
       outcome: "not-executed", nextAction: "retry-same-key", wakeOnSettle: false });
     busy = false;
     expect(await service.callTool("deploy_exact_sha", args)).toMatchObject({ ok: true, state: "accepted", wakeOnSettle: true });
     expect(posts).toBe(2);
+  } finally { store.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test.each(["pending", "reconnect", "busy"] as const)("an unbound %s deployment receipt cannot authorize recovery", async kind => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-unbound-receipt-"));
+  const file = path.join(root, "mcp.sqlite");
+  let store = new SqliteMcpReceiptStore(file);
+  const tool = "deploy_exact_sha";
+  const args = { revision: SHA, clientRequestId: `unbound-deploy-${kind}` };
+  const key = `${tool}:${args.clientRequestId}`;
+  const calls: string[] = [];
+  try {
+    const legacy = createMcpToolService({ [tool]: async () => {
+      if (kind === "pending") throw new McpDeploymentPendingError("control timeout");
+      if (kind === "reconnect") throw new Error("Viewer control did not reconnect after 2 attempts (attempt timed out)");
+      return { state: "busy", deploymentId: "previous-holder", revision: "b".repeat(40), wakeOnSettle: false };
+    } } as never, store);
+    await legacy.callTool(tool, args);
+    const saved = store.lookup(key);
+    expect(saved).toMatchObject({ binding: null, result: kind === "pending" ? null : expect.any(Object) });
+    store.close();
+    store = new SqliteMcpReceiptStore(file);
+    for (const seat of [SEAT, "conversation_replacement_seat"]) {
+      const bindings = viewerMcpBindings(undefined, { post: async url => {
+        calls.push(url);
+        throw new Error("unexpected deployment control call");
+      } }, {
+        ...domain,
+        callerAttribution: () => ({ kind: "manager", conversationId: seat, role: null }),
+        authorizedSeats: () => [{ conversationId: seat, project: PROJECT, path: null }],
+        beginSeatDeployment: async () => { calls.push("attribution"); },
+        findDeploymentByIdempotencyKey: async () => { calls.push("lookup"); return null; },
+      } as never);
+      const result = await createMcpToolService(bindings, store).callTool(tool, args);
+      expect(result).toMatchObject({ ok: false, retryable: false, code: kind === "pending" ? "outcome_unknown" : "idempotency_conflict" });
+      expect(result).not.toHaveProperty("deploymentId");
+      expect(result).not.toHaveProperty("state");
+      expect(store.lookup(key)).toEqual(saved);
+    }
+    expect(calls).toEqual([]);
   } finally { store.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
