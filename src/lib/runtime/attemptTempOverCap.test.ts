@@ -8,6 +8,7 @@ import { AgentRegistry, closeAgentRegistryForTests } from "@/lib/agent/registry"
 import { pipelineIdentity, savePipelines } from "@/lib/pipelines/store";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { RecordedCheckStore } from "@/lib/recordedChecks/store";
+import { OWNERSHIP_PRELOAD, ownershipSandbox } from "@/lib/state/fixtures/ownershipSandbox";
 import { writeEnvelope } from "@/lib/recordedChecks/wire";
 import { attemptTempJournalPath, type ProcessScan } from "@/lib/tempSweep";
 import { attemptReferencesClear } from "./attemptTempFilesystem";
@@ -409,3 +410,37 @@ test("recorded custody follows a renumbered root through its release and retirem
     expect(checks.rootRetirement(directory, `${Number(earlier.dev) + 1}:${earlier.ino}`)).toMatchObject({ outcome: { state: "completed" } });
   } finally { checks.close(); }
 });
+
+/* A deploy leaves the previous release's ledger behind. The serving Viewer
+ * opens it at startup, and the minute tick then runs in a `tool` helper, which
+ * may change no schema in the operator's own state directory. Sandboxed state
+ * never meets that fence, so these run real processes under an operator-shaped
+ * home. */
+test.each([
+  ["over the cap, over-cap reclaim", 5, "1", { expiryPage: { removed: 0 }, overCap: { removed: 1, ended: "cleared" } }],
+  ["under the cap, the expiry page", 40, String(100 * MiB), { expiryPage: { removed: 1 }, overCap: null }],
+] as const)("on an upgraded install, %s removes scratch from the tool helper and writes its report", (_case, hoursAgo, cap, expected) => {
+  const sandbox = ownershipSandbox();
+  try {
+    const repo = path.join(sandbox.temporaryRoot(), "repo"); fs.mkdirSync(repo);
+    const run = (owner: "viewer" | "tool", ...argv: string[]) => {
+      const result = Bun.spawnSync({ cmd: [process.execPath, "--preload", OWNERSHIP_PRELOAD,
+        path.join(import.meta.dir, "attemptTempOverCap.fixture.ts"), ...argv],
+        cwd: process.cwd(), env: { ...sandbox.environment(), LLV_STATE_OWNER: owner }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+      const stderr = result.stderr.toString();
+      expect(result.exitCode, `${owner} ${argv[0]}\n${stderr}`).toBe(0);
+      return JSON.parse(result.stdout.toString().trim().split("\n").at(-1)!);
+    };
+    const seeded = run("viewer", "--seed-previous-release", String(hoursAgo), repo).answer;
+    expect(path.relative(sandbox.home, seeded.directory).startsWith("..")).toBeFalse();
+    expect(seeded.tables).toContain("routine_sweep_cursor");
+    expect(seeded.tables).not.toContain("over_cap_cursor");
+    // No tick has run yet, so the report read below is this tick's own.
+    const started = run("viewer", "--viewer-start");
+    expect(fs.existsSync(started.report)).toBeFalse();
+    const tick = run("tool", "--minute-tick", cap);
+    expect(tick.answer, JSON.stringify(tick.answer.outcomes)).toMatchObject({ ...expected, removed: 1, errors: 0 });
+    expect(fs.existsSync(seeded.directory)).toBeFalse();
+    expect(JSON.parse(fs.readFileSync(tick.report, "utf8"))).toMatchObject({ ...expected, removed: 1, errors: 0 });
+  } finally { sandbox.release(); }
+}, 120_000);

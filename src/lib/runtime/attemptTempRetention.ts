@@ -165,6 +165,12 @@ export class AttemptTempStore {
         assertStateStartupMutation(path.dirname(filename), "attempt temp routine sweep cursor");
         this.db.exec("CREATE TABLE IF NOT EXISTS routine_sweep_cursor(id INTEGER PRIMARY KEY CHECK(id=1), expiresAt REAL NOT NULL, directory TEXT NOT NULL)");
       }
+      // The Viewer opens the ledger at startup, so the minute tick's `tool`
+      // helper, which may change no schema, finds the table there.
+      if (!this.db.query("SELECT 1 FROM sqlite_master WHERE name='over_cap_cursor' AND type='table'").get()) {
+        assertStateStartupMutation(path.dirname(filename), "attempt temp over-cap cursor");
+        this.db.exec("CREATE TABLE IF NOT EXISTS over_cap_cursor(id INTEGER PRIMARY KEY CHECK(id=1), expiresAt REAL NOT NULL, directory TEXT NOT NULL)");
+      }
       this.db.exec("CREATE TABLE IF NOT EXISTS attempt_cleanup_minutes (minute INTEGER PRIMARY KEY, reclaimedBytes REAL NOT NULL, cpuSeconds REAL NOT NULL)");
       this.db.exec("CREATE TABLE IF NOT EXISTS root_blocked(directory TEXT PRIMARY KEY, count INTEGER NOT NULL, entries TEXT NOT NULL, at REAL NOT NULL)");
       this.db.exec("CREATE TABLE IF NOT EXISTS copy_retention_failures(destination TEXT PRIMARY KEY, failure TEXT NOT NULL)");
@@ -513,7 +519,6 @@ export class AttemptTempStore {
    * recorded date orders visits and grants nothing: each visit repeats the
    * authority and every proof. */
   overCapPage(now: number, limit = 32): ScheduledRoot[] {
-    this.ensureOverCapCursor();
     const cursor = this.db.query<Pick<ScheduledRoot, "expiresAt" | "directory">, []>(
       "SELECT expiresAt,directory FROM over_cap_cursor WHERE id=1").get();
     return this.db.query<ScheduledRoot, [number, string, number, number]>(`SELECT r.*,t.expiresAt FROM root_retention t
@@ -527,13 +532,7 @@ export class AttemptTempStore {
   /** The next over-cap visit starts at the oldest finish again. Returns whether
    * a position had been recorded. */
   resetOverCap(): boolean {
-    this.ensureOverCapCursor();
     return this.db.query("DELETE FROM over_cap_cursor WHERE id=1").run().changes > 0;
-  }
-  private ensureOverCapCursor() {
-    if (this.db.query("SELECT 1 FROM sqlite_master WHERE name='over_cap_cursor' AND type='table'").get()) return;
-    assertStateStartupMutation(path.dirname(this.filename), "attempt temp over-cap cursor");
-    this.db.exec("CREATE TABLE IF NOT EXISTS over_cap_cursor(id INTEGER PRIMARY KEY CHECK(id=1), expiresAt REAL NOT NULL, directory TEXT NOT NULL)");
   }
   checkpointRoutine(owner: ScheduledRoot) {
     this.db.query("INSERT OR REPLACE INTO routine_sweep_cursor VALUES(1,?,?)").run(owner.expiresAt, owner.directory);
