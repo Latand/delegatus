@@ -3084,7 +3084,7 @@ async function leaveLesson(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
     /* Root conversations stay gateway-attributed for ordinary tool behavior,
        but a freshly authorized designation is enough to establish seat
        identity for this role-memory write. */
-    const seat = caller.conversationId && (caller.kind === "manager" || caller.kind === "gateway")
+    const seat = caller.conversationId && (caller.kind === "manager" || caller.kind === "gateway" || caller.role === "legatus")
       ? (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources())).find(row => row.conversationId === caller.conversationId)
       : null;
     const answer = { correction: args.correction, lesson: args.lesson, rewrite: args.rewrite, none: args.none, problem: args.problem, applied: args.applied, misled: args.misled };
@@ -3101,7 +3101,7 @@ async function leaveLesson(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
       if (own) return { ...leaveLessonForOperator(own, answer) };
       throw new RoleMemoryRefusal("LESSON_NOT_A_SEAT", "this gateway conversation has no active project designation");
     }
-    if (seat) return { ...leaveLessonForSeat(seat, answer) };
+    if (seat) return { ...leaveLessonForSeat({ ...seat, ...(seat.project?.startsWith("legatus:") ? { roleId: "legatus" as const } : {}) }, answer) };
     try {
       return { ...leaveLessonForConversation(dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [], caller.conversationId, answer) };
     } catch (error) {
@@ -9464,9 +9464,9 @@ export function viewerMcpBindings(
           assertCurrent();
           return curationOperationResult(readCurationOperation(operation)!);
         }
-        const result = await readCuration(pass, typeof args.scope === "string" ? args.scope : undefined, typeof args.cursor === "string" ? args.cursor : undefined);
-        context?.assertCaller?.();
-        authority.assertCurrent();
+        const assertReadCurrent = () => { context?.assertCaller?.(); authority.assertCurrent(); };
+        const result = await readCuration(pass, typeof args.scope === "string" ? args.scope : undefined, typeof args.cursor === "string" ? args.cursor : undefined, undefined, assertReadCurrent);
+        assertReadCurrent();
         return result;
       } catch (error) {
         if (error instanceof RoleMemoryRefusal) throw new McpToolRefusal(error.message, { code: error.code, status: 409 });
@@ -9491,7 +9491,17 @@ export function viewerMcpBindings(
     backfill_worktree_projects: (args, context) => viewerControlForCall(controlDependencies, context).post("/api/board/maintenance/worktrees", {
       dryRun: args.dryRun !== false, ...(args.project ? { project: args.project } : {}),
     }, {}, context),
-    search_memory: (args, context) => searchMemoryTool(args, viewerControlForCall(controlDependencies, context), attributionOf(domainDependencies).conversationId ?? null),
+    search_memory: (args, context) => {
+      const caller = attributionOf(domainDependencies);
+      const conversationId = caller.conversationId ?? null;
+      const project = conversationId && (caller.kind === "manager" || caller.role === "legatus")
+        ? (domainDependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources(), conversationId))
+          .find(row => row.conversationId === conversationId)?.project
+        : null;
+      const capability = project?.startsWith("legatus:") ? callerCapability() : undefined;
+      const seat = project && capability ? { project, headers: { [VIEWER_SPAWN_CAPABILITY_HEADER]: capability } } : undefined;
+      return searchMemoryTool(args, viewerControlForCall(controlDependencies, context), conversationId, seat);
+    },
     get_conversation: Object.assign(
       (args: McpToolArgs, context?: McpToolCallContext) => getConversation(args, domainDependencies, context),
       { receiptScope: (args: McpToolArgs) => conversationReadReceiptScope(args, domainDependencies) },
