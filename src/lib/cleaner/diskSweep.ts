@@ -4,8 +4,8 @@ import { agentRegistry } from "@/lib/agent/registry";
 import { statePath } from "@/lib/configDir";
 import { pipelineRecordReader } from "@/lib/pipelines/store";
 import { projectAliasResolver } from "@/lib/projects/aliases";
-import { openLaneUseCheck } from "@/lib/runtime/attemptScratchLanes";
-import { assertRetentionTestPath, retentionUnderTest } from "@/lib/retentionTestSafety";
+import { scratchRootAdmitted, scratchRootUseCheck, scratchSelectionRefusal } from "@/lib/runtime/attemptScratchLanes";
+import { retentionUnderTest } from "@/lib/retentionTestSafety";
 import { AttemptTempStore, sweepAttemptTemps, type AttemptTempOwner, type AttemptTempSweepOptions } from "@/lib/runtime/attemptTempRetention";
 import { attemptTempAuthority } from "@/lib/runtime/attemptTempProduction";
 import { attemptProcessReferencesClear, attemptReferencesClear } from "@/lib/runtime/attemptTempFilesystem";
@@ -34,17 +34,6 @@ function productionScan(directories: readonly string[]) {
   if (!full.ownNamespace) throw new Error("process reference inventory unavailable");
   return { ...full, processes: [...full.processes, ...view.processes] };
 }
-
-function scratchRoot(directory: string): boolean {
-  const parent = path.dirname(directory), name = path.basename(directory);
-  const admitted = parent === statePath("scratch") && /^llv-(?:read-only-stage|stage)-[A-Za-z0-9]{6}$/.test(name)
-    || parent === attemptTempConfigParent() && /^llv-stage-config-[A-Za-z0-9]{6}$/.test(name);
-  if (!admitted) return false;
-  assertRetentionTestPath(directory);
-  return fs.realpathSync(parent) === parent && !fs.existsSync(path.join(parent, ".delegatus-keep"));
-}
-
-function openLaneUses(directory: string): boolean { return openLaneUseCheck()(directory); }
 
 function scratchOwnerMatches(owner: AttemptTempOwner, project: string): boolean {
   try {
@@ -86,19 +75,26 @@ export async function runCleanerSweep(request: CleanerSweepRequest, ports: {
   }
   const store = new AttemptTempStore();
   try {
-    const page = store.cleanerRoots(request.after);
+    // A reboot can renumber the device under an unchanged directory. Bind the
+    // ledger to it before the selection pins this page's identities.
+    const page = store.cleanerRoots(request.after).map(row => mode === "on" ? store.rebindRenumberedRoot(row) ?? row : row);
     const kept: CleanerHold[] = [];
     const selected = new Map(page.filter(row => {
       if (!scratchOwnerMatches(row, pass.project.trim())) {
         kept.push({ path: row.directory, bytes: row.bytes, reason: "scratch owner project unproven or outside Cleaner pass" });
         return false;
       }
-      try { if (scratchRoot(row.directory)) return true; } catch { /* Preserve unreadable ancestry. */ }
+      try { if (scratchRootAdmitted(row.directory)) return true; } catch { /* Preserve unreadable ancestry. */ }
       kept.push({ path: row.directory, bytes: row.bytes, reason: "scratch ancestry or keep marker" });
       return false;
     }).map(row => [row.directory, row]));
     const authority: NonNullable<AttemptTempSweepOptions["authority"]> = (owner, inventory) =>
       attemptTempAuthority(owner, inventory, ports.now ?? Date.now, 0, "attempt");
+    const inUse = scratchRootUseCheck();
+    const refusal: NonNullable<NonNullable<AttemptTempSweepOptions["selection"]>["refusal"]> = owner =>
+      scratchSelectionRefusal(selected.get(owner.directory), owner, inUse)
+      ?? (scratchOwnerMatches(owner, pass.project.trim()) ? null
+        : { reason: "scratch owner project unproven or outside Cleaner pass", reasonCode: "owner_project" });
     const report = selected.size ? await sweepAttemptTemps(store, {
       now: ports.now, mode, scan, authority, state: async (owner, inventory) => (await authority(owner, inventory)).state,
       references: ports.containerReferences && ((original, target, observation) =>
@@ -106,14 +102,8 @@ export async function runCleanerSweep(request: CleanerSweepRequest, ports: {
       runBudgetMs: 40_000,
       selection: {
         directories: [...selected.keys()],
-        current: owner => {
-          const row = selected.get(owner.directory);
-          return !!row && row.identity === owner.identity && row.pipelineId === owner.pipelineId
-            && row.launchId === owner.launchId && row.createdAt === owner.createdAt
-            && row.released === owner.released && row.retainUntilClose === owner.retainUntilClose
-            && scratchRoot(owner.directory) && !openLaneUses(owner.directory)
-            && scratchOwnerMatches(owner, pass.project.trim());
-        },
+        current: owner => refusal(owner) === null,
+        refusal,
         watches: [diskCleanerStateFile(), statePath("viewer-release.json"), statePath("scratch"), attemptTempConfigParent()]
           .filter(file => fs.existsSync(file)),
       },

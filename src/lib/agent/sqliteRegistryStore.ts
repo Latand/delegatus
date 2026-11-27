@@ -2695,28 +2695,43 @@ export class SqliteAgentRegistryStore {
     return measureRegistryRead("registry.snapshot", () => this.readOnlySnapshotMeasured(), true);
   }
 
+  /** Equal stamps mean that nothing was committed between the two reads, so a
+      protection snapshot taken after the first one still holds. */
+  worktreeProtectionStamp(): string { return this.storeStamp(); }
+
   /** Filesystem retention needs current owner evidence, never historical
    * delivery bodies or the complete immutable registry graph. Normalize one
-   * stored row at a time and keep only the fields its existing guard reads. */
-  worktreeProtectionSnapshot(): WorktreeProtection {
+   * stored row at a time and keep only the fields its existing guard reads.
+   * `within` keeps only the entries and conversations that work at or below one
+   * of those directories, for a guard that asks about nothing else: decoding
+   * every row of a large registry takes most of a second. */
+  worktreeProtectionSnapshot(within?: readonly string[]): WorktreeProtection {
     const admitted = this.db.inTransaction;
     if (!admitted) beginRegistryTransaction(this.db);
     try {
       const result: WorktreeProtection = { entries: {}, conversations: {}, heldDeliveries: {} };
       for (const collection of ["entries", "conversations", "heldDeliveries"] as const) {
+        // The directory each guard reads from these rows. The character after
+        // the separator closes the range of paths below a directory.
+        const cwd = `json_extract(value_json,'${collection === "entries" ? "$.cwd" : "$.generations[#-1].launchProfile.cwd"}')`;
+        const scoped = collection === "heldDeliveries" ? undefined : within;
+        const scope = scoped ? ` AND (${scoped.map(() => `${cwd}=? OR ${cwd}>=? AND ${cwd}<?`).join(" OR ") || "0"})` : "";
         // Each state gets its own index seek. Null is the legacy default
         // "held"; the normalizer still rejects corrupt idle/image commands.
         const sql = collection === "heldDeliveries"
           ? ["held", "assigned", "delivery-uncertain", null].map(() =>
             `SELECT row_key,value_json,row_order FROM ${this.recordsSource}
               WHERE collection='heldDeliveries' AND json_extract(value_json,'$.state') IS ?`).join(" UNION ALL ") + " ORDER BY row_order"
-          : `SELECT row_key,value_json FROM ${this.recordsSource} WHERE collection=? ORDER BY row_order`;
+          : `SELECT row_key,value_json FROM ${this.recordsSource} WHERE collection=?${scope} ORDER BY row_order`;
+        const bindings = collection === "heldDeliveries" ? ["held", "assigned", "delivery-uncertain", null]
+          : [collection, ...(scoped ?? []).flatMap(directory => [directory, directory + path.sep,
+            directory + String.fromCharCode(path.sep.charCodeAt(0) + 1)])];
         // This read owns its statement. An interrupted iterator must not leave
         // a cached Bun statement unusable after the peer repairs the row.
         const statement = this.db.prepare<{ row_key: string; value_json: string }, (string | null)[]>(sql);
         this.onRowPayloadRead?.(collection, 0);
         try {
-          const cursor = statement.iterate(...(collection === "heldDeliveries" ? ["held", "assigned", "delivery-uncertain", null] : [collection]));
+          const cursor = statement.iterate(...bindings);
           for (;;) {
             const next = cursor.next();
             if (next.done) break;
