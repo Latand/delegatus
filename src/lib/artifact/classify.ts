@@ -41,6 +41,10 @@ const TEXT_EXTENSIONS = new Set([
 
 export const TEXT_MIME = "text/plain; charset=utf-8";
 
+export function isHtmlReport(pathname: string): boolean {
+  return /\.html?$/i.test(pathname);
+}
+
 /** Strips the `path/to/file.ts:12` / `:12:7` location suffix agents emit. */
 export function stripLineSuffix(path: string): string {
   return path.replace(/(:\d+){1,2}$/, "");

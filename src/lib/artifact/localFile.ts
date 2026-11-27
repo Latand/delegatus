@@ -10,6 +10,7 @@ import { knownProjectFileRoots } from "@/lib/scanner/projectDirectories";
 import { projectCurationSnapshot } from "@/lib/projects/curation";
 import { homeDirectory } from "@/lib/platformHome";
 import { keptReportRow, reportMediaCopyAllowed, reportMediaRoot } from "@/lib/reportMedia/lookup";
+import { isHtmlReport } from "./classify";
 import { isEvidenceImage } from "./evidenceFormats";
 export { isEvidenceImage } from "./evidenceFormats";
 
@@ -40,17 +41,23 @@ export function underRoot(candidate: string, root: string): boolean {
   return candidate === root || candidate.startsWith(root + path.sep);
 }
 
-/* Durable rendered evidence is outside every managed scratch root. The
-   historical OS temp location remains readable for existing report links. */
-export function evidenceRoots(): string[] {
+/* Durable rendered evidence is outside every managed scratch root. */
+function evidenceReportRoots(): string[] {
   const configured = process.env.LLV_EVIDENCE_ROOTS;
-  const roots = configured === undefined ? [statePath("evidence"), "/var/tmp"] : configured.split(":");
+  const roots = configured === undefined ? [statePath("evidence")] : configured.split(path.delimiter);
   return roots.map((root) => root.trim()).filter((root) => path.isAbsolute(root)).map((root) => path.resolve(root));
 }
 
-/* The roots that serve rasters and nothing else: the evidence roots, and the
-   report picture store. The store is no evidence root: agents are never told
-   to render into it. */
+/* The historical OS temp location remains readable for raster links. */
+export function evidenceRoots(): string[] {
+  const roots = evidenceReportRoots();
+  const legacy = "/var/tmp";
+  if (process.env.LLV_EVIDENCE_ROOTS === undefined && path.isAbsolute(legacy)) roots.push(path.resolve(legacy));
+  return roots;
+}
+
+/* The evidence roots and the report picture store both serve rasters. The
+   store is no evidence root: agents are never told to render into it. */
 function rasterRoots(): string[] {
   return [...new Set([...evidenceRoots(), reportMediaRoot()])];
 }
@@ -105,8 +112,8 @@ export function inFencedStore(candidate: string, fenced: readonly string[]): boo
 /** A product-owned output directory inside a private area, with the class of file it may serve. */
 interface Passage {
   root: string;
-  /** Raster files only, and never a project root at or below it. */
-  rasterOnly: boolean;
+  /** A restricted evidence passage, never a project root at or below it. */
+  restrictedEvidence: boolean;
 }
 
 interface PrivateArea {
@@ -115,14 +122,10 @@ interface PrivateArea {
   passages: Passage[];
 }
 
-/* The two directories the product writes stage output into: managed scratch
-   (a project root, any file) and durable evidence (a raster root, rasters
-   only). Their root, class and hidden-component rules still decide admission;
-   the passage only lifts the private-area veto that would otherwise cover the
-   state directory, and only for the class its root serves on main. Another
-   project root that contains evidence, or a cwd recorded inside it, therefore
-   reaches its rasters and nothing else. */
-const STATE_OUTPUTS = [{ name: "scratch", rasterOnly: false }, { name: "evidence", rasterOnly: true }] as const;
+/* Managed scratch is a project root. Durable evidence has a restricted
+   passage through the surrounding private state directory. The applicable
+   root, class and hidden-component rules still decide admission. */
+const STATE_OUTPUTS = [{ name: "scratch", restrictedEvidence: false }, { name: "evidence", restrictedEvidence: true }] as const;
 
 function realOrWritten(root: string): string {
   try {
@@ -179,7 +182,7 @@ function privateAreas(): PrivateArea[] {
   // Each output is named below every spelling of the state directory and never
   // by its own resolved target: a linked output that leads elsewhere inside a
   // private area gains nothing, because the resolved candidate is judged again.
-  const outputs: Passage[] = states.flatMap(state => STATE_OUTPUTS.map(({ name, rasterOnly }) => ({ root: path.join(state, name), rasterOnly })));
+  const outputs: Passage[] = states.flatMap(state => STATE_OUTPUTS.map(({ name, restrictedEvidence }) => ({ root: path.join(state, name), restrictedEvidence })));
   const areas: PrivateArea[] = [];
   const add = (root: string, withOutputs: boolean) => {
     for (const name of privateRootNames(root)) {
@@ -198,11 +201,12 @@ function privateAreas(): PrivateArea[] {
 /**
  * Whether no private area vetoes a path. A file candidate passes a passage of
  * its class; a project root candidate passes only a passage that serves every
- * file, because a root inside a raster passage would serve its other files.
+ * file, because a project root inside evidence would serve its other files.
  */
-function privatePathAllowed(candidate: string, areas: readonly PrivateArea[], asRoot = false): boolean {
+function privatePathAllowed(candidate: string, areas: readonly PrivateArea[], purpose?: "project-root" | "evidence-html"): boolean {
   const passes = (passage: Passage) => underRoot(candidate, passage.root)
-    && (!passage.rasterOnly || (!asRoot && isEvidenceImage(candidate)));
+    && (!passage.restrictedEvidence || (purpose !== "project-root" && isEvidenceImage(candidate))
+      || (purpose === "evidence-html" && isHtmlReport(candidate)));
   return areas.every(({ root, passages }) => !underRoot(candidate, root) || passages.some(passes));
 }
 
@@ -219,7 +223,7 @@ function projectRoots(): string[] {
     .filter(root => path.isAbsolute(root)).map(root => path.resolve(root));
 }
 
-export type Admission = "project" | "evidence";
+export type Admission = "project" | "evidence" | "evidence-html";
 
 /**
  * Hidden components below any containing root of the admission kind are
@@ -228,8 +232,8 @@ export type Admission = "project" | "evidence";
  * The picture writer supplies temp roots only for paths outside served roots.
  * With no surviving root, still refuse a hidden name before kept-copy lookup.
  */
-export function hiddenPathAllowed(candidate: string, roots: AllowedRoots, temp: readonly string[] = []): boolean {
-  if (!privatePathAllowed(candidate, roots.privateAreas ?? [])) return false;
+export function hiddenPathAllowed(candidate: string, roots: AllowedRoots, temp: readonly string[] = [], purpose?: "evidence-html"): boolean {
+  if (!privatePathAllowed(candidate, roots.privateAreas ?? [], purpose)) return false;
   const containing = (group: readonly string[]) => group.filter(root => underRoot(candidate, root));
   const projects = containing(roots.projects);
   const evidence = projects.length ? [] : containing(roots.evidence);
@@ -248,15 +252,29 @@ export function hiddenPathAllowed(candidate: string, roots: AllowedRoots, temp: 
   });
 }
 
-/** Check lexical containment before resolving links; evidence roots admit rasters only. */
+/** Check lexical containment before resolving links. Direct evidence reads admit rasters only. */
 export function admittedAs(candidate: string, roots: AllowedRoots): Admission | null {
   if (inFencedStore(candidate, roots.fenced) || !hiddenPathAllowed(candidate, roots) || !reportMediaCopyAllowed(candidate)) return null;
   if (roots.projects.some(root => underRoot(candidate, root))) return "project";
-  return isEvidenceImage(candidate) && roots.evidence.some((root) => underRoot(candidate, root)) ? "evidence" : null;
+  return isEvidenceImage(candidate) && roots.evidence.some(root => underRoot(candidate, root)) ? "evidence" : null;
 }
 
-/** A link must stay within admitted roots. Evidence links still resolve to rasters. */
+/** A grant minted for evidence HTML admits HTML and raster assets, even where a project overlaps. */
+export function evidenceFrameAdmission(candidate: string, roots: AllowedRoots): Admission | null {
+  const html = isHtmlReport(candidate);
+  if (!html && !isEvidenceImage(candidate)) return null;
+  const purpose = html ? "evidence-html" : undefined;
+  if (!roots.evidenceReports.some(root => underRoot(candidate, root)) || inFencedStore(candidate, roots.fenced)
+    || !hiddenPathAllowed(candidate, roots, [], purpose) || !hiddenPathAllowed(candidate, { ...roots, projects: [] }, [], purpose)
+    || !reportMediaCopyAllowed(candidate)) return null;
+  return html ? "evidence-html" : "evidence";
+}
+
+/** A link must stay within admitted roots. Evidence links also keep their admitted file class. */
 export function realpathAdmitted(lexical: Admission, real: string, roots: AllowedRoots): boolean {
+  if (lexical === "evidence-html") {
+    return evidenceFrameAdmission(real, roots) === "evidence-html";
+  }
   const resolved = admittedAs(real, roots);
   if (lexical === "project") return resolved !== null;
   return resolved !== null && isEvidenceImage(real) && roots.evidence.some((root) => underRoot(real, root))
@@ -266,8 +284,10 @@ export function realpathAdmitted(lexical: Admission, real: string, roots: Allowe
 export interface AllowedRoots {
   home: string;
   projects: string[];
-  /** Roots that serve rasters only: the evidence roots and the report picture store. */
+  /** Evidence roots and the raster-only report picture store. */
   evidence: string[];
+  /** Managed or explicitly enabled roots that can issue HTML frame grants. */
+  evidenceReports: string[];
   /** Fenced stores, which no root admits. */
   fenced: string[];
   /** Private tool/config areas, with narrowly owned output passages. */
@@ -278,8 +298,8 @@ export function lexicalAllowedRoots(): AllowedRoots {
   const home = homeRoot();
   const candidates = projectRoots();
   const areas = privateAreas();
-  const projects = candidates.filter(root => !underRoot(home, root) && privatePathAllowed(root, areas, true));
-  return { home, projects, evidence: rasterRoots(), fenced: fencedStores(), privateAreas: areas };
+  const projects = candidates.filter(root => !underRoot(home, root) && privatePathAllowed(root, areas, "project-root"));
+  return { home, projects, evidence: rasterRoots(), evidenceReports: evidenceReportRoots(), fenced: fencedStores(), privateAreas: areas };
 }
 
 /** The same roots with symlinks resolved; a root that does not exist is dropped. */
@@ -297,15 +317,17 @@ export function realAllowedRootsSync(): AllowedRoots {
     }
   };
   const home = real(homeRoot()) ?? homeRoot();
-  const evidence = rasterRoots().map(real).filter((root): root is string => root !== null);
   /* A store that does not exist yet holds nothing to read; one reached through
      a link is fenced at the place the link leads to as well. */
   const stores = fencedStores();
   const fenced = [...new Set([...stores, ...stores.map(real).filter((store): store is string => store !== null)])];
   const lexical = lexicalAllowedRoots();
+  const evidenceByPath = new Map(lexical.evidence.map(root => [root, real(root)]));
+  const evidence = [...evidenceByPath.values()].filter((root): root is string => root !== null);
+  const evidenceReports = lexical.evidenceReports.map(root => evidenceByPath.get(root)).filter((root): root is string => root != null);
   const areas = lexical.privateAreas ?? [];
-  const projects = lexical.projects.map(real).filter((root): root is string => root !== null && !underRoot(home, root) && privatePathAllowed(root, areas, true));
-  return { home, projects, evidence, fenced, privateAreas: areas };
+  const projects = lexical.projects.map(real).filter((root): root is string => root !== null && !underRoot(home, root) && privatePathAllowed(root, areas, "project-root"));
+  return { home, projects, evidence, evidenceReports, fenced, privateAreas: areas };
 }
 
 /* macOS refuses an open with this flag (`ELOOP`) when any component of the
@@ -411,12 +433,6 @@ async function resolvesTo(handle: fsp.FileHandle, expected: string): Promise<boo
   }
 }
 
-/**
- * Streams `[start, end]` from the pinned descriptor, honouring the request's
- * AbortSignal (the preview closing cancels the fetch) and the configured time
- * budget. The descriptor is closed on completion, cancellation and error —
- * exactly once.
- */
 export function streamWindow(
   handle: fsp.FileHandle,
   start: number,
@@ -424,9 +440,25 @@ export function streamWindow(
   signal: AbortSignal,
   timeBudgetMs: number,
 ): ReadableStream<Uint8Array> {
+  return streamWindowUntil(handle, start, end, signal, Date.now() + timeBudgetMs);
+}
+
+/**
+ * Streams `[start, end]` from the pinned descriptor until the request is
+ * aborted or its absolute deadline passes. The descriptor is closed once,
+ * on completion, cancellation or error.
+ */
+export function streamWindowUntil(
+  handle: fsp.FileHandle,
+  start: number,
+  end: number,
+  signal: AbortSignal,
+  deadline: number,
+): ReadableStream<Uint8Array> {
   let position = start;
-  const deadline = Date.now() + timeBudgetMs;
   let done = false;
+  const boundaryError = () => signal.aborted ? new Error("client aborted")
+    : Date.now() >= deadline ? new Error("artifact time budget exceeded") : null;
   const finish = async () => {
     if (done) return;
     done = true;
@@ -434,9 +466,10 @@ export function streamWindow(
   };
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
-      if (signal.aborted || Date.now() > deadline) {
+      const expired = boundaryError();
+      if (expired) {
         await finish();
-        controller.error(new Error(signal.aborted ? "client aborted" : "artifact time budget exceeded"));
+        controller.error(expired);
         return;
       }
       const want = Math.min(STREAM_CHUNK, end - position + 1);
@@ -448,6 +481,8 @@ export function streamWindow(
       const buffer = Buffer.alloc(want);
       try {
         const { bytesRead } = await handle.read(buffer, 0, want, position);
+        const expired = boundaryError();
+        if (expired) throw expired;
         if (bytesRead <= 0) {
           /* The pinned inode ended early (truncated in place): end the body
              rather than hang — the client's validator round-trip reports it. */
