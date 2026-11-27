@@ -615,7 +615,11 @@ test.each(["unrelated head", "missing head", "branch moved", "remote unavailable
   );
   try {
     if (!mode.startsWith("created ")) h.lane.delivery!.target.pr = 17;
-    if (mode === "foreign fork") h.lane.delivery!.target.prRepository = "upstream/widgets";
+    if (mode === "foreign fork") {
+      const upstream = "upstream/widgets";
+      h.lane.delivery!.target.prRepository = upstream;
+      h.git("config", "--add", `url.${h.remote}.insteadOf`, `https://github.com/${upstream}.git`);
+    }
     savePipelines([h.lane]);
     // A real sibling commit exists locally, so refusal proves ancestry rather
     // than treating a missing object as a divergent history.
