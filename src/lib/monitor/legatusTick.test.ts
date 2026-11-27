@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { NextRequest } from "next/server";
-import { fs, path, SANDBOX, NOW, MINUTE, harness, runSeatTickCheck } from "./seatTickController.fixture";
+import { fs, path, NOW, MINUTE, harness, runSeatTickCheck } from "./seatTickController.fixture";
 import { ensureLegatusProject } from "@/lib/orchestrator/legatusSeat";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
-import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
+import { internalServiceHeaders, setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
 import { POST as messagePOST } from "@/app/api/orchestrator/message/route";
 import { PUT as settingsPUT } from "@/app/api/monitor/seat-tick/settings/route";
 import { conversationHostPOST } from "@/app/api/conversation-host/handlers";
@@ -13,12 +13,16 @@ import { publishPrototype } from "@/lib/prototypeReview/store";
 import { questions } from "@/lib/prototypeReview/questionnaire.fixture";
 import { loadTasks, saveTasks } from "@/lib/tasks/store";
 import { initializeStateCollectionsAsync } from "@/lib/state/sqliteStateStore";
+import { withNativeRelayHandoff } from "@/lib/orchestrator/nativeRelayHandoff";
+import { clearSeatRoundsForTests } from "@/lib/prototypeReview/seatRounds";
 import { readSeatTickSettings, defaultSeatTickSettings } from "./seatTickSettings";
-import { acknowledgeSeatAgenda, legatusMessageReceipt, pendingSeatAgenda, recordOperatorLaunch } from "./seatAgenda";
+import { acknowledgeSeatAgenda, legatusMessageReceipt, pendingSeatAgenda, queueLegatusMessage, recordOperatorLaunch } from "./seatAgenda";
 
 const DESTINATION = "agenda-destination";
-const LEGATUS = "conversation_legatus_fixture";
 const WORKER = "conversation_agenda_destination";
+let LEGATUS = "conversation_legatus_fixture";
+let destinationWorker = WORKER;
+let fixtureSequence = 0;
 const AT = new Date(NOW).toISOString();
 
 function designate(project: string, conversationId: string) {
@@ -30,12 +34,21 @@ function designate(project: string, conversationId: string) {
 }
 
 async function isolated(run: (project: string) => Promise<void>) {
-  const previous = process.env.LLV_STATE_DIR;
-  process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(SANDBOX, "legatus-"));
+  fixtureSequence++;
+  LEGATUS = `conversation_legatus_fixture_${fixtureSequence}`;
+  destinationWorker = `conversation_agenda_destination_${fixtureSequence}`;
   setCallerConversationResolverForTests(() => LEGATUS);
-  try { await run(ensureLegatusProject()); }
+  try {
+    const project = ensureLegatusProject();
+    await initializeStateCollectionsAsync(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), []);
+    saveTasks([]);
+    clearSeatRoundsForTests();
+    const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"));
+    try { db.exec("DELETE FROM seat_agenda"); }
+    finally { db.close(); }
+    await run(project);
+  }
   finally {
-    process.env.LLV_STATE_DIR = previous;
     setCallerConversationResolverForTests(null);
   }
 }
@@ -75,7 +88,7 @@ test("a designated Legatus writes an attributed schedule history row through HTT
   }).seat_tick_settings!;
   const report = await tick({ project, clientRequestId: "legatus-own-read" });
   expect(report.defaultWakeIntervalMinutes).toBe(30);
-  setCallerConversationResolverForTests(() => WORKER);
+  setCallerConversationResolverForTests(() => destinationWorker);
   expect((await write({ wakeIntervalMinutes: 19, reason: "New timing", actor: { kind: "legatus" } })).status).toBe(200);
   expect(readSeatTickSettings(DESTINATION).setBy?.kind).toBe("agent");
   expect(readSeatTickSettings(DESTINATION).legatusScheduleHistory).toHaveLength(1);
@@ -83,21 +96,33 @@ test("a designated Legatus writes an attributed schedule history row through HTT
 
 test("a Legatus direct send to a project seat enters the same agenda", () => isolated(async project => {
   designate(project, LEGATUS);
-  designate(DESTINATION, WORKER);
+  designate(DESTINATION, destinationWorker);
   const response = await conversationHostPOST(request("/api/conversation-host", "POST", {
-    conversationId: WORKER, clientMessageId: "legatus-conversation-send", text: "Check the destination backlog",
+    conversationId: destinationWorker, clientMessageId: "legatus-conversation-send", text: "Check the destination backlog",
   }));
   expect(response.status).toBe(202);
   expect(await response.json()).toMatchObject({ ok: true, outcome: "queued" });
   expect(pendingSeatAgenda(DESTINATION, 10)).toMatchObject([{ text: "Check the destination backlog", urgent: 0 }]);
 }));
 
+test("an authenticated native MCP caller handoff keeps a Legatus send on the recipient agenda", () => isolated(async project => {
+  designate(project, LEGATUS);
+  designate(DESTINATION, destinationWorker);
+  const body = { conversationId: destinationWorker, clientMessageId: "native-legatus-send", text: "Check the destination backlog" };
+  const result = await withNativeRelayHandoff(body, () => LEGATUS, headers => conversationHostPOST(new NextRequest("http://localhost/api/conversation-host", {
+    method: "POST", body: JSON.stringify(body), headers: { host: "localhost", ...internalServiceHeaders("mcp"), ...headers },
+  })));
+  expect(result.status).toBe(202);
+  expect(await result.json()).toMatchObject({ ok: true, outcome: "queued" });
+  expect(pendingSeatAgenda(DESTINATION, 10)).toMatchObject([{ kind: "legatus-message", text: body.text, urgent: 0 }]);
+}));
+
 test("malformed action fields cannot route a Legatus text send around the seat agenda", () => isolated(async project => {
   designate(project, LEGATUS);
-  designate(DESTINATION, WORKER);
+  designate(DESTINATION, destinationWorker);
   for (const action of [null, "unsupported-action"]) {
     const response = await conversationHostPOST(request("/api/conversation-host", "POST", {
-      conversationId: WORKER, clientMessageId: `malformed-action-${String(action)}`, text: "Bypass the agenda", action,
+      conversationId: destinationWorker, clientMessageId: `malformed-action-${String(action)}`, text: "Bypass the agenda", action,
     }));
     expect(response.status).toBe(400);
   }
@@ -106,7 +131,7 @@ test("malformed action fields cannot route a Legatus text send around the seat a
 
 test("an ordinary Legatus message waits for the destination's wake and an urgent one queues as its wake", () => isolated(async project => {
   designate(project, LEGATUS);
-  const destination = designate(DESTINATION, WORKER);
+  const destination = designate(DESTINATION, destinationWorker);
   const send = async (clientMessageId: string, text: string, urgent: boolean) => {
     const response = await messagePOST(request("/api/orchestrator/message", "POST", { project: DESTINATION, clientMessageId, text, urgent }));
     expect(response.status).toBe(202);
@@ -146,15 +171,15 @@ test("an ordinary Legatus message waits for the destination's wake and an urgent
 test("forms from different projects and an operator launch coalesce behind one Legatus wake", () => isolated(async project => {
   const seat = designate(project, LEGATUS);
   const formInput = { clientRequestId: "choose-release", title: "Choose next steps", questions };
-  const source = { conversationId: WORKER };
+  const source = { conversationId: destinationWorker };
   const taskId = "task-agenda-form";
   saveTasks([{ id: taskId, project: "another-project", status: "inbox", placement: "unplaced", text: "Review next steps",
     assignments: [], createdAt: AT, updatedAt: AT }]);
   const taskRound = await publishPrototype(formInput, taskId, source);
   const seatRound = await publishPrototype({ ...formInput, clientRequestId: "choose-layout" }, null, source, DESTINATION);
   expect((await publishPrototype(formInput, taskId, source)).id).toBe(taskRound.id);
-  await recordOperatorLaunch(DESTINATION, WORKER);
-  await recordOperatorLaunch(DESTINATION, WORKER);
+  await recordOperatorLaunch(DESTINATION, destinationWorker);
+  await recordOperatorLaunch(DESTINATION, destinationWorker);
   expect(pendingSeatAgenda(project, 10).map(row => row.kind)).toEqual(["legatus-question", "legatus-question", "operator-launch"]);
 
   const stateFile = path.join(process.env.LLV_STATE_DIR!, "legatus-tick.json");
@@ -169,7 +194,7 @@ test("forms from different projects and an operator launch coalesce behind one L
   expect(first.rig.sent).toHaveLength(1);
   expect(first.rig.sent[0]!.text).toContain(taskRound.id);
   expect(first.rig.sent[0]!.text).toContain(seatRound.id);
-  expect(first.rig.sent[0]!.text).toContain(WORKER);
+  expect(first.rig.sent[0]!.text).toContain(destinationWorker);
   expect((await check()).rig.sent).toHaveLength(0);
 
   options.wakeState = "landed";
@@ -188,31 +213,34 @@ test("forms from different projects and an operator launch coalesce behind one L
 }));
 
 test("reopening a completed task creates one new waiting-form episode", () => isolated(async project => {
+  designate(project, LEGATUS);
+  designate(DESTINATION, destinationWorker);
   const taskId = "task-reopened-form";
   saveTasks([{ id: taskId, project: "another-project", status: "inbox", placement: "unplaced", text: "Review the reopened form",
     assignments: [], createdAt: AT, updatedAt: AT }]);
-  const round = await publishPrototype({ clientRequestId: "reopen-form", title: "Choose a path", questions }, taskId, { conversationId: WORKER });
+  const round = await publishPrototype({ clientRequestId: "reopen-form", title: "Choose a path", questions }, taskId, { conversationId: destinationWorker });
   expect(pendingSeatAgenda(project, 10)).toHaveLength(1);
-
-  const legacy = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"));
-  try {
-    legacy.exec("DROP TRIGGER IF EXISTS seat_agenda_form_update_episode; CREATE TRIGGER seat_agenda_form_update AFTER UPDATE OF value_json ON state_rows BEGIN SELECT 1; END");
-  } finally { legacy.close(); }
-  await initializeStateCollectionsAsync(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), []);
+  await queueLegatusMessage({ conversationId: LEGATUS, project: DESTINATION, clientMessageId: "keep-message", text: "Keep this pending", urgent: false });
+  await recordOperatorLaunch(DESTINATION, destinationWorker);
 
   const waiting = loadTasks()[0]!;
   const doneAt = new Date(Date.parse(round.createdAt) + 60_000).toISOString();
   saveTasks([{ ...waiting, status: "done", doneAt, updatedAt: doneAt }]);
-  expect(pendingSeatAgenda(project, 10)).toEqual([]);
+  expect(pendingSeatAgenda(project, 10).map(row => row.kind)).toEqual(["operator-launch"]);
+  const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"));
+  try {
+    expect(db.query<{ kind: string; pending: number }, []>("SELECT kind, pending FROM seat_agenda WHERE pending = 1 ORDER BY kind").all())
+      .toEqual([{ kind: "legatus-message", pending: 1 }, { kind: "operator-launch", pending: 1 }]);
+  } finally { db.close(); }
 
   const completed = loadTasks()[0]!;
   const reopened = { ...completed, status: "inbox" as const, updatedAt: new Date(Date.parse(round.createdAt) + 120_000).toISOString() };
   delete reopened.doneAt;
   saveTasks([reopened]);
   const episode = pendingSeatAgenda(project, 10);
-  expect(episode).toHaveLength(1);
-  expect(episode[0]).toMatchObject({ kind: "legatus-question", ref: round.id, task_id: taskId });
+  expect(episode.filter(row => row.kind === "legatus-question")).toHaveLength(1);
+  expect(episode.find(row => row.kind === "legatus-question")).toMatchObject({ ref: round.id, task_id: taskId });
   const reopenedAgain = loadTasks()[0]!;
   saveTasks([reopenedAgain]);
-  expect(pendingSeatAgenda(project, 10).map(row => row.id)).toEqual(episode.map(row => row.id));
+  expect(pendingSeatAgenda(project, 10).map(row => row.id).sort()).toEqual(episode.map(row => row.id).sort());
 }));

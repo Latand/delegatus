@@ -14,8 +14,11 @@ import os from "node:os";
 import path from "node:path";
 import { sameRecordedProcessIdentity } from "@/lib/processIdentity";
 
-function admittedSpawnCwd(rawCwd: string): string {
+export function admittedSpawnCwd(rawCwd: string): string {
   return path.resolve(rawCwd === "~" || rawCwd.startsWith("~/") ? path.join(os.homedir(), rawCwd.slice(1)) : rawCwd);
+}
+export function admittedSpawnProject(rawCwd: string): string | null {
+  return projectForCwd(admittedSpawnCwd(rawCwd.trim()));
 }
 
 import { codexLaunchTier, CodexServiceTierUnavailableError, hiddenAccountsTierRefusal } from "@/lib/accounts/codexServiceTiers";
@@ -418,9 +421,8 @@ export async function executeSpawnRequest(
     try {
       const launched = await response.clone().json() as SpawnResponse;
       const rawCwd = typeof body.cwd === "string" ? body.cwd.trim() : "";
-      const admittedCwd = rawCwd ? admittedSpawnCwd(rawCwd) : "";
       const project = typeof body.project === "string" ? validExplicitProject(body.project)
-        : admittedCwd ? projectForCwd(admittedCwd) : null;
+        : rawCwd ? admittedSpawnProject(rawCwd) : null;
       if (project && launched.ok && launched.conversationId && !launched.parent
         && launched.state !== "failed" && launched.state !== "conflict") await dependencies.recordOperatorLaunch(project, launched.conversationId);
     } catch { console.error("[seat tick] operator launch event could not be recorded"); }

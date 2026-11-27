@@ -18,7 +18,7 @@ import { createWorkspace } from "@/lib/team/workspaces";
 import { defaultModelFor } from "./models";
 import { AgentRegistry } from "./registry";
 import { beginLegacySpawnFixture } from "./registryTestFixtures";
-import { executeSpawnRequest, type SpawnCommandDependencies } from "./spawnCommand";
+import { admittedSpawnCwd, admittedSpawnProject, executeSpawnRequest, type SpawnCommandDependencies } from "./spawnCommand";
 
 /**
  * The workspace binding a seat launch records, through the real spawn
@@ -56,6 +56,15 @@ const member = person("m_member", "member");
 createWorkspace(store, owner, { id: W, name: "Alpha", projects: [projectForCwd(cwd)!] });
 store.putWorkspaceMember(W, member.id, "member", owner.id, AT);
 const scope: WorkspacePrincipal = { memberId: member.id, workspaceId: W };
+
+test("literal and expanded home cwd resolve to the same admitted launch project", () => {
+  const literal = admittedSpawnCwd("~");
+  const expanded = admittedSpawnCwd(os.homedir());
+  expect(literal).toBe(expanded);
+  expect(projectForCwd(literal)).toBe(projectForCwd(expanded));
+  expect(admittedSpawnProject("~")).toBe(projectForCwd(literal));
+  expect(admittedSpawnProject(os.homedir())).toBe(projectForCwd(expanded));
+});
 
 /** The transcript of a settled conversation a member last wrote to. */
 function fencedParent(): string {
