@@ -264,8 +264,9 @@ serviceTest("a hung file still hits its individual limit on a retry with a warm 
   const driver = path.join(f.root, "hung-driver.ts");
   writeFileSync(driver, `import { touchedTests, comparatorEnding } from ${JSON.stringify(path.join(import.meta.dir, "local-gate-tests.ts"))};
 try {
-  await touchedTests(${JSON.stringify(f.repo)}, ${JSON.stringify(base)}, ["a.test.ts", "b.test.ts"],
+  const verdict = await touchedTests(${JSON.stringify(f.repo)}, ${JSON.stringify(base)}, ["a.test.ts", "b.test.ts"],
     { budgets: { fileMs: 5000, runMs: 60_000 } });
+  process.exitCode = verdict.introduced.length ? 1 : 0;
 } catch (error) {
   const ending = comparatorEnding(error);
   console.error(ending.line);
