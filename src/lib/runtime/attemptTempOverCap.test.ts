@@ -307,12 +307,12 @@ test("a tick whose expiry page spends the whole budget lets reclaim go first on 
   const f = fixture();
   const expired = f.make("slow", f.lane("lane-slow", 40)), young = f.make("young", f.lane("lane-young", 5));
   const hrtime = process.hrtime.bigint.bind(process.hrtime);
-  let spent = 0n;
+  let spent = BigInt(0);
   const monotonic = spyOn(process.hrtime, "bigint").mockImplementation(() => hrtime() + spent);
   const references = f.ports.references;
   f.ports.references = async (original, current, scan) => {
     // The expired root's reference proof outlasts every window of the tick.
-    if (original === expired) spent += 41_000_000_000n;
+    if (original === expired) spent += BigInt(41_000_000_000);
     return references(original, current, scan);
   };
   try {
