@@ -8000,6 +8000,10 @@ export const en = {
   "memoryProfile.runningText": "Reading the rules and building the summary, overall and for each memory level.",
 
   "roleMemory.line.rewrote": "Rewrote {count} rule → {targets}",
+  "roleMemory.legatus": "Legatus",
+  "roleMemory.decision.typed": "operator decision · typed",
+  "roleMemory.decision.voice": "operator decision · voice",
+  "roleMemory.decision.clicked": "operator decision · clicked",
   "roleMemory.kept": "kept by you",
   "roleMemory.unreviewed": "awaiting curator",
   "roleMemory.versions": "Earlier text · {count}",
