@@ -803,10 +803,18 @@ describe("stats history import", () => {
     expect(logs()).toEqual([]);
   });
 
+  test("Wrangler worker-first routes do not overlap a broader wildcard", async () => {
+    const cfg = await Bun.file(new URL("./wrangler.jsonc", import.meta.url)).json();
+    const routes: string[] = cfg.assets.run_worker_first;
+    const redundant = routes.filter(route => routes.some(rule =>
+      rule !== route && rule.endsWith("/*") && route.startsWith(rule.slice(0, -1))));
+    expect(redundant).toEqual([]);
+  });
+
   test("Wrangler config creates the SQLite object and declares no Access vars or analytics datasets", async () => {
     const cfg = await Bun.file(new URL("./wrangler.jsonc", import.meta.url)).json();
     expect(cfg.main).toBe("entry.ts");
-    expect(cfg.assets.run_worker_first).toEqual(["/api/*", "/stats", "/stats/", "/stats/*"]);
+    expect(cfg.assets.run_worker_first).toEqual(["/api/*", "/stats", "/stats/*"]);
     expect(cfg.vars).toEqual({ STATS_ORIGIN: "https://delegatus.org", STATS_RP_ID: "delegatus.org" });
     expect(cfg.durable_objects.bindings).toEqual([{ name: "STATS", class_name: "StatsStore" }]);
     expect(cfg.migrations).toEqual([{ tag: "v1", new_sqlite_classes: ["StatsStore"] }]);
