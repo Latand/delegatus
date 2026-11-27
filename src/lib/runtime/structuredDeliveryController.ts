@@ -1093,7 +1093,7 @@ export async function bindStructuredDeliveryQueue(
     open: () => progressStore.open(),
   };
   const effectPages = new DeliveryEffectPages(client, () => scheduleAutomaticRetry());
-  const queue = new StructuredDeliveryQueue(
+  const queue: StructuredDeliveryQueue = new StructuredDeliveryQueue(
     {
       progress,
       /* A send held before the journal is the account-migration drain's: a
@@ -1412,11 +1412,32 @@ export async function bindStructuredDeliveryQueue(
       },
     },
     hostResolver(registry, hosts),
-    async (conversationId, expectedKey, onlyIfIdle, authority, providerRecovery) => {
+    async (conversationId, expectedKey, onlyIfIdle, authority, providerRecovery, explicit) => {
       if (providerRecovery && !onlyIfIdle) return false;
+      const killConversation = conversationId as ViewerConversationId;
+      const stillAuthorized = () => !explicit || (explicit.canActuate() && !stopped && state.activeQueue === queue
+        && !branchSharesRootHost(registry, registry.conversation(killConversation)));
+      const matchesAdmission = (entry: AgentRegistryEntry | null | undefined) => {
+        if (!explicit) return true;
+        if ((entry?.claimEpoch ?? null) !== explicit.target.claimEpoch) return false;
+        const recorded = recordedScopeProcess(entry?.structuredHost);
+        const admitted = explicit.target.process;
+        // A resume publishes its claim before setup publishes the process.
+        // Bind that later process to the already admitted claim and writer
+        // epoch; a reclaimed claim still fails the epoch check above.
+        if (!admitted && recorded) {
+          return explicit.target.claimEpoch !== null
+            && entry?.structuredHost?.writerClaimEpoch === explicit.target.claimEpoch;
+        }
+        return recorded && admitted
+          ? sameRecordedProcessIdentity(recorded, admitted) && recorded.bootEpoch === admitted.bootEpoch
+          : recorded === admitted;
+      };
+      if (!stillAuthorized()) return false;
       if (!onlyIfIdle && recordedHostHeld(conversationId)) {
         await cancelRecordedHost(conversationId);
         // Reconciliation of the original run precedes the host's signal ladder.
+        if (explicit) throw new Error("waiting for recorded-check host cancellation");
         return false;
       }
       if (onlyIfIdle) {
@@ -1541,9 +1562,40 @@ export async function bindStructuredDeliveryQueue(
           }
         }
       };
-      const retainedSurvivors = registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)]?.structuredTerminationSurvivors ?? [];
+      const readExplicitEntry = () => {
+        const current = registry.conversation(killConversation);
+        if (!current || current.id !== killConversation || current.engine !== expectedKey.engine
+          || !current.generations.some(generation => generation.id === expectedKey.sessionId)) {
+          throw new Error("admitted structured kill generation is no longer attributable to the conversation");
+        }
+        return registry.hostEntry(expectedKey);
+      };
+      const stopWrite = (label: string) => ({ label, operationId: explicit?.operationId,
+        waitDeadlineAt: explicit?.deadlineAt ?? undefined });
+      const entry = explicit ? readExplicitEntry() : registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)];
+      const retainedSurvivors = entry?.structuredTerminationSurvivors ?? [];
+      if (explicit && !matchesAdmission(entry)) {
+        // A completed teardown drops the root from the row. Accept that proof
+        // on replay while the claim epoch and the admitted exit still agree.
+        const admitted = explicit.target.process;
+        if (!admitted || !entry || entry.claimEpoch !== explicit.target.claimEpoch
+          || (entry.status !== "dead" && entry.status !== "unhosted") || entry.claimOwner
+          || entry.host || recordedScopeProcess(entry.structuredHost) || recordedAgentScope(entry.structuredHost) || retainedSurvivors.length
+          || (entry.structuredHost?.signalDomain && !entry.structuredHost.signalDomain.retired)
+          || processIdentityStatus(admitted) !== "dead") {
+          throw new Error("structured kill target changed since admission");
+        }
+        if (!stillAuthorized()) return false;
+        await state.detachRetiredActiveHost?.(expectedKey);
+        await settleKilledLaunches();
+        return true;
+      }
+      if (explicit && !entry) return stillAuthorized();
       let terminated = retainedSurvivors.length === 0
-        ? (await registry.deliveryWriteOrBusy({ label: "registry.terminateInactiveStructuredHost" }, registry.terminateInactiveStructuredHost.bind(registry, conversationId as `conversation_${string}`, expectedKey)))
+        ? await registry.deliveryWriteOrBusy(stopWrite("registry.terminateInactiveStructuredHost"), () => {
+          if (explicit && (!stillAuthorized() || !matchesAdmission(readExplicitEntry()))) return false;
+          return registry.terminateInactiveStructuredHost(killConversation, expectedKey);
+        })
         : false;
       if (!terminated) {
         // An explicit kill does not depend on idle/severed-turn evidence. A
@@ -1551,17 +1603,18 @@ export async function bindStructuredDeliveryQueue(
         // Use the recorded process fence and the existing tree termination
         // ladder, then let the durable kill boundary cancel its queued prompt.
         const read = () => structuredHostKillRefFromRegistry(expectedKey, {
-          snapshot: () => registry.readOnlySnapshot(), conversationId: conversationId as ViewerConversationId,
+          snapshot: () => registry.startupHostSnapshot(expectedKey), conversationId: killConversation,
         });
         const built = read();
         if (!built.ok || built.ref.conversationId !== conversationId) return false;
         const ref = built.ref;
-        const targetScope = recordedAgentScope(registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)]?.structuredHost);
-        const targetClaimEpoch = registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)]?.claimEpoch;
+        const targetEntry = registry.hostEntry(expectedKey);
+        const targetScope = recordedAgentScope(targetEntry?.structuredHost);
+        const targetClaimEpoch = targetEntry?.claimEpoch;
         const authorize = (): { status: 409; error: string } | null => {
           const current = read();
-          const entry = registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)];
-          if (!current.ok || entry?.host || entry?.claimEpoch !== targetClaimEpoch
+          const entry = registry.hostEntry(expectedKey);
+          if (!stillAuthorized() || !matchesAdmission(entry) || !current.ok || entry?.host || entry?.claimEpoch !== targetClaimEpoch
             || !sameAgentScope(recordedAgentScope(entry?.structuredHost), targetScope) || current.ref.conversationId !== conversationId
             || current.ref.pid !== ref.pid || current.ref.startIdentity !== ref.startIdentity
             || current.ref.bootEpoch !== ref.bootEpoch) {
@@ -1575,7 +1628,7 @@ export async function bindStructuredDeliveryQueue(
         };
         const refusal = authorize();
         if (refusal) throw new Error(refusal.error);
-        const retirementEntry = registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)] ?? null;
+        const retirementEntry = registry.hostEntry(expectedKey);
         const retirementCustody = retirementEntry ? {
           claimEpoch: retirementEntry.claimEpoch,
           claimOwner: retirementEntry.claimOwner,
@@ -1583,18 +1636,20 @@ export async function bindStructuredDeliveryQueue(
           process: recordedScopeProcess(retirementEntry.structuredHost),
         } : null;
         const outcome = await terminateStructuredHostTree(ref, {
-          stopOrigin: { path: onlyIfIdle ? "idle-delivery-retirement" : "delivery-kill-action", operationId: authority?.operationId ?? conversationId },
+          stopOrigin: { path: onlyIfIdle ? "idle-delivery-retirement" : "delivery-kill-action", operationId: authority?.operationId ?? explicit?.operationId ?? conversationId },
+          ...(explicit?.deadlineAt != null ? { fenceWaitMs: Math.min(3_000, Math.max(0, explicit.deadlineAt - Date.now())) } : {}),
           orphanAlarmRegistry: registry,
           retainedSurvivors,
           scope: targetScope,
           registryCustody: retirementCustody,
           authorize,
+          onFirstEffect: explicit?.onFirstEffect,
           ...(onlyIfIdle ? { authorizeAsync: async () => await durableAuthority()
             ? null : { status: 409 as const, error: "idle-retirement-authority-lost" } } : {}),
           // The automatic path uses the signal ladder's synchronous authority
           // recheck rather than the operator's unconditional release method.
           ...(onlyIfIdle ? { terminateOwnedHost: async () => false } : {}),
-          persistCapturedTree: identities => registry.deliveryWriteOrBusy({ label: "registry.controller-stop-capture" }, () => {
+          persistCapturedTree: identities => registry.deliveryWriteOrBusy(stopWrite("registry.controller-stop-capture"), () => {
             if (authorize()) return false;
             const current = registry.hostEntry(expectedKey);
             if (!current || current.claimOwner !== retirementCustody?.claimOwner || current.claimEpoch !== retirementCustody?.claimEpoch
@@ -1614,18 +1669,19 @@ export async function bindStructuredDeliveryQueue(
           withdrawCapturedTree: async () => {
             const capture = controllerCapture;
             if (!capture) return;
-            const withdrawn = await registry.deliveryWriteOrBusy({ label: "registry.controller-stop-withdraw" },
+            const withdrawn = await registry.deliveryWriteOrBusy(stopWrite("registry.controller-stop-withdraw"),
               () => registry.withdrawStructuredTerminationSurvivors(expectedKey, ref, capture, CONTROLLER_STOP_SOURCE));
             if (!withdrawn) return;
             controllerCapture = null;
             capturedRetirement = null;
           },
           retireRegistryEntry: (key, expected, confirmed, custody, confirmedScope) =>
-            registry.deliveryWriteOrBusy({ label: "registry.controller-stop-settle" }, () => registry.terminateStructuredHost(key, expected, confirmed, custody, confirmedScope)),
+            registry.deliveryWriteOrBusy(stopWrite("registry.controller-stop-settle"),
+              () => registry.terminateStructuredHost(key, expected, confirmed, custody, confirmedScope)),
         });
         if (!outcome.ok) {
           if (outcome.terminationStarted && outcome.survivors.length > 0) {
-            (await registry.deliveryWriteOrBusy({ label: "registry.recordStructuredTerminationSurvivors" }, registry.recordStructuredTerminationSurvivors.bind(registry, expectedKey, ref, outcome.survivors)));
+            (await registry.deliveryWriteOrBusy(stopWrite("registry.recordStructuredTerminationSurvivors"), registry.recordStructuredTerminationSurvivors.bind(registry, expectedKey, ref, outcome.survivors)));
           }
           throw new Error(outcome.error);
         }

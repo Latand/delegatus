@@ -315,7 +315,7 @@ export const SHOTS: ReadmeShot[] = [
     /* The shortest screen the desktop board draws at: below 600 px the phone
        layout takes over. */
     viewport: { width: WIDE.width, height: 600 },
-    requiredText: ["Idempotent refunds", "Rotate webhook signing keys", "Move invoices to the new ledger", "Document refund error codes", "Needs your answer", "1 needs you", "Waiting outside: finance to confirm the rounding rule"],
+    requiredText: ["Idempotent refunds", "Rotate webhook signing keys", "Move invoices to the new ledger", "Document refund error codes", "Needs your answer", "1 card needs your answer", "Waiting outside: finance to confirm the rounding rule"],
     /* "resume ·" is a pane recovery opened for the seat: a stray agent card. */
     absentText: ["tmux", "Untitled task", "resume ·", "no reason given", ...MONITOR_ALARM_TEXT],
     prepare: foldOrchestrator,

@@ -26,7 +26,7 @@ export function roleName(t: TFunction, role: { id: string; name: string }): stri
 /** Localized role name straight from a stored role id (stage chips, stage
     rows) — falls back to the raw id for an unknown/legacy role. */
 export function roleNameById(t: TFunction, roleId: string): string {
-  return copy(t, `roleCopy.${roleId}.name`, roleId);
+  return copy(t, `roleCopy.${roleId}.name`, roleId === "legatus" ? t("roleMemory.legatus") : roleId);
 }
 
 export function roleDescription(t: TFunction, role: { id: string; description: string }): string {

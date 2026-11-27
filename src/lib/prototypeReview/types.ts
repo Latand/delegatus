@@ -80,7 +80,7 @@ export interface PrototypeDecision {
   comment: string;
   at: string;
   /** The person who decided; the background delivery sends in their name. Local only. */
-  decidedBy?: { kind: "operator" } | { kind: "member"; memberId: string } | { kind: "agent"; conversationId: string };
+  decidedBy?: { kind: "operator" } | { kind: "member"; memberId: string } | { kind: "agent"; conversationId: string } | { kind: "legatus"; conversationId: string; ruleId?: string };
   /** Verified relay owner, local only; revalidated against the same member before dispatch. */
   telegramUserId?: string;
   /** Local proof recorded only after the native-association authorization gate. */

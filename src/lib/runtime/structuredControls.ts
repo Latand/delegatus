@@ -21,7 +21,8 @@ import { HistorySecurityError, MissingSourceAncestorError, sanitizeProviderError
 import { headCwd } from "@/lib/agent/transcript";
 
 import { isRuntimeHostTransportFailure, runtimeHostClient, type RuntimeHostClient } from "./client";
-import { newOperationId, runtimeCompactCapability, type RuntimeControlCapability, type RuntimeOperationCommand } from "./contracts";
+import { newOperationId, runtimeCompactCapability, type RuntimeControlCapability, type RuntimeKillTarget, type RuntimeOperationCommand } from "./contracts";
+import { recordedAgentScope, recordedScopeProcess } from "./agentScope";
 import { republishStructuredDeliveryHost } from "./structuredDeliveryController";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { recoverDeadStructuredConversation, structuredHostProcessAlive } from "./structuredRecovery";
@@ -285,24 +286,45 @@ export async function dispatchStructuredControl(
   if (!request.action) return null;
   if (!(dependencies.enabled ?? (() => structuredHostsEnabled()))()) return null;
   const registry = dependencies.registry ?? agentRegistry();
-  const conversation = request.path
+  const selectedConversation = request.path
     ? registry.conversationForPath(request.path)
     : request.conversationId.startsWith("conversation_")
       ? registry.conversation(request.conversationId as `conversation_${string}`)
       : null;
-  const generation = conversation?.generations.at(-1);
-  if (!conversation || !generation) return null;
+  if (!selectedConversation?.generations.length) return null;
   if (!request.onlyIfIdle && request.controlOrigin?.kind !== "agent" && request.actor?.kind !== "agent"
     && (STRUCTURED_CONTROL_ACTIONS.has(request.action) || request.action === "resume")) {
-    await cancelSeatQuotaOnControl(conversation.id);
+    await cancelSeatQuotaOnControl(selectedConversation.id);
   }
-  const snapshot = registry.readOnlySnapshot();
-  const entry = snapshot.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })];
-  if (!entry) return null;
   /* Host teardown clears the structuredHost column before terminal kill
      projection or reconfigure recovery finishes. Durable conversation state
      keeps those controls on the structured channel throughout that gap. */
   const structuredKill = request.action === "kill";
+  const explicitKill = structuredKill && !request.onlyIfIdle;
+  const snapshot = explicitKill
+    ? registry.livenessConversationSnapshot(selectedConversation.id) : registry.readOnlySnapshot();
+  // Use the same keyed snapshot for the generation, custody and send cohort.
+  const conversation = explicitKill ? snapshot.conversations[selectedConversation.id] : selectedConversation;
+  const generation = conversation?.generations.at(-1);
+  if (!conversation || !generation) return null;
+  let targets: RuntimeKillTarget[] | undefined;
+  if (explicitKill) {
+    targets = [];
+    const seen = new Set<string>();
+    for (const native of [...conversation.generations].reverse()) {
+      if (seen.has(native.id)) continue;
+      seen.add(native.id);
+      const row = snapshot.entries[sessionKeyId({ engine: conversation.engine, sessionId: native.id })];
+      const process = recordedScopeProcess(row?.structuredHost);
+      if (native === generation || process || row?.claimOwner || recordedAgentScope(row?.structuredHost)
+        || (row?.structuredTerminationSurvivors?.length ?? 0) > 0
+        || (row?.structuredHost?.signalDomain && !row.structuredHost.signalDomain.retired)) {
+        targets.push({ sessionId: native.id, claimEpoch: row?.claimEpoch ?? null, process });
+      }
+    }
+  }
+  const entry = snapshot.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })];
+  if (!entry && (!targets || targets.length === 1)) return null;
   // Capture before command admission: a later send is outside this kill's cohort.
   const pendingSendIds = structuredKill ? [...new Set([
     ...hotRegistryRows(snapshot, "heldDeliveries").filter(([, row]) => row.conversationId === conversation.id
@@ -320,18 +342,18 @@ export async function dispatchStructuredControl(
         && registry.canonicalConversationId(receipt.conversationId) === conversation.id);
   const structuredReconfigureRestart = request.action === "reconfigure"
     && (conversation.reconfigure?.status === "applying" || completedStructuredOwnership);
-  if (!entry.structuredHost && !structuredKill && !structuredReconfigureRestart) return null;
+  if (!entry?.structuredHost && !structuredKill && !structuredReconfigureRestart) return null;
 
   if (request.action === "permission") {
-    return await answerPermissionRequest(request, conversation.id, entry.structuredHost!, dependencies);
+    return await answerPermissionRequest(request, conversation.id, entry!.structuredHost!, dependencies);
   }
   if (request.action === "answer") {
-    return await answerNativeRequest(request, conversation.id, entry.structuredHost!, dependencies);
+    return await answerNativeRequest(request, conversation.id, entry!.structuredHost!, dependencies);
   }
 
   if (!STRUCTURED_CONTROL_ACTIONS.has(request.action)) {
     if (request.action === "resume") {
-      if (entry.status === "dead" || entry.status === "unhosted") return null;
+      if (!entry || entry.status === "dead" || entry.status === "unhosted") return null;
       const resumed = (spawned: boolean, held = false): StructuredControlResult => {
         if (!held) void Promise.resolve().then(async () => {
           const notify = dependencies.onResumed ?? (await import("@/lib/monitor/resumedSeatTick")).requestResumedSeatTick;
@@ -385,7 +407,7 @@ export async function dispatchStructuredControl(
        `thread/compact/start`, claude-broker by typing `/compact` into the
        conversation. The 409 is left for a host kind that has neither. */
     const capability = runtimeCompactCapability(conversation.engine);
-    const hostKind = entry.structuredHost?.kind;
+    const hostKind = entry?.structuredHost?.kind;
     if (!capability.supported || (hostKind !== "codex-app-server" && hostKind !== "claude-broker")) {
       return {
         status: 409,
@@ -406,7 +428,10 @@ export async function dispatchStructuredControl(
 
   const pipelineStage = snapshot.memberships[conversation.id]?.some(membership => membership.kind === "pipeline");
   if (structuredKill && !request.operationId && ((request.controlOrigin?.kind ?? request.actor?.kind) === "agent" || !pipelineStage)
-    && !entry.structuredHost?.process
+    && (!targets || targets.length === 1 && !targets[0]?.process)
+    && entry && !entry.structuredHost?.process && !entry.claimOwner
+    && !entry.structuredTerminationSurvivors?.length
+    && (!entry.structuredHost?.signalDomain || entry.structuredHost.signalDomain.retired)
     && (entry.status === "dead" || entry.status === "unhosted")) {
     /* The durable projection already records this session as torn down, so a
        retirement replays the terminal outcome. Pipeline operator stops still
@@ -575,6 +600,7 @@ export async function dispatchStructuredControl(
     const sessionKey = { engine: conversation.engine, sessionId: generation.id };
     const command: RuntimeOperationCommand = request.action === "kill"
       ? { kind: "kill", operationId, idempotencyKey: operationId, conversationId: conversation.id, sessionKey, pendingSendIds,
+          ...(targets ? { targets } : {}),
           origin: request.controlOrigin ?? (request.actor?.kind === "agent" ? { kind: "agent", conversationId: request.actor.conversationId } : { kind: "operator" }),
           ...(request.onlyIfIdle ? { onlyIfIdle: request.onlyIfIdle } : {}),
           ...(request.providerRecovery ? { providerRecovery: request.providerRecovery } : {}) }
@@ -606,7 +632,7 @@ export async function dispatchStructuredControl(
               operationId,
               idempotencyKey: operationId,
               conversationId: conversation.id,
-              turnId: entry.structuredHost?.activeTurnRef ?? null,
+              turnId: entry?.structuredHost?.activeTurnRef ?? null,
             };
     assertSwitchCurrent?.();
     const result = await client.command(command);

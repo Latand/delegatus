@@ -75,17 +75,10 @@ test("leaks", async () => {
 });
 `;
 
-test("a test run through the preload leaves nothing in the temp dir it started with", () => {
-  const directory = sandbox();
-  const temp = path.join(directory, "tmp");
-  fs.mkdirSync(temp);
-  fs.writeFileSync(path.join(directory, "leak.test.ts"), LEAKING_TEST);
-  const report = path.join(directory, "made.json");
-  const before = fs.readdirSync(temp);
-
+function runWithPreload(directory: string, temp: string, report: string) {
   /* The child builds its own state and host bindings. Its signal-domain
      capability still lets the gate admit a runner from this PID namespace. */
-  const result = spawnSync(process.execPath, ["test", "--preload", path.join(repoRoot, "test-preload.ts"), "./leak.test.ts"], {
+  return spawnSync(process.execPath, ["test", "--preload", path.join(repoRoot, "test-preload.ts"), "./fixture.test.ts"], {
     cwd: directory,
     env: {
       NODE_ENV: "test", PATH: process.env.PATH, HOME: process.env.HOME,
@@ -99,6 +92,16 @@ test("a test run through the preload leaves nothing in the temp dir it started w
     encoding: "utf8",
     timeout: 60_000,
   });
+}
+
+test("a test run through the preload leaves nothing in the temp dir it started with", () => {
+  const directory = sandbox();
+  const temp = path.join(directory, "tmp");
+  fs.mkdirSync(temp);
+  fs.writeFileSync(path.join(directory, "fixture.test.ts"), LEAKING_TEST);
+  const report = path.join(directory, "made.json");
+  const before = fs.readdirSync(temp);
+  const result = runWithPreload(directory, temp, report);
   if (result.status !== 0) throw new Error(result.stderr);
   expect(result.status).toBe(0);
 
@@ -114,3 +117,44 @@ test("a test run through the preload leaves nothing in the temp dir it started w
   expect(before).toEqual([]);
   expect(fs.readdirSync(temp)).toEqual([]);
 });
+
+test.skipIf(process.platform === "win32").each(["dot-directory", "symlink"] as const)("document tests run with a %s stage temp root", kind => {
+  const directory = sandbox();
+  const stageTemp = path.join(directory, ".config", "state", "scratch", "tmp");
+  fs.mkdirSync(stageTemp, { recursive: true });
+  const temp = kind === "symlink" ? path.join(directory, "stage-temp") : stageTemp;
+  if (kind === "symlink") fs.symlinkSync(stageTemp, temp, "junction");
+  const report = path.join(directory, "temp-root.json");
+  fs.writeFileSync(path.join(directory, "fixture.test.ts"), `
+    import { expect, test } from "bun:test";
+    import fs from "node:fs";
+    import os from "node:os";
+    import path from "node:path";
+    import { readUnderRoots } from ${JSON.stringify(path.join(repoRoot, "src/lib/telegram/bot/documents.ts"))};
+
+    test("document admission in the test environment", () => {
+      const temp = os.tmpdir();
+      fs.writeFileSync(process.env.LEAK_REPORT, JSON.stringify({ temp, home: os.homedir() }));
+      const handoff = path.join(temp, "handoff");
+      const stateDir = path.join(handoff, "state");
+      const read = leaf => {
+        const file = path.join(handoff, leaf, "report.txt");
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, "fixture document");
+        return readUnderRoots(file, [handoff], { home: temp, stateDir }, 1024).bytes.toString();
+      };
+      expect(read("")).toBe("fixture document");
+      expect(() => read(".private")).toThrow(expect.objectContaining({ code: "document_forbidden_path", message: expect.stringContaining("dot-directory .private") }));
+      expect(() => read("state")).toThrow(expect.objectContaining({ code: "document_forbidden_path", message: expect.stringContaining("Delegatus state directory") }));
+    });
+  `);
+  const result = runWithPreload(directory, temp, report);
+  if (result.status !== 0) throw new Error(result.error?.message ?? result.stderr);
+  const observed = JSON.parse(fs.readFileSync(report, "utf8"));
+  for (const root of [observed.temp, path.dirname(observed.home)]) {
+    expect(path.basename(root)).toStartWith(TEST_RUN_TEMP_PREFIX);
+    expect(root.split(path.sep).some((segment: string) => segment.startsWith("."))).toBeFalse();
+    expect(fs.existsSync(root)).toBeFalse();
+  }
+  expect(fs.readdirSync(stageTemp)).toEqual([]);
+}, 30_000);

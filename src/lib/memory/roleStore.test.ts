@@ -25,7 +25,8 @@ async function runMemoryChild(script: string): Promise<void> {
     const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { child.kill("SIGKILL"); void child.exited.then(() => reject(Error("role-memory history child exceeded its deadline"))); }, 30_000); });
     const result = Promise.all([child.exited, new Response(child.stderr).text()]);
     const [code, stderr] = await Promise.race([result, timeout]);
-    expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+    const unexpected = stderr.split("\n").filter(line => line && !/^\[state transaction-hold\] \{"collection":"role_memory","heldMs":\d+,"pid":\d+,"role":"unowned"\}$/.test(line));
+    expect({ code, stderr: unexpected.join("\n") }).toEqual({ code: 0, stderr: "" });
   } finally { if (timer) clearTimeout(timer); }
 }
 

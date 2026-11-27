@@ -3,10 +3,11 @@
 import { ChevronRight, Crown, Folders, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 
-import { formatConversationHash, isArchivedPredecessor, parseConversationHash, resolveConversationTarget, withoutArchivedPredecessors, type ConversationHash } from "@/lib/accounts/identity";
+import { catalogPositions, firstFileAtPath, formatConversationHash, isArchivedPredecessor, parseConversationHash, resolveConversationTarget, withoutArchivedPredecessors, type ConversationHash } from "@/lib/accounts/identity";
 import { navigateToFragment, NOTIFICATION_OPEN_MESSAGE, setFragmentNavigator } from "@/lib/navigation/fragmentNavigation";
 import { createTraversalFence, FOCUS_HISTORY_STATE_KEY, focusEntryFor, parseFocusHistoryState, recordFocusNavigation, recordProjectNavigation, releaseFocusNavigation, retargetRecordedProject, setFocusHistoryOwner } from "@/lib/navigation/focusHistory";
 import { onAccountPanelRequest } from "@/lib/accounts/openPanel";
+import { createCatalogSelection } from "@/lib/client/catalogOverlay";
 import { useFleetCues } from "@/hooks/useFleetCues";
 import { useWorkCues } from "@/hooks/useWorkCues";
 import { useArchivedProjects } from "@/hooks/useArchivedProjects";
@@ -46,7 +47,7 @@ import { AttentionToast } from "./attention/AttentionToast";
 import { SoundCaptions } from "./SoundCaptions";
 import type { CaptionTarget } from "@/lib/audio/captions";
 import { openCaptionTarget as openCaptionTargetIn } from "@/lib/audio/captionNavigation";
-import { attentionEntryProject, buildNeedsYouQueue, laneFocusId, laneFocusPath, type MobileAttentionEntry } from "./attention/attentionQueue";
+import { attentionEntryProject, buildNeedsYouQueue, laneFocusId, laneFocusPath, needsYouHolds, type MobileAttentionEntry } from "./attention/attentionQueue";
 import { MobileAttentionSheet, type MobileNoticeRow } from "./attention/MobileAttentionSheet";
 import { roleNameById } from "./builderCopy";
 import { purgeLegacyOperatorCredential } from "./operatorCredential";
@@ -77,7 +78,7 @@ import { useClosingPipelines } from "./mobile/MobilePipelineScreen";
 import { getMobileNav, readMobileNavEntry, screenFromFragment, screenKey, standsOnOwnUrl, topScreen, useMobileNavStore, type MobileNavConfig, type MobileScreen } from "./mobile/mobileNav";
 import { MobileProjectSheet } from "./mobile/MobileProjectSheet";
 import { overviewLiftProject, overviewScreenProject, overviewStackKey, overviewStackScreens } from "./mobile/overviewPhone";
-import type { MobileShellHost } from "./mobile/MobileShell";
+import { renderViewerSheet, ViewerSheetContext, type MobileShellHost, type SheetRenderer } from "./mobile/MobileShell";
 import { dropPendingSeatConfirmOutside, onOrchestratorDraftRequest } from "./orchestrator/draftPrefill";
 import { onOrchestratorFocusRequest } from "./orchestrator/taskChips";
 import { OrchestratorDock, dockOpenFor, rememberDockOpen } from "./orchestrator/OrchestratorDock";
@@ -343,14 +344,17 @@ function ViewerApp() {
      plain catalog held can age out of a later payload; this keeps its row on
      the board for the one fetch that asks for it by name, instead of closing
      the pane under the reader and reopening it. */
-  const openedRow = catalogPin ? allFiles.find((file) => file.path === catalogPin.path) : undefined;
+  const openedRow = catalogPin ? firstFileAtPath(allFiles, catalogPin.path) : undefined;
   const [lastOpenedRow, setLastOpenedRow] = useState<FileEntry | null>(null);
   if (openedRow && openedRow !== lastOpenedRow) setLastOpenedRow(openedRow);
+  const selectCurrentGenerations = useMemo(() => createCatalogSelection(withoutArchivedPredecessors), []);
   const files = useMemo(() => {
-    const folded = withoutArchivedPredecessors(allFiles);
+    const folded = selectCurrentGenerations(allFiles);
     const pinnedPath = catalogPin?.path;
-    if (!pinnedPath || folded.some((file) => file.path === pinnedPath)) return folded;
-    const pinned = allFiles.find((file) => file.path === pinnedPath);
+    if (!pinnedPath
+      || catalogPositions(allFiles).byPath.get(pinnedPath)?.some((position) => !isArchivedPredecessor(allFiles[position]!))
+      || folded.some((file) => file.path === pinnedPath)) return folded;
+    const pinned = firstFileAtPath(allFiles, pinnedPath);
     if (!pinned) {
       return catalogPin?.hydrated && lastOpenedRow?.path === pinnedPath ? [...folded, lastOpenedRow] : folded;
     }
@@ -361,7 +365,7 @@ function ViewerApp() {
     const standing = pinned.conversationId ? folded.find((file) => file.conversationId === pinned.conversationId) : undefined;
     if (!standing) return [...folded, pinned];
     return isArchivedPredecessor(standing) ? folded.map((file) => file === standing ? pinned : file) : folded;
-  }, [allFiles, catalogPin, lastOpenedRow]);
+  }, [selectCurrentGenerations, allFiles, catalogPin, lastOpenedRow]);
   /* The paths the plain catalog carries: the payload without the rows only a
      pin admitted. */
   const unpinnedPaths = useMemo(() => {
@@ -446,19 +450,17 @@ function ViewerApp() {
     localStorage.setItem(PROJECT_KEY, owner);
     mobileNav.retargetProject(owner, null, location.href);
   }, [isMobile, project, phoneTopKey, tasks, pipelines, allFiles, mobileNav]);
-  const dashboardFilesRef = useRef<{ project: string; files: FileEntry[] } | null>(null);
+  /* One selection per project: another project's row reads nothing of this one,
+     and a replaced row of this one is swapped in by position (#4285). */
+  const selectDashboard = useMemo(
+    () => createCatalogSelection((rows) => rows.filter((file) => projectKey(file) === dashboardProject)),
+    [dashboardProject],
+  );
   const dashboardFiles = useMemo(() => {
     if (dashboardProject === OVERVIEW) return [];
-    const selected = files.filter((file) => projectKey(file) === dashboardProject);
-    const previous = dashboardFilesRef.current;
-    const stable = previous?.project === dashboardProject
-      && previous.files.length === selected.length
-      && selected.every((file, index) => file === previous.files[index])
-      ? previous.files
-      : selected;
-    dashboardFilesRef.current = { project: dashboardProject, files: stable };
-    return stable;
-  }, [files, dashboardProject]);
+    const selected = selectDashboard(files);
+    return selected;
+  }, [files, dashboardProject, selectDashboard]);
   /* Every certified answer refreshes the names this browser remembers, so
      the next cold start names the project before its first answer (#2071). */
   useEffect(() => {
@@ -1131,14 +1133,23 @@ function ViewerApp() {
     }
     publishBlockerNames({ projects: projectDisplayNames, conversations, tasks: taskTitles, cards });
   }, [updateBlockers, updateDecision, wantedNames, allFiles, tasks, projectDisplayNames]);
-  const needsYou = useMemo(() => buildNeedsYouQueue(files, pipelines, clock, closingPipelines, updateDecision, tasks, seatDecisions, secretRequestNotices), [files, pipelines, clock, closingPipelines, updateDecision, tasks, seatDecisions, secretRequestNotices]);
-  /* «Готово» (docs/design/done-section.md §5): finished work still waiting to
-     be accepted counts with the decisions on the header, the panel, the tab
-     title and the phone's badge, until it is accepted. The rail's ⏸, «Dismiss
-     all», the agents' read and the board report stay decisions only. */
+  /* Everything the board's cards mark as waiting on the operator: the N key
+     and the «show only who waits» filter walk it. */
+  const boardWaits = useMemo(
+    () => buildNeedsYouQueue(files, pipelines, clock, closingPipelines, updateDecision, tasks, seatDecisions, secretRequestNotices),
+    [files, pipelines, clock, closingPipelines, updateDecision, tasks, seatDecisions, secretRequestNotices],
+  );
+  /* «Needs you» (docs/design/legatus/build-plan.md, slice 1): the forms that
+     wait for the operator, and the waits no seat answers yet. The header, the
+     panel, the tab title, the rail's ⏸, the phone's badge and its sheet all
+     read this one list. */
+  const needsYou = useMemo(() => boardWaits.filter(needsYouHolds), [boardWaits]);
+  /* «Готово» (docs/design/done-section.md) no longer counts anywhere: the feed
+     still projects for the cards, the report log and the deploy and limit
+     fault sounds. */
   const doneItems = useDoneItems();
   const doneLoaded = useDoneItemsLoaded();
-  const waitingCount = needsYou.length + doneItems.length;
+  const waitingCount = needsYou.length;
   /* The sound map (docs/design/sound-redesign.md): what needs the operator,
      what landed and what was released, from the same queue and feed the badge
      reads, so a sound and the badge cannot disagree. A stand-in served for a
@@ -1452,8 +1463,8 @@ function ViewerApp() {
   /* N never leaves the current project (D4): the same items and order the
      global list holds, conversations and lanes, taken off its memo. */
   const projectEntries = useMemo(
-    () => (project === OVERVIEW ? [] : needsYou.filter((entry) => attentionEntryProject(entry) === project)),
-    [needsYou, project],
+    () => (project === OVERVIEW ? [] : boardWaits.filter((entry) => attentionEntryProject(entry) === project)),
+    [boardWaits, project],
   );
 
   /* The phone's ONE queue (mobile v2 §4.1, §4.6): the bar's badge counts it,
@@ -1471,16 +1482,17 @@ function ViewerApp() {
      (`needsDecisionPipelineRows`), so the count, the sheet and the rows under
      it cannot disagree. It is a slice of the desktop island's list, so the
      phone and the desktop cannot disagree either (#2129). */
-  const shellEntries = project === OVERVIEW ? needsYou : projectEntries;
+  const shellEntries = useMemo(
+    () => (project === OVERVIEW ? needsYou : needsYou.filter((entry) => attentionEntryProject(entry) === project)),
+    [needsYou, project],
+  );
   const shellQueueCount = shellEntries.length;
-  /* The phone's «Готово» is the same slice, plus what belongs to no board. */
-  const shellDone = useMemo(() => (project === OVERVIEW ? doneItems : doneItems.filter((item) => item.project === null || item.project === project)), [doneItems, project]);
   /* The filter is offered while anything on the board on screen waits, a
      parked lane (#2129) included: that card is what stays lit. Scoped to the
      board, so it never offers to dim a board where nothing would stay lit.
      The boards read it from one attribute on <main> (globals.css), so
      flipping it re-renders none of them. */
-  const needsOnlyAvailable = shellQueueCount > 0;
+  const needsOnlyAvailable = (project === OVERVIEW ? boardWaits : projectEntries).length > 0;
   /* eslint-disable-next-line react-hooks/set-state-in-effect */
   useEffect(() => {
     if (!needsOnlyAvailable) setNeedsOnly(false);
@@ -1493,7 +1505,7 @@ function ViewerApp() {
     const target = notice.target;
     const firstLine = (text: string | undefined) => cleanTitle((text ?? "").split(/\r?\n/, 1)[0] ?? "", 90);
     const title = target.kind === "conversation"
-      ? cleanTitle(allFiles.find((file) => file.path === target.path)?.title ?? "", 90) || t("notices.target.conversation")
+      ? cleanTitle(firstFileAtPath(allFiles, target.path)?.title ?? "", 90) || t("notices.target.conversation")
       : target.kind === "pipeline" || target.kind === "stage"
         ? firstLine(pipelines.find((pipeline) => pipeline.id === target.pipelineId)?.task) || t("notices.target.pipeline")
         : target.kind === "task"
@@ -1663,7 +1675,8 @@ function ViewerApp() {
   /* A caption that names only a conversation takes that conversation's title. */
   const captionConversationTitle = useCallback(
     (conversationId: string): string | null => {
-      const file = allFiles.find((candidate) => candidate.conversationId === conversationId);
+      const first = catalogPositions(allFiles).byConversation.get(conversationId)?.[0];
+      const file = first === undefined ? undefined : allFiles[first];
       return file ? cleanTitle(file.title, 90) || null : null;
     },
     [allFiles],
@@ -1726,7 +1739,6 @@ function ViewerApp() {
       onOpen={jumpToEntry}
       focus={panelFocus}
       pinned={favoritesPinned}
-      done={doneItems}
     />
   );
 
@@ -1755,23 +1767,17 @@ function ViewerApp() {
     [needsOnlyAvailable, needsOnlyActive],
   );
 
-  /* The phone shell's host (mobile v2 lane 1): the queue count for the bar's
-     badge, the arrival for the banner slot (below the runtime states, which
-     outrank it, and dropped on the board, where the queue is the first section
-     and the badge carries the count), the search palette, and the two sheets
-     the Viewer owns — the project switcher the title cell opens (it replaced
-     the drawer and the hamburger) and the Needs-you queue the badge opens over
-     whichever screen is showing. Memoized because ProjectDashboard is memo'd
-     and a fresh object per render would re-render it on every poll. */
-  const mobileShell = useMemo<MobileShellHost | null>(() => {
+  /* The visible projects or Needs-you sheet reads the latest global catalog here.
+     The dashboard receives the badge, banner and workspace label through its host. */
+  const renderSheet = useCallback<SheetRenderer>((name, close) => {
     if (!isMobile) return null;
     /* A notice goes where it points, on the stack the operator is on: nothing
        moved them there, so ‹ comes straight back. */
-    const openNotice = (notice: AttentionNotice, close: () => void) => {
+    const openNotice = (notice: AttentionNotice) => {
       close();
       const target = notice.target;
       if (target.kind === "conversation") {
-        const file = allFiles.find((entry) => entry.path === target.path);
+        const file = firstFileAtPath(allFiles, target.path);
         if (file) {
           if (project === OVERVIEW) openOverOverview(file);
           else openFile(file);
@@ -1782,99 +1788,91 @@ function ViewerApp() {
         mobileNav.push({ kind: "task", id: target.taskId });
       }
     };
-    return {
-      attentionCount: shellQueueCount + shellDone.length,
-      noticeDot: phoneNotices.unseen,
-      filterActive: needsOnly && needsOnlyAvailable,
-      arrival: toastFile ? (
-        <AttentionToast
-          file={toastFile}
-          mobile
-          onOpen={() => {
-            if (project === OVERVIEW) openOverOverview(toastFile);
-            else openFile(toastFile);
-            setToastPath(null);
-          }}
-          onDismiss={() => setToastPath(null)}
+    if (name === "projects") {
+      return (
+        <MobileProjectSheet
+          files={files}
+          projectCatalog={railCatalog}
+          projectDisplayNames={projectDisplayNames}
+          pipelines={pipelines}
+          workflows={workflows}
+          archivedProjects={archivedProjects}
+          crownedProjects={crownedProjects}
+          selected={project}
+          now={clock}
+          needsYouCounts={needsYouByProject}
+          loaded={loaded}
+          catalogFailures={catalogFailures}
+          onSelect={selectProject}
+          onCreateProject={createProject}
+          onClose={close}
+          workspace={workspaceState}
+          actions={projectRowActions}
+          onToggleCrown={toggleCrown}
+          projectCwds={projectCwds}
         />
-      ) : null,
-      workspaceEyebrow,
-      renderSheet: (name, close) => {
-        if (name === "projects") {
-          return (
-            <MobileProjectSheet
-              files={files}
-              projectCatalog={railCatalog}
-              projectDisplayNames={projectDisplayNames}
-              pipelines={pipelines}
-              workflows={workflows}
-              archivedProjects={archivedProjects}
-              crownedProjects={crownedProjects}
-              selected={project}
-              now={clock}
-              needsYouCounts={needsYouByProject}
-              loaded={loaded}
-              catalogFailures={catalogFailures}
-              onSelect={selectProject}
-              onCreateProject={createProject}
-              onClose={close}
-              workspace={workspaceState}
-              actions={projectRowActions}
-              onToggleCrown={toggleCrown}
-              projectCwds={projectCwds}
-            />
-          );
-        }
-        if (name === "attention") {
-          /* The Needs-you sheet (lane 8): the one list above, its rows opening
-             through the same hand-off a panel click performs. A pipeline row
-             opens the pipeline screen (lane 7) on the same stack the board is
-             on, so ‹ leaves the way the operator came in. */
-          return (
-            <MobileAttentionSheet
-              entries={shellEntries}
-              now={clock}
-              pipelines={pipelines}
-              projectNames={projectDisplayNames}
-              current={project === OVERVIEW ? null : project}
-              order={railOrder}
-              /* Over the Overview a row opens as a screen on its stack, as its
-                 cards do (#2098); a project's own board focuses in place. */
-              onOpenConversation={project === OVERVIEW ? (item) => {
-                close();
-                cycleRef.current = item.id;
-                openOverOverview(item.file);
-              } : (item) => {
-                /* The conversation's screen takes the sheet's entry. */
-                close();
-                jumpToItem(item);
-              }}
-              onOpenPipeline={(row) => {
-                close();
-                /* Over the Overview a lane of any project goes on top of the
-                   screen the operator is on and its own project's dashboard
-                   draws it; ‹ comes back to that screen. */
-                mobileNav.push({ kind: "pipeline", id: row.id });
-              }}
-              onOpenPrototype={(notice) => {
-                close();
-                openPrototypeEntry(notice);
-              }}
-              onClose={close}
-              notices={noticeRows}
-              onOpenNotice={(notice) => openNotice(notice, close)}
-              onClearNotice={clearNotice}
-              onNoticesSeen={markNoticesSeen}
-              filterActive={needsOnly}
-              onToggleFilter={needsOnlyAvailable ? () => setNeedsOnly((value) => !value) : undefined}
-              done={shellDone}
-            />
-          );
-        }
-        return null;
-      },
-    };
-  }, [isMobile, shellEntries, shellDone, toastFile, openFile, openOverOverview, mobileNav, files, allFiles, railCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, needsYouByProject, loaded, catalogFailures, selectProject, createProject, projectRowActions, toggleCrown, projectCwds, jumpToItem, openPrototypeEntry, phoneNotices.unseen, noticeRows, railOrder, needsOnly, needsOnlyAvailable, workspaceState, workspaceEyebrow]);
+      );
+    }
+    if (name === "attention") {
+      /* The Needs-you sheet (lane 8): the one list above, its rows opening
+         through the same hand-off a panel click performs. A pipeline row
+         opens the pipeline screen (lane 7) on the same stack the board is
+         on, so ‹ leaves the way the operator came in. */
+      return (
+        <MobileAttentionSheet
+          entries={shellEntries}
+          now={clock}
+          pipelines={pipelines}
+          projectNames={projectDisplayNames}
+          current={project === OVERVIEW ? null : project}
+          order={railOrder}
+          /* Over the Overview a row opens as a screen on its stack, as its
+             cards do (#2098); a project's own board focuses in place. */
+          onOpenConversation={project === OVERVIEW ? (item) => {
+            close();
+            cycleRef.current = item.id;
+            openOverOverview(item.file);
+          } : (item) => {
+            /* The conversation's screen takes the sheet's entry. */
+            close();
+            jumpToItem(item);
+          }}
+          onOpenPipeline={(row) => {
+            close();
+            /* Over the Overview a lane of any project goes on top of the
+               screen the operator is on and its own project's dashboard
+               draws it; ‹ comes back to that screen. */
+            mobileNav.push({ kind: "pipeline", id: row.id });
+          }}
+          onOpenPrototype={(notice) => {
+            close();
+            openPrototypeEntry(notice);
+          }}
+          onClose={close}
+          notices={noticeRows}
+          onOpenNotice={openNotice}
+          onClearNotice={clearNotice}
+          onNoticesSeen={markNoticesSeen}
+          filterActive={needsOnly}
+          onToggleFilter={needsOnlyAvailable ? () => setNeedsOnly((value) => !value) : undefined}
+        />
+      );
+    }
+    return null;
+  }, [isMobile, shellEntries, openFile, openOverOverview, mobileNav, files, allFiles, railCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, needsYouByProject, loaded, catalogFailures, selectProject, createProject, projectRowActions, toggleCrown, projectCwds, jumpToItem, openPrototypeEntry, noticeRows, railOrder, needsOnly, needsOnlyAvailable, workspaceState, clearNotice, markNoticesSeen]);
+
+  const mobileArrival = useMemo(() => isMobile && toastFile ? (
+    <AttentionToast file={toastFile} mobile onOpen={() => {
+      if (project === OVERVIEW) openOverOverview(toastFile);
+      else openFile(toastFile);
+      setToastPath(null);
+    }} onDismiss={() => setToastPath(null)} />
+  ) : null, [isMobile, toastFile, project, openOverOverview, openFile]);
+  const filterActive = needsOnly && needsOnlyAvailable;
+  const mobileShell = useMemo<MobileShellHost | null>(() => isMobile ? {
+    attentionCount: shellQueueCount, noticeDot: phoneNotices.unseen, filterActive, arrival: mobileArrival, workspaceEyebrow,
+    renderSheet: renderViewerSheet,
+  } : null, [isMobile, shellQueueCount, phoneNotices.unseen, filterActive, mobileArrival, workspaceEyebrow]);
 
   const shell = (
     <div className="flex h-full">
@@ -2183,7 +2181,9 @@ function ViewerApp() {
   return (
     <KeepAwakeProvider>
       <WorkLinksProvider value={workLinks}>
-        <ServerReachProvider value={reach}>{shell}</ServerReachProvider>
+        <ServerReachProvider value={reach}>
+          <ViewerSheetContext.Provider value={isMobile ? renderSheet : null}>{shell}</ViewerSheetContext.Provider>
+        </ServerReachProvider>
       </WorkLinksProvider>
     </KeepAwakeProvider>
   );

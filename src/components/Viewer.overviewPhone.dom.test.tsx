@@ -124,8 +124,11 @@ const NAMELESS_WORKER = "/sessions/nameless-worker.jsonl";
 const FILES: FileEntry[] = [
   conversation(LEDGER_BUILDER, LEDGER, "Builder of the ledger export"),
   conversation(ATLAS_REVIEWER, ATLAS, "Reviewer of the atlas legend"),
+  /* A planner a lane started in a project with no seat: «Needs you» holds its
+     question (docs/design/legatus/build-plan.md, slice 1). */
   conversation(MESH_PLANNER, MESH, "Planner of the mesh migration", {
     activity: "idle", proc: null, lastTurn: { startedAt: (NOW - 900) * 1000, endedAt: (NOW - 600) * 1000 },
+    durableLineage: { kind: "spawn", role: "planner", depth: 1, parentConversationId: null, reviewsConversationId: null, memberships: [] },
     pendingQuestion: { kind: "question", toolUseId: "tool-mesh", transcriptPath: MESH_PLANNER, pid: 1, askedAt: iso(540), questions: [{ question: "Which schema stays?", header: "Schema", multiSelect: false, options: [] }] },
   } as Partial<FileEntry>),
   conversation(MESH_LOOSE, MESH, "Sweep the stale mesh caches"),

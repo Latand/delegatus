@@ -152,7 +152,7 @@ import type { LaunchFailureReporting } from "@/lib/tasks/launchFailureReporting"
 export type AgentHostStatus = "starting" | "live" | "idle" | "handoff" | "unhosted" | "dead";
 
 const STRUCTURED_CLAIM_REFUSALS = ["missing-entry", "adoption-pending", "missing-host",
-  "termination-survivors", "signal-domain", "agent-scope", "unhosted", "live-native", "writer-owned"] as const;
+  "termination-survivors", "signal-domain", "agent-scope", "unhosted", "live-native", "writer-owned", "archived-writer"] as const;
 export type StructuredHostClaimRefusal = typeof STRUCTURED_CLAIM_REFUSALS[number];
 
 /** Optional per-attempt output, filled at the branch that refuses the claim. */
@@ -304,6 +304,9 @@ export interface AgentRegistryEntry {
   claimOwner: string | null;
   pendingAction: "spawn" | "resume" | "handoff" | null;
   structuredHostOperationId?: string | null;
+  /** Migration revoked this generation's writer. Its original custody stays
+      recorded until native teardown has accounted for the process tree. */
+  structuredWriterRetired?: true;
   updatedAt: string;
 }
 
@@ -6680,14 +6683,14 @@ export class AgentRegistry {
    * mutation share the admitted transaction. Stores without a SQLite writer run it at once.
    */
   private async whenWriterHeld<T>(
-    correlation: { label: string; operationId?: string | null },
+    correlation: { label: string; operationId?: string | null; waitDeadlineAt?: number },
     operation: () => T,
     correlate?: (value: T) => { label: string; operationId?: string | null } | null,
   ): Promise<{ acquired: true; value: T } | { acquired: false }> {
     const startedAt = performance.now();
     return withViewerOperation("registry.write", () => this.withWriterAdmissionQueue(
       remaining => this.whenWriterAdmitted(correlation, operation, correlate, remaining),
-      this.writerDeadlineMs ?? 5_000,
+      Math.min(this.writerDeadlineMs ?? 5_000, Math.max(0, (correlation.waitDeadlineAt ?? Infinity) - Date.now())),
       () => {
         recordBlockingWait({ site: "registry-lock-async", synchronous: false,
           durationMs: performance.now() - startedAt, correlation, subject: "agent-registry", refused: true });
@@ -6775,7 +6778,7 @@ export class AgentRegistry {
 
   /** {@link deliveryWrite} for a coordinator step: the value, or
       {@link RegistryWriterBusyError} when the lock stayed held. */
-  async deliveryWriteOrBusy<T>(correlation: { label: string; operationId?: string | null }, write: () => T): Promise<T> {
+  async deliveryWriteOrBusy<T>(correlation: { label: string; operationId?: string | null; waitDeadlineAt?: number }, write: () => T): Promise<T> {
     const written = await this.whenWriterHeld(correlation, write);
     if (!written.acquired) throw new RegistryWriterBusyError(correlation.label, this.writerHolderDetail());
     return written.value;
@@ -7234,6 +7237,16 @@ export class AgentRegistry {
         if (row) byId.set(deliveryId, clone(row));
       }
       return { owners, held, byId };
+    }, { skipColdKeyInitialization: true });
+  }
+
+  /** Terminal owners retain the admitted message and its server-stamped origin. */
+  recentTerminalDeliveryOwners(conversationId: ViewerConversationId): DeliveryOperationOwner[] {
+    return this.readKeyed(file => {
+      const ids = conversationIdsResolvingTo(file, resolveConversationAlias(file, conversationId));
+      return ids.flatMap(id => registryKeysMatchingBounded(file, "deliveryOperationOwners", [
+        { field: "conversationId", value: id }, { field: "custodyState", value: "terminal" },
+      ], DELIVERY_OPERATION_OWNER_TERMINAL_LIMIT).map(key => clone(file.deliveryOperationOwners[key]!)));
     }, { skipColdKeyInitialization: true });
   }
 
@@ -8351,7 +8364,7 @@ export class AgentRegistry {
       const memoryProject = designatedSeatMembership?.containerId
         ?? explicitProject ?? existingConversation?.projectOwnership?.project ?? profile.project;
       if (designatedSeatMembership && memoryProject
-        && (memoryRole === "orchestrator" || memoryRole === "maintainer")) {
+        && (memoryRole === "orchestrator" || memoryRole === "maintainer" || memoryRole === "legatus")) {
         /* Designation is an explicit role transition. A conversation adopted
            from a stage must shed that stage's selector and clean-memory flag.
            The role label alone is insufficient: pipeline stages may use the
@@ -8360,7 +8373,7 @@ export class AgentRegistry {
         profile.learnedRules = { project: memoryProject, roleId: memoryRole };
       } else if (roleIsClean(memoryRole)) {
         profile.cleanMemory = true;
-      } else if ((memoryRole === "orchestrator" || memoryRole === "maintainer")
+      } else if ((memoryRole === "orchestrator" || memoryRole === "maintainer" || memoryRole === "legatus")
         && !profile.cleanMemory && !profile.learnedRules && memoryProject) {
         profile.learnedRules = { project: memoryProject, roleId: memoryRole };
       } else if (!designatedSeatMembership && !memoryRole) {
@@ -10338,6 +10351,7 @@ export class AgentRegistry {
         || entry.claimOwner !== claimOwner
         || entry.claimEpoch !== claimEpoch
         || entry.structuredHost.writerClaimEpoch !== claimEpoch
+        || (entry.structuredWriterRetired && (!releaseClaim || (status !== "dead" && status !== "unhosted")))
         || (entry.structuredTerminationSurvivors?.length ?? 0) > 0) return null;
       let normalizedHost = normalizeStructuredHost(preserveStructuredScope(entry.structuredHost, structuredHost));
       const handoffClaimEpoch = entry.structuredHost.releaseHandoffClaimEpoch;
@@ -10383,7 +10397,7 @@ export class AgentRegistry {
       const entry = file.entries[sessionKeyId(key)];
       const structuredHost = entry?.structuredHost;
       const current = structuredHost?.process;
-      if (!entry?.claimOwner || !structuredHost || !current || expected.startIdentity === null
+      if (!entry?.claimOwner || entry.structuredWriterRetired || !structuredHost || !current || expected.startIdentity === null
         || !sameRecordedProcessIdentity(current, expected)) return false;
       const replacement = {
         ...entry,
@@ -10403,15 +10417,15 @@ export class AgentRegistry {
     });
   }
 
-  /** Why a claimed write was refused: true when the caller still owns the
-      writer fence and only a captured termination tree holds the row. */
+  /** A refused checkpoint can still hold native custody while teardown is
+      pending. Keep its claim available to the identity-fenced stop. */
   structuredHostWriteHeldByTermination(key: SessionKey, claimOwner: string, claimEpoch: number): boolean {
     return this.readKeyed(file => {
       const entry = file.entries[sessionKeyId(key)];
       return entry?.claimOwner === claimOwner
       && entry.claimEpoch === claimEpoch
       && entry.structuredHost?.writerClaimEpoch === claimEpoch
-      && (entry.structuredTerminationSurvivors?.length ?? 0) > 0;
+      && (entry.structuredWriterRetired === true || (entry.structuredTerminationSurvivors?.length ?? 0) > 0);
     });
   }
 
@@ -10419,6 +10433,7 @@ export class AgentRegistry {
     return this.readKeyed(file => {
       const entry = file.entries[sessionKeyId(key)];
       return entry?.claimOwner === claimOwner
+      && entry.structuredWriterRetired !== true
       && entry.claimEpoch === claimEpoch
       && entry.structuredHost?.writerClaimEpoch === claimEpoch;
     });
@@ -10453,6 +10468,7 @@ export class AgentRegistry {
           claimEpoch: 0, claimOwner: null, pendingAction: "resume" as const, updatedAt: now() }
         : null);
       if (!entry) return refuse("missing-entry");
+      if (entry.structuredWriterRetired) return refuse("archived-writer");
       // Every claimant (boot, resume and retry) must retain the predecessor's
       // writer epoch until native setup has confirmed cleanup.
       if (unfinishedStructuredAdoption(file, key)) return refuse("adoption-pending");
@@ -12372,6 +12388,13 @@ export class AgentRegistry {
       if (!predecessor) throw new Error("viewer conversation has no native generation");
       const committedAt = now();
       const committedHost = successor.host ?? expectedReceipt.host;
+      if (predecessor.id !== successor.id && predecessor.accountId !== successor.accountId) {
+        const source = file.entries[sessionKeyId({ engine: conversation.engine, sessionId: predecessor.id })];
+        if (source?.structuredHost && source.artifactPath === predecessor.path) {
+          source.structuredWriterRetired = true;
+          source.updatedAt = committedAt;
+        }
+      }
       predecessor.archivedAt = committedAt;
       const generation: NativeGeneration = {
         ...successor,

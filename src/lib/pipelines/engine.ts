@@ -5585,6 +5585,35 @@ function settledPublicationRefusal(pipeline: Pipeline): RefusedPublication | nul
     ? { ok: false, error: result.detail, remote: "unreachable" } : null;
 }
 
+function refusedPassedPublicationAttempt(pipeline: Pipeline): PipelineStageAttempt | null {
+  const delivery = pipeline.delivery;
+  const operation = delivery?.operation;
+  if (!delivery?.active || !delivery.target.remote || !publishesRemoteBranch(pipeline)
+    || !operation || operation.epoch !== delivery.epoch || operation.sha !== pipeline.lastPassedCommit
+    || !awaitingPassedPublication(pipeline) || pipeline.remoteAction?.state === "pending") return null;
+  const refusal = settledPublicationRefusal(pipeline);
+  if (!refusal || refusal.outcome === "superseded") return null;
+  const attempt = currentAttempt(pipeline, pipeline.cursor!.stageId)!;
+  if (attempt.publicationRepair) return null;
+  return pipeline.state === "running" || pipeline.state === "paused" || checkoutVerificationPark(pipeline, attempt)
+    ? attempt : null;
+}
+
+/** A manual action can arrive before the committing job verifies the checkout. */
+async function movedRefusedPublicationHead(pipeline: Pipeline, ports: PipelinePorts): Promise<string | null> {
+  if (!refusedPassedPublicationAttempt(pipeline)) return null;
+  const head = await currentPipelineBranchHead(pipeline, ports.exec);
+  return head.ok && head.sha !== pipeline.lastPassedCommit ? head.sha : null;
+}
+
+async function parkMovedPassedPublication(pipeline: Pipeline, attempt: PipelineStageAttempt, head: string, ports: PipelinePorts): Promise<void> {
+  const base = pipeline.baseBranch || DEFAULT_PIPELINE_BASE_BRANCH;
+  const detail = afterCommitRepair(attempt, `the worktree moved to ${shortId(head)} after accepting ${shortId(pipeline.lastPassedCommit)}. Use publish acceptedSha=${head} to accept a verified clean integration of origin/${base}. Other changes require a fresh review.`);
+  recordSettledPublicationFailure(pipeline, attempt, ports);
+  attempt.error = detail;
+  await park(pipeline, detail);
+}
+
 /** A quiescent publisher whose push never reached the remote: ended by a
     signal, by its time limit, or together with the Viewer that started it. */
 function publicationNotLanded(published: RefusedPublication): boolean {
@@ -17615,6 +17644,8 @@ async function applyPipelinePatch(
     const moved = accepted !== pipeline.lastPassedCommit;
     const publicationFence = remoteActionFence(pipeline);
     const publicationEvidence = passedPublicationEvidence(pipeline);
+    const movedHead = req.acceptedSha === undefined && pipeline.state !== "paused"
+      ? await movedRefusedPublicationHead(pipeline, ports) : null;
     let integration: PipelineStageAttempt["publicationIntegration"];
     // A pass whose commit custody settlement refused: whoever answers the
     // lane's decisions accepts its clean head after reviewing it, in place.
@@ -17670,6 +17701,15 @@ async function applyPipelinePatch(
       if (moved && current.delivery?.operation?.state === "running") return { error: "publisher is still in flight; reconcile before accepting a moved head", status: 409 };
       const ownerError = current.delivery && deliveryOwnerError(current, pipelineDeliveryLookup({ ...current.delivery.target, active: true }));
       if (ownerError) return { error: ownerError, status: 409 };
+      if (movedHead) {
+        const passed = refusedPassedPublicationAttempt(current);
+        if (!passed || remoteActionFence(current) !== publicationFence) {
+          return { error: "the lane changed during passed-head verification; read it again", status: 409 };
+        }
+        await parkMovedPassedPublication(current, passed, movedHead, ports);
+        await persist();
+        return { pipeline: current };
+      }
       if (req.acceptedSha === undefined && restoreParkedPublishedPass(current)) {
         await persist(); requestPipelineTick();
         return { pipeline: current };
@@ -17757,6 +17797,9 @@ async function applyPipelinePatch(
       return { pipeline: current };
     });
   }
+
+  const paused = req.action === "resume" ? findPipelineRecord(id) : null;
+  const resumedHead = paused?.state === "paused" ? await movedRefusedPublicationHead(paused, ports) : null;
 
   let decisionProducerEvidence: RepairProducerEvidence | undefined;
   if (req.action === "resolve-decision" || req.action === "retry-stage") {
@@ -18236,6 +18279,10 @@ async function applyPipelinePatch(
       }
     } else if (req.action === "resume") {
       if (pipeline.state !== "paused") return { error: "pipeline is not paused", status: 409 };
+      const passed = resumedHead ? refusedPassedPublicationAttempt(pipeline) : null;
+      if (resumedHead && (!passed || remoteActionFence(pipeline) !== remoteActionFence(paused!))) {
+        return { error: "the lane changed during passed-head verification; read it again", status: 409 };
+      }
       pipeline.state = pipeline.pausedState ?? "running";
       pipeline.pausedState = null;
       delete pipeline.pause;
@@ -18250,6 +18297,7 @@ async function applyPipelinePatch(
       pipeline.stateDetail = (pipeline.state === "needs_review" || pipeline.state === "needs_decision" && currentTerminalReviewPending(pipeline)) && pipeline.reviewPending
         ? reviewPendingDetail(pipeline.reviewPending)
         : pauseResumeDetail("resumed", actor);
+      if (resumedHead && passed) await parkMovedPassedPublication(pipeline, passed, resumedHead, ports);
       if (flow?.state === "paused") ports.patchFlow(flow.id, "resume", undefined, actor);
     } else if (req.action === "retry-stage") {
       const budgetRefusal = terminalBudgetDecisionRefusal(attempt, true);
