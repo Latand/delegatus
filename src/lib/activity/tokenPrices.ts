@@ -1,3 +1,4 @@
+import usageEstimates from "./usageEstimates.json";
 import { addTokens, emptyTokens, tokenTotal, type TokenCounts } from "./tokenUsage";
 
 /*
@@ -5,76 +6,33 @@ import { addTokens, emptyTokens, tokenTotal, type TokenCounts } from "./tokenUsa
  * would cost at the providers' published API prices. Work on a subscription is
  * billed by plan, so the figure is a comparison and is never called spending.
  *
- * The table is kept by hand. Every rate is US dollars per million tokens, read
- * on PRICE_TABLE_DATE from the two pages in PRICE_SOURCES; update the date with
- * the rates. A model, or a tier of it, missing here has no published price and
- * reads «—». Rates are the short-prompt rates: Claude Haiku 5.5 above 100 000
- * prompt tokens and OpenAI prompts above 272 000 input tokens cost more, and
- * the counts are summed per hour, not per request, so the estimate can only
- * fall short there.
+ * Rates in usageEstimates.json are USD per million tokens at short-context
+ * prices. Hourly counts cannot distinguish which prompts crossed the
+ * long-context thresholds.
  */
 
-export const PRICE_TABLE_DATE = "2026-11-17";
-export const PRICE_SOURCES = [
-  "https://platform.claude.com/docs/en/about-claude/pricing",
-  "https://developers.openai.com/api/docs/pricing",
-] as const;
+export const PRICE_TABLE_DATE = usageEstimates.prices.reduce((latest, row) => row.date > latest ? row.date : latest, "");
+export const PRICE_SOURCES = [...new Set(usageEstimates.prices.map(row => usageEstimates.sources[row.source as keyof typeof usageEstimates.sources]))]
+  .flatMap(source => "url" in source ? [source.url] : []);
 
 /** Dollars per million tokens. `cacheWrite1h` is the one-hour cache write. */
 export interface TokenRate { input: number; cacheRead: number; cacheWrite: number; cacheWrite1h: number; output: number }
 export type PriceTier = "standard" | "fast" | "flex" | "ultrafast";
 
-/* Claude: cache writes are 1.25× input for five minutes and 2× for an hour;
-   reads are 0.1× input except where the page names its own rate. Fast mode
-   swaps the input and output rates and keeps the cache multipliers. */
-const claude = (input: number, output: number, read = input / 10): TokenRate => ({ input, cacheRead: read, cacheWrite: input * 1.25, cacheWrite1h: input * 2, output });
-/* OpenAI: no cache-write rate is published; written input is priced as input. */
-const openai = (input: number, cached: number, output: number): TokenRate => ({ input, cacheRead: cached, cacheWrite: input, cacheWrite1h: input, output });
+const RATES = new Map(usageEstimates.prices.map(row => {
+  const { input, cachedInput, cacheWrite5m, cacheWrite1h, cacheWrite30m, cacheWrite12h, output } = row;
+  const claude = row.model.startsWith("claude-");
+  return [`${row.model}:${row.tier}:${row.effectiveFrom ?? row.date}`, {
+    input, cacheRead: cachedInput, output,
+    cacheWrite: cacheWrite5m ?? cacheWrite30m ?? (claude ? input * 1.25 : input),
+    cacheWrite1h: cacheWrite1h ?? cacheWrite12h ?? (claude ? input * 2 : input),
+  }];
+}));
 
-const RATES: Readonly<Record<string, Partial<Record<PriceTier, TokenRate>>>> = {
-  "claude-fable-5-2": { standard: claude(8, 40, 0.2), fast: claude(16, 80, 0.4) },
-  "claude-fable-5-1": { standard: claude(10, 50, 0.25) },
-  "claude-mythos-5-1": { standard: claude(10, 50, 0.25) },
-  "claude-fable-5": { standard: claude(10, 50, 1) },
-  "claude-mythos-5": { standard: claude(10, 50, 1) },
-  "claude-opus-5-5": { standard: claude(4, 20, 0.2), fast: claude(8, 40, 0.4) },
-  "claude-opus-5": { standard: claude(5, 25), fast: claude(10, 50) },
-  "claude-opus-4-8": { standard: claude(5, 25), fast: claude(10, 50) },
-  "claude-opus-4-7": { standard: claude(5, 25) },
-  "claude-opus-4-6": { standard: claude(5, 25) },
-  "claude-opus-4-5": { standard: claude(5, 25) },
-  "claude-opus-4-1": { standard: claude(15, 75) },
-  "claude-opus-4": { standard: claude(15, 75) },
-  "claude-sonnet-5-5": { standard: claude(2, 10, 0.1) },
-  "claude-sonnet-5": { standard: claude(2, 10) },
-  "claude-sonnet-4-6": { standard: claude(3, 15) },
-  "claude-sonnet-4-5": { standard: claude(3, 15) },
-  "claude-sonnet-4": { standard: claude(3, 15) },
-  "claude-haiku-5-5": { standard: claude(0.1, 0.5) },
-  "claude-haiku-4-5": { standard: claude(1, 5) },
-  "claude-3-5-haiku": { standard: claude(0.8, 4) },
-  // GPT-6.2 Ultrafast promotional snapshot through 2027-02-28 (3× Standard).
-  // Flex has no published GPT-6.2 rate; Batch prices are not Flex prices.
-  "gpt-6.2-sol": { standard: openai(2, 0.1, 10), fast: openai(4, 0.2, 20), ultrafast: openai(6, 0.3, 30) },
-  "gpt-6.2-astra": { standard: openai(8, 0.4, 40), fast: openai(16, 0.8, 80), ultrafast: openai(24, 1.2, 120) },
-  "gpt-6-astra": { standard: openai(10, 1, 50), flex: openai(5, 0.5, 25), fast: openai(20, 2, 100), ultrafast: openai(60, 6, 300) },
-  "gpt-6.1-sol": { standard: openai(2, 0.1, 10), flex: openai(1, 0.05, 5), fast: openai(4, 0.2, 20), ultrafast: openai(12, 0.6, 60) },
-  "gpt-6-sol": { standard: openai(2, 0.2, 10), flex: openai(1, 0.1, 5), fast: openai(4, 0.4, 20) },
-  "gpt-6-luna": { standard: openai(0.1, 0.01, 0.5), flex: openai(0.05, 0.005, 0.25), fast: openai(0.2, 0.02, 1) },
-  "gpt-5.5": { standard: openai(5, 0.5, 30), flex: openai(2.5, 0.25, 15), fast: openai(12.5, 1.25, 75) },
-  "gpt-5.4": { standard: openai(2.5, 0.25, 15), flex: openai(1.25, 0.13, 7.5), fast: openai(5, 0.5, 30) },
-  "gpt-5.4-mini": { standard: openai(0.75, 0.075, 4.5), flex: openai(0.375, 0.0375, 2.25), fast: openai(1.5, 0.15, 9) },
-  "gpt-5.4-nano": { standard: openai(0.2, 0.02, 1.25), flex: openai(0.1, 0.01, 0.625) },
-  "gpt-5.3-codex": { standard: openai(1.75, 0.175, 14), fast: openai(3.5, 0.35, 28) },
-  "gpt-5.2": { standard: openai(1.75, 0.175, 14), flex: openai(0.875, 0.0875, 7), fast: openai(3.5, 0.35, 28) },
-  "gpt-5.1": { standard: openai(1.25, 0.125, 10), flex: openai(0.625, 0.0625, 5), fast: openai(2.5, 0.25, 20) },
-  "gpt-5": { standard: openai(1.25, 0.125, 10), flex: openai(0.625, 0.0625, 5), fast: openai(2.5, 0.25, 20) },
-  "gpt-5-mini": { standard: openai(0.25, 0.025, 2), flex: openai(0.125, 0.0125, 1), fast: openai(0.45, 0.045, 3.6) },
-  "gpt-5-nano": { standard: openai(0.05, 0.005, 0.4), flex: openai(0.025, 0.0025, 0.2) },
-  "gpt-5.6-sol": { standard: openai(4, 0.4, 20), flex: openai(2, 0.2, 10), fast: openai(8, 0.8, 40) },
-  "gpt-5.6-terra": { standard: openai(2, 0.2, 12), flex: openai(1, 0.1, 6), fast: openai(4, 0.4, 24) },
-  "gpt-5.6-luna": { standard: openai(0.2, 0.02, 1.2), flex: openai(0.1, 0.01, 0.6), fast: openai(0.4, 0.04, 2.4) },
-};
+/** Provider price dates follow the Pacific calendar used for published cutovers. */
+export function pricingDateAt(now: number): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+}
 
 /** The tier a recorded speed or service tier is billed at; null when the
     table cannot tell. Claude records `standard` or `fast`; Codex records its
@@ -90,16 +48,32 @@ export function priceTier(tier: string | null | undefined): PriceTier | null {
 }
 
 /** A dated snapshot id (`claude-haiku-4-5-20251001`) prices as its model. */
-const modelKey = (model: string) => model.trim().toLowerCase().replace(/-\d{8}$/, "");
+export const modelKey = (model: string) => model.trim().toLowerCase().replace(/-\d{8}$/, "");
 
-export function tokenRate(model: string, tier: string | null | undefined): TokenRate | null {
+const TIMELINES = new Map<string, Array<(typeof usageEstimates.prices)[number]>>();
+for (const row of usageEstimates.prices) {
+  const key = `${modelKey(row.model)}:${row.tier}`;
+  const timeline = TIMELINES.get(key) ?? [];
+  timeline.push(row);
+  TIMELINES.set(key, timeline);
+}
+for (const timeline of TIMELINES.values()) timeline.sort((a,b) => (a.effectiveFrom ?? a.date).localeCompare(b.effectiveFrom ?? b.date));
+
+export function tokenRate(model: string, tier: string | null | undefined, pricingDate = pricingDateAt(Date.now())): TokenRate | null {
   const priced = priceTier(tier);
-  return priced ? RATES[modelKey(model)]?.[priced] ?? null : null;
+  if (!priced) return null;
+  const timeline = TIMELINES.get(`${modelKey(model)}:${priced}`);
+  let row: (typeof usageEstimates.prices)[number] | undefined;
+  for (const item of timeline ?? []) {
+    if ((item.effectiveFrom ?? item.date) > pricingDate) break;
+    if (!item.until || pricingDate <= item.until) row = item;
+  }
+  return row ? RATES.get(`${row.model}:${row.tier}:${row.effectiveFrom ?? row.date}`) ?? null : null;
 }
 
 /** Dollars for one model and tier, or null when it has no published price. */
-export function tokenCost(model: string, tier: string | null | undefined, counts: TokenCounts): number | null {
-  const rate = tokenRate(model, tier);
+export function tokenCost(model: string, tier: string | null | undefined, counts: TokenCounts, pricingDate?: string): number | null {
+  const rate = tokenRate(model, tier, pricingDate);
   if (!rate) return null;
   const write5m = Math.max(0, counts.cacheWrite - counts.cacheWrite1h);
   return (counts.input * rate.input + counts.cacheRead * rate.cacheRead + write5m * rate.cacheWrite
