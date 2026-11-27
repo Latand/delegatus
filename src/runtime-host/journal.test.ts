@@ -4775,3 +4775,38 @@ test("a kill receipt retains its first send cohort across transitions and a proc
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a replay after generation succession and a process restart keeps the kill targets first admitted", () => {
+  const dir = sandbox("kill-targets");
+  const filename = path.join(dir, "events.sqlite");
+  const journal = new RuntimeJournal(filename, { structuredHosts: true });
+  try {
+    const command = { kind: "kill" as const, conversationId: "conversation_cohort", operationId: "cohort-stop", idempotencyKey: "cohort-stop",
+      sessionKey: { engine: "claude" as const, sessionId: "second" }, targets: [
+        { sessionId: "second", claimEpoch: 2, process: null },
+        { sessionId: "first", claimEpoch: 1, process: { pid: 123, startIdentity: "fixture-start", bootEpoch: "fixture-boot" } },
+      ] };
+    expect(journal.executeOperation(command).receipt.status).toBe("queued");
+    journal.close();
+    const child = Bun.spawnSync({ cmd: [process.execPath, "-e", `
+      import { RuntimeJournal } from "./src/runtime-host/journal.ts";
+      const journal = new RuntimeJournal(process.env.LLV_TEST_JOURNAL, { structuredHosts: true });
+      try {
+        const command = ${JSON.stringify(command)};
+        command.sessionKey.sessionId = "third";
+        command.targets = [{ sessionId: "third", claimEpoch: 3, process: null }];
+        const replay = journal.executeOperation(command);
+        const effects = journal.effectBatch(10, ["runtime.kill"]);
+        console.log(JSON.stringify({ replay, effects }));
+      } finally { journal.close(); }
+    `], cwd: process.cwd(), env: { ...process.env, LLV_TEST_JOURNAL: filename }, stdout: "pipe", stderr: "pipe" });
+    expect(child.exitCode).toBe(0);
+    const { replay, effects } = JSON.parse(new TextDecoder().decode(child.stdout));
+    expect(replay).toMatchObject({ replayed: true, operationId: command.operationId, receipt: { status: "queued" } });
+    expect(effects).toContainEqual(expect.objectContaining({ kind: "runtime.kill",
+      payload: expect.objectContaining({ sessionKey: command.sessionKey, targets: command.targets }) }));
+  } finally {
+    journal.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

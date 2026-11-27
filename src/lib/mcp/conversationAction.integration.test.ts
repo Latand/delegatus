@@ -1,4 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
@@ -22,7 +23,7 @@ for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_STATE_DIR",
 process.env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
 
 const { captureProcessIdentity } = await import("@/lib/processIdentity");
-const { agentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
+const { AgentRegistry, agentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { applyConversationAction } = await import("@/lib/conversation/actions");
 const { callerConversationId } = await import("@/lib/agent/operatorAuthority");
 const { dispatchStructuredControl } = await import("@/lib/runtime/structuredControls");
@@ -34,6 +35,8 @@ const { bindStructuredDeliveryQueue, releaseStructuredDeliveryHost } = await imp
 const { kickStructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliverySignal");
 const { RuntimeHost } = await import("@/runtime-host/host");
 const { RuntimeJournal } = await import("@/runtime-host/journal");
+const { CONTROL_SETTLEMENT_WINDOW_MS } = await import("@/lib/runtime/structuredDeliveryQueue");
+const { advanceConversationMigration } = await import("@/lib/accounts/migration/coordinator");
 const { serveRuntimeHost } = await import("@/runtime-host/socket");
 const { testEndpoint } = await import("@/runtime-host/fixtures/testEndpoint");
 const { UnixRuntimeHostClient, runtimeHostClient } = await import("@/lib/runtime/client");
@@ -57,11 +60,20 @@ async function eventually(check: () => boolean | Promise<boolean>): Promise<void
   throw new Error("conversation control did not settle");
 }
 
-test.each(["kill", "interrupt", "answer"])("MCP %s reaches a live structured host through the Viewer without an agent runtime socket", async (firstAction) => {
-  const registry = agentRegistry();
+test.each(["kill", "interrupt", "answer", "kill-after-migration", "kill-after-writer-contention", "migration-retires-writer"])("MCP %s reaches a live structured host through the Viewer without an agent runtime socket", async (firstAction) => {
+  const retireWriter = firstAction === "migration-retires-writer";
+  const migrated = retireWriter || firstAction.startsWith("kill-after-");
+  const contended = firstAction === "kill-after-writer-contention";
+  const fixtureSessionId = ["11111111", "1111", "4111", "8111",
+    retireWriter ? "000000000003" : contended ? "000000000002" : "000000000001"].join("-");
+  const registryPath = path.join(sandbox, `${firstAction}-registry.sqlite`);
+  const registry = migrated ? new AgentRegistry(path.join(sandbox, `${firstAction}-registry.json`), undefined, undefined,
+    { sqliteMode: "sqlite", sqliteFilename: registryPath, sqliteWriterDeadlineMs: 150 }) : agentRegistry();
+  if (migrated) setAgentRegistryForTests(registry);
   const caller = registry.beginSpawn("claude", sandbox, { cwd: sandbox, title: "Conversation control caller" });
   process.env.LLV_SPAWN_CAPABILITY = registry.rotateSpawnCapabilityForReceipt(caller.launchId);
-  const target = registry.beginSpawnRequest({ engine: "claude", cwd: sandbox, transport: "structured", launchProfile: { title: "Conversation control target" } });
+  const target = registry.beginSpawnRequest({ engine: "claude", cwd: sandbox, transport: "structured",
+    ...(migrated ? { accountId: "account-a" } : {}), launchProfile: { title: "Conversation control target" } });
   if (target.kind !== "created") throw new Error("fixture target was not created");
   const journal = new RuntimeJournal(path.join(sandbox, `${firstAction}-runtime.sqlite`), { structuredHosts: true });
   const socketPath = testEndpoint(sandbox, "runtime");
@@ -102,6 +114,7 @@ test.each(["kill", "interrupt", "answer"])("MCP %s reaches a live structured hos
   `;
   const host = await ClaudeStreamBrokerHost.start({
     cwd: sandbox,
+    ...(migrated ? { sessionId: fixtureSessionId } : {}),
     readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
     readTranscript: () => [],
     eventStore: new FileRuntimeEventStore(path.join(sandbox, "events")),
@@ -122,7 +135,7 @@ test.each(["kill", "interrupt", "answer"])("MCP %s reaches a live structured hos
   fs.writeFileSync(transcriptPath, "{}\n");
   const health = await host.health();
   registry.settleSpawn(target.receipt.launchId, {
-    key, artifactPath: transcriptPath, cwd: sandbox, accountId: null, status: "live", host: null,
+    key, artifactPath: transcriptPath, cwd: sandbox, accountId: migrated ? "account-a" : null, status: "live", host: null,
     structuredHost: {
       kind: "claude-broker", endpoint: health.endpoint!,
       process: captureProcessIdentity(child!.pid!),
@@ -170,12 +183,57 @@ test.each(["kill", "interrupt", "answer"])("MCP %s reaches a live structured hos
     // Caller claims must not replace the capability's server-attributed identity.
     callerConversationId: target.receipt.conversationId, actor: { kind: "operator" },
     ...(action === "answer" ? { requestId: answerRequestId, answers: [1] } : {}),
-  } })).structuredContent as { ok: boolean; error?: string; operationId: string };
+  } })).structuredContent as { ok: boolean; error?: string; operationId: string; receipt?: { status: string } };
+  let writer: Database | undefined;
+  let writerHeld = false;
+  let successorKey: typeof key | undefined;
   try {
     expect(runtimeHostClient()).toBeNull();
     expect(childExited).toBe(false);
     await host.send({ id: "running-turn", text: "Hold this turn open" });
     expect((await host.health()).activeTurnRef).toBe("running-turn");
+    if (migrated) {
+      const id = target.receipt.conversationId;
+      const successorId = "fixture-successor";
+      successorKey = { engine: "claude", sessionId: successorId };
+      const successorPath = path.join(sandbox, `${firstAction}-successor.jsonl`);
+      fs.writeFileSync(successorPath, "{}\n");
+      const successor = spawn(process.execPath, ["-e", "process.stdin.resume()"], { cwd: sandbox, stdio: "pipe" });
+      const exited = once(successor, "exit");
+      const successorProcess = captureProcessIdentity(successor.pid!);
+      successor.stdin.end();
+      expect(await exited).toEqual([0, null]);
+      registry.upsert({ key: successorKey, artifactPath: successorPath, cwd: sandbox, accountId: "account-b",
+        status: "dead", host: null, structuredHost: {
+          ...registry.hostEntry(key)!.structuredHost!, process: successorProcess,
+        }, claimEpoch: 1, claimOwner: null, pendingAction: null });
+      const requested = registry.requestConversationReseat(id, "account-b").migration!;
+      registry.transitionConversationMigration(id, requested.revision, [requested.phase], { phase: "successor-starting" });
+      const providerReceipt = { operationId: requested.operationId, nativeId: successorId, path: successorPath,
+        continuityPaths: [], historyHash: "fixture-history",
+        host: { kind: "claude-fork" as const, identity: successorId, epoch: 1, verifiedAt: "2026-11-26T22:15:00.000Z" } };
+      registry.persistMigrationProviderReceipt(id, requested.revision, requested.operationId, providerReceipt);
+      const committed = registry.commitSuccessor(id, { id: successorId, path: successorPath, accountId: "account-b" },
+        requested.revision, requested.operationId, providerReceipt);
+      expect(committed.generations.map(generation => generation.id)).toEqual([key.sessionId, successorId]);
+      expect(childExited).toBe(false);
+      if (retireWriter) {
+        const predecessor = registry.hostEntry(key)!;
+        expect(predecessor.structuredHost?.process).toMatchObject({ pid: child!.pid });
+        expect(registry.ownsStructuredHostClaim(key, "structured-host:fixture", 1)).toBe(false);
+        expect(registry.setStructuredHostClaimed(key, predecessor.structuredHost!, "live", "structured-host:fixture", 1)).toBeNull();
+        await advanceConversationMigration(id, registry, undefined, { deferBoardRepair: true });
+        await eventually(() => childExited);
+        expect(registry.hostEntry(key)).toMatchObject({ status: "dead", claimOwner: null, structuredHost: null });
+        expect(registry.hostEntry(successorKey)?.structuredHost?.process).toEqual(successorProcess);
+        return;
+      }
+      if (contended) {
+        writer = new Database(registryPath, { strict: true });
+        writer.exec("BEGIN IMMEDIATE");
+        writerHeld = true;
+      }
+    }
     if (firstAction === "answer") {
       await eventually(async () => (await host.health()).pendingQuestions?.length === 1);
       fs.writeFileSync(transcriptPath, JSON.stringify({ type: "assistant", timestamp: "2026-09-30T05:15:00.000Z",
@@ -224,14 +282,32 @@ test.each(["kill", "interrupt", "answer"])("MCP %s reaches a live structured hos
     const killed = await call("kill");
     expect(killed).toMatchObject({ ok: true });
     expect(killed.error).not.toBe("structured runtime host is unavailable");
-    await eventually(() => childExited);
-    await eventually(() => journal.operationResult(killed.operationId)?.receipt.status === "delivered");
+    if (contended) {
+      expect(killed.receipt?.status).toBe("queued");
+      await eventually(async () => {
+        const receipt = (await runtimeClient.operationStatus(killed.operationId))?.receipt;
+        return receipt?.status === "queued" && receipt.reason?.includes("write lock is held") === true;
+      });
+      expect(childExited).toBe(false);
+      writer!.exec("ROLLBACK");
+      writerHeld = false;
+    }
+    await eventually(async () => (await runtimeClient.operationStatus(killed.operationId))?.receipt.status === "delivered");
+    expect(childExited).toBe(true);
+    if (migrated) {
+      const receipt = (await runtimeClient.operationStatus(killed.operationId))!.receipt;
+      expect(receipt.operationId).toBe(killed.operationId);
+      expect(Date.parse(receipt.at) - Date.parse(receipt.admittedAt!)).toBeLessThan(CONTROL_SETTLEMENT_WINDOW_MS);
+      expect(registry.hostEntry(successorKey!)?.status).toBe("dead");
+    }
     expect(registry.readOnlySnapshot().entries[`claude:${key.sessionId}`]?.status).toBe("dead");
     expect(requests.map(request => request.body.action)).toEqual(firstAction === "interrupt" ? ["resume", "interrupt", "compact", "kill"] : firstAction === "answer" ? ["answer", "answer", "kill"] : ["kill"]);
     expect(requests.every(request => request.caller === caller.conversationId)).toBe(true);
     expect(requests.every(request => request.body.actor === undefined && request.body.callerConversationId === undefined)).toBe(true);
     expect(runtimeHostClient()).toBeNull();
   } finally {
+    if (writerHeld) writer?.exec("ROLLBACK");
+    writer?.close();
     await client.close();
     await server.close();
     receipts.close();
@@ -244,6 +320,10 @@ test.each(["kill", "interrupt", "answer"])("MCP %s reaches a live structured hos
     await host.release();
     await new Promise<void>(resolve => socket.close(() => resolve()));
     journal.close();
+    if (migrated) {
+      setAgentRegistryForTests(null);
+      registry.close();
+    }
   }
 }, 20_000);
 
