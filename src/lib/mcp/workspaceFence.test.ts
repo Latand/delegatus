@@ -202,6 +202,7 @@ test.each(["seat", "task"])("#3818: a refused transcript read leaves %s forms an
       const dependencies = { ...productionDomainDependencies,
         attentionAuthority: () => ({ kind: "worker", conversationId: "conversation_member", role: "orchestrator" }),
         authorizedSeats: () => [{ conversationId: "conversation_member", project: ${JSON.stringify(own)}, path: null }],
+        workspaceProject: () => ${JSON.stringify(own)},
         workspaceConversation: () => { throw new Error("replay reached workspace admission"); } };
       const control = { get: async () => { throw new Error("replay dispatched"); }, post: async () => { throw new Error("replay dispatched"); } };
       const service = withWorkspaceMcpFence(createMcpToolService(viewerMcpBindings(undefined, control, dependencies), new FileMcpReceiptStore(${JSON.stringify(receiptFile)})), dependencies);
@@ -1286,6 +1287,7 @@ test.each(["read", "publish"] as const)("implicit pipeline-task %s receipts repl
         const dependencies = { ...productionDomainDependencies,
           attentionAuthority: () => ({ kind: "worker", conversationId: "conversation_member", role: "orchestrator" }),
           authorizedSeats: () => [{ conversationId: "conversation_member", project: ${JSON.stringify(own)}, path: null }],
+          workspaceProject: () => ${JSON.stringify(own)},
           workspaceConversation: () => { throw new Error("replay reached workspace admission"); } };
         const control = { get: async () => { throw new Error("replay dispatched"); }, post: async () => { throw new Error("replay dispatched"); } };
         const service = withWorkspaceMcpFence(createMcpToolService(viewerMcpBindings(undefined, control, dependencies), new FileMcpReceiptStore(${JSON.stringify(receiptFile)})), dependencies);

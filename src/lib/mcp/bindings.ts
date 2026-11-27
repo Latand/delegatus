@@ -108,6 +108,7 @@ import { existingInternalServiceHeaders, INTERNAL_SERVICE_HEADER } from "@/lib/a
 import { internalServiceHeaders } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_ENV, VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { currentMcpHttpCaller, resolveMcpCallerValue, runWithMcpCallerResolution } from "./callerContext";
+import { mcpPageCursorCaller } from "./pageCursors";
 import { withNativeRelayHandoff } from "@/lib/orchestrator/nativeRelayHandoff";
 import { attentionCallerAuthority, processAncestry, type AttentionCallerAuthority, type AttentionCallerSources } from "@/lib/attention/callerAuthority";
 import { UNREAD_FRAME_RECT } from "@/lib/attention/frames";
@@ -1312,6 +1313,36 @@ function attributionOf(dependencies: Pick<ViewerMcpDomainDependencies, "callerAt
 
 function authorityOf(dependencies: Pick<ViewerMcpDomainDependencies, "attentionAuthority">): AttentionCallerAuthority {
   return resolveMcpCallerValue(dependencies, "authority", () => dependencies.attentionAuthority());
+}
+
+const localReceiptCaller = crypto.randomUUID();
+const unidentifiedReceiptCallers = new WeakMap<object, string>();
+
+function receiptTransportIdentity(): string | null {
+  const caller = currentMcpHttpCaller();
+  if (!caller) return localReceiptCaller;
+  if (caller.capability) return mcpPageCursorCaller();
+  // An unsigned connection label or a peer with no verified conversation
+  // cannot establish ownership of a previous request's answer.
+  let identity = unidentifiedReceiptCallers.get(caller);
+  if (!identity) {
+    identity = crypto.randomUUID();
+    unidentifiedReceiptCallers.set(caller, identity);
+  }
+  return identity;
+}
+
+function viewerReceiptIdentity(dependencies: ViewerMcpDomainDependencies): string {
+  const authority = dependencies.attentionAuthority ? authorityOf(dependencies) : undefined;
+  const confirmedId = authority?.kind !== "unidentified" ? authority?.conversationId : null;
+  const attribution = !confirmedId && dependencies.callerAttribution ? attributionOf(dependencies) : undefined;
+  const id = confirmedId || attribution?.via?.deputy || attribution?.conversationId || null;
+  const project = dependencies.callerProject?.() ?? (id
+    ? dependencies.workspaceProject ? dependencies.workspaceProject(id)
+      : dependencies.registrySnapshot ? callerProjectFromSnapshot(dependencies.registrySnapshot(), id) : null
+    : null);
+  const transport = id ? null : receiptTransportIdentity();
+  return JSON.stringify([authority?.kind ?? attribution?.kind, id, project ? canonicalProject(project) : null, transport]);
 }
 
 /** MCP mutations always remain agent-attributed, including an unidentified caller. */
@@ -5275,36 +5306,54 @@ function projectRuntimeAuthority(args: McpToolArgs, dependencies: ViewerMcpDomai
   throw new McpToolRefusal("Project stage runtime requires the operator or this project's designated seat", { code: "project_runtime_refused", status: 403 });
 }
 
-async function projectRuntimeTarget(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<string> {
-  const project = text(args.project) ? await resolveOrchestratorToolProject(text(args.project), dependencies, false)
-    : (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
-      .find(seat => seat.conversationId === attributionOf(dependencies).conversationId)?.project
-      ?? (dependencies.callerProject ? dependencies.callerProject() : productionCallerProject());
-  if (!project) throw new Error("project is required for the stage runtime setting");
-  return canonicalProject(project);
-}
-
 function seatTickSettingsBinding(dependencies: ViewerMcpDomainDependencies): McpToolBinding {
-  const tick = orchestratorProjectBinding(dependencies, (args, context) => seatTickSettingsTool(args, dependencies, context), true);
-  const targets = new WeakMap<McpToolArgs, string>();
-  const runtime = async (args: McpToolArgs) => {
-    let project = targets.get(args);
-    if (!project) {
-      project = await projectRuntimeTarget(args, dependencies);
-      targets.set(args, project);
-    }
-    const actor = projectRuntimeAuthority({ ...args, project }, dependencies);
-    return { project, actor };
+  const resolve = (args: McpToolArgs, own: string | null) => {
+    const named = text(args.project);
+    if (named) return resolveOrchestratorToolProject(named, dependencies, args.pipelineStageRuntime === undefined);
+    if (own) return canonicalOrchestratorProject(own);
+    throw new Error(args.pipelineStageRuntime === undefined
+      ? "project is required: this session's own project could not be resolved, so name the project whose tick to read or change"
+      : "project is required for the stage runtime setting");
   };
   return Object.assign(async (args: McpToolArgs, context?: McpToolCallContext) => {
-    if (args.pipelineStageRuntime === undefined) return tick(args, context);
-    const { project } = await runtime(args);
-    return seatTickSettingsTool({ ...args, project }, dependencies, context);
+    const project = context?.receiptProject ?? resolve(args, seatTickCaller(dependencies).callerProject);
+    return seatTickSettingsTool(args, project, dependencies, context);
   }, {
-    prepareAdmission: async (args: McpToolArgs) => { if (args.pipelineStageRuntime === undefined) await tick.prepareAdmission?.(args); },
-    authorizeReceipt: async (args: McpToolArgs) => { if (args.pipelineStageRuntime !== undefined) await runtime(args); },
-    receiptScope: async (args: McpToolArgs) => args.pipelineStageRuntime === undefined ? null : JSON.stringify(await runtime(args)),
+    captureReceiptTarget: (args: McpToolArgs) => {
+      const named = text(args.project);
+      const caller = () => runWithMcpCallerResolution(() => seatTickCaller(dependencies).callerProject);
+      const own = caller();
+      const project = resolve(args, own);
+      const aliases = projectAliasSnapshot({ strict: true });
+      const unchanged = captureBoardAliasProof(named || own || "", project, aliases.aliases, aliases.displayNames, named ? dependencies : undefined);
+      return {
+        project,
+        fingerprint: JSON.stringify([own ? canonicalOrchestratorProject(own) : null, project]),
+        assert() {
+          if (caller() !== own || !unchanged()) {
+            throw new McpToolRefusal("receipt project selection changed", { code: "project_scope_refused", retryable: false });
+          }
+          assertWorkspaceMcpCall(project);
+          if (args.pipelineStageRuntime !== undefined) runWithMcpCallerResolution(() => projectRuntimeAuthority({ ...args, project }, dependencies));
+        },
+      };
+    },
+    receiptScope: async (args: McpToolArgs, context?: McpToolCallContext) => {
+      if (args.pipelineStageRuntime === undefined) return null;
+      const project = context?.receiptProject ?? resolve(args, seatTickCaller(dependencies).callerProject);
+      return JSON.stringify({ project, actor: projectRuntimeAuthority({ ...args, project }, dependencies) });
+    },
   });
+}
+
+function seatTickCaller(dependencies: ViewerMcpDomainDependencies) {
+  const attribution = attributionOf(dependencies);
+  const callerSeat = attribution.conversationId
+    ? (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources(), attribution.conversationId))
+      .find(candidate => candidate.conversationId === attribution.conversationId)
+    : undefined;
+  const callerProject = callerSeat?.project ?? (dependencies.callerProject ? dependencies.callerProject() : productionCallerProject());
+  return { attribution, callerSeat, callerProject };
 }
 
 /**
@@ -5346,21 +5395,9 @@ function seatTickSettingsBinding(dependencies: ViewerMcpDomainDependencies): Mcp
  * acknowledged with `{changed, revision, changedFields, monitorPromptLength}`
  * and nothing else. A verbose read carries the note once.
  */
-async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, context: McpToolCallContext = {}): Promise<McpToolPayload> {
+async function seatTickSettingsTool(args: McpToolArgs, project: string, dependencies: ViewerMcpDomainDependencies, context: McpToolCallContext = {}): Promise<McpToolPayload> {
   throwIfCallEnded(context);
-  const attribution = attributionOf(dependencies);
-  const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
-  const callerSeat = attribution.conversationId
-    ? seats.find((candidate) => candidate.conversationId === attribution.conversationId)
-    : undefined;
-  const callerProject = callerSeat?.project
-    ?? (dependencies.callerProject ? dependencies.callerProject() : productionCallerProject());
-  const requested = text(args.project) || callerProject;
-  if (!requested) {
-    throw new Error("project is required: this session's own project could not be resolved, so name the project whose tick to read or change");
-  }
-  // Explicit input was resolved by the binding before its receipt was claimed.
-  const project = text(args.project) || canonicalOrchestratorProject(requested);
+  const { attribution, callerSeat, callerProject } = seatTickCaller(dependencies);
   if (args.pipelineStageRuntime !== undefined) {
     const runtimeActor = projectRuntimeAuthority({ ...args, project }, dependencies);
     const extra = Object.keys(args).filter(key => !["project", "pipelineStageRuntime", "clientRequestId", "verbose", "full", "nativeCallerProof"].includes(key));
@@ -8617,7 +8654,8 @@ function recoveryCaller(
   let project: string | null;
   try {
     if (!dependencies.registrySnapshot) return unidentified;
-    project = callerProjectFromSnapshot(dependencies.registrySnapshot(), authority.conversationId);
+    const rawProject = callerProjectFromSnapshot(dependencies.registrySnapshot(), authority.conversationId);
+    project = rawProject ? canonicalProject(rawProject) : null;
   } catch {
     return unidentified;
   }
@@ -9636,7 +9674,7 @@ export function viewerMcpBindings(
       if (!caller.conversationId || caller.via || !["manager", "gateway"].includes(caller.kind)) throw new McpToolRefusal("Only a project's designated seat or the operator's own session asks to connect a repository.", { code: "not_permitted", status: 403, retryable: false });
     }, receiptScope: async () => `forge-connect:${attributionOf(domainDependencies).conversationId}` }),
     issue_report: (args, context) => issueReportTool(args, viewerControlForCall(controlDependencies, context), domainDependencies),
-  });
+  }, () => viewerReceiptIdentity(domainDependencies));
 }
 
 function resolvePrototypeReviewId(...args: Parameters<typeof resolveStoredReviewId>): ReturnType<typeof resolveStoredReviewId> {

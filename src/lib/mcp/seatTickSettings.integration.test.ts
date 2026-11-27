@@ -5,6 +5,7 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { NextRequest } from "next/server";
+import { shortId } from "@/lib/shortIds";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "tick-instructions-mcp-"));
 for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_STATE_DIR", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "TMPDIR"]) {
@@ -20,7 +21,8 @@ const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestrato
 const { defaultSeatTickSettings, readSeatTickSettings, writeSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
 const { setLegacyDocumentWriteHookForTests } = await import("@/lib/state/legacyDocumentStore");
 const { productionDomainDependencies, viewerMcpBindings, viewerMcpToolPolicy } = await import("./bindings");
-const { createMcpToolService, MemoryMcpReceiptStore } = await import("./server");
+const { createMcpToolService, MemoryMcpReceiptStore, openAsyncMcpReceiptStore, requestDigest } = await import("./server");
+const { currentMcpHttpCaller, runAsMcpHttpCaller } = await import("./callerContext");
 const { setMcpHttpDependenciesForTests } = await import("./http");
 const { POST } = await import("@/app/api/mcp/route");
 const project = "tick-instruction-fixture";
@@ -107,3 +109,122 @@ test("reason inheritance, stale designation, schema and write receipts through t
     expect(requests).toBeGreaterThan(calls);
   } finally { await client.close(); listener.stop(true); setMcpHttpDependenciesForTests(null); setLegacyDocumentWriteHookForTests(null); }
 }, 60_000);
+
+test("keyed settings reads refuse foreign callers in a warm service and after reopening SQLite", async () => {
+  setSystemTime(new Date("2026-11-13T12:00:00Z"));
+  const tool = "seat_tick_settings";
+  const suffix = "a".repeat(32);
+  const first = { project: `repo-${suffix}`, conversationId: "conversation_first_seat", monitorPrompt: "First monitor note" };
+  const second = { project: `dir-${suffix}`, conversationId: "conversation_second_seat", monitorPrompt: "Second monitor note" };
+  let callerWithSameLocalId = second;
+  let racingCaller = first;
+  const activeCaller = () => {
+    switch (currentMcpHttpCaller()?.paginationIdentity) {
+      case "first": return first;
+      case "same-local-id": return callerWithSameLocalId;
+      case "racing": return racingCaller;
+      default: return second;
+    }
+  };
+  for (const caller of [first, second]) {
+    writeSeatTickSettings(caller.project, { ...defaultSeatTickSettings(caller.project), monitorPrompt: caller.monitorPrompt });
+  }
+  const dependencies = {
+    ...productionDomainDependencies,
+    attentionAuthority: () => ({ kind: "worker" as const, conversationId: activeCaller().conversationId, role: "orchestrator" }),
+    callerAttribution: () => ({ kind: "manager" as const, conversationId: activeCaller().conversationId, role: "orchestrator" }),
+    callerProject: () => activeCaller().project,
+    authorizedSeats: () => [activeCaller()] as never,
+  };
+  const filename = path.join(sandbox, "seat-read-receipts.sqlite");
+  let receipts = await openAsyncMcpReceiptStore(filename);
+  const serviceFor = () => createMcpToolService(viewerMcpBindings(undefined, undefined, dependencies), receipts, viewerMcpToolPolicy(dependencies));
+  let service = serviceFor();
+  const call = (identity: string, args: Record<string, unknown>) =>
+    runAsMcpHttpCaller({ paginationIdentity: identity }, () => service.callTool(tool, args));
+  const args = { clientRequestId: "shared-tick-read", verbose: true, full: true };
+  const legacy = { ...args, clientRequestId: "legacy-tick-read" };
+  const oldDigest = requestDigest(tool, legacy);
+  const key = `${tool}:${args.clientRequestId}`;
+  const compact = { clientRequestId: "shared-compact-tick-read", verbose: true };
+  const legacyKey = `${tool}:${legacy.clientRequestId}`;
+  const refusal = { ok: false, toolName: tool, clientRequestId: args.clientRequestId, replayed: true,
+    code: "idempotency_conflict", error: "clientRequestId does not match the original call", retryable: false };
+  try {
+    const recorded = await call("first", args);
+    expect(recorded).toMatchObject({ ok: true, project: first.project, callerProject: first.project, replayed: false, monitorPrompt: first.monitorPrompt });
+    const compactAnswer = await call("first", compact);
+    expect(compactAnswer).toMatchObject({ ok: true, project: shortId(first.project), replayed: false, monitorPrompt: first.monitorPrompt });
+    const stored = await receipts.lookup(key);
+    const oldAnswer = { ...recorded, clientRequestId: legacy.clientRequestId };
+    await receipts.claim(legacyKey, oldDigest, "durable");
+    await receipts.complete(legacyKey, oldDigest, oldAnswer, "durable");
+    const oldRecord = await receipts.lookup(legacyKey);
+    for (const cold of [false, true]) {
+      if (cold) {
+        receipts.close();
+        receipts = await openAsyncMcpReceiptStore(filename);
+        service = serviceFor();
+      }
+      expect(await call("second", args)).toEqual(refusal);
+      expect(await call("second", compact)).toEqual({ ...refusal, clientRequestId: compact.clientRequestId });
+      expect(await call("first", compact)).toEqual({ ...compactAnswer, replayed: true });
+      callerWithSameLocalId = { ...second, conversationId: first.conversationId };
+      expect(await call("same-local-id", args)).toEqual(refusal);
+      callerWithSameLocalId = { ...first, conversationId: second.conversationId };
+      expect(await call("same-local-id", args)).toEqual(refusal);
+      expect(await call("first", { ...args, verbose: false })).toEqual(refusal);
+      expect(await call("first", args)).toEqual({ ...recorded, replayed: true });
+      expect(await call("second", legacy)).toEqual({ ...refusal, clientRequestId: legacy.clientRequestId });
+      expect(await call("first", legacy)).toEqual({ ...refusal, clientRequestId: legacy.clientRequestId });
+      expect(await receipts.lookup(key)).toEqual(stored);
+      expect(await receipts.lookup(legacyKey)).toEqual(oldRecord);
+    }
+    const own = await call("second", { ...args, clientRequestId: "independent-tick-read" });
+    expect(own).toMatchObject({ ok: true, project: second.project, callerProject: second.project, replayed: false, monitorPrompt: second.monitorPrompt });
+    const claim = receipts.claim;
+    const inFlight = { ...args, clientRequestId: "pending-tick-read" };
+    const claimed = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    receipts.claim = async (...claimArgs) => {
+      const result = await claim(...claimArgs);
+      claimed.resolve();
+      await release.promise;
+      return result;
+    };
+    const pending = call("first", inFlight);
+    try {
+      await Promise.race([claimed.promise, pending]);
+      expect(await call("second", inFlight)).toEqual({ ...refusal, clientRequestId: inFlight.clientRequestId });
+    } finally {
+      release.resolve();
+      expect(await pending).toMatchObject({ ok: true, project: first.project, replayed: false });
+    }
+    receipts.claim = async (...claimArgs) => {
+      const result = await claim(...claimArgs);
+      racingCaller = second;
+      return result;
+    };
+    expect(await call("racing", args)).toMatchObject({ ok: false, code: "caller_unidentified", retryable: false });
+    expect(await receipts.lookup(key)).toEqual(stored);
+  } finally {
+    receipts.close();
+    setSystemTime();
+  }
+});
+
+test("an adapter's connection label alone grants no receipt ownership", async () => {
+  const dependencies = {
+    ...productionDomainDependencies,
+    attentionAuthority: () => ({ kind: "unidentified" as const }),
+    callerAttribution: () => ({ kind: "unidentified" as const, conversationId: null, role: null }),
+    callerProject: () => project,
+  };
+  const service = createMcpToolService(viewerMcpBindings(undefined, undefined, dependencies), new MemoryMcpReceiptStore());
+  const args = { clientRequestId: "label-only-read", verbose: true };
+  const call = () => runAsMcpHttpCaller({ paginationIdentity: "same-label" }, () => service.callTool("seat_tick_settings", args));
+  expect(await call()).toMatchObject({ ok: true, project, replayed: false });
+  const refused = await call();
+  expect(refused).toMatchObject({ ok: false, code: "idempotency_conflict", retryable: false });
+  expect(refused).not.toHaveProperty("settings");
+});

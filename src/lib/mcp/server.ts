@@ -382,6 +382,8 @@ export interface McpBoardRead {
 
 export interface McpToolCallContext {
   responseAuthority?: McpResponseAuthority;
+  /** Canonical target selected for this invocation before receipt admission. */
+  receiptProject?: string;
   /** Board selection and current authority captured before normalization can await. */
   boardRead?: McpBoardRead;
   /** Canonical selection resolved by the workspace fence; never a wire argument. */
@@ -489,6 +491,11 @@ export function nativeWorkFromRequestMeta(meta: unknown): McpNativeWork | null {
 export interface McpDispatchTracker {
   attempted: boolean;
 }
+export interface McpReceiptAccess {
+  project: string;
+  fingerprint: string;
+  assert(): void;
+}
 function curatorDisclosureResult(tool: string, args: McpToolArgs, authority: McpToolCallContext["curatorResponse"], result: McpToolResult): McpToolResult {
   try { authority?.assertCurrent?.(); return result; }
   catch (error) {
@@ -496,6 +503,10 @@ function curatorDisclosureResult(tool: string, args: McpToolArgs, authority: Mcp
   }
 }
 export type McpToolBinding = ((args: McpToolArgs, context?: McpToolCallContext) => Promise<McpToolPayload>) & {
+  /** Server-derived caller and project, captured before consulting a receipt. */
+  receiptIdentity?: () => string;
+  /** Pin a project selected by this tool, including an implicit selection. */
+  captureReceiptTarget?: (args: McpToolArgs) => McpReceiptAccess;
   captureBoardRead?: (args: McpToolArgs, context: McpToolCallContext) => McpBoardRead;
   /** Curator apply only: pin current disclosure authority and read its atomic
    * domain acknowledgement. This hook must never dispatch an apply. */
@@ -887,7 +898,7 @@ function reclaimFencedSeatClaim(receipt: Receipt | McpReceiptRecord | undefined,
   return !!receipt && !!held && !!binding && receipt.stage === "not-executed"
     && retryableSeatFence(receipt.recoveryResult ?? receipt.result)
     && held.toolName === "send_message_to_orchestrator" && binding.toolName === held.toolName
-    && binding.clientRequestId === held.clientRequestId && sameCaller(held.caller, binding.caller, held.toolName)
+    && binding.clientRequestId === held.clientRequestId && sameCaller(held.caller, binding.caller)
     && !!held.target.identity?.startsWith("machine:") && JSON.stringify(binding.target) === JSON.stringify(held.target)
     && binding.downstreamKey === held.downstreamKey && binding.seatMessageDigest === digest
     && !!binding.seatMessageFence && binding.seatMessageFence !== held.seatMessageFence;
@@ -2497,6 +2508,13 @@ export function requestDigest(toolName: McpToolName, args: McpToolArgs): string 
   return crypto.createHash("sha256").update(JSON.stringify(stable({ toolName, args }))).digest("hex");
 }
 
+/** Keep the existing key so an unbound legacy claim cannot be replayed or
+ * replaced. The digest binds both pending work and its eventual answer. */
+function callerBoundDigest(digest: string, identity?: string, target?: string): string {
+  return identity === undefined && target === undefined ? digest
+    : crypto.createHash("sha256").update(JSON.stringify(["mcp-receipt-v1", digest, identity, target])).digest("hex");
+}
+
 function clientRequestId(args: McpToolArgs): string | null {
   return typeof args.clientRequestId === "string" && args.clientRequestId.trim() ? args.clientRequestId.trim() : null;
 }
@@ -2513,10 +2531,14 @@ function failure(
   return { ok: false, toolName, clientRequestId: requestId, replayed, error, code, retryable, ...(details ? { details } : {}) };
 }
 
+function receiptConflict(toolName: string, requestId: string): McpToolFailure {
+  return failure(toolName, requestId, "idempotency_conflict", "clientRequestId does not match the original call", false, true);
+}
+
 export interface McpToolService {
   callTool(toolName: string, args: McpToolArgs, context?: McpToolCallContext): Promise<McpToolResult>;
   /** Read an already settled, caller-owned receipt; never claim or dispatch. */
-  replayTool?(toolName: string, args: McpToolArgs): Promise<McpToolResult | null>;
+  replayTool?(toolName: string, args: McpToolArgs, context?: McpToolCallContext): Promise<McpToolResult | null>;
 }
 
 type McpTimingOutcome = "success" | "failure" | "replay" | "conflict" | "pending" | "deadline" | "cancelled";
@@ -2769,12 +2791,10 @@ export class McpDispatchSettledRefusalError extends McpToolRefusal {
   }
 }
 
-function sameCaller(recorded: McpRequestCaller, current: McpRequestCaller, toolName: McpToolName): boolean {
+function sameCaller(recorded: McpRequestCaller, current: McpRequestCaller): boolean {
   return recorded.kind === current.kind
     && recorded.project === current.project
-    && (recorded.conversationId === current.conversationId
-      || (toolName !== "send_message_to_orchestrator" && recorded.conversationId !== null
-        && (current.predecessors ?? []).includes(recorded.conversationId)));
+    && recorded.conversationId === current.conversationId;
 }
 
 function identifiedCaller(caller: McpRequestCaller): boolean {
@@ -2885,11 +2905,13 @@ export function createMcpToolService(
   const pendingLocalReleases = new Map<string, { digest: string; binding: McpRequestBinding; store: McpRecoveryReceiptStore }>();
   bindings = witnessStoreWriters(bindings);
   const service: McpToolService = {
-    async replayTool(toolName, args) {
+    async replayTool(toolName, args, context) {
       if (!(MCP_TOOL_NAMES as readonly string[]).includes(toolName) || !supportsMcpRecovery(receipts)) return null;
       const tool = toolName as McpToolName;
       const scopeOf = bindings[tool].replayReceiptScope;
       if (!scopeOf) return null;
+      const identityOf = bindings[tool].receiptIdentity;
+      const identity = identityOf?.();
       const effective = (await normalizeShortIdArgs(normalizeBoundedMcpNumerics(tool, args).args));
       const requestId = clientRequestId(effective);
       const scope = scopeOf(effective);
@@ -2902,14 +2924,22 @@ export function createMcpToolService(
       catch { return failure(tool, requestId, "receipt_unavailable", "the caller's receipt could not be read", true, false, { check: "receipt-store" }); }
       // Storage may yield across a caller switch or a seat replacement. A
       // receipt read cannot acquire the departed caller's authority.
-      if (scopeOf(effective) !== scope) return null;
+      const stillOwnsReceipt = () => runWithMcpCallerResolution(() => identityOf?.() === identity && scopeOf(effective) === scope);
+      const scopeRefusal = { code: "workspace_forbidden", check: "prototype-receipt-scope", retryable: false };
+      const scopeError = "workspace access denied (prototype-receipt-scope)";
+      if (!stillOwnsReceipt()) return failure(tool, requestId, scopeRefusal.code, scopeError, false, false, scopeRefusal);
       const current = permit();
       if (current && !current.allowed) return failure(tool, requestId, current.code, current.error, false);
       if (!record?.result) return null;
-      const digest = requestDigest(tool, bindings[tool].canonicalizeReceiptArgs?.(effective) ?? effective);
-      if (record.digest !== digest) return failure(tool, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true);
+      const digest = callerBoundDigest(requestDigest(tool, bindings[tool].canonicalizeReceiptArgs?.(effective) ?? effective), identity);
+      if (record.digest !== digest) return receiptConflict(tool, requestId);
       // A retryable publication still needs the Viewer's claim recovery path.
       if (!record.result.ok && record.result.retryable) return null;
+      if (context) retainResponseAuthority(context, () => {
+        if (!stillOwnsReceipt()) {
+          throw new McpToolRefusal(scopeError, scopeRefusal);
+        }
+      });
       let result = withoutPrototypeTaskFields({ ...record.result, replayed: true });
       if (effective.full !== true) result = shortIdsInAnswer(result);
       return result;
@@ -2931,9 +2961,15 @@ export function createMcpToolService(
           () => callTool(toolName, logicalArgs, context));
       }
       const typedTool = toolName as McpToolName;
+      const binding = bindings[typedTool];
+      const recoverable = options.recovery?.[typedTool] ?? null;
       const pageCaller = mcpPageCursorCaller();
       const normalized = normalizeBoundedMcpNumerics(typedTool, args);
       let effectiveArgs = normalized.args;
+      const bypassReceipt = RECEIPT_FREE_READ_TOOLS.has(typedTool) || (typedTool === "curate_rules" && effectiveArgs.action === "read")
+        || (typedTool === "backfill_worktree_projects" && effectiveArgs.dryRun !== false)
+        || (["codex_cloud_environment", "claude_cloud_task"].includes(typedTool) && effectiveArgs.action === "read" && effectiveArgs.clientRequestId === undefined)
+        || (effectiveArgs.clientRequestId === undefined && OPTIONAL_READ_KEY_TOOLS.has(typedTool));
       if (typedTool === "search_memory" && typeof effectiveArgs.clientRequestId === "string"
         && effectiveArgs.clientRequestId.trim().length > 256) {
         return failure(typedTool, null, "invalid_request", "clientRequestId must be at most 256 characters for search_memory", false);
@@ -2994,7 +3030,11 @@ export function createMcpToolService(
       };
       // Activity resolves project scope after recovering verified host identities;
       // the generic directory can still be missing a newly launched project.
-      try { if (typedTool !== "agent_activity") effectiveArgs = await measure("caller", () => normalizeShortIdArgs(effectiveArgs, context)); }
+      let receiptIdentity: string | undefined;
+      try {
+        if (!bypassReceipt && !recoverable && clientRequestId(effectiveArgs)) receiptIdentity = binding.receiptIdentity?.();
+        if (typedTool !== "agent_activity") effectiveArgs = await measure("caller", () => normalizeShortIdArgs(effectiveArgs, context));
+      }
       catch (error) {
         const rawDetails = error !== null && typeof error === "object" && "details" in error ? error.details : undefined;
         const details = isRecord(rawDetails) ? rawDetails : {};
@@ -3007,10 +3047,7 @@ export function createMcpToolService(
       const requestId = clientRequestId(effectiveArgs);
       // Omitted keys on pure reads mean a fresh observation, without a receipt.
       // Private reads bypass receipts with explicit keys too; other keyed reads replay below.
-      if (RECEIPT_FREE_READ_TOOLS.has(typedTool) || (typedTool === "curate_rules" && effectiveArgs.action === "read")
-        || (typedTool === "backfill_worktree_projects" && effectiveArgs.dryRun !== false)
-        || (["codex_cloud_environment", "claude_cloud_task"].includes(typedTool) && effectiveArgs.action === "read" && effectiveArgs.clientRequestId === undefined)
-        || (effectiveArgs.clientRequestId === undefined && OPTIONAL_READ_KEY_TOOLS.has(typedTool))) {
+      if (bypassReceipt) {
         const verdict = permit();
         if (verdict && !verdict.allowed) return finish(failure(typedTool, null, verdict.code, verdict.error, false), "failure");
         try {
@@ -3032,7 +3069,6 @@ export function createMcpToolService(
         }
       }
       if (!requestId) return finish(failure(toolName, null, "invalid_request", "clientRequestId is required", false), "failure");
-      const recoverable = options.recovery?.[typedTool] ?? null;
       const recoveryStore = recoverable && supportsMcpRecovery(receipts) ? receipts : null;
       if (recoverable && !recoveryStore) throw new Error(`MCP receipt store cannot recover ${typedTool}`);
 
@@ -3044,7 +3080,23 @@ export function createMcpToolService(
       if (verdict && !verdict.allowed) {
         return finish(failure(typedTool, requestId, verdict.code, verdict.error, false), "failure");
       }
+      let receiptTarget: McpReceiptAccess | undefined;
+      const assertReceiptAccess = () => {
+        context.assertCaller?.();
+        if (runWithMcpCallerResolution(() => binding.receiptIdentity?.()) !== receiptIdentity) {
+          throw new McpToolRefusal("receipt caller authority changed", { code: "caller_unidentified", retryable: false });
+        }
+        receiptTarget?.assert();
+      };
       try {
+        if (!recoverable) {
+          receiptTarget = binding.captureReceiptTarget?.(effectiveArgs);
+          if (receiptTarget) context = { ...context, receiptProject: receiptTarget.project };
+          if (receiptIdentity !== undefined || receiptTarget) {
+            assertReceiptAccess();
+            retainResponseAuthority(context, assertReceiptAccess);
+          }
+        }
         const authorize = bindings[typedTool].authorizeReceipt;
         if (authorize) {
           const assertReceipt = await authorize(effectiveArgs, context);
@@ -3098,8 +3150,12 @@ export function createMcpToolService(
         ? Object.fromEntries(Object.entries(effectiveArgs).filter(([name]) => name !== "recoveryOnly"))
         : effectiveArgs;
       const canonicalArgs = bindings[typedTool].canonicalizeReceiptArgs?.(digestArgs) ?? digestArgs;
-      const digest = requestDigest(typedTool, canonicalArgs);
+      const argumentDigest = requestDigest(typedTool, canonicalArgs);
+      const digest = callerBoundDigest(argumentDigest, receiptIdentity, receiptTarget?.fingerprint);
       const key = receiptKey(typedTool, requestId, scope);
+      const checkReceiptAccess = !recoverable && (receiptIdentity !== undefined || receiptTarget) ? assertReceiptAccess : undefined;
+      const disclose = (answer: McpToolResult): McpToolResult =>
+        responseAuthorityResult(typedTool, effectiveArgs, checkReceiptAccess ? { checks: [checkReceiptAccess] } : undefined, answer);
       const finishReceipt = trackMcpClaim(key, digest);
       try {
       /* A recoverable mutation never joins an in-process duplicate: who is
@@ -3108,12 +3164,12 @@ export function createMcpToolService(
       const active = recoverable || curatorApply ? undefined : inFlight.get(key);
       if (active) {
         if (active.digest !== digest) {
-          return finish(failure(toolName, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true), "conflict");
+          return finish(receiptConflict(toolName, requestId), "conflict");
         }
         const replayStartedAt = performance.now();
         const replayed = { ...await active.result, replayed: true };
         phaseDurations.replay = performance.now() - replayStartedAt;
-        return finish(replayed, "replay");
+        return finish(disclose(replayed), "replay");
       }
       let outcome: McpTimingOutcome = "failure";
       let revalidateNative: () => McpToolResult | null = () => null;
@@ -3160,7 +3216,7 @@ export function createMcpToolService(
           if (!invocationProof) return null;
           let current: McpRequestCaller | undefined;
           try { current = tool.currentCaller?.(); } catch { /* Unavailable evidence grants no identity. */ }
-          if (current && identifiedCaller(current) && current.conversationId === binding.caller.conversationId
+          if (current && identifiedCaller(current) && sameCaller(current, binding.caller)
             && current.nativeProof === invocationProof) return null;
           return failure(typedTool, requestId, "caller_unidentified", nativeAdmissionMessage(current?.admission ?? { reason: "session-changed", retryable: false }), false, false);
         };
@@ -3202,7 +3258,7 @@ export function createMcpToolService(
         const readableStoredResult = async (): Promise<McpToolResult | null> => {
           const current = await store.lookup(key);
           if (!current?.result || current.digest !== digest || !current.binding
-            || !sameCaller(current.binding.caller, binding.caller, typedTool)) return null;
+            || !sameCaller(current.binding.caller, binding.caller)) return null;
           return current.recoveryResult ?? current.result;
         };
         /* Terminal downstream evidence becomes the row's answer, written
@@ -3226,8 +3282,7 @@ export function createMcpToolService(
           } catch (cause) {
             return unreadableReceipt(cause, replayed);
           }
-          if (current?.binding && !sameCaller(current.binding.caller, binding.caller, typedTool)) return notPermitted();
-          if (current && current.digest !== digest) return notPermitted();
+          if (current && (!current.binding || !sameCaller(current.binding.caller, binding.caller) || current.digest !== digest)) return notPermitted();
           // Contradictory ownership never licenses disclosure of cached IDs.
           if (evidence.ownership === "unknown") return recoveryAnswer(typedTool, requestId, evidence, replayed);
           const previous = current?.recoveryResult ?? current?.result ?? original;
@@ -3297,14 +3352,19 @@ export function createMcpToolService(
               outcome = "conflict";
               return failure(typedTool, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true);
             }
-            if (record.result && !recoveryOnly && (typedTool !== "spawn_agent" || terminalResult(record.result))) {
-              outcome = "replay";
-              return { ...record.result, replayed: true };
-            }
             outcome = evidence.outcome === "unknown" ? "failure" : "replay";
-            return recoveryAnswer(typedTool, requestId, evidence, true, record.result);
+            return recoveryAnswer(typedTool, requestId, evidence, true);
           }
-          if (!sameCaller(recorded.caller, binding.caller, typedTool)) return notPermitted();
+          if (!sameCaller(recorded.caller, binding.caller)) {
+            // An explicit successor recovery can consult downstream evidence
+            // in its own project. Only the original caller can replay the row.
+            if (!recoveryOnly || typedTool === "send_message_to_orchestrator" || recorded.caller.kind !== binding.caller.kind
+              || recorded.caller.project === null || recorded.caller.project !== binding.caller.project
+              || !recorded.caller.conversationId || !binding.caller.predecessors?.includes(recorded.caller.conversationId)
+              || record.digest !== digest) return notPermitted();
+            outcome = "replay";
+            return recoveryAnswer(typedTool, requestId, await readEvidence(recorded, false, false), true);
+          }
           if (record.digest !== digest) {
             outcome = "conflict";
             return failure(typedTool, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true);
@@ -3377,7 +3437,7 @@ export function createMcpToolService(
           return answerFromEvidence(evidence, true, record.result, recorded);
         };
         const retryCandidate = (record: McpReceiptRecord): boolean => !recoveryOnly && record.digest === digest
-          && !!record.binding && sameCaller(record.binding.caller, binding.caller, typedTool)
+          && !!record.binding && sameCaller(record.binding.caller, binding.caller)
           && record.binding.toolName === "send_message_to_orchestrator" && !!record.binding.target.identity?.startsWith("machine:")
           && !!record.binding.target.project && record.stage === "not-executed" && retryableSeatFence(record.recoveryResult ?? record.result);
         const claimStartedAt = performance.now();
@@ -3395,7 +3455,7 @@ export function createMcpToolService(
             try {
               const retry = record?.binding;
               const fresh = await tool.bind(retry ? { ...digestArgs, machine: retry.target.identity!.slice(8), project: retry.target.project } : digestArgs);
-              if (!identifiedCaller(fresh.caller) || !sameCaller(binding.caller, fresh.caller, typedTool)) return notPermitted();
+              if (!identifiedCaller(fresh.caller) || !sameCaller(binding.caller, fresh.caller)) return notPermitted();
               if (invocationProof && fresh.caller.nativeProof !== invocationProof) return failure(typedTool, requestId, "caller_unidentified", nativeAdmissionMessage({ reason: "session-changed", retryable: false }), false, false);
               binding = { ...binding, ...fresh, ...(retry ? { downstreamKey: retry.downstreamKey } : {}),
                 ...(fresh.seatMessageFence ? { seatMessageDigest: digest } : {}) };
@@ -3679,27 +3739,44 @@ export function createMcpToolService(
             }, false);
           }
         }
-        context.boardRead?.assert();
-        const claim = await measure("claim", () => receipts.claim(key, digest, retention, localBinding, context.boardRead?.assert));
-        context.boardRead?.assert();
-        curatorApply?.assertCurrent();
-        if (claim.kind === "conflict") {
-          outcome = "conflict";
-          return failure(toolName, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true);
-        }
         const interruptedAnswer = () => {
           const read = typedTool === "update_task" ? "get_task" : typedTool === "create_task" ? "list_tasks" : "original-key-lookup";
           return failure(toolName, requestId, "outcome_unknown",
             `The previous call has no committed operation receipt; execution is uncertain. Read ${read} to resolve its outcome and retain the original clientRequestId.`,
             false, true, { outcome: "unknown", nextAction: read, evidence: "mcp-receipt" });
         };
+        const beforeClaim = context.boardRead || checkReceiptAccess ? () => {
+          context.boardRead?.assert();
+          checkReceiptAccess?.();
+        } : undefined;
+        let claim: ReceiptClaim;
+        try {
+          beforeClaim?.();
+          claim = await measure("claim", () => receipts.claim(key, digest, retention, localBinding, beforeClaim));
+        } catch (error) {
+          if (!(error instanceof McpToolRefusal)) throw error;
+          return boardReadFailure(typedTool, effectiveArgs, error);
+        }
+        context.boardRead?.assert();
+        curatorApply?.assertCurrent();
         if (curatorApply && claim.kind !== "fresh") {
-          // This reader cannot resend. Missing or legacy evidence stays
-          // UNKNOWN, even when a generic receipt happens to contain success.
+          // The editorial operation proves its own caller, canonical project
+          // and arguments after an alias changes. Only that witness can answer.
           const saved = curatorApply.recoverCommitted();
           curatorApply.assertCurrent();
-          outcome = saved ? "replay" : "pending";
-          return saved ? { ...saved, ok: true, toolName: typedTool, clientRequestId: requestId, replayed: true } : interruptedAnswer();
+          if (saved) {
+            outcome = "replay";
+            return { ...saved, ok: true, toolName: typedTool, clientRequestId: requestId, replayed: true };
+          }
+          if (claim.kind !== "conflict") {
+            outcome = "pending";
+            return interruptedAnswer();
+          }
+        }
+        if (claim.kind === "conflict") {
+          outcome = "conflict";
+          if (claim.record?.digest === argumentDigest && !claim.record.result) return interruptedAnswer();
+          return receiptConflict(toolName, requestId);
         }
         if (claim.kind === "pending" && !interruptedCallIsRecoverable(typedTool, effectiveArgs)) {
           outcome = "pending";
@@ -3806,6 +3883,18 @@ export function createMcpToolService(
         const bindingStartedAt = performance.now();
         try {
           context.boardRead?.assert();
+          try { checkReceiptAccess?.(); }
+          catch (error) {
+            // Only a fresh claim belongs to this invocation. Existing claims
+            // may describe work already performed by the original caller.
+            if (claim.kind === "fresh") {
+              let released = false;
+              try { released = await receipts.release?.(key, digest, localBinding) ?? false; }
+              catch { /* Retain the pre-dispatch proof for the original caller. */ }
+              if (!released && localStore && localBinding) pendingLocalReleases.set(key, { digest, binding: localBinding, store: localStore });
+            }
+            return boardReadFailure(typedTool, effectiveArgs, error);
+          }
           const payload = await bindings[typedTool](effectiveArgs, typedTool === "deploy_exact_sha" && (retryDeployment || claim.kind === "pending")
             ? { ...context, priorAttemptUncertain: true,
               ...(retryDeployment && claim.result.ok && claim.result.state === "accepted"
@@ -3940,6 +4029,8 @@ export function createMcpToolService(
         // Preserve the curator committed witness if disclosure authority changes.
         curatorApply?.assertCurrent();
         context.boardRead?.assert();
+        const verified = disclose(settled);
+        if (verified !== settled) return verified;
         settled = bindMcpPageCursorResult(typedTool, settled, pageCaller);
         await measure("completion", () => receipts.complete(key, digest, settled, retention));
         context.boardRead?.assert();
@@ -3950,7 +4041,7 @@ export function createMcpToolService(
       try {
         const answered = await result;
         curatorApply?.assertCurrent();
-        return finish(revalidateNative() ?? answered, outcome, unfinishedAgeMs);
+        return finish(revalidateNative() ?? disclose(answered), outcome, unfinishedAgeMs);
       } catch (error) {
         if (!curatorApply) throw error;
         try {
@@ -3986,7 +4077,7 @@ export function createMcpToolService(
       return await runWithMcpCallerResolution(() => service.callTool(tool, args, context));
     } finally { finish(); }
   } });
-  return { replayTool: (tool, args) => service.replayTool!(tool, args), callTool: async function callTool(tool: string, args: McpToolArgs, context: McpToolCallContext = {}): Promise<McpToolResult> {
+  return { replayTool: (tool, args, context) => service.replayTool!(tool, args, context), callTool: async function callTool(tool: string, args: McpToolArgs, context: McpToolCallContext = {}): Promise<McpToolResult> {
     const board = BOARD_READ_TOOLS.has(tool);
     // Establish native proof and the canonical board before cursor filter matching.
     if (board && "nativeCallerProof" in args) {
@@ -3998,7 +4089,7 @@ export function createMcpToolService(
         () => callTool(tool, logicalArgs, context));
     }
     const curatorResponse = context.curatorResponse ?? (tool === "curate_rules" ? {} : undefined);
-    const authority = context.responseAuthority ?? (board || tool === "pipeline_action" && args.action === "set-src" ? { checks: [] } : undefined);
+    const authority = context.responseAuthority ?? { checks: [] };
     context = { ...context, responseAuthority: authority, curatorResponse };
     try {
       if (board) {
@@ -5504,7 +5595,7 @@ export function createViewerMcpServer(service: McpToolService, tools: readonly M
       });
       const finishClaim = trackMcpClaim(`${toolName}:${clientRequestId(args as McpToolArgs) ?? "unkeyed"}`);
       try {
-        const authority: McpResponseAuthority | undefined = BOARD_READ_TOOLS.has(toolName) || toolName === "pipeline_action" && args.action === "set-src" ? { checks: [] } : undefined;
+        const authority: McpResponseAuthority = { checks: [] };
         const curatorResponse: McpToolCallContext["curatorResponse"] = toolName === "curate_rules" ? {} : undefined;
         const call = () => service.callTool(toolName, args as McpToolArgs, {
           responseAuthority: authority,
