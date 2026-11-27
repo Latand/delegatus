@@ -1,4 +1,3 @@
-import { seedForgeCommitAccount } from "@/test-helpers/forgeCommitAccount";
 import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -8,7 +7,6 @@ import { spawnSync } from "node:child_process";
 const previousState = process.env.LLV_STATE_DIR;
 const remoteState = fs.mkdtempSync(path.join(os.tmpdir(), "llv-remote-actions-"));
 process.env.LLV_STATE_DIR = remoteState;
-seedForgeCommitAccount();
 const { closeAgentRegistryForTests } = await import("@/lib/agent/registry");
 closeAgentRegistryForTests();
 const { pipelineCorpus } = await import("./fixtures/corpus");

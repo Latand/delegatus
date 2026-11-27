@@ -2,7 +2,7 @@ import { hasActiveGateSandbox, recordGateSandbox, releaseGateSandbox } from "./g
 import { gateTaskDiagnostics } from "./gate-tasks";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, realpathSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { decodeXML } from "entities";
 import { gateInputSnapshot, gateTemporaryRoot, ISOLATED_DIRECTORY_KEYS, isolatedEnvironment, SUPERVISOR_MARGIN_MS } from "./local-gate";
@@ -365,7 +365,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     const sites = options.sites?.filter(site => site.file === file);
     const filtered = !!sites && !sites.some(site => site.kind === "error");
     const filter = filtered ? testNameFilter(sites) : [];
-    const privateRoot = mkdtempSync(path.join(sandbox, "test-"));
+    const privateRoot = recordGateSandbox(mkdtempSync(path.join(sandbox, "test-")));
     const env = isolatedEnvironment(privateRoot, inherited);
     // HOME is private before this Bun process starts. The preload verifies it
     // against os.homedir(); binding it avoids a second owned service with an
@@ -445,7 +445,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
       // A caller's TMPDIR may sit inside its checkout. Normalize the report
       // sandbox before replacing that checkout prefix on only the head side.
       failures.push({ file, suite: "", name: `${RUNNER_ERROR}${message.replace(privateTestRoot, "<sandbox>").split(root).join("<checkout>")}`, kind: "error" });
-    } finally { rmSync(privateRoot, { recursive: true, force: true }); }
+    } finally { releaseGateSandbox(privateRoot); }
     const elapsedMs = performance.now() - fileStarted;
     const hint = label === "head" && elapsedMs > budgets.fileMs / 2
       ? `; over half the ${budgets.fileMs / 1000} s file budget; split it` : "";
