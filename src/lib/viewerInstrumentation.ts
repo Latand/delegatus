@@ -49,6 +49,15 @@ import { markViewerHttpReady, viewerStartupPhases } from "@/lib/viewerReadiness"
 const RELEASE_ACTIVATION_POLL_MS = 250;
 const HOT_STATE_CUTOVER_STABLE_POLLS = 3;
 const HOT_STATE_CUTOVER_MAX_POLLS = 12;
+/* A deploy fence is transient: the adapter gives the fenced release 30s to
+   quiesce, then switches or restores. A fence older than this is stuck. */
+const HOT_STATE_FENCE_WAIT_MS = 120_000;
+
+function hotStateFenceWaitMs(env: Readonly<Record<string, string | undefined>> = process.env): number {
+  const configured = Number(env.LLV_HOT_STATE_FENCE_WAIT_MS || HOT_STATE_FENCE_WAIT_MS);
+  return Number.isFinite(configured) && configured > 0 ? configured : HOT_STATE_FENCE_WAIT_MS;
+}
+
 interface ActivationTimer {
   unref?(): unknown;
 }
@@ -73,6 +82,10 @@ interface ViewerReleaseActivationOptions {
   onFenceWithdrawn?: () => void | Promise<void>;
   resumeWorktreeRecovery?: () => Promise<void>;
   onDemoted?: (context: { fenced: boolean }) => void | Promise<void>;
+  /** Ends a process whose startup a fence interrupted, once that fence ends or
+      outlasts `fenceWaitMs`. Without it the failure reaches the caller. */
+  restartAfterFencedStartup?: (code: number) => unknown;
+  fenceWaitMs?: number;
 }
 
 interface HotStateCutoverOptions {
@@ -81,6 +94,9 @@ interface HotStateCutoverOptions {
   maxPolls?: number;
   schedule?: (callback: () => void, delayMs: number) => ActivationTimer;
   legacySignature?: () => string;
+  fenceWaitMs?: number;
+  exit?: (code: number) => unknown;
+  log?: (...args: unknown[]) => void;
 }
 
 export interface HotStateCutoverBoundary {
@@ -173,6 +189,41 @@ function legacyHotStateSignature(): string {
   }).join("|");
 }
 
+/** A release the deploy fenced and its supervisor restarted boots while the
+ * adapter still holds the fence. It waits for the adapter to end it in this
+ * release's favour, reading the target and the authority afresh on every poll,
+ * so a switch to another release is never overwritten. A fence that outlasts
+ * the bound, or traffic moving away, ends the process: a rejected
+ * instrumentation hook leaves `next start` answering 500 for as long as it runs. */
+async function awaitHotStateFenceEnd(
+  directory: string,
+  isCurrent: () => boolean,
+  options: HotStateCutoverOptions,
+): Promise<{ releaseRevision: string; authority: HotStateAuthority }> {
+  const pollMs = options.pollMs ?? RELEASE_ACTIVATION_POLL_MS;
+  const waitMs = options.fenceWaitMs ?? hotStateFenceWaitMs();
+  const schedule = options.schedule ?? ((callback, delayMs) => setTimeout(callback, delayMs));
+  const log = options.log ?? console.error;
+  const deadline = Date.now() + waitMs;
+  log(`[viewer release] booting under an active hot-state fence; waiting up to ${waitMs} ms for it to end`);
+  try {
+    for (;;) {
+      // Ref'd on purpose: this wait is the startup's only pending work.
+      await new Promise<void>((resolve) => { schedule(resolve, pollMs); });
+      if (!isCurrent()) throw new Error("viewer release lost traffic during hot-state cutover");
+      const releaseRevision = hotStateWriterRevision(directory);
+      const authority = readHotStateAuthority(directory);
+      if (releaseRevision !== null && authority && authority.mode !== "fencing"
+        && authority.releaseRevision === releaseRevision) return { releaseRevision, authority };
+      if (Date.now() >= deadline) throw new Error(`hot-state fence did not clear for this release within ${waitMs} ms`);
+    }
+  } catch (error) {
+    log("[viewer release] startup cannot pass the hot-state fence; exiting so the supervisor restarts this release", error);
+    (options.exit ?? process.exit)(1);
+    throw error;
+  }
+}
+
 /** A promoted first-SQLite release waits through the predecessor's demotion
  * poll and imports only after every legacy hot-state file is stable. */
 export async function establishHotStateCutoverBoundary(
@@ -180,7 +231,7 @@ export async function establishHotStateCutoverBoundary(
   options: HotStateCutoverOptions = {},
 ): Promise<HotStateCutoverBoundary> {
   const directory = path.dirname(statePath("state.sqlite"));
-  const releaseRevision = hotStateWriterRevision(directory);
+  let releaseRevision = hotStateWriterRevision(directory);
   const targetExists = releaseRevision !== null || fs.existsSync(statePath("viewer-release.json"));
   if (targetExists && releaseRevision === null) throw new Error("viewer release cannot publish hot-state authority");
   if (releaseRevision === null) {
@@ -188,6 +239,9 @@ export async function establishHotStateCutoverBoundary(
     return { authority: null, reimportLegacy: false };
   }
   let authority = readHotStateAuthority(directory);
+  if (authority?.mode === "fencing") {
+    ({ releaseRevision, authority } = await awaitHotStateFenceEnd(directory, isCurrent, options));
+  }
   if (authority?.mode === "sqlite" && authority.releaseRevision !== releaseRevision) {
     authority = publishHotStateAuthority(directory, "sqlite", releaseRevision);
     markStateSqliteCutoverReady(statePath("state.sqlite"));
@@ -197,7 +251,6 @@ export async function establishHotStateCutoverBoundary(
     markStateSqliteCutoverReady(statePath("state.sqlite"));
     return { authority, reimportLegacy: false };
   }
-  if (authority?.mode === "fencing") throw new Error("hot-state cutover cannot replace an active rollback fence");
   if (authority?.mode !== "preparing" || authority.releaseRevision !== releaseRevision) {
     authority = publishHotStateAuthority(directory, "preparing", releaseRevision);
   }
@@ -242,6 +295,8 @@ export async function activateViewerRuntimeWhenCurrent(
   let demoted = false;
   let fenceInProgress = false;
   let fenceObserved = false;
+  /* Never cleared: a startup step can fail on a fence that has already been withdrawn. */
+  let fenceSeen = false;
   let fencedEpoch: number | null = null;
   const monitor = () => {
     if (demoted) return;
@@ -268,6 +323,7 @@ export async function activateViewerRuntimeWhenCurrent(
       }
     } else if (fencedEpoch !== fence.epoch && !fenceInProgress) {
       fenceObserved = true;
+      fenceSeen = true;
       fenceInProgress = true;
       void Promise.resolve(options.onFenceRequested?.(fence)).then(() => {
         fencedEpoch = fence.epoch;
@@ -279,11 +335,26 @@ export async function activateViewerRuntimeWhenCurrent(
     }
     schedule(monitor, pollMs).unref?.();
   };
+  const fenceHeld = () => fenceInProgress || options.fenceRequest?.()?.mode === "fencing";
   const start = async () => {
     if (started) return;
     started = true;
     schedule(monitor, pollMs).unref?.();
-    await activate();
+    try {
+      await activate();
+    } catch (error) {
+      const restart = options.restartAfterFencedStartup;
+      if (!restart || (!fenceSeen && !fenceHeld())) throw error;
+      /* The fence aborted this startup for good. Stay alive while it stands, so
+         the monitor can still acknowledge it, then hand over to a fresh boot. */
+      log("[viewer release] a hot-state fence interrupted startup; restarting once it ends", error);
+      const deadline = Date.now() + (options.fenceWaitMs ?? hotStateFenceWaitMs());
+      while (fenceHeld() && Date.now() < deadline) {
+        await new Promise<void>((resolve) => { schedule(resolve, pollMs); });
+      }
+      restart(1);
+      throw error;
+    }
   };
   if (isCurrent()) {
     await start();
@@ -1167,6 +1238,10 @@ export async function registerViewerRuntime(): Promise<void> {
     const { releaseStructuredHostsForViewerDemotion } = await import("@/lib/runtime/startup");
     await releaseStructuredHostsForViewerDemotion({ boundary: viewerReleaseBoundary() });
   };
+  /* Until the cutover boundary is established this release holds no state: the
+     adapter checkpoints a fence on its own, and a booting release that answered
+     it would abort its own startup and run a second checkpoint beside it. */
+  let cutoverEstablished = false;
   await activateViewerRuntimeWhenCurrent(async () => {
     /* This callback runs only in the process that owns the release and is
        about to serve traffic. It is the one place a state-mutating startup
@@ -1175,6 +1250,7 @@ export async function registerViewerRuntime(): Promise<void> {
        (#1905, a lane's `next build` importing the live account files). */
     openStateMutationActivation();
     const boundary = await establishHotStateCutoverBoundary(isCurrent);
+    cutoverEstablished = true;
     activatedReleaseRevision = boundary.authority?.releaseRevision ?? null;
     assertStartupActive();
     const { startManagedRetirementGuard } = await import("@/lib/state/managedRetirementGuard");
@@ -1310,7 +1386,9 @@ export async function registerViewerRuntime(): Promise<void> {
       }).catch(error => console.error("[install ping] startup failed", error instanceof Error ? error.name : "unknown"));
     });
   }, isCurrent, {
+    restartAfterFencedStartup: (code) => process.exit(code),
     fenceRequest: () => {
+      if (!cutoverEstablished) return null;
       const revision = releaseRevision();
       const authority = readHotStateAuthority(hotStateDirectory);
       return revision !== null

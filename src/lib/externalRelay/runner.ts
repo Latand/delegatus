@@ -1,4 +1,5 @@
 import { requesterCodeMatch, redactRequesterCodes } from "./requesterEnrolment";
+import { answerDmTask, dmTaskTrigger } from "./dmTask";
 import { safeRelayHttpReason } from "./httpDiagnostics";
 import { checkProviderOpens } from "./providerOpens";
 import { deliverOwnerLateAnswer } from "./ownerLateDelivery";
@@ -308,6 +309,7 @@ export async function runClaimedRequest(
   const rawRequest = raw as Record<string, unknown>;
   const targetId = request?.target_id ?? rawRequest.target_id;
   const codeMatch = verified && !recovery && deadline.fallback !== "past" ? requesterCodeMatch(relay, verified, deadline.at) : undefined;
+  const dmTrigger = request && !codeMatch && !recovery ? dmTaskTrigger(request) : null;
   const recorder = codeMatch ? null : answerRecorder({
     requestId,
     relayId: relay.id,
@@ -714,7 +716,7 @@ export async function runClaimedRequest(
   };
   try {
     let newestProgress: ExternalRelayProgress | null = null;
-    const steps = codeMatch || request.delivery === "guest" ? null : createRelaySteps(relay.features);
+    const steps = codeMatch || dmTrigger || request.delivery === "guest" ? null : createRelaySteps(relay.features);
     let progressSeq = 0;
     let stepLog: string | null = null;
     let pendingServiceTools = 0;
@@ -783,7 +785,7 @@ export async function runClaimedRequest(
       return paired && currentTarget && canonicalRelayProject(currentTarget.project) === canonicalRelayProject(target.project)
         ? elevatedRequesterFor(paired, currentTarget, request, current.relays) : null;
     };
-    if (!codeMatch && !recovery && requester && matchingElevation(elevationSettings())?.entry.tier === "requester" && !ownerPrototype()) {
+    if (!codeMatch && !dmTrigger && !recovery && requester && matchingElevation(elevationSettings())?.entry.tier === "requester" && !ownerPrototype()) {
       runDir = await createOwnerRunDirectory();
       requesterLease = { requestId, leaseId, relayId: relay.id, targetId: target.id, runDir, stallMs, deadlineAt: serviceDeadline.at };
       await openRequesterLease(requesterLease);
@@ -834,6 +836,13 @@ export async function runClaimedRequest(
       return await finish({ lease_id: leaseId, outcome: "answered", duration_ms: Date.now() - deadline.receivedAt,
         answer: { action: "reply", text: reply.text, reply_to: reply.message,
           ...(caps?.rich ? { format: "plain", buttons: [], attachments: [] } : {}) } });
+    }
+    if (dmTrigger) {
+      const leaseHeld = () => acked && !leaseUnavailable && !releaseRequested && !activeDrain() && Date.now() < deadline.at;
+      if (!leaseHeld()) return await finish(declined(leaseId, "busy"));
+      const answer = await answerDmTask(relay, request, dmTrigger, caps!, deadline.at, leaseHeld);
+      if (!answer || !leaseHeld()) return await finish(declined(leaseId, "busy"));
+      return await finish({ lease_id: leaseId, outcome: "answered", duration_ms: Date.now() - deadline.receivedAt, answer });
     }
     // The member limit (§B.8): a member past it is declined, and the service's
     // fallback setting decides whether its own agent answers instead.

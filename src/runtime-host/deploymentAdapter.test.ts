@@ -718,6 +718,57 @@ printf '{"action":"activate","source":"legacy","revision":"${"a".repeat(40)}","r
     .toBe(`incumbent released hot state after 4s; activation published after 12s; deadline ${PROMOTE_ACTION_TIMEOUT_MS}`);
 });
 
+function failingAdapter(stderr: string) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-adapter-refusal-"));
+  sandboxes.push(directory);
+  const executable = path.join(directory, "adapter.sh");
+  fs.writeFileSync(executable, `#!/bin/sh
+cat >&2 <<'OUTPUT'
+${stderr}
+OUTPUT
+exit 1
+`, { mode: 0o700 });
+  return HostCommandViewerDeploymentAdapter.fromExecutable(executable, { stateFile: path.join(directory, "adapter-process.json") });
+}
+
+const LOCK_DIAGNOSTIC = `[blocking-wait] {"site":"state-write-lock","stateWait":{"callSite":"state.mirror.demotion","outcome":"success"},"durationMs":883.8}\n`;
+
+test("a failed action records its marked refusal, whatever diagnostics surround it", async () => {
+  const adapter = failingAdapter([
+    LOCK_DIAGNOSTIC.repeat(6),
+    "[deployment adapter failure] the backup worker ran past 10000 ms and was stopped",
+    LOCK_DIAGNOSTIC,
+  ].join("\n"));
+  await expect(adapter.resolveRevision("origin/main")).rejects.toThrow(
+    /^the backup worker ran past 10000 ms and was stopped$/,
+  );
+});
+
+test("an adapter that died unmarked leaves its last words in the record", async () => {
+  const adapter = failingAdapter(`${LOCK_DIAGNOSTIC.repeat(6)}error: adapter crashed while publishing`);
+  const refusal = await adapter.resolveRevision("origin/main").then(() => "", (error: Error) => error.message);
+  expect(refusal).toEndWith("error: adapter crashed while publishing");
+  expect(refusal.length).toBeLessThanOrEqual(500);
+});
+
+/* The previous release a rollback waits for may need minutes to come back. */
+test("the host gives a rollback a deadline that outlasts the previous release's restart", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-adapter-rollback-"));
+  sandboxes.push(directory);
+  const executable = path.join(directory, "adapter.sh");
+  const seen = path.join(directory, "deadline");
+  fs.writeFileSync(executable, `#!/bin/sh
+printf '%s' "$LLV_DEPLOYMENT_ADAPTER_ACTION_DEADLINE_MS" > '${seen}'
+printf '{"action":"restore","source":"legacy","revision":"${"a".repeat(40)}","releaseId":null,"artifactDigest":"${"b".repeat(64)}","stagedAt":null,"publishedAt":"2026-11-26T19:47:35.000Z","durable":true}\n'
+`, { mode: 0o700 });
+  const adapter = HostCommandViewerDeploymentAdapter.fromExecutable(executable, { stateFile: path.join(directory, "adapter-process.json") });
+  const identity = { image: "viewer:test", container: "viewer-previous", endpoint: "http://127.0.0.1:18001", revision: "a".repeat(40) };
+  await adapter.rollback(identity, identity, {
+    source: "legacy", revision: "a".repeat(40), releaseId: null, artifactDigest: "b".repeat(64), stagedAt: null,
+  });
+  expect(Number(fs.readFileSync(seen, "utf8"))).toBeGreaterThan(300_000);
+});
+
 test("promotion deadline reports the active handoff phase", async () => {
   const candidate = {
     image: "viewer:test",

@@ -12,6 +12,8 @@ export interface ArtifactMeta {
   etag: string;
   /** HTML only: the sandboxed frame URL the report renders from. */
   frame?: string;
+  /** Evidence HTML has a frame but no direct artifact bytes. */
+  frameOnly?: true;
   /** A committed file: the commit it was read at. */
   revision?: { head: string; committedAt: number; headSource: "branch" | "last-passed" };
   /** A committed file: the directory its relative links resolve against. */

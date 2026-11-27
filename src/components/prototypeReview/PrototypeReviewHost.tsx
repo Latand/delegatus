@@ -7,10 +7,11 @@ import { openOperatorDecisions } from "@/components/decisions/decisionSurface";
 import { openPrototypeReview, usePrototypeReviewJump, usePrototypeReviewNotices, type PrototypeReviewTarget } from "@/hooks/usePrototypeReview";
 import { cleanTitle } from "@/components/utils";
 import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
+import { isSecretRequestId, type SecretRequestNotice } from "@/lib/secretRequests/view";
 import type { BoardTask } from "@/lib/tasks/types";
 
 import { PrototypeReview } from "./PrototypeReview";
-import { publishPrototypeNotices } from "./prototypeReviewStore";
+import { publishPrototypeNotices, publishSecretRequestNotices } from "./prototypeReviewStore";
 
 /**
  * The page's one review surface. A card's button and the orchestrator's
@@ -20,11 +21,17 @@ import { publishPrototypeNotices } from "./prototypeReviewStore";
  * in for it (docs/design/operator-decision-forms.md). It also hands the
  * waiting notices of the page's task poll to the orchestrator's panel.
  */
-export function PrototypeReviewHost({ tasks, seatDecisions }: { tasks: readonly BoardTask[]; seatDecisions?: readonly PrototypeReviewNotice[] }) {
+export function PrototypeReviewHost({ tasks, seatDecisions, secretRequestNotices }: {
+  tasks: readonly BoardTask[];
+  seatDecisions?: readonly PrototypeReviewNotice[];
+  secretRequestNotices?: readonly SecretRequestNotice[];
+}) {
   const [target, setTarget] = useState<(PrototypeReviewTarget & { kind: "prototype-review" }) | null>(null);
   const { notices } = usePrototypeReviewNotices(tasks, undefined, seatDecisions);
   useEffect(() => { publishPrototypeNotices(notices); }, [notices]);
   useEffect(() => () => publishPrototypeNotices([]), []);
+  useEffect(() => { publishSecretRequestNotices(secretRequestNotices ?? []); }, [secretRequestNotices]);
+  useEffect(() => () => publishSecretRequestNotices([]), []);
   usePrototypeReviewJump(useCallback((next: PrototypeReviewTarget) => {
     if (next.kind === "seat-decision") { openOperatorDecisions({ project: next.project, reviewId: next.reviewId }); return; }
     setTarget(next);
@@ -32,6 +39,11 @@ export function PrototypeReviewHost({ tasks, seatDecisions }: { tasks: readonly 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const reviewId = params.get("prototypeReview"), taskId = params.get("prototypeTask"), project = params.get("project");
+    const secret = params.get("secretRequest");
+    if (project && secret && isSecretRequestId(secret)) {
+      openOperatorDecisions({ project, reviewId: secret });
+      return;
+    }
     if (!reviewId || !/^pr_[a-f0-9]{32}$/.test(reviewId)) return;
     if (taskId) openPrototypeReview({ kind: "prototype-review", taskId, reviewId });
     else if (project) openOperatorDecisions({ project, reviewId });

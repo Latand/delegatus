@@ -301,6 +301,10 @@ export interface ViewerReadinessProbe {
   now?(): number;
   /** null waits until readiness, cancellation, or positive container exit. */
   timeoutMs?: number | null;
+  /** With a bounded timeout: an exited container is one its supervisor is
+      restarting, so the wait goes on until the budget is spent. A missing
+      container still ends it. */
+  awaitRestart?: boolean;
   signal?: AbortSignal;
   reportPending?(detail: string): void;
 }
@@ -341,6 +345,12 @@ export async function waitForViewerReadiness(options: ViewerReadinessProbe): Pro
       if (!unbounded) throw error;
       options.reportPending?.(`candidate inspection unavailable: ${probeExcerpt(error instanceof Error ? error.message : "unknown error", DETAIL_CHARS)}`);
       await sleep(delayMs);
+      continue;
+    }
+    if (state === "exited" && options.awaitRestart && !unbounded) {
+      last = unavailable(options.endpoint, state);
+      if (attempt === 1) firstDetail = last.detail ?? null;
+      if (attempt < maxAttempts) await sleep(delayMs);
       continue;
     }
     if (state !== "running") {

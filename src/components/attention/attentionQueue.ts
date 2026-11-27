@@ -7,6 +7,7 @@ import type { AutoView } from "@/lib/selfUpdate/auto";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { prototypeReviewNotices } from "@/lib/prototypeReview/model";
 import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
+import type { SecretRequestNotice } from "@/lib/secretRequests/view";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
@@ -34,7 +35,8 @@ export type MobileAttentionEntry =
   | { kind: "pipeline"; id: string; row: MobileBoardPipelineRow }
   | { kind: "update"; id: string; decision: NonNullable<AutoView["decision"]> }
   /** A task's prototype review that waits for the operator's choice. */
-  | { kind: "prototype"; id: string; notice: PrototypeReviewNotice };
+  | { kind: "prototype"; id: string; notice: PrototypeReviewNotice }
+  | { kind: "secret-request"; id: string; notice: SecretRequestNotice };
 
 /** Conversations first in queue order, then the pipelines — the board's
     Needs-you order (`buildMobileBoard`), so the sheet and the section under
@@ -68,10 +70,12 @@ export function buildNeedsYouQueue(
   tasks: readonly BoardTask[] = [],
   /** The orchestrators' own open questions, which no task carries. */
   seatDecisions: readonly PrototypeReviewNotice[] = [],
+  secretRequests: readonly SecretRequestNotice[] = [],
 ): MobileAttentionEntry[] {
   const finished = finishedWorkIndex(tasks, pipelines);
   const queue = buildMobileAttentionQueue(buildAttentionQueue(files.map(file => withFinishedAttention(file, now, finished)), now), overviewPipelineRows(pipelines, now, closing));
   for (const notice of prototypeReviewNotices(tasks, seatDecisions)) queue.push({ kind: "prototype", id: notice.id, notice });
+  for (const notice of secretRequests) queue.push({ kind: "secret-request", id: notice.id, notice });
   if (decision) queue.push({ kind: "update", id: `auto-update:${decision.id}`, decision });
   return queue;
 }
@@ -105,6 +109,6 @@ export const laneFocusId = (path: string): string | null => (path.startsWith(LAN
 /** The project an entry belongs to. */
 export function attentionEntryProject(entry: MobileAttentionEntry): string {
   if (entry.kind === "update") return entry.decision.project;
-  if (entry.kind === "prototype") return entry.notice.project;
+  if (entry.kind === "prototype" || entry.kind === "secret-request") return entry.notice.project;
   return entry.kind === "conversation" ? entry.item.project : entry.row.pipeline.project;
 }

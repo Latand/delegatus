@@ -1,6 +1,9 @@
 "use client";
 
-import { Filter, MessageCircleQuestionMark, GalleryHorizontalEnd, TriangleAlert } from "lucide-react";
+import { openOperatorDecisions } from "@/components/decisions/decisionSurface";
+import { SecretTarget } from "@/components/decisions/SecretTarget";
+
+import { Filter, KeyRound, MessageCircleQuestionMark, GalleryHorizontalEnd, TriangleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { ChevronDown, ChevronRight, X } from "@/components/icons";
@@ -25,7 +28,7 @@ import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
 
 import type { MobileAttentionEntry } from "./attentionQueue";
 import { sendDismissal } from "./dismissalOverlay";
-import { needsYouDismissal, needsYouDismissibleCount, needsYouEntryRole, needsYouEntrySince, needsYouSections, prototypeNoticeAsk, formRowAsk } from "./needsYouPanel";
+import { formRowAsk, needsYouDismissal, needsYouDismissibleCount, needsYouEntryRole, needsYouEntrySince, needsYouRowText, needsYouSections, prototypeNoticeAsk } from "./needsYouPanel";
 import { NeedsYouAskText } from "./NeedsYouAskText";
 import { conversationOperatorAsk, laneOperatorAsk } from "./operatorAsk";
 import { PermissionActions } from "./PermissionActions";
@@ -134,6 +137,11 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
   const open = (entry: MobileAttentionEntry) => {
     if (entry.kind === "update") { openSelfUpdate(); return; }
     if (entry.kind === "prototype") { onOpenPrototype?.(entry.notice); return; }
+    if (entry.kind === "secret-request") {
+      onClose();
+      openOperatorDecisions({ project: entry.notice.project, reviewId: entry.notice.id });
+      return;
+    }
     if (entry.kind === "conversation") onOpenConversation(entry.item);
     else onOpenPipeline?.(entry.row);
   };
@@ -151,7 +159,8 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
     const since = needsYouEntrySince(entry);
     return since === null ? (entry.kind === "pipeline" ? entry.row.seconds : null) : Math.max(0, now - since);
   };
-  const rowTitle = (entry: MobileAttentionEntry) => (entry.kind === "update" ? t("selfUpdate.auto.decision.title") : entry.kind === "prototype" ? entry.notice.title : entry.kind === "conversation" ? cleanTitle(entry.item.file.title, 90) : entry.row.task);
+  const rowTitle = (entry: Extract<MobileAttentionEntry, { kind: "conversation" | "pipeline" }>) =>
+    entry.kind === "conversation" ? cleanTitle(entry.item.file.title, 90) : entry.row.task;
   const sections = needsYouSections(entries, current, order);
   const titled = sections.length > 1;
   const dismissible = needsYouDismissibleCount(entries);
@@ -159,6 +168,12 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
   const row = (entry: MobileAttentionEntry) => {
     // The card keeps the sheet's content gutter; a bare card ran edge to edge.
     if (entry.kind === "update") return <div key={entry.id} className="px-4 py-1"><AutoDrainDecision key={entry.decision.id} decision={entry.decision} /></div>;
+    if (entry.kind === "secret-request") return (
+      <div key={entry.id} className="flex min-w-0 items-start">
+        <div className="min-w-0 flex-1"><SecretRow entry={entry} age={laneAge(entry)} onOpen={() => open(entry)} /></div>
+        <span aria-hidden className="invisible inline-flex min-h-11 shrink-0 items-center px-3 text-label font-semibold">{t("needs.dismiss")}</span>
+      </div>
+    );
     /* A prototype review leaves the list by its choice, so the row has no «Dismiss». */
     /* Its chevron stands in the same column as theirs: while other rows of
        the sheet carry «Dismiss», an unseen one holds the place they give to
@@ -383,6 +398,33 @@ function ConversationRow({ item, now, current, onOpen, role }: { item: Attention
       {row}
       <PermissionActions file={item.file} size="touch" />
     </div>
+  );
+}
+
+/** A secret request: one line with its kind, what it writes to and its age. */
+function SecretRow({ entry, age, onOpen }: { entry: Extract<MobileAttentionEntry, { kind: "secret-request" }>; age: number | null; onOpen: () => void }) {
+  const { t } = useLocale();
+  const { title, label } = needsYouRowText(t, entry);
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-label={t("decisions.expandAria", { title: t("secretRequest.titleFor", { target: title }) })}
+      data-needs-you-row={entry.id}
+      data-attention-row={entry.id}
+      data-mobile2-row="secret-request"
+      className={ROW}
+    >
+      <span aria-hidden className="inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px] bg-accent text-white">
+        <KeyRound className="h-[11px] w-[11px]" />
+      </span>
+      <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+        <span data-attention-decision className="shrink-0 text-caption font-bold uppercase tracking-[0.06em] text-accent">{label}</span>
+        <SecretTarget target={title} className="flex-1 text-body font-semibold text-primary" data-needs-you-title-line="" />
+        {age === null ? null : <span data-attention-age className="shrink-0 text-label text-muted">{fmtAgeSeconds(age)}</span>}
+      </span>
+      <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
+    </button>
   );
 }
 

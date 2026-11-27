@@ -153,3 +153,9 @@ test("only the observed leading invisible prefix of a local absolute path is nor
   for (const value of ["\u200Bhttps://example.com/a%20b.md", "\u200B//example.com/a.md", "\u200Brelative.md", "\u2060/workspace/a.md"]) expect(resolveLink(value)).toBeNull();
   expect(resolveLink("https://example.com/a%20b.md")).toBeNull();
 });
+
+test("native Windows drive and UNC paths resolve as local file links", () => {
+  expect(resolveLink("R:\\workspace\\evidence\\report.html")).toMatchObject({ kind: "file", path: "R:\\workspace\\evidence\\report.html" });
+  expect(resolveLink("\\\\server\\share\\evidence\\report.html")).toMatchObject({ kind: "file", path: "\\\\server\\share\\evidence\\report.html" });
+  expect(resolveLink("R:\\workspace\\evidence\\report.html#summary")).toMatchObject({ kind: "file", path: "R:\\workspace\\evidence\\report.html", anchor: "summary" });
+});

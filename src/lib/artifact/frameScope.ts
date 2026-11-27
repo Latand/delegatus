@@ -1,4 +1,5 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import path from "node:path";
 import { sessionIsLive } from "@/lib/team/sessions";
 import { existingTeamStore } from "@/lib/team/store";
 
@@ -12,7 +13,8 @@ import { existingTeamStore } from "@/lib/team/store";
  * directory — the report's own — and is minted only by the same-origin meta
  * read of /api/artifact, so a page that has not been handed a frame URL
  * cannot build one, and a frame that has been handed one reaches nothing
- * outside its report's directory.
+ * outside its report's directory. The signed kind binds the grant to the
+ * admission policy that allowed the report.
  *
  * The key lives only in this process: a restart invalidates every scope, and
  * the preview simply mints a new one on its next open.
@@ -35,18 +37,31 @@ function sign(payload: string): string {
   return createHmac("sha256", frameKey()).update(payload).digest("base64url");
 }
 
-/** A signed directory, expiry and minting session (or `-` for a solo install). */
-export function mintFrameScope(directory: string, now: number = Date.now(), sessionId: string | null = null): string {
-  const payload = `${Buffer.from(directory, "utf8").toString("base64url")}.${(now + FRAME_SCOPE_TTL_MS).toString(36)}.${sessionId ?? "-"}`;
+interface FrameGrant {
+  directory: string;
+  kind: "project" | "evidence";
+  sessionId: string | null;
+  workspaceProject: string | null;
+  evidenceRoot: string | null;
+  evidenceRootPath: string | null;
+}
+
+/** A signed canonical directory, admission kind, expiry and minting session (or `-` for a solo install). */
+export function mintFrameScope(directory: string, now: number = Date.now(), sessionId: string | null = null, kind: FrameGrant["kind"] = "project", workspaceProject: string | null = null, evidenceRoot: string | null = null, evidenceRootPath: string | null = null): string {
+  const encodedProject = workspaceProject === null ? "-" : Buffer.from(workspaceProject, "utf8").toString("base64url");
+  const encodedRoot = evidenceRoot === null ? "-" : Buffer.from(evidenceRoot, "utf8").toString("base64url");
+  const encodedRootPath = evidenceRootPath === null ? "-" : Buffer.from(evidenceRootPath, "utf8").toString("base64url");
+  const payload = `${Buffer.from(directory, "utf8").toString("base64url")}.${(now + FRAME_SCOPE_TTL_MS).toString(36)}.${sessionId ?? "-"}.${kind}.${encodedProject}.${encodedRoot}.${encodedRootPath}`;
   return `${payload}.${sign(payload)}`;
 }
 
-/** The directory a scope grants, or null when it is forged, altered or expired. */
-export function verifyFrameScope(scope: string, now: number = Date.now()): string | null {
+/** The verified grant, or null when it is forged, altered or expired. */
+export function verifyFrameScope(scope: string, now: number = Date.now()): FrameGrant | null {
   const parts = scope.split(".");
-  if (parts.length !== 4) return null;
-  const [dir, expiry, sessionId, signature] = parts as [string, string, string, string];
-  const expected = Buffer.from(sign(`${dir}.${expiry}.${sessionId}`));
+  if (parts.length !== 8) return null;
+  const [dir, expiry, sessionId, kind, encodedProject, encodedRoot, encodedRootPath, signature] = parts as [string, string, string, string, string, string, string, string];
+  if (kind !== "project" && kind !== "evidence") return null;
+  const expected = Buffer.from(sign(`${dir}.${expiry}.${sessionId}.${kind}.${encodedProject}.${encodedRoot}.${encodedRootPath}`));
   const given = Buffer.from(signature);
   if (expected.length !== given.length || !timingSafeEqual(expected, given)) return null;
   const expiresAt = parseInt(expiry, 36);
@@ -61,7 +76,12 @@ export function verifyFrameScope(scope: string, now: number = Date.now()): strin
     }
   } catch { return null; } // Unreadable authority grants no file access.
   const directory = Buffer.from(dir, "base64url").toString("utf8");
-  return directory.startsWith("/") ? directory : null;
+  const workspaceProject = encodedProject === "-" ? null : Buffer.from(encodedProject, "base64url").toString("utf8");
+  const evidenceRoot = encodedRoot === "-" ? null : Buffer.from(encodedRoot, "base64url").toString("utf8");
+  const evidenceRootPath = encodedRootPath === "-" ? null : Buffer.from(encodedRootPath, "base64url").toString("utf8");
+  return path.isAbsolute(directory) || path.win32.isAbsolute(directory)
+    ? { directory, kind, sessionId: sessionId === "-" ? null : sessionId, workspaceProject, evidenceRoot, evidenceRootPath }
+    : null;
 }
 
 /** The frame URL for `fileName` inside the scoped directory. */
@@ -93,4 +113,19 @@ export function frameMime(ext: string, fallback: string): string {
  * scripts cannot read the viewer's DOM, storage or cookies, and every request
  * it makes to the viewer's API arrives cross-origin and is refused.
  */
-export const FRAME_CSP = "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals";
+export const FRAME_SANDBOX = "allow-scripts";
+export const PROJECT_FRAME_SANDBOX = "allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals";
+
+/** Evidence pages may load only resources routed through their signed directory. */
+export function frameCsp(scope: string, origin: string, evidence: boolean, allowBase = false, inlineImagesOnly = false): string {
+  const sandbox = `sandbox ${evidence ? FRAME_SANDBOX : PROJECT_FRAME_SANDBOX}`;
+  if (!evidence) return sandbox;
+  const baseRoot = `${origin}/api/artifact/frame/${scope}/`;
+  /* Chromium rejects path-bearing IPv6 host sources. For literal IPv6 loopback,
+     CSP constrains the authority and the signed frame handler enforces the
+     directory path; every request remains on the authority that minted it. */
+  let resourceRoot = baseRoot;
+  try { if (new URL(origin).hostname.includes(":")) resourceRoot = origin; } catch { /* caller validates origin */ }
+  if (inlineImagesOnly) return `${sandbox}; default-src 'none'; base-uri 'none'; object-src 'none'; frame-src 'none'; child-src 'none'; form-action 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src 'none'; connect-src 'none'`;
+  return `${sandbox}; default-src 'none'; base-uri ${allowBase ? baseRoot : "'none'"}; object-src 'none'; frame-src 'none'; child-src 'none'; form-action 'none'; script-src 'none'; style-src ${resourceRoot} 'unsafe-inline'; img-src ${resourceRoot} data:; font-src ${resourceRoot} data:; media-src ${resourceRoot}; connect-src ${resourceRoot}`;
+}
