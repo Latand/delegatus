@@ -45,7 +45,7 @@ test("the route caps unique ids at 400 and keeps known empty tasks",async()=>{
   const body=await (await get([tasks[0]!.id,...tasks.map(t=>t.id)].join(","))).json();
   expect(Object.keys(body.tasks)).toHaveLength(400); expect(body.tasks["task-0"]).toEqual({providers:[]}); expect(body.tasks["task-400"]).toBeUndefined();
 });
-test("owners see account details and members see provider headlines only",async()=>{
+test("owners see account details and members see the same provider estimates",async()=>{
   const team=teamStore();
   const cookies:string[]=[];
   for(const [id,role] of [["m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","owner"],["m_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","member"]] as const) {
@@ -57,13 +57,18 @@ test("owners see account details and members see provider headlines only",async(
   createWorkspace(team, team.owner()!, { id: workspaceId, name: "Spend fixture", projects: ["fixture"] });
   team.putWorkspaceMember(workspaceId, "m_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "member", team.owner()!.id, new Date(now).toISOString());
   saveTasks([task("a")]); const store=ActivityStore.open();
-  store.db.query("INSERT INTO task_limit_spend VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run("a","codex:a","codex",1000,0,10,10,4,null,null,null,null,1,2,null,now);
-  store.db.query("INSERT INTO task_limit_spend VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run("a","claude:a","claude",2000,0,10,10,6,null,null,null,null,1,2,null,now); store.close();
+  store.db.query("INSERT INTO task_limit_spend(task,account,engine,tokens,unpriced_tokens,weight,rated_weight,weekly_pp,window_start,window_pp,session_start,session_pp,first_hour,last_hour,floor,computed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run("a","codex:a","codex",1000,0,10,10,4,null,null,null,null,1,2,null,now);
+  store.db.query(`INSERT INTO task_limit_spend
+    (task,account,engine,tokens,unpriced_tokens,weight,rated_weight,weekly_pp,first_hour,last_hour,computed_at,api_usd,api_priced_tokens)
+    VALUES('a','claude:a','claude',2000,0,10,10,6,1,2,?,0.4,2000)`).run(now);
+  store.close();
   const owner=await (await get("a",{cookie:`llv_member=${cookies[0]}`})).json();
   expect(owner.tasks.a.providers.map((p:{engine:string})=>p.engine)).toEqual(["claude","codex"]);
   expect(owner.tasks.a.providers[0].accounts).toHaveLength(1);
   const member=await (await get("a",{cookie:`llv_member=${cookies[1]}`})).json();
-  expect(member.tasks.a.providers[0].accounts).toBeNull(); expect(JSON.stringify(member)).not.toContain('"key"');
+  expect(member.tasks.a.providers[0]).toEqual({ ...owner.tasks.a.providers[0], accounts: null });
+  expect(member.tasks.a.providers[0]).toMatchObject({ weeklyPp: 6, basis: "measured", tokens: 2000, apiUsd: 0.4, bound: "approx" });
+  expect(JSON.stringify(member)).not.toContain('"key"');
 });
 test("an unreadable store gives a generic failure with no private paths",async()=>{
   const state=process.env.LLV_STATE_DIR; process.env.LLV_STATE_DIR=path.join(sandbox,"corrupt");
