@@ -13,6 +13,7 @@ import { claimInstall, signOutSession } from "@/lib/team/members";
 import { resetTeamStoreForTests, teamStore } from "@/lib/team/store";
 import { createWorkspace } from "@/lib/team/workspaces";
 import { conversationCatalogSnapshot, replaceConversationCatalog } from "@/lib/scanner/conversationCatalog";
+import { resetProjectCatalogStoreForTests } from "@/lib/scanner/projectCatalogStore";
 import { resetStateReadonlyReaderForTests } from "@/lib/state/sqliteStateStore";
 
 import { readEvidenceHtml } from "./readEvidenceHtml";
@@ -42,6 +43,7 @@ beforeEach(() => {
 afterEach(async () => {
   resetTeamStoreForTests();
   for (const response of responses.splice(0)) if (response.body && !response.body.locked) await response.body.cancel();
+  resetProjectCatalogStoreForTests();
   resetStateReadonlyReaderForTests();
   if (savedState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = savedState;
   process.env.HOME = savedHome;
