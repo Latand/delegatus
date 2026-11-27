@@ -9,10 +9,12 @@ import { partitionCrownedSummaries } from "@/components/projectModel";
 import {
   createManualProject,
   projectCurationSnapshot,
+  reserveProjectStartName,
   resetProjectCurationForTests,
   setProjectCrown,
 } from "./curation";
 import { projectIdentityFromDirectory, projectIdentityFromRepositoryRoot } from "./identity";
+import { workspaceNameKey } from "@/lib/team/contract";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-project-curation-"));
 const ORIGINAL_STATE = process.env.LLV_STATE_DIR;
@@ -109,6 +111,34 @@ test("duplicate identities are refused, in the store and against the visible cat
   expect(clash).toEqual({ ok: false, code: "DUPLICATE_PROJECT", message: expect.any(String) });
 
   resetProjectCurationForTests();
+  expect(projectCurationSnapshot().manualProjects).toHaveLength(1);
+});
+
+test("parallel project starts reserve one normalized name before the losing folder is created", async () => {
+  const parent = path.join(SANDBOX, "parallel-starts");
+  fs.mkdirSync(parent);
+  const roots = [path.join(parent, "same-name"), path.join(parent, "same-name-copy")];
+  const claims = await Promise.all(roots.map((root, index) => Promise.resolve(reserveProjectStartName({
+    scope: "workspace-fixture", key: workspaceNameKey("Shared Project"),
+    project: projectIdentityFromDirectory(root)!.project, operationId: `operation-${index}`,
+    assertCurrent: () => undefined,
+  }))));
+  expect(claims.filter(Boolean)).toHaveLength(1);
+  const winner = claims[0] ? 0 : 1;
+  fs.mkdirSync(roots[winner]!);
+  resetProjectCurationForTests();
+  expect(reserveProjectStartName({ scope: "workspace-fixture", key: workspaceNameKey("Shared Project"),
+    project: projectIdentityFromDirectory(roots[winner]!)!.project, operationId: `operation-${winner}`,
+    assertCurrent: () => undefined })).toBe(true);
+  expect(reserveProjectStartName({ scope: "workspace-fixture", key: workspaceNameKey("Shared Project"),
+    project: projectIdentityFromDirectory(roots[1 - winner]!)!.project, operationId: "late-original-operation",
+    assertCurrent: () => undefined })).toBe(false);
+  const created = createManualProject("Shared Project", roots[winner]!, new Set(), {
+    projectStart: { id: `operation-${winner}`, assertCurrent: () => undefined,
+      nameReservation: { scope: "workspace-fixture", key: workspaceNameKey("shared project") } },
+  });
+  expect(created.ok).toBe(true);
+  expect(fs.existsSync(roots[1 - winner]!)).toBe(false);
   expect(projectCurationSnapshot().manualProjects).toHaveLength(1);
 });
 

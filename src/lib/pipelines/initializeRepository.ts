@@ -254,11 +254,14 @@ async function installPreparedRepository(root: string, stableRoot: string, prepa
   try {
     const metadata = await fs.lstat(path.join(stableRoot, ".git"));
     if (!metadata.isDirectory()) throw new Error("project Git metadata changed");
+    // Once any .git entry exists, its marker is authoritative. A missing,
+    // unreadable, or foreign marker must never be treated as permission to
+    // continue installing our prepared repository over somebody else's Git.
     return await installedPreparation(root, manifest, assertCurrent);
   } catch (error) {
-    if (!missing(error)) throw error;
-    // The metadata may exist without this operation's marker. Only the probe
-    // below, against the real root, allows installation of a prepared baseline.
+    if (!missing(error) || (error as NodeJS.ErrnoException).path !== path.join(stableRoot, ".git")) throw error;
+    // Only an absent root .git entry permits installation. ENOENT from the
+    // marker, manifest, or any nested probe remains a refusal.
   }
   if (await git(prepared, ["rev-parse", "--verify", "HEAD"], assertCurrent) !== manifest.initialization.commit)
     throw new Error("project initialization preparation changed");
@@ -271,13 +274,23 @@ async function installPreparedRepository(root: string, stableRoot: string, prepa
     assertCurrent();
     const suffix = Buffer.from(item.suffix);
     if (original === null) {
-      if (!current) await fs.writeFile(absolute, suffix, { flag: "wx" });
+      if (!current) {
+        await assertSafeRepositoryRoot(root);
+        await assertNoRepositoryAncestor(root);
+        assertCurrent();
+        await fs.writeFile(absolute, suffix, { flag: "wx" });
+      }
       else if (!current.data.equals(suffix)) throw new Error("project gitignore changed");
       continue;
     }
     if (!current || current.dev !== original.dev || current.ino !== original.ino
       || digest(current.data.subarray(0, original.size)) !== original.digest) throw new Error("project gitignore changed");
-    if (current.size === original.size) await appendIgnore(stableRoot, { ...original, relative: item.relative }, item.suffix, assertCurrent);
+    if (current.size === original.size) {
+      await assertSafeRepositoryRoot(root);
+      await assertNoRepositoryAncestor(root);
+      assertCurrent();
+      await appendIgnore(stableRoot, { ...original, relative: item.relative }, item.suffix, assertCurrent);
+    }
     else if (!current.data.subarray(original.size).equals(suffix)) throw new Error("project gitignore changed");
   }
   await assertNoRepositoryAncestor(root);
@@ -308,6 +321,25 @@ export async function recoverProjectRepository(root: string, operation: Reposito
     return await withFileTransaction(path.join(stableRoot, ".delegatus-initialization"), "project initialization is already in progress", () =>
       installPreparedRepository(root, stableRoot, prepared, manifest, operation.assertCurrent));
   } finally { await directory?.close(); }
+}
+
+/** Retire only the operation's verified preparation after its installed Git
+ * marker and commit prove that the target repository is complete. */
+export async function retirePreparedRepository(root: string, operation: RepositoryInitializationOperation): Promise<void> {
+  if (!operation.prepared) return;
+  const prepared = preparedName(root, operation.id);
+  let observed: Awaited<ReturnType<typeof fs.lstat>>;
+  try { observed = await fs.lstat(prepared); }
+  catch (error) { if (missing(error)) return; throw error; }
+  if (!observed.isDirectory() || observed.dev !== operation.prepared.directory.dev || observed.ino !== operation.prepared.directory.ino) return;
+  const saved = await readFile(prepared, PREPARED_MANIFEST, 8 * 1024 * 1024);
+  if (digest(saved.data) !== operation.prepared.digest) return;
+  const manifest = JSON.parse(saved.data.toString("utf8")) as PreparedRepository;
+  if (manifest.id !== operation.id) return;
+  const installed = await installedPreparation(root, manifest, operation.assertCurrent);
+  if (!installed.ok) return;
+  operation.assertCurrent();
+  await fs.rm(prepared, { recursive: true, force: false });
 }
 
 export async function readRepositoryInitialization(root: string): Promise<RepositoryInitialization | undefined> {

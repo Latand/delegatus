@@ -14,7 +14,7 @@ import { orchestratorRelayPayload, resolveOrchestratorRelay } from "@/lib/orches
 import { activeSeatCommandDependencies, executeOrchestratorSeatRequest, reconcileOrchestratorSeatLaunch } from "@/lib/orchestrator/seatCommand";
 import { orchestratorSeatForOrUnknown } from "@/lib/orchestrator/seats";
 import { operatorTimeZone } from "@/lib/operator/settings";
-import { assertSafeRepositoryRoot, preparePipelineRepository, recoverProjectRepository, type RepositoryInitializationOperation } from "@/lib/pipelines/initializeRepository";
+import { assertSafeRepositoryRoot, preparePipelineRepository, recoverProjectRepository, retirePreparedRepository, type RepositoryInitializationOperation } from "@/lib/pipelines/initializeRepository";
 import { preflightPipelineRepo } from "@/lib/pipelines/preflight";
 import { loadPipelinesForTask } from "@/lib/pipelines/store";
 import { captureProcessIdentity, sameRecordedProcessIdentity } from "@/lib/processIdentity";
@@ -36,7 +36,7 @@ import { workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { canonicalProject } from "./aliases";
-import { createManualProject, projectStartRegistration } from "./curation";
+import { createManualProject, projectStartRegistration, reserveProjectStartName } from "./curation";
 import { boundedTarget } from "./directorySuggestions";
 import { folderName } from "./folderName";
 import { isCanonicalProjectId, localRepositoryProjectId, repositoryRootForPath } from "./identity";
@@ -329,6 +329,22 @@ export async function advanceProjectStart(store: ProjectStartReceiptStore, key: 
     if (!sameRecordedProcessIdentity(binding.owner, owner)) await save({}, release, true);
     assert();
     const { root, originalProject, input, operationId, source } = checkpoint;
+    if (input.target.kind === "new_project") {
+      const displayName = cleanWorkspaceName(input.target.name);
+      if (!displayName) throw new ProjectStartRefusal("INVALID_NAME", 400, "target.name");
+      const nameKey = workspaceNameKey(displayName);
+      const reserved = reserveProjectStartName({
+        scope: source.workspace?.workspaceId ?? "global", key: nameKey,
+        project: originalProject, operationId, assertCurrent: assert,
+      });
+      if (!reserved) throw new ProjectStartRefusal("DUPLICATE_NAME");
+      assert();
+    }
+    if (observed(checkpoint.effects.repository) && checkpoint.prepared) {
+      await retirePreparedRepository(root, {
+        id: operationId, prepared: checkpoint.prepared, assertCurrent: assert, recordPrepared: async () => undefined,
+      });
+    }
     if (!observed(checkpoint.effects.folder)) {
       effect = "folder";
       if (checkpoint.directory) {
@@ -363,8 +379,11 @@ export async function advanceProjectStart(store: ProjectStartReceiptStore, key: 
           await mark("registration", "dispatching");
           assert();
           if (projectStartIdentity(root) !== originalProject) throw new ProjectStartRefusal("target_changed");
+          const displayName = cleanWorkspaceName(input.target.name);
+          if (!displayName) throw new ProjectStartRefusal("INVALID_NAME", 400, "target.name");
           const result = createManualProject(input.target.name, root, new Set(workspaceCatalog().projects.map(row => row.project)), {
-            allowedRoots: suggestionRoots(), projectStart: { id: operationId, assertCurrent: assert },
+            allowedRoots: suggestionRoots(), projectStart: { id: operationId, assertCurrent: assert,
+              nameReservation: { scope: source.workspace?.workspaceId ?? "global", key: workspaceNameKey(displayName) } },
           });
           if (!result.ok) throw new ProjectStartRefusal(result.code);
         }
@@ -401,6 +420,7 @@ export async function advanceProjectStart(store: ProjectStartReceiptStore, key: 
         : dispatched ? await recoverProjectRepository(root, operation)
           : await preparePipelineRepository(root, true, {}, operation);
       assert();
+      operation.prepared = checkpoint.prepared;
       if (!ready) throw uncertain();
       if (!ready.ok) {
         if (checkpoint.prepared) throw uncertain();
@@ -413,6 +433,7 @@ export async function advanceProjectStart(store: ProjectStartReceiptStore, key: 
       const complete = { ...checkpoint, project };
       assertProjectStartTarget(complete);
       await save({ project, phase: "identity", effects: { ...checkpoint.effects, repository: checkpoint.prepared ? "observed" : "reused" } });
+      if (checkpoint.prepared) await retirePreparedRepository(root, operation);
     }
 
     const project = checkpoint.project!;
@@ -458,15 +479,21 @@ export async function advanceProjectStart(store: ProjectStartReceiptStore, key: 
         await mark("seat", "reused");
       } else {
         const clientRequestId = projectStartKey("seat", operationId);
-        if (checkpoint.effects.seat === "not-started") {
-          await mark("seat", "dispatching");
+        let receipt = agentRegistry().spawnReceiptForClientAttempt(clientRequestId);
+        const currentSlot = orchestratorSeatForOrUnknown(project);
+        const recoverPendingIntent = !receipt && !currentSlot?.active
+          && currentSlot?.pending?.intent.clientRequestId === clientRequestId
+          && currentSlot.pending.intent.error === null;
+        if (checkpoint.effects.seat === "not-started" || recoverPendingIntent) {
+          if (checkpoint.effects.seat === "not-started") await mark("seat", "dispatching");
           const assertSeatAdmission = () => {
             assert();
             if (checkFreshSeat(project) !== checkpoint.runtimeDigest) throw new ProjectStartRefusal("role_changed");
           };
           assertSeatAdmission();
           const slot = orchestratorSeatForOrUnknown(project);
-          if (!slot || slot.active || slot.pending && !slot.pending.intent.error) throw new ProjectStartRefusal("already_designated");
+          if (!slot || slot.active || slot.pending && !slot.pending.intent.error
+            && slot.pending.intent.clientRequestId !== clientRequestId) throw new ProjectStartRefusal("already_designated");
           const result = await executeOrchestratorSeatRequest({
             project, cwd: root, mandate: checkpoint.mandate, promptVersion: checkpoint.mandateVersion, clientRequestId,
           }, activeSeatCommandDependencies(),
@@ -475,9 +502,9 @@ export async function advanceProjectStart(store: ProjectStartReceiptStore, key: 
           assert();
           if (result.status >= 400 && result.body.admission === "refused")
             throw new ProjectStartRefusal(safeCode(result.body.code, "seat_refused"), result.status);
+          receipt = agentRegistry().spawnReceiptForClientAttempt(clientRequestId);
         }
         const registry = agentRegistry();
-        const receipt = registry.spawnReceiptForClientAttempt(clientRequestId);
         if (receipt?.state === "failed" && receipt.rejection) throw new ProjectStartRefusal(safeCode(receipt.rejection.code, "seat_refused"));
         const slot = orchestratorSeatForOrUnknown(project);
         const intent = slot?.active ?? slot?.pending;
@@ -563,11 +590,17 @@ export async function advanceProjectStart(store: ProjectStartReceiptStore, key: 
     const reason = error instanceof ProjectStartRefusal ? error : new ProjectStartRefusal(isMissing(error) ? "project_start_custody_unavailable" : "project_start_interrupted");
     const unknown = ["project_start_custody_unavailable", "project_start_deadline", "project_start_interrupted"].includes(reason.code);
     const effects = { ...checkpoint.effects };
+    const seatKey = projectStartKey("seat", checkpoint.operationId);
+    const currentSeat = effect === "seat" && !agentRegistry().spawnReceiptForClientAttempt(seatKey)
+      ? orchestratorSeatForOrUnknown(checkpoint.project ?? checkpoint.originalProject)
+      : null;
+    const retryPendingSeatIntent = Boolean(currentSeat && !currentSeat.active
+      && currentSeat.pending?.intent.clientRequestId === seatKey && currentSeat.pending.intent.error === null);
     // A launch/dispatch window keeps its uncertainty even if current
     // authority positively refuses further work.
     if (effect && effects[effect] === "dispatching") effects[effect] = unknown || ["authority_changed", "target_changed", "workspace_forbidden"].includes(reason.code) ? "unknown" : "refused";
     await save({
-      nextAt: null, disposition: unknown ? "unknown" : "partial", effects,
+      nextAt: retryPendingSeatIntent ? Date.now() : null, disposition: unknown ? "unknown" : "partial", effects,
       cause: refusalDetails(reason), ...(effects.delivery === "unknown" ? { arrival: "unknown" } : {}),
     }, release);
   }

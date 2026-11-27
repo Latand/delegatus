@@ -17,7 +17,7 @@ import { realProvisionExec } from "./git";
 import { realExec } from "@/lib/workflows/provision";
 import { POST as preflight } from "@/app/api/pipelines/preflight/route";
 import {
-  preparePipelineRepository, recoverProjectRepository, type RepositoryInitializationOperation,
+  preparePipelineRepository, recoverProjectRepository, retirePreparedRepository, type RepositoryInitializationOperation,
 } from "./initializeRepository";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-init-"));
@@ -75,8 +75,13 @@ test.each(["prepared", "ignore", "installed"] as const)("project start recovers 
   expect(fs.existsSync(path.join(dir, ".git"))).toBe(stopAfter === "installed");
   expect(fs.readFileSync(path.join(dir, ".gitignore"), "utf8") === original).toBe(stopAfter !== "installed");
   resume = true;
+  const peerFile = path.join(path.dirname(dir), "peer-owned.txt");
+  fs.writeFileSync(peerFile, "keep peer data\n");
   const recovered = await recoverProjectRepository(dir, { ...operation, prepared: recorded });
   expect(recovered).toMatchObject({ ok: true, repoDir: dir });
+  await retirePreparedRepository(dir, { ...operation, prepared: recorded });
+  expect(fs.existsSync(path.join(path.dirname(dir), `.delegatus-initialization-${operation.id}`))).toBe(false);
+  expect(fs.readFileSync(peerFile, "utf8")).toBe("keep peer data\n");
   for (const filename of [path.join(dir, ".gitignore"), path.join(nested, ".gitignore")]) {
     const actual = fs.readFileSync(filename, "utf8");
     expect(actual.startsWith(original)).toBe(true);
@@ -84,6 +89,36 @@ test.each(["prepared", "ignore", "installed"] as const)("project start recovers 
   }
   expect(git(dir, "rev-list", "--count", "HEAD")).toBe("1");
   expect(git(dir, "ls-tree", "-r", "--name-only", "HEAD")).not.toContain("nested/.env");
+});
+
+test.each(["root", "ancestor"] as const)("prepared recovery preserves foreign Git and ignore files when a repository appears at the %s", async location => {
+  const container = path.join(root, `conflict-${++serial}`);
+  fs.mkdirSync(container);
+  const dir = path.join(container, "project");
+  fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, "readme.txt"), "Project baseline\n");
+  const ignore = path.join(dir, ".gitignore");
+  fs.writeFileSync(ignore, "keep-this-rule/\n");
+  const foreignRoot = location === "root" ? dir : container;
+  const gitPath = path.join(foreignRoot, ".git");
+  let recorded: RepositoryInitializationOperation["prepared"] = null;
+  const operation: RepositoryInitializationOperation = {
+    id: (location === "root" ? "d" : "e").repeat(64), prepared: null,
+    assertCurrent: () => undefined,
+    recordPrepared: async value => {
+      recorded = value;
+      fs.mkdirSync(gitPath, { recursive: true });
+      fs.writeFileSync(path.join(gitPath, "foreign-marker"), "owned elsewhere\n");
+    },
+  };
+  expect((await preparePipelineRepository(dir, true, {}, operation)).ok).toBe(false);
+  const beforeGit = fs.readFileSync(path.join(gitPath, "foreign-marker"));
+  const beforeIgnore = fs.readFileSync(ignore);
+  expect(recorded).not.toBeNull();
+  await expect(recoverProjectRepository(dir, { ...operation, prepared: recorded })).rejects.toThrow();
+  expect(fs.readFileSync(path.join(gitPath, "foreign-marker"))).toEqual(beforeGit);
+  expect(fs.readFileSync(ignore)).toEqual(beforeIgnore);
+  expect(fs.existsSync(path.join(dir, ".git", "HEAD"))).toBe(false);
 });
 
 test("A: board eligibility is read-only; creation initializes main and reports its safe baseline", async () => {

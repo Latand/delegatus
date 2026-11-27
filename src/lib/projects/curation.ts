@@ -41,6 +41,7 @@ export type CreateProjectFailure =
   | "MISSING_DIRECTORY"
   | "MKDIR_FAILED"
   | "DUPLICATE_PROJECT"
+  | "DUPLICATE_NAME"
   | "STORE_ERROR";
 
 export interface CreateProjectOptions {
@@ -52,7 +53,7 @@ export interface CreateProjectOptions {
       the route always passes them, so what can be created is exactly what can
       be offered (issue #1223). */
   allowedRoots?: readonly string[];
-  projectStart?: { id: string; assertCurrent(): void };
+  projectStart?: { id: string; assertCurrent(): void; nameReservation?: { scope: string; key: string } };
 }
 
 export type CreateProjectResult =
@@ -73,6 +74,20 @@ export function projectCurationSnapshot(): ProjectCurationSnapshot {
 export function projectStartRegistration(project: string, id: string): ManualProject | null {
   const row = projectCurationStore.readRow(curationFile(), `manual:${project}`)?.value as { entry: ManualProject; projectStartId?: string } | undefined;
   return row?.projectStartId === id ? row.entry : null;
+}
+
+/** Reserve a normalized start name before its operation creates a directory.
+ * The row shares the curation transaction with registration, so concurrent
+ * starts cannot both pass this check and create separate folders. */
+export function reserveProjectStartName(input: { scope: string; key: string; project: string; operationId: string; assertCurrent(): void }): boolean {
+  const rowKey = `start-name:${input.scope}:${input.key}`;
+  return projectCurationStore.patchRows(curationFile(), 2, tx => {
+    const held = (tx.get(rowKey)?.value ?? null) as { project?: unknown; operationId?: unknown } | null;
+    if (held && (held.project !== input.project || held.operationId !== input.operationId)) return false;
+    input.assertCurrent();
+    tx.put({ key: rowKey, value: { project: input.project, operationId: input.operationId } });
+    return true;
+  });
 }
 
 /** Crown or uncrown one project in a serialized transaction. */
@@ -155,10 +170,18 @@ export function createManualProject(
   }
   const entry: ManualProject = { project: identity.project, displayName, root: repositoryRoot ?? resolved, createdAt: Math.floor(Date.now() / 1000) };
   try {
-    return projectCurationStore.patchRows<CreateProjectResult>(curationFile(), 2, tx => {
+    return projectCurationStore.patchRows<CreateProjectResult>(curationFile(), options.projectStart?.nameReservation ? 4 : 2, tx => {
       const rowKey = `manual:${identity.project}`;
       if (existingProjects.has(identity.project) || tx.get(rowKey)) return { ok: false, code: "DUPLICATE_PROJECT", message: "a project with this identity already exists" };
       options.projectStart?.assertCurrent();
+      const reservation = options.projectStart?.nameReservation;
+      const reservationKey = reservation && `start-name:${reservation.scope}:${reservation.key}`;
+      if (reservationKey) {
+        const held = (tx.get(reservationKey)?.value ?? null) as { project?: unknown; operationId?: unknown } | null;
+        if (held && (held.project !== identity.project || held.operationId !== options.projectStart?.id))
+          return { ok: false, code: "DUPLICATE_NAME", message: "a project with this name is already registered in the selected scope" };
+        tx.put({ key: reservationKey, value: { project: identity.project, operationId: options.projectStart!.id } });
+      }
       tx.put({ key: rowKey, value: { entry, order: Date.now(), ...(options.projectStart ? { projectStartId: options.projectStart.id } : {}) } });
       return { ok: true, entry };
     });

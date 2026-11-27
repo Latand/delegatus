@@ -8,7 +8,7 @@ import type { DocumentRow, LegacyDocumentStore } from "@/lib/state/legacyDocumen
 
 export type WorktreeMapping = { repo: string; worktree: string };
 export type AliasDocument = { aliases: Record<string, string>; displayNames: Record<string, string> };
-export type CurationDocument = { crowned: string[]; manualProjects: { project: string; displayName: string; root: string; createdAt: number }[] };
+export type CurationDocument = { crowned: string[]; manualProjects: { project: string; displayName: string; root: string; createdAt: number }[]; startNames: Record<string, { project: string; operationId: string }> };
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Project state is unreadable");
   return value as Record<string, unknown>;
@@ -62,7 +62,7 @@ export const worktreeMapStore = smallStore<Record<string, WorktreeMapping>>({
   }, fromRows: rows => Object.fromEntries(rows.map(r => [r.key, r.value as WorktreeMapping])), toFile: value => value,
 });
 export const projectCurationStore = smallStore<CurationDocument>({
-  collection: "project_curation", empty: () => ({ crowned: [], manualProjects: [] }),
+  collection: "project_curation", empty: () => ({ crowned: [], manualProjects: [], startNames: {} }),
   parse: raw => {
     const value = versioned(raw);
     if (!Array.isArray(value.crowned) || value.crowned.some(v => typeof v !== "string" || !v.trim()) || !Array.isArray(value.manualProjects)) throw new Error("Project curation is unreadable");
@@ -71,12 +71,19 @@ export const projectCurationStore = smallStore<CurationDocument>({
       if ([row.project, row.displayName, row.root].some(v => typeof v !== "string" || !v.trim()) || typeof row.createdAt !== "number" || !Number.isFinite(row.createdAt)) throw new Error("Project curation is unreadable");
       return row as CurationDocument["manualProjects"][number];
     });
-    return { crowned: [...new Set(value.crowned)] as string[], manualProjects };
+    const startNames = value.startNames === undefined ? {} : object(value.startNames) as CurationDocument["startNames"];
+    if (Object.entries(startNames).some(([key, row]) => !key || !row || typeof row.project !== "string" || typeof row.operationId !== "string")) throw new Error("Project curation is unreadable");
+    return { crowned: [...new Set(value.crowned)] as string[], manualProjects, startNames };
   },
-  toRows: value => [...value.crowned.map((project, order) => ({ key: `crown:${project}`, value: { project, order } })), ...value.manualProjects.map((entry, order) => ({ key: `manual:${entry.project}`, value: { entry, order } }))],
+  toRows: value => [
+    ...value.crowned.map((project, order) => ({ key: `crown:${project}`, value: { project, order } })),
+    ...value.manualProjects.map((entry, order) => ({ key: `manual:${entry.project}`, value: { entry, order } })),
+    ...Object.entries(value.startNames).map(([key, reservation]) => ({ key: `start-name:${key}`, value: reservation })),
+  ],
   fromRows: rows => ({
     crowned: rows.filter(r => r.key.startsWith("crown:")).map(r => r.value as { project: string; order: number }).sort((a,b) => a.order-b.order).map(r => r.project),
     manualProjects: rows.filter(r => r.key.startsWith("manual:")).map(r => r.value as { entry: CurationDocument["manualProjects"][number]; order: number }).sort((a,b) => a.order-b.order).map(r => r.entry),
+    startNames: Object.fromEntries(rows.filter(r => r.key.startsWith("start-name:")).map(r => [r.key.slice("start-name:".length), r.value as CurationDocument["startNames"][string]])),
   }), toFile: value => ({ schemaVersion: 1, ...value }),
 });
 export const PROJECT_COLLECTIONS = {

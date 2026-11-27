@@ -6,9 +6,9 @@ import { advanceProjectStart } from "@/lib/projects/start";
 import { assertProjectStartLaunch } from "@/lib/projects/startAuthority";
 import { projectStartKey } from "@/lib/projects/startContract";
 import { preparePipelineRepository } from "@/lib/pipelines/initializeRepository";
-import { normalizeStages } from "@/lib/pipelines/engine";
-import { pipelineRoleLookup } from "@/lib/pipelines/roles";
-import { buildPipeline, createPipelineWithDelivery } from "@/lib/pipelines/store";
+import { loadPipelines } from "@/lib/pipelines/store";
+import { createPipelineFromRequest, defaultPipelinePorts } from "@/lib/pipelines/engine";
+import { registerPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { saveRoleOverrides } from "@/lib/roles/store";
 import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDelivery";
 import { defaultStartHost } from "@/lib/runtime/structuredSpawn";
@@ -86,7 +86,7 @@ function seatActive(project: string, conversationId: string, transcriptPath: str
   completeOrchestratorSeatIntent({ project, clientRequestId: "seed_0000001", conversationId, path: transcriptPath, now: AT });
 }
 
-for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "hostile", "parent-became-repository", "recipient-replaced", "recipient-replaced-after-claim", "recipient-replaced-before-response", "workspace-grant-revoked", "codex-pre-exec", "claude-pre-exec"] as const) {
+for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "hostile", "parent-became-repository", "recipient-replaced", "recipient-replaced-after-claim", "recipient-replaced-before-response", "workspace-grant-revoked", "codex-pre-exec", "claude-pre-exec", "seat-intent-restart", "queued-undelivered", "ordinary-worker"] as const) {
   test(`project start keeps original-key custody through the real Viewer's ${mode} path`, async () => {
     const oldHome = process.env.HOME;
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "project-start-home-"));
@@ -108,6 +108,21 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
         team.putWorkspaceMember(principal.workspaceId, principal.memberId, "member", owner.id, AT);
       }
       const source = projectStartFixtureSeat(testRegistry, sandbox, sourceRoot, 51, process.pid, team ? principal : undefined);
+      let callerConversationId = source.conversationId;
+      if (mode === "ordinary-worker") {
+        const sessionId = crypto.randomUUID();
+        const artifactPath = path.join(sandbox, `${sessionId}.jsonl`);
+        fs.writeFileSync(artifactPath, JSON.stringify({ type: "user", sessionId, cwd: sourceRoot,
+          message: { role: "user", content: "Ordinary worker fixture" } }) + "\n");
+        const launchProfile = emptyLaunchProfile({ cwd: sourceRoot, project: source.project, title: "Fixture worker" });
+        const begun = testRegistry.beginSpawnRequest({ cwd: sourceRoot, engine: "claude", role: "builder", transport: "structured", launchProfile });
+        if (begun.kind !== "created") throw new Error("ordinary worker fixture launch reservation refused");
+        const entry: StagedRegistryEntry = { ...source.entry, key: { engine: "claude", sessionId }, artifactPath,
+          launchProfile, status: "live", claimOwner: "fixture-worker", claimEpoch: 1 };
+        expect(testRegistry.stageStructuredSpawn(begun.receipt.launchId, entry).kind).toBe("settled");
+        expect(testRegistry.finalizeStructuredSpawn(begun.receipt.launchId).kind).toBe("settled");
+        callerConversationId = begun.receipt.conversationId;
+      }
       const targetParent = mode === "parent-became-repository" ? path.join(parent, "target-parent") : parent;
       if (mode === "parent-became-repository") fs.mkdirSync(targetParent);
       const targetRoot = path.join(targetParent, "sample");
@@ -118,13 +133,14 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
       let launchCount = 0;
       let preparedExec = 0;
       let execCalls = 0;
+      let seatSpawnCalls = 0;
       let mandate = "";
       setSeatCommandDependenciesForTests({
         ...productionSeatCommandDependencies,
         engineReadiness: () => "connected",
         spawn: async (body, _autonomous, admission) => {
           admission?.assertProjectStart?.();
-          launchCount += 1;
+          seatSpawnCalls += 1;
           mandate = String(body.prompt ?? "");
           const cwd = String(body.cwd);
           const engine = preExecEngine ?? (body.engine === "codex" || body.engine === "antigravity" ? body.engine : "claude");
@@ -134,6 +150,7 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
             launchProfile,
           });
           if (begun.kind !== "created") throw new Error("fixture launch reservation refused");
+          launchCount += 1;
           if (preExecEngine) {
             const retireWriter = () => {
               preparedExec += 1;
@@ -157,7 +174,7 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
       });
       let existing: ReturnType<typeof projectStartFixtureSeat> | undefined;
       let gitHead: string | undefined;
-      if (team || mode === "existing" || mode === "recipient-replaced" || mode === "recipient-replaced-after-claim" || mode === "recipient-replaced-before-response") {
+      if (team || mode === "existing" || mode === "recipient-replaced" || mode === "recipient-replaced-after-claim" || mode === "recipient-replaced-before-response" || mode === "queued-undelivered") {
         fs.mkdirSync(targetRoot);
         fs.writeFileSync(path.join(targetRoot, "readme.txt"), "Existing fixture\n");
         const prepared = await preparePipelineRepository(targetRoot);
@@ -190,7 +207,7 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
       }
       const domain: ViewerMcpDomainDependencies = {
         ...productionDomainDependencies, attentionAuthority: () => ({
-          kind: "worker", conversationId: source.conversationId, role: "orchestrator", evidence: "native-session",
+          kind: "worker", conversationId: callerConversationId, role: mode === "ordinary-worker" ? "builder" : "orchestrator", evidence: "native-session",
         }),
       };
       const bindings = viewerMcpBindings(undefined, undefined, domain);
@@ -200,6 +217,12 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
       };
       let service = openService(receipts);
       const accepted = await service.callTool("start_project", args);
+      if (mode === "ordinary-worker") {
+        expect(accepted).toMatchObject({ ok: false, code: "caller_forbidden" });
+        expect(fs.existsSync(targetRoot)).toBe(false);
+        expect(launchCount).toBe(0);
+        return;
+      }
       if (mode === "recipient-replaced-after-claim") {
         expect(accepted).toMatchObject({ ok: false, code: "target_changed" });
         expect(accepted).not.toHaveProperty("seat");
@@ -293,9 +316,10 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
           if (team) placeProject(team, owner, existing!.project, null);
           authorizeBeforeWrite?.();
           sent.push(operationId);
+          const status = mode === "queued-undelivered" ? "queued" : "delivered";
           return { operationId, replayed: false, receipt: {
             operationId, idempotencyKey: command.idempotencyKey,
-            conversationId: command.conversationId, kind: command.kind, status: "delivered",
+            conversationId: command.conversationId, kind: command.kind, status,
             at: AT, revision: 1,
           } };
         },
@@ -317,9 +341,37 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
         });
         const stderr = await new Response(child.stderr).text();
         expect(await child.exited, stderr).toBe(0);
+      } else if (mode === "seat-intent-restart") {
+        testRegistry.close();
+        const child = Bun.spawn([process.execPath, "--eval", `
+          import { AgentRegistry, setAgentRegistryForTests } from "./src/lib/agent/registry";
+          import { SqliteMcpReceiptStore } from "./src/lib/mcp/server";
+          import { productionSeatCommandDependencies, setSeatCommandDependenciesForTests } from "./src/lib/orchestrator/seatCommand";
+          import { advanceProjectStart } from "./src/lib/projects/start";
+          const registry = new AgentRegistry(process.env.FIXTURE_REGISTRY!);
+          setAgentRegistryForTests(registry);
+          setSeatCommandDependenciesForTests({ ...productionSeatCommandDependencies, engineReadiness: () => "connected", spawn: async () => { process.exit(77); } });
+          const receipts = new SqliteMcpReceiptStore(process.env.FIXTURE_RECEIPTS!);
+          await advanceProjectStart(receipts, process.env.FIXTURE_KEY!);
+        `], { env: { ...process.env, FIXTURE_REGISTRY: path.join(sandbox, "registry.json"), FIXTURE_RECEIPTS: file, FIXTURE_KEY: key },
+          stdin: "ignore", stdout: "ignore", stderr: "pipe" });
+        const stderr = await new Response(child.stderr).text();
+        expect(await child.exited, stderr).toBe(77);
+        testRegistry = new AgentRegistry(path.join(sandbox, "registry.json"));
+        setAgentRegistryForTests(testRegistry);
       } else {
         await advanceProjectStart(receipts, key, existing ? runtime : undefined);
       }
+      if (mode === "seat-intent-restart") {
+        expect(receipts.lookup(key)?.binding?.projectStart).toMatchObject({
+          effects: { seat: "dispatching" }, phase: "seat", disposition: "in-progress",
+        });
+        expect(receipts.lookup(key)?.binding?.projectStart?.nextAt).toBeGreaterThan(0);
+        expect(testRegistry.spawnReceiptForClientAttempt(projectStartKey("seat", String(accepted.operationId)))).toBeNull();
+        await advanceProjectStart(receipts, key);
+        expect(seatSpawnCalls).toBe(1);
+      }
+      if (!existing) expect(fs.existsSync(path.join(path.dirname(targetRoot), `.delegatus-initialization-${String(accepted.operationId)}`))).toBe(false);
       if (mode === "changed-caller") {
         expect(fs.existsSync(targetRoot)).toBe(false);
         expect(receipts.lookup(key)?.binding?.projectStart?.cause?.code).toBe("authority_changed");
@@ -368,9 +420,16 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
       }
       expect(replay).toMatchObject({
         state: "in-progress", effects: { folder: existing ? "reused" : "observed", repository: existing ? "reused" : "observed", task: "observed" },
-        project: projectForCwd(targetRoot), arrival: existing ? "confirmed" : "pending",
+        project: projectForCwd(targetRoot), arrival: existing && mode !== "queued-undelivered" ? "confirmed" : "pending",
       });
-      expect(loadTasksByIds(new Set([String(replay.taskId)]))).toMatchObject([{ project: replay.project, status: "inbox" }]);
+      if (mode !== "seat-intent-restart")
+        expect(loadTasksByIds(new Set([String(replay.taskId)]))).toMatchObject([{ project: replay.project, status: "inbox" }]);
+      if (mode === "queued-undelivered") {
+        expect(replay).toMatchObject({ arrival: "pending", phase: "delivery", effects: { delivery: "dispatching" } });
+        expect(loadPipelines()).toEqual([]);
+        expect(launchCount).toBe(0);
+        return;
+      }
       const launch = testRegistry.spawnReceiptForClientAttempt(projectStartKey("seat", String(accepted.operationId)));
       if (existing) {
         expect(replay.seat).toMatchObject({ conversationId: existing.conversationId, reused: true });
@@ -396,6 +455,7 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
           structuredHost: { ...source.entry.structuredHost, kind: launch.engine === "codex" ? "codex-app-server" : "claude-broker" } };
         recipient = { conversationId: launch.conversationId, project: String(replay.project), entry };
         expect(testRegistry.stageStructuredSpawn(launch.launchId, entry).kind).toBe("settled");
+        expect(testRegistry.ensureConversation(launch.engine, artifactPath, launch.accountId).id).toBe(launch.conversationId);
         const mandateOperationId = `spawn_message_${launch.launchId}`;
         const first = await enqueueStructuredMessage({ path: artifactPath, conversationId: launch.conversationId, text: mandate,
           clientMessageId: `spawn_${launch.launchId}`, operationId: mandateOperationId, launchId: launch.launchId }, {
@@ -410,21 +470,32 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
         expect(sent).toEqual([mandateOperationId, projectStartKey("message", String(accepted.operationId))]);
       }
       if (!recipient) throw new Error("fixture destination was unavailable");
-      const { stages, error } = normalizeStages([
-        { id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Run the first task", next: null },
-      ], pipelineRoleLookup, undefined, 1, recipient.project);
-      if (!stages) throw new Error(`fixture pipeline rejected its stage: ${error}`);
-      const work = buildPipeline({
-        id: "f1240099", task: "First task work", taskIds: [String(replay.taskId)], project: recipient.project, repoDir: targetRoot,
-        stages, srcConversationId: recipient.conversationId, srcPath: recipient.entry.artifactPath, now: new Date().toISOString(), publication: "internal",
-      });
-      work.creationRequest = { key: "fixture-receiver-work", digest: "e".repeat(64) };
-      await createPipelineWithDelivery(work, { repository: recipient.project, remote: "", branch: `refs/heads/${work.branch}` });
+      if (mode === "seat-intent-restart") {
+        const recovered = await service.callTool("start_project", args);
+        expect(recovered).toMatchObject({ state: "in-progress", phase: "work", arrival: "confirmed", taskId: replay.taskId, launchId: replay.launchId });
+        expect(launchCount).toBe(1);
+        return;
+      }
+      const restoreTick = registerPipelineTick(async () => {});
+      let admittedPipelineId: string;
+      try {
+        const admitted = await createPipelineFromRequest({
+          clientRequestId: "fixture-receiver-work", task: "First task work", taskIds: [String(replay.taskId)],
+          repoDir: targetRoot, src: recipient.entry.artifactPath, publication: "internal",
+          stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Run the first task", next: null }],
+        }, { ...defaultPipelinePorts(), engineReadiness: () => "connected" }, {
+          creatorLineage: { srcPath: recipient.entry.artifactPath, srcConversationId: recipient.conversationId },
+          creationRequest: { key: "create_pipeline:fixture-receiver-work", digest: "e".repeat(64) },
+          briefer: { kind: "agent", conversationId: recipient.conversationId },
+        });
+        if (!admitted.pipeline) throw new Error(`pipeline admission refused first work: ${String(admitted.error)}`);
+        admittedPipelineId = admitted.pipeline.id;
+      } finally { restoreTick(); }
       await advanceProjectStart(receipts, key);
       const final = await service.callTool("start_project", args);
       if (!final.ok) throw new Error(`fixture project start lookup refused: ${final.code}`);
       expect(final.taskId).toBe(replay.taskId);
-      expect(final).toMatchObject({ state: "started", work: { state: "admitted", pipelineIds: ["f1240099"] } });
+      expect(final).toMatchObject({ state: "started", work: { state: "admitted", pipelineIds: [admittedPipelineId] } });
       expect(launchCount).toBe(existing ? 0 : 1);
     } finally {
       setSeatCommandDependenciesForTests(null);
