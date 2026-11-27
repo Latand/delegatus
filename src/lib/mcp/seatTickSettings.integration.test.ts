@@ -148,7 +148,7 @@ test("keyed settings reads refuse foreign callers in a warm service and after re
   const key = `${tool}:${args.clientRequestId}`;
   const compact = { clientRequestId: "shared-compact-tick-read", verbose: true };
   const legacyKey = `${tool}:${legacy.clientRequestId}`;
-  const refusal = { ok: false, toolName: tool, clientRequestId: args.clientRequestId, replayed: true,
+  const refusal = { ok: false as const, toolName: tool, clientRequestId: args.clientRequestId, replayed: true,
     code: "idempotency_conflict", error: "clientRequestId does not match the original call", retryable: false };
   try {
     const recorded = await call("first", args);

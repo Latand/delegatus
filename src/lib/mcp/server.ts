@@ -3749,14 +3749,14 @@ export function createMcpToolService(
           context.boardRead?.assert();
           checkReceiptAccess?.();
         } : undefined;
-        let claim: ReceiptClaim;
-        try {
+        const claim = await measure("claim", () => {
           beforeClaim?.();
-          claim = await measure("claim", () => receipts.claim(key, digest, retention, localBinding, beforeClaim));
-        } catch (error) {
-          if (!(error instanceof McpToolRefusal)) throw error;
-          return boardReadFailure(typedTool, effectiveArgs, error);
-        }
+          return receipts.claim(key, digest, retention, localBinding, beforeClaim);
+        }).catch((error: unknown) => {
+          if (error instanceof McpToolRefusal) return error;
+          throw error;
+        });
+        if (claim instanceof McpToolRefusal) return boardReadFailure(typedTool, effectiveArgs, claim);
         context.boardRead?.assert();
         curatorApply?.assertCurrent();
         if (curatorApply && claim.kind !== "fresh") {

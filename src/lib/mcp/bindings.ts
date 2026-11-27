@@ -1333,7 +1333,7 @@ function receiptTransportIdentity(): string | null {
 }
 
 function viewerReceiptIdentity(dependencies: ViewerMcpDomainDependencies): string {
-  const authority = dependencies.attentionAuthority ? authorityOf(dependencies) : undefined;
+  const authority = typeof dependencies.attentionAuthority === "function" ? authorityOf(dependencies) : undefined;
   const confirmedId = authority?.kind !== "unidentified" ? authority?.conversationId : null;
   const attribution = !confirmedId && dependencies.callerAttribution ? attributionOf(dependencies) : undefined;
   const id = confirmedId || attribution?.via?.deputy || attribution?.conversationId || null;
