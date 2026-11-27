@@ -14,6 +14,10 @@ import os from "node:os";
 import path from "node:path";
 import { sameRecordedProcessIdentity } from "@/lib/processIdentity";
 
+function admittedSpawnCwd(rawCwd: string): string {
+  return path.resolve(rawCwd === "~" || rawCwd.startsWith("~/") ? path.join(os.homedir(), rawCwd.slice(1)) : rawCwd);
+}
+
 import { codexLaunchTier, CodexServiceTierUnavailableError, hiddenAccountsTierRefusal } from "@/lib/accounts/codexServiceTiers";
 import { NextRequest, NextResponse } from "next/server";
 import { deferSpawnWork } from "./spawnDeferral";
@@ -413,8 +417,10 @@ export async function executeSpawnRequest(
     && !body?.src && !body?.parent && !body?.parentConversationId) {
     try {
       const launched = await response.clone().json() as SpawnResponse;
+      const rawCwd = typeof body.cwd === "string" ? body.cwd.trim() : "";
+      const admittedCwd = rawCwd ? admittedSpawnCwd(rawCwd) : "";
       const project = typeof body.project === "string" ? validExplicitProject(body.project)
-        : typeof body.cwd === "string" ? projectForCwd(body.cwd) : null;
+        : admittedCwd ? projectForCwd(admittedCwd) : null;
       if (project && launched.ok && launched.conversationId && !launched.parent
         && launched.state !== "failed" && launched.state !== "conflict") await dependencies.recordOperatorLaunch(project, launched.conversationId);
     } catch { console.error("[seat tick] operator launch event could not be recorded"); }
@@ -645,7 +651,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
 
   const rawCwd = typeof body.cwd === "string" ? body.cwd.trim() : "";
   if (!rawCwd) return NextResponse.json({ error: "working directory is required" }, { status: 400 });
-  const cwd = path.resolve(rawCwd === "~" || rawCwd.startsWith("~/") ? path.join(os.homedir(), rawCwd.slice(1)) : rawCwd);
+  const cwd = admittedSpawnCwd(rawCwd);
   let stat: fs.Stats;
   try {
     stat = fs.statSync(cwd);

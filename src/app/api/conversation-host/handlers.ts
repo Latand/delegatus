@@ -1,4 +1,5 @@
 import { currentLegatusSeat } from "@/lib/orchestrator/legatusSeat";
+import { acceptNativeRelayHandoff, nativeRelayConversation } from "@/lib/orchestrator/nativeRelayHandoff";
 import { orchestratorSeatFor, orchestratorSeatIdentityForConversation } from "@/lib/orchestrator/seats";
 import { queueLegatusMessage, SeatAgendaRefusal } from "@/lib/monitor/seatAgenda";
 import { dispatchConversationMessage } from "@/lib/conversation/messageDispatch";
@@ -183,6 +184,9 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
     return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
   }
 
+  if (!acceptNativeRelayHandoff(req, body as Record<string, unknown>))
+    return NextResponse.json({ error: "native caller handoff is unavailable" }, { status: 403 });
+
   const voiceBinding = (body as { voiceDelegatus?: { sessionId?: unknown; proposalId?: unknown } }).voiceDelegatus;
   if (voiceBinding !== undefined && (body.orchestratorRelayProject === undefined || !voiceBinding
     || typeof voiceBinding.sessionId !== "string" || typeof voiceBinding.proposalId !== "string")) {
@@ -304,7 +308,9 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
      An agent names itself by presenting its conversation capability; anything
      else is the operator, which is the same reading every operator-only gate in
      this codebase uses. */
-  const caller = callerConversationId(req);
+  let caller: string | null;
+  try { caller = nativeRelayConversation(req) ?? callerConversationId(req); }
+  catch { return NextResponse.json({ error: "native caller handoff is unavailable" }, { status: 403 }); }
   const actor: AccountChoiceActor = caller ? { kind: "agent", conversationId: caller } : { kind: "operator" };
   /* A member picks from their project's account list. Checked before the
      account is looked up, so an unlisted account is refused, not probed. */

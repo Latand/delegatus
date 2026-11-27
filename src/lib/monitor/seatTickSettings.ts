@@ -605,7 +605,7 @@ export function applySeatTickSettingsChange(
   context: SeatTickChangeContext,
 ): SeatTickSettingsChangeResult {
   if (context.authorize && !context.authorize()) return { ok: false, error: "Legatus seat changed before the settings write" };
-  if (change.autonomy !== undefined || change.autonomyDecision !== undefined || change.turbo !== undefined) {
+  if (change.enabled !== undefined || change.wakeIntervalMinutes !== undefined || change.autonomy !== undefined || change.autonomyDecision !== undefined || change.turbo !== undefined) {
     const effective = effectiveSeatTickSettings(current, Date.parse(context.at), 60 * 60_000);
     if (effective.lapsed) current = seatTickSettingsAfterLapse(current.project, effective);
   }

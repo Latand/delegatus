@@ -42,6 +42,7 @@ export const seatAgendaSchema = [
     sender TEXT, urgent INTEGER NOT NULL DEFAULT 0, pending INTEGER NOT NULL DEFAULT 1
   )`,
   `CREATE INDEX IF NOT EXISTS seat_agenda_pending ON seat_agenda(target, urgent DESC, seq) WHERE pending = 1`,
+  `CREATE INDEX IF NOT EXISTS seat_agenda_pending_form_ref ON seat_agenda(ref, kind) WHERE pending = 1`,
   `CREATE TRIGGER IF NOT EXISTS seat_agenda_form_insert AFTER INSERT ON state_rows
     WHEN NEW.collection IN ('tasks', 'seat-decisions')
     BEGIN ${insert} END`,

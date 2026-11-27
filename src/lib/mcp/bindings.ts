@@ -2016,7 +2016,7 @@ async function sendMessage(
       ...(orchestratorRelayProject && context?.binding?.sendPayload?.requesterRequestId
         ? { requesterRequestId: context.binding.sendPayload.requesterRequestId } : {}),
     };
-    outcome = await withNativeRelayHandoff(body, orchestratorRelayProject ? nativeOrchestratorRelayCaller() : null,
+    outcome = await withNativeRelayHandoff(body, nativeOrchestratorRelayCaller(),
       headers => dispatchControl(control)(orchestratorRelayProject ? "/api/orchestrator/message" : "/api/conversation-host", body,
         { ...callerCapabilityHeaders(), ...headers }));
   } catch (error) {
@@ -8823,15 +8823,17 @@ function nativeOrchestratorRelayCaller(): (() => string) | null {
     const seat = authorizedManagerSeats(productionManagerAuthoritySources()).find(candidate => candidate.conversationId === id);
     // This handoff repairs designated-seat relays only. Other relay producers
     // retain their existing authenticated capability and operator paths.
-    if (!pinned || !seat?.project) return refused();
-    const project = seat.project;
+    const legatus = currentLegatusSeat(id);
+    if (!pinned || (!seat?.project && !legatus)) return refused();
+    const project = seat?.project ?? legatus!.project;
     const epoch = orchestratorSeatFor(project).active?.seatEpoch;
     return () => {
       const current = authority();
       if (current.kind === "unidentified" || current.conversationId !== id
         || current.nativeProof !== original.nativeProof || generation() !== pinned
         || orchestratorSeatFor(project).active?.seatEpoch !== epoch
-        || !authorizedManagerSeats(productionManagerAuthoritySources()).some(candidate => candidate.conversationId === id && candidate.project === project)) return refused();
+        || (!authorizedManagerSeats(productionManagerAuthoritySources()).some(candidate => candidate.conversationId === id && candidate.project === project)
+          && currentLegatusSeat(id)?.project !== project)) return refused();
       return id;
     };
   });

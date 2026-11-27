@@ -165,6 +165,18 @@ test("a seat can turn its own project's tick off with no expiry, and it stays of
   expect(later.reason).toBe("the only open lane is a draft nothing can discharge");
 });
 
+test("a Legatus schedule edit first resolves an expired destination schedule and keeps author history", () => {
+  const expired = { ...defaultSeatTickSettings("destination"), enabled: false, wakeIntervalMinutes: 60,
+    until: new Date(NOW - 60_000).toISOString(), updatedAt: new Date(NOW - HOUR_MS).toISOString(), reason: "old schedule" };
+  const actor: SeatTickSettingsActor = { kind: "legatus", conversationId: "conversation_legatus", project: "legatus:fixture", seatEpoch: 3 };
+  const changed = applySeatTickSettingsChange(expired, { enabled: false, wakeIntervalMinutes: 17, reason: "new cadence" }, { at: AT, actor });
+  expect(changed.ok).toBe(true);
+  if (!changed.ok) throw new Error(changed.error);
+  expect(effectiveSeatTickSettings(changed.settings, NOW, HOUR_MS)).toMatchObject({ enabled: false, wakeIntervalMs: 17 * 60_000, lapsed: false });
+  expect(changed.settings).toMatchObject({ setBy: actor,
+    legatusScheduleHistory: [{ enabled: false, wakeIntervalMinutes: 17, by: actor, why: "new cadence" }] });
+});
+
 test("an expiry lapses back to the default, and the lapse is visible to the caller", () => {
   const applied = change(defaultSeatTickSettings(PROJECT), {
     enabled: false,

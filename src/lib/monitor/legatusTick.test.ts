@@ -29,9 +29,9 @@ function designate(project: string, conversationId: string) {
   return { ...result.seat, conversationId };
 }
 
-async function isolated(run: (project: string) => Promise<void>, useFileState = false) {
+async function isolated(run: (project: string) => Promise<void>) {
   const previous = process.env.LLV_STATE_DIR;
-  if (!useFileState) process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(SANDBOX, "legatus-"));
+  process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(SANDBOX, "legatus-"));
   setCallerConversationResolverForTests(() => LEGATUS);
   try { await run(ensureLegatusProject()); }
   finally {
@@ -179,7 +179,13 @@ test("forms from different projects and an operator launch coalesce behind one L
   expect((await check()).rig.sent).toHaveLength(0);
   options.now! += MINUTE;
   expect((await check()).record?.reasons).toEqual(["interval"]);
-}, true));
+  const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"));
+  try {
+    const plan = db.query<{ detail: string }, [string]>("EXPLAIN QUERY PLAN UPDATE seat_agenda SET pending=0 WHERE ref=? AND kind='legatus-question' AND pending=1").all(taskRound.id).map(row => row.detail).join(" ");
+    expect(plan).toContain("seat_agenda_pending_form_ref");
+    expect(plan).not.toContain("SCAN seat_agenda");
+  } finally { db.close(); }
+}));
 
 test("reopening a completed task creates one new waiting-form episode", () => isolated(async project => {
   const taskId = "task-reopened-form";
@@ -209,4 +215,4 @@ test("reopening a completed task creates one new waiting-form episode", () => is
   const reopenedAgain = loadTasks()[0]!;
   saveTasks([reopenedAgain]);
   expect(pendingSeatAgenda(project, 10).map(row => row.id)).toEqual(episode.map(row => row.id));
-}, true));
+}));
