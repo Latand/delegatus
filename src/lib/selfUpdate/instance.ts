@@ -7,13 +7,14 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 import { agentRegistry } from "@/lib/agent/registry";
+import { registryLivenessRows } from "@/lib/agent/sqliteRegistryStore";
 import { identityAlive, livenessProbe } from "@/lib/agent/accountLiveness";
 import { headlessRoundProcess, productionLivenessSources, type AgentLivenessSources } from "@/lib/lifecycle/liveness";
 import { activityProcessReader } from "@/lib/lifecycle/agentActivityProcesses";
-import { ownerProcessAlive, readOwnerCensus, rowKeyId, type OwnerlessRecord, type RecordedOwner } from "@/lib/lifecycle/owners";
+import { launchSetupIdentities, ownerProcessAlive, readOwnerCensus, rowKeyId, type OwnerlessRecord, type RecordedOwner } from "@/lib/lifecycle/owners";
 import type { EngineHost, HostState } from "@/lib/runtime/engineHost";
 import { structuredDeliveryHeldHosts } from "@/lib/runtime/structuredDeliveryController";
-import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityMayOwn, type ProcessIdentity } from "@/lib/processIdentity";
 import { activeOrchestratorSeats } from "@/lib/orchestrator/seats";
 import { viewerOwnProjectKeys } from "@/lib/monitor/seatTickSources";
 import { flowPipelineController } from "@/lib/pipelines/controller";
@@ -655,6 +656,8 @@ export function productionDeps(env: Readonly<Record<string, string | undefined>>
       dispatchVersion: () => createHash("sha256")
         .update(JSON.stringify([...registryAdmissionEvidence(agentRegistry().readOnlySnapshot()), flowPipelineController().idle(), seatTickIdle()]))
         .digest("hex"),
+      launchSetupPending: () => registryLivenessRows(agentRegistry().readOnlySnapshot()).receipts.some(receipt =>
+        launchSetupIdentities(receipt).some(identity => processIdentityMayOwn(identity))),
       runtimeSnapshot: async () => {
         const client = runtimeHostClient();
         if (!client) throw new Error("runtime host is unavailable");

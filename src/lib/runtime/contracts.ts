@@ -509,11 +509,20 @@ export interface RuntimeKillCommand extends RuntimeCommandBase {
   kind: "kill";
   /** Viewer-derived cohort; the first admission owns it across retries. */
   pendingSendIds?: string[];
+  /** Viewer admission snapshot for an explicit conversation stop. Older and
+      idle-only commands retain their single-generation fence. */
+  targets?: RuntimeKillTarget[];
   /** Authenticated control authorship; an automatic recovery is system custody. */
   origin?: MessageOrigin;
   onlyIfIdle?: RuntimeIdleKillFence;
   providerRecovery?: RuntimeProviderRecoveryRef;
   sessionKey: { engine: RuntimeEngine; sessionId: string };
+}
+
+export interface RuntimeKillTarget {
+  sessionId: string;
+  claimEpoch: number | null;
+  process: import("@/lib/processIdentity").ProcessIdentity | null;
 }
 
 export interface RuntimeReconfigureCommand extends RuntimeCommandBase {

@@ -459,6 +459,7 @@ export interface ProjectCatalogEntry {
 export interface FilesResponse {
   /** One waiting prototype review per task, for the orchestrator notice and needs-you count. */
   prototypeReviewNotices?: import("@/lib/prototypeReview/types").PrototypeReviewNotice[];
+  secretRequestNotices?: import("@/lib/secretRequests/view").SecretRequestNotice[];
   /** The orchestrators' own open questions, which no task carries. */
   seatDecisions?: import("@/lib/prototypeReview/types").PrototypeReviewNotice[];
   /** Board-only read: execution bodies remain on targeted full endpoints. */
@@ -717,6 +718,8 @@ export interface EngineLimits {
   /** Read compatibility for snapshots persisted before tier lists. */
   flagship?: TierLimitWindow | null;
   plan: string | null;
+  /** Provider rate tier when reported separately from the subscription name. */
+  planTier?: string;
   /** Unix seconds of the oldest selected window observation. Null means the
       provider supplied no observation clock. */
   capturedAt: number | null;

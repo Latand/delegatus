@@ -18,6 +18,7 @@ import {
   backupsDue,
   backupDatabase,
   SchemaRecoveryError,
+  checkDatabaseAtActivation,
   checkStateDatabasesAtActivation,
   pruneBackups,
   raiseStorageIncidentCard,
@@ -166,6 +167,68 @@ test("a healthy or absent database is left alone", () => {
   expect(checkStateDatabasesAtActivation(directory)).toEqual([]);
   expect(fs.readdirSync(directory).sort()).toEqual(before);
   expect(readTaskIds(directory)).toEqual(["kept"]);
+});
+
+test("agent registry quick_check leaves logical index damage for backup integrity validation", () => {
+  const directory = sandbox();
+  const registry = stateDatabases(directory).find((database) => database.name === "agent-registry.sqlite");
+  if (!registry) throw new Error("agent-registry.sqlite is not a durable database");
+  expect(registry.check).toBe("integrity_check");
+  expect(registry.activationCheck).toBe("quick_check");
+
+  const healthy = new Database(registry.filename, { create: true });
+  healthy.exec("CREATE TABLE registry_meta(key TEXT PRIMARY KEY, value TEXT); CREATE TABLE retained(value TEXT); CREATE INDEX retained_value ON retained(value)");
+  healthy.query("INSERT INTO registry_meta VALUES (?, ?)").run("revision", "1");
+  healthy.query("INSERT INTO retained VALUES (?)").run("indexed-key");
+  const page = Number(healthy.query<{ rootpage: number }, [string]>("SELECT rootpage FROM sqlite_master WHERE name = ?").get("retained_value")?.rootpage);
+  const pageSize = Number(healthy.query<{ page_size: number }, []>("PRAGMA page_size").get()?.page_size);
+  healthy.close();
+
+  const pageStart = (page - 1) * pageSize;
+  const bytes = fs.readFileSync(registry.filename);
+  const keyOffset = bytes.indexOf(Buffer.from("indexed-key"), pageStart);
+  if (keyOffset < pageStart || keyOffset >= pageStart + pageSize) throw new Error("indexed key was not found on its index page");
+  overwrite(registry.filename, keyOffset, Buffer.from("jndexed-key"));
+
+  const damaged = new Database(registry.filename, { readonly: true });
+  try {
+    expect(damaged.query("PRAGMA quick_check").all()).toEqual([{ quick_check: "ok" }]);
+    expect(damaged.query("PRAGMA integrity_check").all()).toContainEqual({ integrity_check: "row 1 missing from index retained_value" });
+  } finally { damaged.close(); }
+
+  expect(checkDatabaseAtActivation(registry, { stateDirectory: directory })).toEqual({ state: "ok" });
+  expect(fs.existsSync(registry.filename)).toBe(true);
+
+  const backup = backupDatabase(registry, {
+    backupDirectory: backupDirectory(directory),
+    now: new Date("2026-09-19T12:30:00Z"),
+  });
+  expect(backup.state).toBe("failed");
+  if (backup.state === "failed") expect(backup.detail).toContain("row 1 missing from index retained_value");
+  expect(fs.readdirSync(backupDirectory(directory))).toEqual([]);
+});
+
+test("agent registry schema repair rechecks with its activation pragma", () => {
+  const directory = sandbox();
+  const registry = stateDatabases(directory).find((database) => database.name === "agent-registry.sqlite");
+  if (!registry) throw new Error("agent-registry.sqlite is not a durable database");
+  fs.writeFileSync(registry.filename, "private fixture");
+  const checks: string[] = [];
+  const outcome = checkDatabaseAtActivation({ ...registry, rebuiltTriggers: ["retained_rebuild_trigger"] }, {
+    stateDirectory: directory,
+    now: new Date("2026-09-19T12:30:00Z"),
+    testHooks: {
+      inspect: (_filename, pragma) => {
+        checks.push(pragma);
+        return checks.length === 1
+          ? { verdict: "incompatible", detail: "schema syntax is unsupported", object: "retained_rebuild_trigger", reason: "syntax error" }
+          : { verdict: "ok" };
+      },
+      dropRebuiltTriggers: () => [],
+    },
+  });
+  expect(outcome.state).toBe("repaired");
+  expect(checks).toEqual(["quick_check", "quick_check"]);
 });
 
 test("a backup is skipped when nothing changed or it is not due, and taken after a change", () => {
@@ -594,13 +657,42 @@ test("activation checks a retained-size database off-thread and awaits its verdi
     return child;
   });
   progress.arm(() => { fs.writeFileSync(go, "release"); });
+  const completed: Array<[number, number]> = [];
   try {
-    await progress.run(() => checkStateDatabasesBeforeStores(directory));
+    await progress.run(() => checkStateDatabasesBeforeStores(directory, (done: number, total: number) => {
+      completed.push([done, total]);
+    }));
+    const databaseCount = stateDatabases(directory).length;
+    expect(completed).toEqual(Array.from({ length: databaseCount }, (_, index) => [index + 1, databaseCount]));
     expect(started).toBe(true);
     expect(readStorageIncidents(directory)).toEqual([]);
     expect(fs.existsSync(database.filename)).toBe(true);
   } finally { launch.mockRestore(); }
 }, 60_000);
+
+test.if(process.platform === "linux" && fs.existsSync("/usr/bin/nice") && os.getPriority() < 19)(
+  "the activation worker inherits Viewer priority and the backup worker yields CPU", async () => {
+    const directory = sandbox();
+    const observation = path.join(directory, "worker-priority");
+    const workerPath = path.join(directory, "priority-worker.ts");
+    fs.writeFileSync(workerPath, `import { writeFileSync } from "node:fs";
+      import { getPriority } from "node:os";
+      writeFileSync(${JSON.stringify(observation)}, String(getPriority()));
+      await import(${JSON.stringify(path.resolve("src/lib/stateBackup.worker.ts"))});
+    `);
+    const helper = await import("@/lib/helperLease");
+    const spawn = helper.spawnLeasedHelper;
+    const launch = spyOn(helper, "spawnLeasedHelper").mockImplementation((name, spec, ...rest) =>
+      spawn(name, { ...spec, args: [...spec.args.slice(0, -1), workerPath] }, ...rest));
+    try {
+      const viewerPriority = os.getPriority();
+      await checkStateDatabasesBeforeStores(directory);
+      expect(Number(fs.readFileSync(observation, "utf8"))).toBe(viewerPriority);
+      await runBackupPassInWorker(directory, new Map());
+      expect(Number(fs.readFileSync(observation, "utf8"))).toBe(Math.min(viewerPriority + 10, 19));
+    } finally { launch.mockRestore(); }
+  },
+);
 
 test("activation leaves a busy healthy database intact while the Viewer timers progress", async () => {
   const directory = sandbox();

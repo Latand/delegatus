@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "classification": "synthetic",
   "generator": "scripts/capture-readme-media.ts",
-  "generatorSha256": "ce08b1e67ab24096c300d61f880516db4c3f21da47a158e1f3788a41b70d7e02",
+  "generatorSha256": "917b760e578c07d2a48d840ec30ae676c04b1cb79e6f2b7c9417d270f04514f5",
   "seed": "scripts/readme-demo-state.ts",
-  "seedSha256": "a87949b4f1615a6a66fa13611b07548a7fd2fb33a331f422fc29538981151710",
+  "seedSha256": "19650ca24e809736702ef4cf1e2f3be32e761139070b8de4404092d0d289a714",
   "command": "bun run build && bun scripts/capture-readme-media.ts",
   "assets": [
     {
@@ -28,7 +28,7 @@
         "meanDifference": 0.23,
         "ringsClipped": 0
       },
-      "sha256": "9a259f3e02efc402ecfceca94d863bfbf59ebe16ee1cd1ca3b05a3481499680c"
+      "sha256": "7ed023c9239d0eb0e18c9e0aa918c6f4f68812122a5cec373d2fc35f45e42e78"
     },
     {
       "path": "orchestrator.svg",
@@ -51,7 +51,7 @@
         "meanDifference": 0.613,
         "ringsClipped": 1
       },
-      "sha256": "d661c175665129eb2789d9b8916671f517b438c6d8d21e496f5a13cd54b3623e"
+      "sha256": "821a43b092af7c8f408b32fac70b26ca88acd38935b8127fa5e3cfc621255b31"
     },
     {
       "path": "conversation.svg",
@@ -71,14 +71,14 @@
       "renderBack": {
         "worstTileMean": 14.152,
         "changedTileShare": 0.007,
-        "meanDifference": 0.368,
+        "meanDifference": 0.356,
         "ringsClipped": 2
       },
-      "sha256": "4ed9bc6dc853721f0b4c8cb5f31329b0e5b86d81431ea79a9142e32b7e0ff31f"
+      "sha256": "ce00f16a0510c0b5a436adbe300f0f40ed2f5adbe27d5201bebec885e22ab8a6"
     },
     {
       "path": "pipeline.svg",
-      "description": "A pipeline opened from its card: the stage graph with its fail edge, and each stage's conversation side by side.",
+      "description": "A pipeline opened from its card: the stage tabs with the fail rule under them, and the selected stage's conversation.",
       "viewport": {
         "width": 1272,
         "height": 944
@@ -90,14 +90,14 @@
         "height": 920
       },
       "colorScheme": "dark",
-      "rasterTiles": 27,
+      "rasterTiles": 22,
       "renderBack": {
-        "worstTileMean": 8.351,
-        "changedTileShare": 0.003,
-        "meanDifference": 0.369,
+        "worstTileMean": 8.39,
+        "changedTileShare": 0,
+        "meanDifference": 0.169,
         "ringsClipped": 0
       },
-      "sha256": "d91fe00548ab97ca834bd7af383c493f31d41c789137ae829eb1d368483999f0"
+      "sha256": "0eb4de040ff1c53559a826c30af647fccec7fdcf6c869c4ca3a82f06c6845d09"
     },
     {
       "path": "card-menu.svg",
@@ -120,7 +120,7 @@
         "meanDifference": 0.299,
         "ringsClipped": 0
       },
-      "sha256": "6e732a34b460599431b137c8bf8e3d692e5331f6af1d299648419739ba581ae7"
+      "sha256": "eeecd241e88292d3b97c65aab396abeb76fac353ccff8e7f0dcc5366613f0ae9"
     },
     {
       "path": "accounts.svg",
@@ -131,19 +131,19 @@
       },
       "crop": {
         "x": 255,
-        "y": 487,
+        "y": 461,
         "width": 400,
         "height": 321
       },
       "colorScheme": "dark",
       "rasterTiles": 19,
       "renderBack": {
-        "worstTileMean": 2.765,
+        "worstTileMean": 2.702,
         "changedTileShare": 0,
-        "meanDifference": 0.227,
+        "meanDifference": 0.217,
         "ringsClipped": 0
       },
-      "sha256": "50ad5b7594f036072f78e038395cf7a837f7751ba814a51fafd125ad63af3662"
+      "sha256": "a991610644efcd14a9c5f728852f0c16cf1edad88d284d06c9c151ff4b083abf"
     },
     {
       "path": "phone-conversation.svg",
@@ -157,10 +157,10 @@
       "renderBack": {
         "worstTileMean": 12.052,
         "changedTileShare": 0.02,
-        "meanDifference": 0.753,
+        "meanDifference": 0.752,
         "ringsClipped": 0
       },
-      "sha256": "4b2e8c91346e451b6db1ec5b5144eaaee6c373e2683066cad988cf857eb6b4e0"
+      "sha256": "01a7fb98ea3398b577b25c2094cd053686bf300ce0a4076510e51615beec7d12"
     },
     {
       "path": "phone-board.svg",
@@ -174,10 +174,10 @@
       "renderBack": {
         "worstTileMean": 12.37,
         "changedTileShare": 0.022,
-        "meanDifference": 0.421,
+        "meanDifference": 0.422,
         "ringsClipped": 0
       },
-      "sha256": "0e262986402e05d76ab78b5949eda7d517c3107501e2aab39cbdf510c5b5fa74"
+      "sha256": "0e93d1cb2c697ad2382ee17d3ec5f4ef29dabb07c9bec04fca5f38c2b96410b0"
     }
   ]
 }

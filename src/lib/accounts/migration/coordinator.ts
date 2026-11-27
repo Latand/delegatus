@@ -940,25 +940,28 @@ async function cleanupDiscardedSuccessor(
   }
 }
 
-/**
- * Whether an in-flight reconfigure owns this switch, so this caller must not
- * execute it (issue #1028).
- *
- * Committing is only half of an account switch: the predecessor's structured
- * host is still claimed, still running on the source account, and the ONLY
- * code that retires it is the reconfigure executor, which releases and
- * terminates the source session key straight after its own commit. A tick, a
- * send, or a route that commits behind that executor therefore leaves a live
- * host on the old account and hands the reconfigure a switch it did not make —
- * two writers for one transition. So exactly one of them proceeds: the owner.
- *
- * The owner re-runs on its own queue (re-queued at a turn boundary, re-fired
- * whenever the host's turn state changes), so deferring here delays nothing.
- */
+/** An applying reconfigure owns the switch and the source host's release. */
 function reconfigureOwnsMigration(conversation: RegistryConversation, executingOperationId?: string): boolean {
   const reconfigure = conversation.reconfigure;
   if (reconfigure?.status !== "applying" || reconfigure.accountId !== conversation.migration?.targetId) return false;
   return reconfigure.operationId !== executingOperationId;
+}
+
+async function finishMigratedWriter(registry: AgentRegistry, conversation: RegistryConversation): Promise<void> {
+  const migration = conversation.migration;
+  if (migration?.phase !== "committed" || reconfigureOwnsMigration(conversation)) return;
+  const key = { engine: conversation.engine, sessionId: migration.sourceGenerationId };
+  const row = registry.hostEntry(key);
+  if (!row?.structuredWriterRetired || !row.structuredHost) return;
+  const { retireMigratedStructuredHost } = await import("@/lib/runtime/structuredHostControl");
+  try {
+    await retireMigratedStructuredHost(registry, conversation.id, key, migration.operationId);
+  } catch (error) {
+    // The fenced row remains visible and the committed-migration sweep can resume teardown.
+    console.warn("[account-migration] predecessor retirement deferred", {
+      operationId: migration.operationId, error: safeProviderDiagnostic(error),
+    });
+  }
 }
 
 function sameTargetReconfigureCanReuseSuccessor(
@@ -1030,6 +1033,7 @@ export async function advanceConversationMigration(
     migration = conversation.migration!;
   }
   if (migration.phase === "committed") {
+    await finishMigratedWriter(registry, conversation);
     if (!options.deferBoardRepair) await repairCommittedBoardSuccessions(
       [conversation],
       registry,
@@ -1253,6 +1257,7 @@ export async function advanceConversationMigration(
       historyHash: publicationReceipt.historyHash,
       host: publicationReceipt.host,
     }, publicationRevision, publicationOperationId, publicationReceipt); });
+    await finishMigratedWriter(registry, committed);
     if (!options.deferBoardRepair) await repairCommittedBoardSuccessions(
       [committed],
       registry,
@@ -1591,6 +1596,10 @@ export async function reconcileMigrations(
     for (const pending of owed) {
       const owner = registry.conversation(pending.conversationId);
       if (owner) await cleanupDiscardedSuccessor(provider, pending.receipt, owner, registry);
+    }
+    if (snapshotConversation.migration?.phase === "committed") {
+      const current = registry.conversation(snapshotConversation.id);
+      if (current) await finishMigratedWriter(registry, current);
     }
     if (work) await drainConversation(snapshotConversation);
   };

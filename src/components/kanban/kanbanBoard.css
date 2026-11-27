@@ -1118,7 +1118,7 @@
    live-tail marker repeat the header's state and are left out (the "back to
    live" control still appears once the feed is scrolled up); the composer keeps 240 px of transcript
    above it in a tall pane and a smaller strip here, never squeezed shut. */
-.kb .seat [data-orchestrator-conversation] form { max-height: min(60%, 100% - 72px); }
+.kb .seat [data-orchestrator-conversation] > form { max-height: min(60%, 100% - 72px); }
 /* The seat on top takes whatever height the grip left it, down to 160 px, and
    the share above left its composer two rows there and a 9 px slit at the
    grip's lower stop (#1734). Here the transcript is what yields, down to 72 px
@@ -1128,7 +1128,7 @@
    (`seatComposerBudget`), so a draft alone never makes the form scroll. */
 .kb .seat:not(.side):not(.folded) { min-height: calc(var(--seat-h, var(--seat-default-h)) + var(--seat-grow)); max-height: max(var(--seat-h, var(--seat-default-h)), var(--seat-default-h)); }
 .kb .seat:not(.side) [data-orchestrator-conversation] > [data-composer-yields] { min-height: 72px; }
-.kb .seat:not(.side) [data-orchestrator-conversation] form { max-height: none; flex-shrink: 1; min-height: 0; }
+.kb .seat:not(.side) [data-orchestrator-conversation] > form { max-height: none; flex-shrink: 1; min-height: 0; }
 .kb .seat [data-orchestrator-conversation] :is([data-turn-status], [data-live-tail-pill]) { display: none; }
 /* Each panel keeps its scroll to itself: at its top or end the wheel, a
    trackpad or a key stops there and the page stays between the seat and the
@@ -1138,10 +1138,11 @@
 .kb .seat [data-orchestrator-conversation] [data-log-feed-scroller] { padding-top: 4px; padding-bottom: 0; overscroll-behavior-y: contain; }
 .kb .seat [data-orchestrator-conversation] [data-feed-state] { padding-bottom: 4px; }
 .kb .seat [data-orchestrator-conversation] [data-agent-control-strip] { padding-top: 2px; padding-bottom: 2px; }
-.kb .seat [data-orchestrator-conversation] form { padding-top: 4px; padding-bottom: 4px; }
+.kb .seat [data-orchestrator-conversation] > form { padding-top: 4px; padding-bottom: 4px; }
 /* The transcript, the control strip and the composer with its model row
    start on the seat's inset, where the head's avatar does (#2185). */
-.kb .seat [data-orchestrator-conversation] :is([data-feed-state], [data-agent-control-strip], form) { padding-left: var(--inset-seat); padding-right: var(--inset-seat); }
+.kb .seat [data-orchestrator-conversation] :is([data-feed-state], [data-agent-control-strip]),
+.kb .seat [data-orchestrator-conversation] > form { padding-left: var(--inset-seat); padding-right: var(--inset-seat); }
 .kb .seat-head [data-orchestrator-incumbent] { min-width: 0; }
 .kb .seat.folded [data-orchestrator-panel] > :not(.seat-head):not(.seat-rail) { display: none; }
 /* Two rows when the seat is open: the title, Previous seats and the seat's own
@@ -2261,8 +2262,8 @@
 /* ── Task limit spend (docs/design/task-limit-spend.md §7.2, variant 2) ─────
    At the end of the state line, per provider: its engine mark and a scale of
    four cells, filled in the engine's colour; a bar, so it never reads as the
-   round engine mark or the state dot. No digits on the card: the numbers and
-   each account's week are in the popover. Unscoped: the phone's card draws
+   round engine mark or the state dot. Without a share, the mark shows the
+   compact token count. The phone's card draws
    the same line, and the popover is portalled to the document. */
 .spend { position: relative; display: inline-flex; flex: none; align-items: center; gap: 8px; white-space: nowrap; font-size: var(--text-label); line-height: 16px; font-variant-numeric: tabular-nums; color: var(--color-secondary); border-radius: 4px; }
 .spend[role="button"] { cursor: help; }
@@ -2270,8 +2271,8 @@
 .spend[role="button"]::after { content: ""; position: absolute; inset: -6px -4px; }
 .spend[role="button"]:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 .spend-p { display: inline-flex; align-items: center; gap: 3px; }
-/* No limit readings: the word, in muted ink. */
-.spend-p[data-kind="norate"] .spend-n { color: var(--color-muted); }
+/* The compact token count uses muted ink. */
+.spend-p[data-kind="tokens"] .spend-n { color: var(--color-muted); }
 .spend-p .scale { display: block; width: 15px; height: 8px; flex: none; }
 .spend-p .scale rect { fill: var(--border-strong); }
 .spend-p .scale rect.on { fill: currentColor; }
@@ -2289,9 +2290,12 @@
 .kb .card.done .spend, [data-phone-card][class*="bg-quiet"] .spend { --engine-mark-cut: var(--surface-quiet); }
 
 /* The popover: the state dot's bubble, with a provider block per engine. */
-.spend-pop { width: max-content; text-align: left; }
-.spend-pop:has(.meter) { max-width: 320px; }
+.spend-pop { width: max-content; max-width: min(320px, calc(100vw - 24px)); text-align: left; }
+:is(.spend-pop, .phone-spend) .pop-sub { overflow-wrap: anywhere; }
+/* A model id is one word: a line breaks between ids, not at a hyphen inside one. */
+:is(.spend-pop, .phone-spend) .model-id { white-space: nowrap; }
 .spend-pop .pop-title { display: block; font-weight: 600; margin-bottom: 4px; }
+.spend-pop .pop-total { font-weight: 400; color: var(--color-muted); }
 .spend-pop .pop-row { display: flex; align-items: flex-start; gap: 5px; }
 .spend-pop .pop-block { display: block; }
 /* A provider's block (headline, account lines, note) stands apart from the next one. */
@@ -2304,6 +2308,9 @@
 .spend-pop .pop-note { display: block; margin-top: 6px; padding-top: 5px; border-top: 1px solid var(--border-default); color: var(--color-muted); }
 .spend-pop .pop-warn { color: var(--color-warning); }
 .spend-pop .meter-note { margin: 2px 0 0 17px; }
+/* An account's line stands apart from the one before it; the basis is the provider's muted line. */
+:is(.spend-pop, .phone-spend) .meter-note[data-spend-account] { margin-top: 4px; }
+:is(.spend-pop, .phone-spend) .pop-basis { color: var(--color-muted); }
 /* An account's line: the sidebar's limit line, with the task's part drawn
    over the week the account has used so far. */
 .spend-pop .meter { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; min-height: 18px; margin-left: 17px; }
@@ -2329,16 +2336,18 @@
 /* The phone's task screen: the popover's lines as one section, the album row's form. */
 .phone-spend { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 12px; background: var(--surface-card); box-shadow: var(--shadow-1); font-size: var(--text-ui); line-height: 17px; color: var(--color-primary); }
 .phone-spend .pop-row { display: flex; align-items: flex-start; gap: 6px; }
+.phone-spend .pop-block + .pop-block { margin-top: 6px; }
 .phone-spend .pop-row > [data-engine-mark] { margin-top: 2px; }
+.phone-spend .pop-main { min-width: 0; }
 .phone-spend .pop-main b { font-weight: 600; }
 .phone-spend .pop-sub { display: block; color: var(--color-secondary); }
 .phone-spend .pop-note { color: var(--color-muted); font-size: var(--text-label); line-height: 16px; padding-top: 6px; border-top: 1px solid var(--border-default); }
 .phone-spend .pop-warn { color: var(--color-warning); }
-.phone-spend .meter-note { margin-left: 18px; font-size: var(--text-label); line-height: 16px; }
+.phone-spend .meter-note { margin: 2px 0 0 18px; font-size: var(--text-label); line-height: 16px; }
 .phone-spend .meter { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; min-height: 20px; margin-left: 18px; font-size: var(--text-label); }
 .phone-spend .meter-label { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; color: var(--color-secondary); }
 .phone-spend .meter-value { flex: none; color: var(--color-muted); font-variant-numeric: tabular-nums; }
-.phone-spend .meter-bar { width: 64px; }
+.phone-spend .meter-bar { width: clamp(40px, calc(100vw - 284px), 64px); }
 
 /* A closed card that has not started: its priority mark alone, at the line's end. */
 .card-state.prio-only { justify-content: flex-end; }

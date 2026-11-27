@@ -107,7 +107,7 @@ export function KanbanSeat({ project, projectName, projectCwd, files, tasks, boa
     let grown = 0;
     const step = () => {
       const conversation = section.querySelector<HTMLElement>("[data-orchestrator-conversation]");
-      const form = conversation?.querySelector<HTMLElement>("form");
+      const form = conversation?.querySelector<HTMLElement>(":scope > form");
       const transcript = conversation?.querySelector<HTMLElement>("[data-composer-yields]");
       let next = 0;
       if (form && transcript) {

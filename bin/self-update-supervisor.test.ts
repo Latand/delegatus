@@ -11,7 +11,6 @@ import {
   createReadinessJournal,
   accessKeyCanRoundTrip,
   releaseHasRevisionReadiness,
-  TERMINAL_BOOTSTRAP_TIMEOUT_MS,
   waitForViewerReadiness,
   waitForPageAndChunk,
   exitError,
@@ -466,7 +465,7 @@ describe("revision-bound Viewer readiness", () => {
       try {
         const address = server.address() as { port: number };
         const ready = await waitForViewerReadiness(address.port, {
-          revision, timeoutMs: 5_000, allowLegacyFallback: legacy,
+          revision, silenceMs: 5_000, allowLegacyFallback: legacy,
           probeAccess: () => ({ headers: { "x-test-probe": "fixture", ...fixtureHeaders() } }), onPhase: journal.observe,
         });
         expect(ready).toBeTrue();
@@ -489,7 +488,7 @@ describe("revision-bound Viewer readiness", () => {
   test("a perimeter refusal falls back with launcher credentials, while missing credentials and pending readiness fail", async () => {
     const attempts: string[] = [];
     const legacy = await waitForViewerReadiness(43123, {
-      revision, timeoutMs: 1_000, allowLegacyFallback: true, probeAccess: () => ({ headers: fixtureHeaders() }),
+      revision, silenceMs: 1_000, allowLegacyFallback: true, probeAccess: () => ({ headers: fixtureHeaders() }),
       probe: async (_port, endpoint, _revision, _budget, headers) => {
         attempts.push(`${endpoint}:${headers[authorizationHeader] ?? "missing"}`);
         return endpoint === "/api/ready" ? { httpStatus: 403 } : { httpStatus: headers[authorizationHeader] ? 200 : 403 };
@@ -503,7 +502,7 @@ describe("revision-bound Viewer readiness", () => {
       attempts.length = 0;
       let refusalNow = 0;
       const refused = await waitForViewerReadiness(43123, {
-        revision, timeoutMs: 1_000, allowLegacyFallback: true, now: () => refusalNow, probeAccess: () => ({ headers }),
+        revision, silenceMs: 1_000, allowLegacyFallback: true, now: () => refusalNow, probeAccess: () => ({ headers }),
         probe: async (_port, endpoint, _revision, budget) => {
           attempts.push(endpoint);
           refusalNow += endpoint === "/api/ready" ? 1 : budget;
@@ -518,7 +517,7 @@ describe("revision-bound Viewer readiness", () => {
     attempts.length = 0;
     let now = 0;
     const pending = await waitForViewerReadiness(43123, {
-      revision, timeoutMs: 1_000, now: () => now,
+      revision, silenceMs: 1_000, now: () => now,
       probe: async (_port, endpoint) => {
         attempts.push(endpoint);
         now = 1_000;
@@ -534,7 +533,7 @@ describe("revision-bound Viewer readiness", () => {
     const attempts: string[] = [];
     let now = 0;
     const ready = await waitForViewerReadiness(43123, {
-      revision, timeoutMs: 1_000, allowLegacyFallback: false, now: () => now,
+      revision, silenceMs: 1_000, allowLegacyFallback: false, now: () => now,
       probe: async (_port, endpoint) => {
         attempts.push(endpoint);
         now = 1_000;
@@ -565,7 +564,7 @@ describe("revision-bound Viewer readiness", () => {
     const endpoints: string[] = [];
     let now = 0;
     const accepted = await waitForViewerReadiness(43123, {
-      revision, timeoutMs: 1_000, now: () => now,
+      revision, silenceMs: 1_000, now: () => now,
       allowLegacyFallback: !releaseHasRevisionReadiness({ dir }),
       probe: async (_port, endpoint) => {
         endpoints.push(endpoint);
@@ -592,7 +591,7 @@ describe("revision-bound Viewer readiness", () => {
     const journalFile = join(root, "pending-revision.json");
     const journal = createReadinessJournal(journalFile, { revision, pid: 123 }, () => now);
     const ready = await waitForViewerReadiness(43123, {
-      revision, timeoutMs: 5_000, onPhase: journal.observe,
+      revision, silenceMs: 5_000, onPhase: journal.observe,
       now: () => now, sleep: async milliseconds => { now += milliseconds; },
       probe: async (_port, endpoint, _revision, budget) => {
         attempts.push([endpoint, budget]);
@@ -616,6 +615,154 @@ describe("revision-bound Viewer readiness", () => {
         { status: "failed", elapsedMs: 4_370, error: "deadline" },
       ] } },
     });
+  });
+});
+
+describe("progress-bound Viewer readiness", () => {
+  const revision = "a".repeat(40);
+  const receipt = (tail: string) => `[viewer startup phase] ${tail}\n`;
+  async function start(name: string, receipts: Array<[number, string]>, {
+    readyAt = Infinity, deadline = 510_000, exitAt = Infinity,
+  } = {}) {
+    let now = 0;
+    let timeout: unknown;
+    let next = 0;
+    const file = join(root, `startup-${name}.json`);
+    const journal = createReadinessJournal(file, { revision, pid: 123 }, () => now);
+    const ready = await waitForViewerReadiness(43123, {
+      revision, silenceMs: 90_000, deadline,
+      startupProgress: journal.startupProgress,
+      onTimeout: detail => { timeout = detail; },
+      now: () => now,
+      sleep: async milliseconds => {
+        const end = now + milliseconds;
+        while (next < receipts.length && receipts[next]![0] <= end) {
+          const [at, line] = receipts[next++]!;
+          now = at;
+          journal.observeStartupOutput(line);
+        }
+        now = end;
+      },
+      assertChildRunning: () => { if (now >= exitAt) throw new Error(`child exited at ${now}`); },
+      probe: async () => ({ httpStatus: now >= readyAt ? 200 : 503, revision }),
+    });
+    return { ready, now, timeout, startup: JSON.parse(readFileSync(file, "utf8")).runs[0].startup };
+  }
+
+  test("503s are pending for 250 seconds while startup advances", async () => {
+    const result = await start("slow", [
+      [30_000, receipt("state-compatibility running 0")],
+      [60_000, receipt("state-compatibility progress 1 7")],
+      [100_000, receipt("registry running 0")],
+      [140_000, receipt("registry progress 29 100")],
+      [180_000, receipt("activation running 0")],
+      [220_000, receipt("activation progress 3 34")],
+    ], { readyAt: 250_000 });
+    expect(result).toMatchObject({ ready: true, now: 250_000, startup: {
+      registry: { done: 29, total: 100 },
+    } });
+  });
+
+  test("a ready answer observed inside the silence window survives journal write time", async () => {
+    let now = 0;
+    const ready = await waitForViewerReadiness(43123, {
+      revision, silenceMs: 90_000, now: () => now,
+      onPhase: event => { if (event.status === "ready") now += 5; },
+      probe: async () => { now = 89_999; return { httpStatus: 200, revision }; },
+      sleep: async milliseconds => { now += milliseconds; },
+    });
+    expect(ready).toBeTrue();
+    expect(now).toBe(90_004);
+  });
+
+  test("a ready answer observed exactly at the inclusive silence boundary succeeds", async () => {
+    let now = 0;
+    const ready = await waitForViewerReadiness(43123, {
+      revision, silenceMs: 90_000, now: () => now,
+      onPhase: event => { if (event.status === "ready") now += 2; },
+      probe: async () => { now = 90_000; return { httpStatus: 200, revision }; },
+      sleep: async milliseconds => { now += milliseconds; },
+    });
+    expect(ready).toBeTrue();
+    expect(now).toBe(90_002);
+  });
+
+  test("silence at registry expires 90 seconds after its last counter", async () => {
+    expect(await start("stalled", [
+      [10_000, receipt("registry running 0")],
+      [40_000, receipt("registry progress 3 24")],
+    ])).toMatchObject({ ready: false, now: 130_000, timeout: {
+      reason: "silence", phase: "registry", lastProgress: "registry 3/24",
+    } });
+  });
+
+  test("no receipts expire at 90 seconds", async () => {
+    expect(await start("silent", [])).toMatchObject({ ready: false, now: 90_000, timeout: {
+      reason: "silence", phase: null, lastProgress: null,
+    } });
+  });
+
+  test("duplicate counters and phase elapsed times cannot keep the child alive", async () => {
+    expect(await start("duplicates", [
+      [10_000, receipt("access running 0")],
+      [20_000, receipt("access ready 1")],
+      [30_000, receipt("registry running 0")],
+      [40_000, receipt("registry progress 3 24")],
+      [60_000, receipt("registry progress 3 24")],
+      [65_000, receipt("registry progress 3 25")],
+      [70_000, receipt("registry progress 2 24")],
+      [85_000, receipt("registry running 99")],
+      [90_000, receipt("access ready 2")],
+      [105_000, receipt("state-compatibility running 0")],
+    ])).toMatchObject({ ready: false, now: 130_000, timeout: {
+      phase: "registry", lastProgress: "registry 3/24",
+    } });
+  });
+
+  test("a ready answer at the ceiling is refused despite advancing receipts", async () => {
+    expect(await start("ceiling", [
+      [10_000, receipt("registry running 0")],
+      [40_000, receipt("registry progress 3 24")],
+      [80_000, receipt("registry progress 5 24")],
+      [130_000, receipt("registry progress 7 24")],
+    ], { deadline: 150_000, readyAt: 150_000 })).toMatchObject({ ready: false, now: 150_000, timeout: {
+      reason: "ceiling", phase: "registry", lastProgress: "registry 7/24",
+    } });
+  });
+
+  test("a child exit wins over its last pending readiness response", async () => {
+    await expect(start("exit", [[10_000, receipt("registry running 0")]], { exitAt: 24_000 }))
+      .rejects.toThrow("child exited at 24000");
+  });
+
+  test("child exit aborts a Viewer probe in flight", async () => {
+    const child = new AbortController();
+    let now = 0;
+    await expect(waitForViewerReadiness(43123, {
+      revision, silenceMs: 90_000, deadline: 510_000, signal: child.signal,
+      now: () => now,
+      assertChildRunning: () => { if (child.signal.aborted) throw new Error(`child exited at ${now}`); },
+      probe: async (_port, _endpoint, _revision, budget, _headers, signal) => {
+        now = 50;
+        child.abort();
+        if (!signal?.aborted) now = budget;
+        return { error: "deadline" };
+      },
+    })).rejects.toThrow(/^child exited at 50$/);
+  });
+
+  test("over-long lines, including split diagnostics, and unknown phases are ignored", async () => {
+    const invalid = await start("invalid", [
+      [30_000, receipt("unsupported running 0")],
+      [40_000, receipt("registry running 0").trimEnd() + " ".repeat(121) + "\n"],
+      [50_000, "x".repeat(121)],
+      [60_000, receipt("registry running 0")],
+      [70_000, receipt("registry progress 1 2")],
+    ]);
+    expect(invalid).toMatchObject({ ready: false, now: 90_000 });
+    expect(invalid.startup).toEqual({});
+    const result = await start("unknown-only", [[50_000, receipt("unsupported running 0")]]);
+    expect(result.startup).toEqual({});
   });
 });
 
@@ -701,11 +848,6 @@ describe("bounded page and chunk readiness", () => {
       } finally { rmSync(file, { force: true }); }
     });
   }
-
-  test("terminal handoff covers candidate and rollback startup bounds", () => {
-    expect(TERMINAL_BOOTSTRAP_TIMEOUT_MS).toBeGreaterThanOrEqual(2 * (300_000 + 90_000 + 90_000));
-    expect(TERMINAL_BOOTSTRAP_TIMEOUT_MS).toBeLessThan(17 * 60_000);
-  });
 
   test("a real never-ready child settles under a parent watchdog", async () => {
     const child = spawn(process.execPath, ["--eval", `

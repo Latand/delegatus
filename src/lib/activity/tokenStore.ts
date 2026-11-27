@@ -53,12 +53,14 @@ export function migrateUsage(db: Database): void {
       account TEXT NOT NULL, day TEXT NOT NULL, task_cursor TEXT NOT NULL DEFAULT '', PRIMARY KEY(account, day)) WITHOUT ROWID`,
     `CREATE TABLE IF NOT EXISTS usage_limit_rates (account TEXT NOT NULL, window TEXT NOT NULL, day TEXT NOT NULL,
       rate REAL, rise REAL NOT NULL, weight REAL NOT NULL, source TEXT NOT NULL, plan TEXT,
-      frozen INTEGER NOT NULL DEFAULT 0, computed_at INTEGER NOT NULL, PRIMARY KEY(account, window, day)) WITHOUT ROWID`,
+      frozen INTEGER NOT NULL DEFAULT 0, computed_at INTEGER NOT NULL, plan_tier TEXT, meter_version TEXT, PRIMARY KEY(account, window, day)) WITHOUT ROWID`,
     "CREATE INDEX IF NOT EXISTS usage_limit_rates_day ON usage_limit_rates(day, account, window)",
     `CREATE TABLE IF NOT EXISTS task_limit_spend (task TEXT NOT NULL, account TEXT NOT NULL, engine TEXT NOT NULL,
       tokens INTEGER NOT NULL, unpriced_tokens INTEGER NOT NULL, weight REAL NOT NULL, rated_weight REAL NOT NULL,
       weekly_pp REAL, window_start INTEGER, window_pp REAL, session_start INTEGER, session_pp REAL,
       first_hour INTEGER NOT NULL, last_hour INTEGER NOT NULL, floor TEXT, computed_at INTEGER NOT NULL,
+      api_usd REAL, api_priced_tokens INTEGER NOT NULL DEFAULT 0, unpriced_models TEXT NOT NULL DEFAULT '[]',
+      api_expired_usd REAL, api_expired_priced_tokens INTEGER NOT NULL DEFAULT 0, api_history_missing INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY(task, account)) WITHOUT ROWID`,
     "CREATE INDEX IF NOT EXISTS task_limit_spend_account ON task_limit_spend(account, task)",
     `CREATE TABLE IF NOT EXISTS limit_spend_meta (singleton INTEGER PRIMARY KEY CHECK(singleton=1), schema INTEGER NOT NULL,
@@ -66,7 +68,7 @@ export function migrateUsage(db: Database): void {
       rates_hour INTEGER NOT NULL DEFAULT -1, pipeline_revision INTEGER NOT NULL DEFAULT -1,
       pipeline_key TEXT NOT NULL DEFAULT '', pipeline_seed TEXT NOT NULL DEFAULT 'seed:',
       aggregate_schema INTEGER NOT NULL DEFAULT 2, aggregate_cursor TEXT NOT NULL DEFAULT '',
-      rate_schema INTEGER NOT NULL DEFAULT 3)`,
+      rate_schema INTEGER NOT NULL DEFAULT 3, estimate_version TEXT NOT NULL DEFAULT '', estimate_cursor TEXT)`,
     "INSERT OR IGNORE INTO limit_spend_meta(singleton, schema) VALUES(1, 1)",
     `CREATE TABLE IF NOT EXISTS usage_days (${dayDefinition}) WITHOUT ROWID`,
     `CREATE TABLE IF NOT EXISTS usage_days_rebuild (${dayDefinition}) WITHOUT ROWID`,
@@ -92,6 +94,20 @@ export function migrateUsage(db: Database): void {
   if (!spendCols.has("aggregate_schema")) db.exec("ALTER TABLE limit_spend_meta ADD COLUMN aggregate_schema INTEGER NOT NULL DEFAULT 1");
   if (!spendCols.has("aggregate_cursor")) db.exec("ALTER TABLE limit_spend_meta ADD COLUMN aggregate_cursor TEXT NOT NULL DEFAULT ''");
   if (!spendCols.has("rate_schema")) db.exec("ALTER TABLE limit_spend_meta ADD COLUMN rate_schema INTEGER NOT NULL DEFAULT 1");
+  if (!spendCols.has("estimate_version")) db.exec("ALTER TABLE limit_spend_meta ADD COLUMN estimate_version TEXT NOT NULL DEFAULT ''");
+  if (!spendCols.has("estimate_cursor")) db.exec("ALTER TABLE limit_spend_meta ADD COLUMN estimate_cursor TEXT");
+  const taskSpendCols = new Set(db.query<{ name: string }, []>("PRAGMA table_info(task_limit_spend)").all().map(r => r.name));
+  if (!taskSpendCols.has("api_usd")) db.exec("ALTER TABLE task_limit_spend ADD COLUMN api_usd REAL");
+  if (!taskSpendCols.has("api_priced_tokens")) db.exec("ALTER TABLE task_limit_spend ADD COLUMN api_priced_tokens INTEGER NOT NULL DEFAULT 0");
+  if (!taskSpendCols.has("unpriced_models")) db.exec("ALTER TABLE task_limit_spend ADD COLUMN unpriced_models TEXT NOT NULL DEFAULT '[]'");
+  if (!taskSpendCols.has("api_expired_usd")) db.exec("ALTER TABLE task_limit_spend ADD COLUMN api_expired_usd REAL");
+  if (!taskSpendCols.has("api_expired_priced_tokens")) db.exec("ALTER TABLE task_limit_spend ADD COLUMN api_expired_priced_tokens INTEGER NOT NULL DEFAULT 0");
+  if (!taskSpendCols.has("api_history_missing")) db.exec("ALTER TABLE task_limit_spend ADD COLUMN api_history_missing INTEGER NOT NULL DEFAULT 1");
+  const rateCols = new Set(db.query<{ name: string }, []>("PRAGMA table_info(usage_limit_rates)").all().map(r => r.name));
+  if (!rateCols.has("plan_tier")) db.exec("ALTER TABLE usage_limit_rates ADD COLUMN plan_tier TEXT");
+  if (!rateCols.has("meter_version")) db.exec("ALTER TABLE usage_limit_rates ADD COLUMN meter_version TEXT");
+  db.exec("CREATE INDEX IF NOT EXISTS usage_limit_rates_latest_plan ON usage_limit_rates(account, day DESC, computed_at DESC) WHERE plan IS NOT NULL");
+  db.exec("CREATE INDEX IF NOT EXISTS usage_limit_rates_plan_tier ON usage_limit_rates(account, plan, day DESC, computed_at DESC) WHERE plan_tier IS NOT NULL");
   const cols = new Set(db.query<{ name: string }, []>("PRAGMA table_info(activity_files)").all().map(r => r.name));
   if (!cols.has("usage_offset")) db.exec("ALTER TABLE activity_files ADD COLUMN usage_offset INTEGER NOT NULL DEFAULT 0");
   if (!cols.has("usage_facts")) db.exec("ALTER TABLE activity_files ADD COLUMN usage_facts TEXT");

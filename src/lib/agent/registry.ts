@@ -132,6 +132,7 @@ import {
   registryConversationsForEntryKey, registryConversationKeysForEntryKey, registryHasEntryKeyIndex,
   sqliteRegistryStoreImported, registryLivenessRows, registryRowProjection, type StartupFallbackSweep, type SpawnMarkerBackup, SpawnMarkerBackupChangedError,
   type RegistryDeliveryCompactionChanges, type RegistryRowProjector,
+  type RegistrySnapshotPreparationOptions, type NativeCallerArtifactPreparationOptions,
   type SqliteRegistryReplacement,
   type SqliteRegistrySnapshot,
 } from "./sqliteRegistryStore";
@@ -151,7 +152,7 @@ import type { LaunchFailureReporting } from "@/lib/tasks/launchFailureReporting"
 export type AgentHostStatus = "starting" | "live" | "idle" | "handoff" | "unhosted" | "dead";
 
 const STRUCTURED_CLAIM_REFUSALS = ["missing-entry", "adoption-pending", "missing-host",
-  "termination-survivors", "signal-domain", "agent-scope", "unhosted", "live-native", "writer-owned"] as const;
+  "termination-survivors", "signal-domain", "agent-scope", "unhosted", "live-native", "writer-owned", "archived-writer"] as const;
 export type StructuredHostClaimRefusal = typeof STRUCTURED_CLAIM_REFUSALS[number];
 
 /** Optional per-attempt output, filled at the branch that refuses the claim. */
@@ -303,6 +304,9 @@ export interface AgentRegistryEntry {
   claimOwner: string | null;
   pendingAction: "spawn" | "resume" | "handoff" | null;
   structuredHostOperationId?: string | null;
+  /** Migration revoked this generation's writer. Its original custody stays
+      recorded until native teardown has accounted for the process tree. */
+  structuredWriterRetired?: true;
   updatedAt: string;
 }
 
@@ -6679,14 +6683,14 @@ export class AgentRegistry {
    * mutation share the admitted transaction. Stores without a SQLite writer run it at once.
    */
   private async whenWriterHeld<T>(
-    correlation: { label: string; operationId?: string | null },
+    correlation: { label: string; operationId?: string | null; waitDeadlineAt?: number },
     operation: () => T,
     correlate?: (value: T) => { label: string; operationId?: string | null } | null,
   ): Promise<{ acquired: true; value: T } | { acquired: false }> {
     const startedAt = performance.now();
     return withViewerOperation("registry.write", () => this.withWriterAdmissionQueue(
       remaining => this.whenWriterAdmitted(correlation, operation, correlate, remaining),
-      this.writerDeadlineMs ?? 5_000,
+      Math.min(this.writerDeadlineMs ?? 5_000, Math.max(0, (correlation.waitDeadlineAt ?? Infinity) - Date.now())),
       () => {
         recordBlockingWait({ site: "registry-lock-async", synchronous: false,
           durationMs: performance.now() - startedAt, correlation, subject: "agent-registry", refused: true });
@@ -6774,7 +6778,7 @@ export class AgentRegistry {
 
   /** {@link deliveryWrite} for a coordinator step: the value, or
       {@link RegistryWriterBusyError} when the lock stayed held. */
-  async deliveryWriteOrBusy<T>(correlation: { label: string; operationId?: string | null }, write: () => T): Promise<T> {
+  async deliveryWriteOrBusy<T>(correlation: { label: string; operationId?: string | null; waitDeadlineAt?: number }, write: () => T): Promise<T> {
     const written = await this.whenWriterHeld(correlation, write);
     if (!written.acquired) throw new RegistryWriterBusyError(correlation.label, this.writerHolderDetail());
     return written.value;
@@ -6882,7 +6886,7 @@ export class AgentRegistry {
   }
 
   /** Production boot and the candidate gate share the cooperative first view. */
-  async prepareReadOnlySnapshot(signal?: AbortSignal, options: { recoveryIndexes?: boolean } = {}): Promise<RegistryFile> {
+  async prepareReadOnlySnapshot(signal?: AbortSignal, options: RegistrySnapshotPreparationOptions = {}): Promise<RegistryFile> {
     signal?.throwIfAborted();
     if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) {
       return (await this.sqliteStore.prepareReadOnlySnapshot(signal, options)).file;
@@ -7593,7 +7597,7 @@ export class AgentRegistry {
     return { snapshot, rootConversationId: liveRootSession({ conversations: Object.values(snapshot.conversations), configuredRootId })?.conversationId ?? null };
   }
 
-  async prepareNativeCallerArtifacts(signal?: AbortSignal, options?: { waitUntilReady?: boolean }): Promise<void> {
+  async prepareNativeCallerArtifacts(signal?: AbortSignal, options?: NativeCallerArtifactPreparationOptions): Promise<void> {
     if (this.sqliteMode === "read" || this.sqliteMode === "sqlite") {
       await this.sqliteStore?.prepareNativeCallerArtifacts(signal, options);
     }
@@ -10337,6 +10341,7 @@ export class AgentRegistry {
         || entry.claimOwner !== claimOwner
         || entry.claimEpoch !== claimEpoch
         || entry.structuredHost.writerClaimEpoch !== claimEpoch
+        || (entry.structuredWriterRetired && (!releaseClaim || (status !== "dead" && status !== "unhosted")))
         || (entry.structuredTerminationSurvivors?.length ?? 0) > 0) return null;
       let normalizedHost = normalizeStructuredHost(preserveStructuredScope(entry.structuredHost, structuredHost));
       const handoffClaimEpoch = entry.structuredHost.releaseHandoffClaimEpoch;
@@ -10382,7 +10387,7 @@ export class AgentRegistry {
       const entry = file.entries[sessionKeyId(key)];
       const structuredHost = entry?.structuredHost;
       const current = structuredHost?.process;
-      if (!entry?.claimOwner || !structuredHost || !current || expected.startIdentity === null
+      if (!entry?.claimOwner || entry.structuredWriterRetired || !structuredHost || !current || expected.startIdentity === null
         || !sameRecordedProcessIdentity(current, expected)) return false;
       const replacement = {
         ...entry,
@@ -10402,15 +10407,15 @@ export class AgentRegistry {
     });
   }
 
-  /** Why a claimed write was refused: true when the caller still owns the
-      writer fence and only a captured termination tree holds the row. */
+  /** A refused checkpoint can still hold native custody while teardown is
+      pending. Keep its claim available to the identity-fenced stop. */
   structuredHostWriteHeldByTermination(key: SessionKey, claimOwner: string, claimEpoch: number): boolean {
     return this.readKeyed(file => {
       const entry = file.entries[sessionKeyId(key)];
       return entry?.claimOwner === claimOwner
       && entry.claimEpoch === claimEpoch
       && entry.structuredHost?.writerClaimEpoch === claimEpoch
-      && (entry.structuredTerminationSurvivors?.length ?? 0) > 0;
+      && (entry.structuredWriterRetired === true || (entry.structuredTerminationSurvivors?.length ?? 0) > 0);
     });
   }
 
@@ -10418,6 +10423,7 @@ export class AgentRegistry {
     return this.readKeyed(file => {
       const entry = file.entries[sessionKeyId(key)];
       return entry?.claimOwner === claimOwner
+      && entry.structuredWriterRetired !== true
       && entry.claimEpoch === claimEpoch
       && entry.structuredHost?.writerClaimEpoch === claimEpoch;
     });
@@ -10452,6 +10458,7 @@ export class AgentRegistry {
           claimEpoch: 0, claimOwner: null, pendingAction: "resume" as const, updatedAt: now() }
         : null);
       if (!entry) return refuse("missing-entry");
+      if (entry.structuredWriterRetired) return refuse("archived-writer");
       // Every claimant (boot, resume and retry) must retain the predecessor's
       // writer epoch until native setup has confirmed cleanup.
       if (unfinishedStructuredAdoption(file, key)) return refuse("adoption-pending");
@@ -12371,6 +12378,13 @@ export class AgentRegistry {
       if (!predecessor) throw new Error("viewer conversation has no native generation");
       const committedAt = now();
       const committedHost = successor.host ?? expectedReceipt.host;
+      if (predecessor.id !== successor.id && predecessor.accountId !== successor.accountId) {
+        const source = file.entries[sessionKeyId({ engine: conversation.engine, sessionId: predecessor.id })];
+        if (source?.structuredHost && source.artifactPath === predecessor.path) {
+          source.structuredWriterRetired = true;
+          source.updatedAt = committedAt;
+        }
+      }
       predecessor.archivedAt = committedAt;
       const generation: NativeGeneration = {
         ...successor,
