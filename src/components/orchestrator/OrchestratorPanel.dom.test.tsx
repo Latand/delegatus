@@ -172,9 +172,13 @@ function installFetch(): void {
       return { ok: true, status: 200, json: async () => (target === "atlas" ? incumbentStatus : { project: target, designated: false, rotation: null, context: null }) } as Response;
     }
     if (url.startsWith("/api/orchestrator/seat?")) {
+      const query = new URL(url, "http://localhost").searchParams;
+      if (query.get("scope") === "all") {
+        return Response.json({ all: { conversationIds: [], paths: [], previous: { conversationIds: [], paths: [] } } });
+      }
       if (seatReadGate) await seatReadGate;
-      const target = new URL(url, "http://localhost").searchParams.get("project");
-      return { ok: true, status: 200, json: async () => (target === "atlas" ? seatStatus : { seat: null, pending: null, exists: true }) } as Response;
+      const target = query.get("project");
+      return Response.json(target === "atlas" ? seatStatus : { seat: null, pending: null, exists: true });
     }
     if (url === "/api/accounts") return { ok: true, status: 200, json: async () => accounts } as Response;
     /* The seat's report log (#2146): an empty page. */
@@ -2094,11 +2098,12 @@ test("the kanban seat's inline header draws the predecessor link as a glyph, wit
   expect(docked.getAttribute("aria-label")).toBeNull();
 });
 
-test("a panel handed its host's seat read shows that seat and never polls the seat route itself (#1695 kanban seat)", async () => {
+test("a panel handed its host's seat read shows that seat without polling project seat detail (#1695 kanban seat)", async () => {
   let seatReads = 0;
   const stubbed = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    if (String(input).startsWith("/api/orchestrator/seat?")) seatReads += 1;
+    const url = new URL(String(input), "http://localhost");
+    if (url.pathname === "/api/orchestrator/seat" && url.searchParams.has("project")) seatReads += 1;
     return stubbed(input, init);
   }) as typeof fetch;
   incumbentStatus = incumbent();
