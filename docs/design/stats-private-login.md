@@ -282,7 +282,7 @@ count as new until the store holds 92 days.
 
 ```jsonc
 "main": "entry.ts",
-"assets": { /* unchanged, plus */ "run_worker_first": ["/api/*", "/stats", "/stats/", "/stats/*"] },
+"assets": { /* unchanged, plus */ "run_worker_first": ["/api/*", "/stats", "/stats/*"] },
 "vars": { "STATS_ORIGIN": "https://delegatus.org", "STATS_RP_ID": "delegatus.org" },
 "durable_objects": { "bindings": [{ "name": "STATS", "class_name": "StatsStore" }] },
 "migrations": [{ "tag": "v1", "new_sqlite_classes": ["StatsStore"] }],
