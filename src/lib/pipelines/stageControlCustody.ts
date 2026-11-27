@@ -12,6 +12,10 @@ const idleStopBinding = z.object({
   transcriptPath: z.string().min(1),
   revision: z.number().int().nonnegative(),
   writerClaim: z.string().min(1),
+  providerRecovery: z.object({
+    pipelineId: z.string().min(1), stageId: z.string().min(1), attempt: z.number().int().positive(),
+    turnTs: z.number().positive(), controlGeneration: z.string().nullable(),
+  }).strict().optional(),
 }).strict();
 export type IdleStopBinding = z.infer<typeof idleStopBinding>;
 type IdleStopIdentity = Omit<IdleStopBinding, "kind" | "operationId">;
@@ -48,6 +52,12 @@ export async function claimIdleStop(key: string, identity: IdleStopIdentity, rep
   const record = await claimPipelineControlOwnership(key, JSON.stringify(binding), "pipeline-idle-fence-" + operationId,
     replaces && JSON.stringify(replaces));
   return { acquired: record.acquired, binding: idleStopBinding.parse(JSON.parse(record.binding)) };
+}
+
+export function idleStopProviderCutMatches(binding: IdleStopBinding, ref: IdleStopBinding["providerRecovery"]): boolean {
+  const saved = binding.providerRecovery;
+  return !!saved && !!ref && saved.pipelineId === ref.pipelineId && saved.stageId === ref.stageId
+    && saved.attempt === ref.attempt && saved.turnTs === ref.turnTs && saved.controlGeneration === ref.controlGeneration;
 }
 
 export function idleStopReceiptMatches(result: RuntimeOperationResult, binding: IdleStopBinding): boolean {

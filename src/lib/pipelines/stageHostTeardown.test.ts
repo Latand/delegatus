@@ -505,6 +505,81 @@ test("provider recovery authority cannot select an unconditional engine stop", a
   expect(killed).toEqual([]);
 });
 
+test("provider recovery can confirm its owned stop after the idle session projection disappears", async () => {
+  const fixture = hostedConversation();
+  const { terminalIdleStopKey } = await import("./stageControlCustody");
+  const recorded = { ...target(fixture.conversationId, fixture.path), launchId: fixture.launchId };
+  const ownerKey = terminalIdleStopKey(recorded);
+  const providerRecovery = { pipelineId: "pipeline-fixture", stageId: recorded.stageId,
+    attempt: recorded.attempt, turnTs: 42, controlGeneration: null };
+  const onlyIfIdle = { revision: 7, writerClaim: "fixture:writer" };
+  const dispatches: string[] = [];
+  let waitingForExit = false;
+  const client = {
+    readSession: async () => waitingForExit ? null : { conversationId: fixture.conversationId, sessionKey: fixture.key,
+      host: "hosted", turn: "idle", activeTurnId: null, attentionIds: [], retirementBlocked: false,
+      artifactPath: fixture.path, ...onlyIfIdle },
+    operationStatus: async (operationId: string) => {
+      if (waitingForExit) fixture.registry.terminateStructuredHost(fixture.key);
+      return { operationId, receipt: { operationId, idempotencyKey: operationId, conversationId: fixture.conversationId,
+        kind: "kill", origin: "system", originAuthenticated: true, status: waitingForExit ? "delivered" : "delivering" } };
+    },
+  } as unknown as RuntimeHostClient;
+  const stop = () => retirePipelineStageAgent(recorded, confirmationProbes({ client, operationId: ownerKey,
+    providerRecovery, requireIdleEvidence: true, action: async request => {
+      expect(request).toMatchObject({ providerRecovery, onlyIfIdle });
+      dispatches.push(request.operationId!);
+      return { status: 202, body: { ok: true, operationId: request.operationId, receipt: { status: "queued" } } };
+    },
+  }));
+  try {
+    expect(await stop()).toEqual({ outcome: "unconfirmed", operationId: dispatches[0],
+      detail: "kill accepted as delivering but termination was not confirmed" });
+    expect(dispatches).toHaveLength(1);
+    expect(await defaultPipelinePorts().stageHostResident(recorded)).toBe(true);
+    waitingForExit = true;
+    expect(await stop()).toEqual({ outcome: "stopped" });
+    expect(await defaultPipelinePorts().stageHostResident(recorded)).toBe(false);
+    expect(dispatches).toHaveLength(1);
+  } finally { setAgentRegistryForTests(null); }
+});
+
+test("provider recovery replays an undispatched owned stop under its original cut and idle fence", async () => {
+  const fixture = hostedConversation();
+  const { terminalIdleStopKey } = await import("./stageControlCustody");
+  const recorded = { ...target(fixture.conversationId, fixture.path), launchId: fixture.launchId };
+  const providerRecovery = { pipelineId: "pipeline-fixture", stageId: recorded.stageId,
+    attempt: recorded.attempt, turnTs: 42, controlGeneration: null };
+  const onlyIfIdle = { revision: 7, writerClaim: "fixture:writer" };
+  const client = {
+    readSession: async () => ({ conversationId: fixture.conversationId, sessionKey: fixture.key,
+      host: "hosted", turn: "idle", activeTurnId: null, attentionIds: [], retirementBlocked: false,
+      artifactPath: fixture.path, ...onlyIfIdle }),
+    operationStatus: async () => null,
+  } as unknown as RuntimeHostClient;
+  const dispatched: Array<{ operationId?: string }> = [];
+  const stop = (turnTs = providerRecovery.turnTs) => retirePipelineStageAgent(recorded, confirmationProbes({ client,
+    operationId: terminalIdleStopKey(recorded), requireIdleEvidence: true, providerRecovery: { ...providerRecovery, turnTs },
+    action: async request => {
+      dispatched.push(request);
+      if (dispatched.length === 1) throw new Error("fixture interrupted before admission");
+      fixture.registry.terminateStructuredHost(fixture.key);
+      return { status: 200, body: { ok: true, operationId: request.operationId, receipt: { status: "delivered" } } };
+    },
+  }));
+  try {
+    const interrupted = await stop();
+    expect(interrupted).toMatchObject({ outcome: "unconfirmed", detail: expect.stringContaining("interrupted before admission") });
+    expect(dispatched).toHaveLength(1);
+    expect(await defaultPipelinePorts().stageHostResident(recorded)).toBe(true);
+    expect(await stop(providerRecovery.turnTs + 1)).toMatchObject({ outcome: "unconfirmed" });
+    expect(dispatched).toHaveLength(1);
+    expect(await stop()).toEqual({ outcome: "stopped" });
+    expect(dispatched).toEqual([dispatched[0], dispatched[0]]);
+    expect(await defaultPipelinePorts().stageHostResident(recorded)).toBe(false);
+  } finally { setAgentRegistryForTests(null); }
+});
+
 test("runtime-switch handoff forwards its stable owned stop identity to the kill control", async () => {
   const fixture = hostedConversation();
   settleKill = () => { fixture.registry.terminateStructuredHost(fixture.key); };

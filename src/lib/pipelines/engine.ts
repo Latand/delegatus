@@ -43,7 +43,7 @@ import { readRuntimeSnapshot } from "@/lib/runtime/snapshotReads";
 import { pipelinePublishesRemoteBranch, MISSING_DELIVERY_REMOTE, LOCAL_DELIVERY_PUBLISH_REFUSAL, PUBLICATION_MEMORY_DEFERRAL } from "./publication";
 import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 import { controllerSnapshotPorts } from "./controllerSnapshot";
-import { claimIdleStop, claimWithdrawal, consumeWithdrawalRefusal, hasWithdrawalRefusal, idleStopReceiptMatches, readIdleStop, readWithdrawal, recordWithdrawalRefusal, settleDeadWithdrawal, terminalIdleStopKey, terminalIdleStopOwner, withdrawalSettledDead, type IdleStopBinding, type WithdrawalBinding } from "./stageControlCustody";
+import { claimIdleStop, claimWithdrawal, consumeWithdrawalRefusal, hasWithdrawalRefusal, idleStopProviderCutMatches, idleStopReceiptMatches, readIdleStop, readWithdrawal, recordWithdrawalRefusal, settleDeadWithdrawal, terminalIdleStopKey, terminalIdleStopOwner, withdrawalSettledDead, type IdleStopBinding, type WithdrawalBinding } from "./stageControlCustody";
 import { pipelineStageHostTerminationSourceCurrent, probePipelineStageHostTermination, type HostTerminationInput, type HostTerminationProbe } from "./hostTermination";
 import { guardHostTerminationCheckpoint, hostTerminationKey } from "./hostTerminationProof";
 import { attemptEvidenceFloor, attemptAccountPin, currentRuntimeSeat, openRuntimeSwitch, pendingRuntimeSwitchRetry, recoverableRuntimeSwitch, parkRuntimeSwitch, requestRuntimeSwitchRetry, switchOperationKey, driveRuntimeSwitch, runtimeTargetsEqual, hasRuntimeSwitchKill, cancelPendingRuntimeSwitch, RuntimeSwitchSuperseded, runtimeSwitchControlAcknowledgement, runtimeSwitchReconfigureOutcome } from "./runtimeSwitch";
@@ -170,7 +170,7 @@ import { laneMovedSince } from "./laneMovement";
 import { pipelineRepoPreflightError, pipelineRepoPreflightStatus } from "./preflight";
 import { creationIssueLinks } from "@/lib/forge/issueDelivery";
 import { preparePipelineRepository, readRepositoryInitialization } from "./initializeRepository";
-import { classifyProviderCondition, CODEX_CYBERSECURITY_REFUSAL, CODEX_WORKSPACE_REQUIREMENTS_FAILURE, type ProviderCondition } from "./providerConditions";
+import { classifyProviderCondition, codexCybersecurityRefusal, CODEX_WORKSPACE_REQUIREMENTS_FAILURE, type ProviderCondition } from "./providerConditions";
 import { equivalentConfig } from "@/lib/roles/equivalents";
 import { clampEffortToScale } from "@/lib/agent/efforts";
 import { isStagePromptContext, renderCutRetryInput, renderDecisionInput, renderOutOfMemoryRetryInput } from "./prompts";
@@ -1441,7 +1441,10 @@ export async function stopPipelineStageAgent(
   target: PipelineStageHostRef,
   probes: StageStopProbes = {},
 ): Promise<PipelineStageStopResult> {
-  if (probes.providerRecovery && !probes.onlyIfIdle) return { outcome: "deferred" };
+  const ownerKey = terminalIdleStopOwner(probes.operationId) ? probes.operationId : null;
+  // An existing owner can reconcile a receipt after the session stops
+  // projecting idle. Issuing any provider stop still requires a fresh fence.
+  if (probes.providerRecovery && !probes.onlyIfIdle && !ownerKey) return { outcome: "deferred" };
   let binding: IdleStopBinding | undefined;
   let receiptDeadline: number | undefined;
   const signal = stageStopSignal(probes);
@@ -1451,7 +1454,6 @@ export async function stopPipelineStageAgent(
     const probe = await stageHostProbe(target);
     assertCurrent();
     if (!probe || !probe.resident()) return { outcome: "not-running" };
-    const ownerKey = terminalIdleStopOwner(probes.operationId) ? probes.operationId : null;
     if (ownerKey) {
       if (ownerKey !== terminalIdleStopKey(target) || target.agentPath && target.agentPath !== probe.transcriptPath)
         return { outcome: "deferred" };
@@ -1459,6 +1461,7 @@ export async function stopPipelineStageAgent(
       if (previous && !idleStopTargetMatches(probe, previous)) return { outcome: "deferred" };
       binding = previous ?? undefined;
       assertCurrent();
+      let replayAdmission = false;
       if (previous) {
         if (!probes.onlyIfIdle) return await confirmStageStop(probe, previous.operationId, null, probes, previous);
         const client = probes.client === undefined ? runtimeHostClient() : probes.client;
@@ -1477,10 +1480,18 @@ export async function stopPipelineStageAgent(
           stopObserving?.();
         });
         assertCurrent();
-        if (now() >= receiptDeadline || !receipt || !idleStopReceiptMatches(receipt, previous)) return {
+        const canReplayMissing = receipt === null && idleStopProviderCutMatches(previous, probes.providerRecovery)
+          && probes.onlyIfIdle.revision >= previous.revision;
+        if (now() >= receiptDeadline || !(receipt ? idleStopReceiptMatches(receipt, previous) : canReplayMissing)) return {
           outcome: "unconfirmed", operationId: previous.operationId, detail: "the earlier stage stop has no verified receipt",
         };
-        if (!KILL_REFUSED_STATES.has(receipt.receipt.status)
+        if (!receipt) {
+          // An interruption can land between recording ownership and command
+          // admission. Replay the same request at the same fence. An advanced
+          // revision has already closed admission under the earlier fence.
+          replayAdmission = probes.onlyIfIdle.revision === previous.revision;
+          if (replayAdmission && probes.onlyIfIdle.writerClaim !== previous.writerClaim) return { outcome: "deferred" };
+        } else if (!KILL_REFUSED_STATES.has(receipt.receipt.status)
           || !IDLE_STOP_NO_EFFECT_REASONS.has(receipt.receipt.reason ?? "")) {
           if (probes.onlyIfIdle.revision <= previous.revision) {
             return await confirmStageStop(probe, previous.operationId, receipt.receipt.status, probes, previous, receiptDeadline);
@@ -1489,9 +1500,10 @@ export async function stopPipelineStageAgent(
         }
       }
       if (!probes.onlyIfIdle) return { outcome: "deferred" };
-      const owned = await claimIdleStop(ownerKey, {
+      const owned = previous && replayAdmission ? { acquired: true, binding: previous } : await claimIdleStop(ownerKey, {
         conversationId: probe.conversationId, sessionKey: probe.key, transcriptPath: probe.transcriptPath,
         revision: probes.onlyIfIdle.revision, writerClaim: probes.onlyIfIdle.writerClaim,
+        ...(probes.providerRecovery ? { providerRecovery: probes.providerRecovery } : {}),
       }, previous ?? undefined, previous?.operationId);
       binding = owned.binding;
       assertCurrent();
@@ -3928,10 +3940,6 @@ function workspaceRequirementsFailure(condition: ProviderCondition): boolean {
   return condition.kind === "transient" && condition.label === CODEX_WORKSPACE_REQUIREMENTS_FAILURE;
 }
 
-function codexCybersecurityRefusal(condition: ProviderCondition): boolean {
-  return condition.kind === "other" && condition.label === CODEX_CYBERSECURITY_REFUSAL;
-}
-
 /** The engine's own hand on a runtime move it makes without an operator request. */
 const PIPELINE_CONTROLLER_ACTOR: PauseResumeActor = { kind: "agent", role: PIPELINE_CONTROLLER_ROLE, conversationId: null };
 
@@ -4344,6 +4352,7 @@ async function recoverProviderCut(
 
 /** An absent registry resident does not establish that a recorded pane exited. */
 async function stopStageForRecovery(target: PipelineStageHostRef, ports: PipelinePorts, options?: { onlyIfIdle: true;
+  operationId?: string; requireIdleEvidence?: true;
   providerRecovery?: import("@/lib/runtime/contracts").RuntimeProviderRecoveryRef }): Promise<PipelineStageStopResult> {
   const stopped = await ports.stopStageAgent(target, options?.onlyIfIdle ? options : { ...options, automatic: true });
   if (stopped.outcome !== "not-running" || !target.paneId) return stopped;
@@ -4475,8 +4484,9 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
   }
   // A refusal ended a terminal turn: like a limit, its host is stopped only
   // while idle, and newer stage activity cancels the relaunch.
+  const codexRefusal = attempt.effectiveRole.engine === "codex" && codexCybersecurityRefusal(condition);
   const providerLimit = condition.kind === "usage_limit" || condition.kind === "auth_required" || condition.kind === "transient"
-    || codexCybersecurityRefusal(condition);
+    || codexRefusal;
   const confirmProviderCut = async () => {
     if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return false;
     if (!providerLimit) return true;
@@ -4497,22 +4507,34 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
   if (!await confirmProviderCut()) return true;
   // The retirement callback validates the durable attempt independently.
   if (providerLimit) await persist();
-  const stopped = await stopStageForRecovery({ stageId: stage.id, attempt: attempt.n, launchId: attempt.launchId,
-    conversationId: attempt.conversationId, agentPath: attempt.agentPath, paneId: attempt.paneId }, ports, providerLimit ? {
+  const host = { stageId: stage.id, attempt: attempt.n, launchId: attempt.launchId,
+    conversationId: attempt.conversationId, agentPath: attempt.agentPath, paneId: attempt.paneId };
+  const stopped = await stopStageForRecovery(host, ports, providerLimit ? {
       onlyIfIdle: true, providerRecovery: { pipelineId: pipeline.id, stageId: stage.id, attempt: attempt.n,
         turnTs: attempt.providerWait?.turnTs ?? 0, controlGeneration: pipeline.controlGeneration ?? null },
+      // Reconcile the same admitted kill across passes. The runtime owns the
+      // idle and provider-turn fences, including when the journal reply is slow.
+      ...(codexRefusal ? { operationId: terminalIdleStopKey(host), requireIdleEvidence: true as const } : {}),
     } : undefined);
   if (!["stopped", "not-running"].includes(stopped.outcome)) {
     const now = ports.now();
     if (stopped.outcome === "unresolved") rememberUnresolvedTermination(attempt, stopped, now);
-    const stopReason = redactBounded("error" in stopped ? stopped.error : stopped.outcome, 300);
+    const stopReason = redactBounded(stopped.outcome === "unconfirmed" ? stopped.detail
+      : "error" in stopped ? stopped.error : codexRefusal ? "idle stop authority was deferred" : stopped.outcome, 300);
     const reason = `stage recovery after ${condition.label} could not terminate its recorded host: ${stopReason}`;
-    if (stopped.outcome === "unresolved" || bookControllerWaitRound(attempt, now, now, ports,
-      { budgetMs: SPAWN_HOST_WAIT_BUDGET_MS, retryMaxMs: SPAWN_HOST_RETRY_MAX_MS }) === "exhausted") {
+    const budget = { budgetMs: SPAWN_HOST_WAIT_BUDGET_MS, retryMaxMs: SPAWN_HOST_RETRY_MAX_MS };
+    const waiting = stopped.outcome !== "unresolved" && bookControllerWaitRound(attempt, now, now, ports, budget) === "waiting";
+    if (waiting) {
+      pipeline.stateDetail = `waiting for the cut stage host to terminate after ${condition.label}; ${stopReason}`;
+    } else if (codexRefusal && stopped.outcome !== "unresolved") {
+      delete attempt.controllerWait;
+      bookControllerWaitRound(attempt, now, now, ports, budget);
+      pipeline.stateDetail = `stage host termination deadline elapsed after ${condition.label}. ${stopReason}. Retrying automatically at ${attempt.controllerWait!.retryAfter}`;
+    } else {
       recordProviderRecovery(attempt, "park", condition, reason, now);
       attempt.completedAt = now;
       await park(pipeline, reason, attempt);
-    } else pipeline.stateDetail = `waiting for the cut stage host to terminate after ${condition.label}; ${stopReason}`;
+    }
     await persist();
     return true;
   }
@@ -18335,6 +18357,15 @@ async function applyPipelinePatch(
         }
       }
       if (pipeline.state === "running") {
+        const wait = attempt?.providerWait;
+        if (!explicitReceiptRetry && attempt?.state === "running" && attempt.effectiveRole.engine === "codex"
+          && !attempt.report && !attempt.verdict && wait && !wait.actionAt && !wait.retryCancelled
+          && codexCybersecurityRefusal(wait.condition)) {
+          // Keep the same attempt and stop custody. Its scheduled confirmation
+          // can continue with the recorded host still resident.
+          requestPipelineTick();
+          return { pipeline };
+        }
         if (req.expectedAttempt === undefined) return { error: "pipeline does not have a stage awaiting retry", status: 409 };
         if (!stage || stage.kind !== "run" || !attempt || attempt.state !== "running" || attempt.paneId
           || !attempt.conversationId || !attempt.agentPath || attempt.report || req.expectedAttempt !== attempt.n

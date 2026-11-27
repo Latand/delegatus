@@ -10,6 +10,10 @@ export type ProviderCondition = {
 export const CODEX_WORKSPACE_REQUIREMENTS_FAILURE = "workspace requirements failure";
 export const CODEX_CYBERSECURITY_REFUSAL = "Codex cybersecurity refusal";
 
+export function codexCybersecurityRefusal(condition: ProviderCondition): boolean {
+  return condition.kind === "other" && condition.label === CODEX_CYBERSECURITY_REFUSAL;
+}
+
 /** Call only for a provider error record, never an ordinary agent message. */
 export function classifyProviderCondition(engine: RuntimeEngine, errorClass: string | null | undefined, text: string): ProviderCondition {
   const code = (errorClass ?? "").toLowerCase();
