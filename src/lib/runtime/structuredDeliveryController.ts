@@ -1093,7 +1093,7 @@ export async function bindStructuredDeliveryQueue(
     open: () => progressStore.open(),
   };
   const effectPages = new DeliveryEffectPages(client, () => scheduleAutomaticRetry());
-  const queue = new StructuredDeliveryQueue(
+  const queue: StructuredDeliveryQueue = new StructuredDeliveryQueue(
     {
       progress,
       /* A send held before the journal is the account-migration drain's: a

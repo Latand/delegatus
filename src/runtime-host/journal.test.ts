@@ -3641,6 +3641,38 @@ test("issue 367: a delivered structured kill converges host and turn projection 
   journal.close();
 });
 
+test.each([
+  ["legacy", undefined, false],
+  ["released", null, true],
+  ["admitted", "fixture:3", true],
+  ["replacement", "fixture:4", false],
+] as const)("an explicit kill settles with a %s session writer", (_case, writerClaim, projectsStop) => {
+  const dir = sandbox("explicit-kill-writer");
+  const journal = new RuntimeJournal(path.join(dir, "events.sqlite"), { structuredHosts: true, now: () => 100 });
+  const conversationId = "conversation_kill_writer";
+  const sessionKey = { engine: "claude" as const, sessionId: "writer-session" };
+  const operationId = "explicit-kill-writer";
+  try {
+    journal.append({ scope: runtimeScope("session", conversationId), kind: "session-status", payload: {
+      conversationId, sessionKey, hostKind: "claude-broker", host: "hosted", turn: "running", activeTurnId: "writer-turn",
+      ...(writerClaim === undefined ? {} : { writerClaim }),
+    } });
+    journal.executeOperation({ kind: "kill", conversationId, operationId, idempotencyKey: operationId, sessionKey,
+      targets: [{ sessionId: sessionKey.sessionId, claimEpoch: 3, process: null }],
+    });
+    journal.transitionOperation(operationId, "delivering");
+    journal.transitionOperation(operationId, "delivered");
+
+    expect(journal.operationResult(operationId)?.receipt.status).toBe("delivered");
+    expect(journal.readSession({ conversationId })).toMatchObject(projectsStop
+      ? { host: "dead", turn: "idle", activeTurnId: null }
+      : { host: "hosted", turn: "running", activeTurnId: "writer-turn" });
+  } finally {
+    journal.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a delivered kill retains its original admission boundary through compaction", () => {
   const dir = sandbox("kill-boundary-compaction");
   const filename = path.join(dir, "events.sqlite");

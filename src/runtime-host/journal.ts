@@ -3330,7 +3330,7 @@ export class RuntimeJournal {
       const killedGeneration = session
         && session.sessionKey.engine === command.sessionKey.engine
         && (command.targets?.some(target => target.sessionId === session.sessionKey.sessionId
-          && (session.writerClaim === null || session.writerClaim.endsWith(`:${target.claimEpoch}`)))
+          && (session.writerClaim === null || session.writerClaim?.endsWith(`:${target.claimEpoch}`) === true))
           ?? session.sessionKey.sessionId === command.sessionKey.sessionId);
       if (session && killedGeneration
         && (session.host !== "dead" || session.turn !== "idle" || session.activeTurnId !== null)) {
