@@ -19,7 +19,7 @@ const entrySchema = z.object({ relayId: z.string(), apiBase: z.string(), pairedA
   snapshot: snapshotSchema.nullable() });
 type Entry = z.infer<typeof entrySchema>;
 export interface CloneRoute { id: string; relay: PairedRelay; targetId: string; name: string;
-  methodsFeature?: boolean; send?: CloneCapabilities | null }
+  methodsFeature?: boolean; send?: CloneCapabilities | null; verifiedNoFileMethods?: boolean }
 export interface DiscoveredCloneChat { chatId: string; title: string }
 export interface CloneDirectoryPorts { file: string; relays(): PairedRelay[]; now(): number; origin: string }
 const same = (entry: Pick<Entry, "relayId" | "apiBase" | "pairedAt">, relay: PairedRelay) =>
@@ -138,7 +138,8 @@ export class CloneDirectory {
       if (target?.active && relay.targets.some(t => t.id === target.target_id && t.enabled)) {
         const send = this.#capabilities.peek(relay, target.target_id, chatId);
         return { id: `clone:${relay.id}:${target.target_id}`, relay, targetId: target.target_id, name: target.name,
-          ...(send ? { methodsFeature: true, send } : {}) };
+          ...(send ? { methodsFeature: true, send } : {}),
+          ...(this.#capabilities.descriptorHasNoFileMethods(relay) ? { verifiedNoFileMethods: true } : {}) };
       }
     }
     return null;
@@ -148,7 +149,7 @@ export class CloneDirectory {
     const relays = this.relays();
     if (!this.peek(chatId)) await Promise.all(relays.filter(r => !this.snapshot(r)).map(r => this.refresh(r)));
     const route = this.peek(chatId);
-    if (route?.relay.features?.includes("clone_send_methods")) await this.#capabilities.refresh(route.relay, route.targetId);
+    if (route?.relay.features !== undefined) await this.#capabilities.refresh(route.relay, route.targetId);
     return this.peek(chatId);
   }
   async discoverChats(): Promise<DiscoveredCloneChat[]> {
@@ -158,7 +159,8 @@ export class CloneDirectory {
       return !snapshot || this.ports.now() - snapshot.fetchedAt >= SOFT_TTL ? this.refresh(relay) : Promise.resolve();
     }));
     for (const relay of relays) for (const target of this.snapshot(relay)?.targets ?? [])
-      if (target.active && relay.targets.some(t => t.id === target.target_id && t.enabled)) await this.#capabilities.refresh(relay, target.target_id);
+      if (relay.features !== undefined && target.active && relay.targets.some(t => t.id === target.target_id && t.enabled))
+        await this.#capabilities.refresh(relay, target.target_id);
     const chats = new Map<string, DiscoveredCloneChat>();
     for (const relay of relays) {
       const snapshot = this.snapshot(relay);

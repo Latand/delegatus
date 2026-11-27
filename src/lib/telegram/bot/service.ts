@@ -358,10 +358,10 @@ export class TelegramBotService {
     const store = this.store();
     let chat: ChatRow | null = null;
     try { chat = this.resolveChat(store, input.chat); } catch { /* Preserve the legacy disconnected refusal below. */ }
-    if (chat && chat.type !== "private") {
-      const route = await this.deps.clones?.route(chat.chatId);
-      if (route && this.deps.clones?.valid(route, chat.chatId)) return store;
-    }
+    // File admission (root, type, secret scan and Office inspection) must
+    // finish before the selector discovers a paired relay. A known group can
+    // use the shared store for those checks without resolving its sender yet.
+    if (chat && chat.type !== "private") return store;
     return this.connectedStore();
   }
 

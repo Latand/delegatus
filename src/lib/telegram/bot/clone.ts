@@ -42,8 +42,8 @@ export { clonePayloadSupported };
 export function cloneSupportRefusal(route: CloneRoute, caller: string, key: string, method: string, params: Record<string, unknown>, part: number): string | null {
   const input = cloneInput(route, caller, key, params, part);
   if (!route.methodsFeature && method === "sendMessage" && clonePayloadSupported(input)) return null;
-  if (!route.methodsFeature || !route.send) return route.relay.features?.includes("clone_send_methods")
-    ? "has no verified current relay file capabilities" : "covers this chat but cannot send files yet";
+  if (!route.methodsFeature || !route.send) return route.verifiedNoFileMethods
+    ? "covers this chat but cannot send files yet" : "has no verified current relay file capabilities";
   const admission = cloneMethodAdmission(method, params, input, route.send.limits, route.send.rights);
   if (!("reason" in admission)) return null;
   return cloneHasFileMethod(route.send.limits) ? admission.reason : "covers this chat but cannot send files yet";
@@ -68,7 +68,7 @@ export function cloneTransport(port: ClonePostingPort, route: CloneRoute, caller
           let pixels = Infinity;
           try { const metadata = await sharp(Buffer.from(await file.blob.arrayBuffer())).metadata(); pixels = (metadata.width ?? Infinity) * (metadata.height ?? Infinity); } catch { /* Refuse unreadable dimensions. */ }
           if (pixels > maxPixels) return { ok: false, kind: "http", status: null,
-            description: "The photo exceeds the clone relay's pixel limit or its dimensions could not be read.", migrateToChatId: null, retryAfterSeconds: null,
+            description: `The ${file.kind} attachment exceeds the clone relay's pixel limit or its dimensions could not be read.`, migrateToChatId: null, retryAfterSeconds: null,
             classified: { code: "photo_invalid", fallback: true } };
         }
       }

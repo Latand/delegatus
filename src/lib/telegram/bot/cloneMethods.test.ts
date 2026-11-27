@@ -284,12 +284,57 @@ test("a pairing alone sends files without a local bot token", async () => {
   expect(await media()).toMatchObject({ messageIds: [102], sentBy: { name: "Report clone" } });
   expect(bot.calls).toHaveLength(before); expect(sends).toHaveLength(2);
 });
-test("without the feature, a pairing-only file send explains the clone limitation", async () => {
-  fs.rmSync(telegramBotTokenPath()); relay.features = [];
-  await expect(document()).rejects.toMatchObject({ code: "clone_files_unsupported" });
+test("a live descriptor without the file feature gets the generic pairing-only refusal", async () => {
+  fs.rmSync(telegramBotTokenPath()); relay.features = []; advertised = false;
+  await expect(document()).rejects.toMatchObject({ code: "clone_files_unsupported", message: expect.stringContaining("covers this chat but cannot send files yet") });
   expect(store.sendRow("document:fixture-writer", "pdf")).toMatchObject({ state: "failed", errorCode: "clone_files_unsupported", messageIds: [] });
-  expect(sends).toEqual([]); expect(descriptors).toBe(0); expect(rightsReads).toBe(0);
+  expect(sends).toEqual([]); expect(descriptors).toBe(1); expect(rightsReads).toBe(0);
   expect(await service.send({ ...common("legacy-pairing-text"), text: "Legacy" })).toMatchObject({ sentBy: { name: "Report clone" } });
+});
+test("pairing-only Office sends trust refreshed relay features when cached pairing metadata is stale", async () => {
+  fs.rmSync(telegramBotTokenPath()); relay.features = [];
+  const [extension, mime] = officeFormats[0]; limits.files.document.mime_types.push(mime);
+  const office = officeFile(extension);
+  expect(await service.sendDocument({ ...common("stale-pairing-features"), document: office }))
+    .toMatchObject({ messageIds: [101], sentBy: { name: "Report clone" }, alreadySent: false });
+  expect(descriptors).toBe(1); expect(rightsReads).toBe(1); expect(sends).toHaveLength(1);
+  expect(sends[0]!.files.get("document")).toMatchObject({ name: office.filename, type: mime });
+});
+test.each(["secret", "malformed", "outside-root", "dot-directory", "state-directory"] as const)(
+  "pairing-only %s document refusal happens before any relay request", async mode => {
+    fs.rmSync(telegramBotTokenPath());
+    const [extension] = officeFormats[0];
+    let filename = officeFile(extension).path;
+    if (mode === "secret") {
+      filename = path.join(path.dirname(pdf), "secret.xlsx");
+      const marker = ["-----BEGIN ", "PRIVATE KEY-----"].join("");
+      fs.writeFileSync(filename, officeZip(officeParts(extension, marker)));
+    } else if (mode === "malformed") {
+      filename = path.join(path.dirname(pdf), "malformed.xlsx"); fs.writeFileSync(filename, "not an Office package");
+    } else if (mode === "outside-root") {
+      filename = path.join(path.dirname(path.dirname(pdf)), "outside.xlsx"); fs.writeFileSync(filename, officeZip(officeParts(extension)));
+    } else if (mode === "dot-directory") {
+      const hidden = path.join(path.dirname(pdf), ".hidden"); fs.mkdirSync(hidden, { recursive: true });
+      filename = path.join(hidden, "hidden.xlsx"); fs.writeFileSync(filename, officeZip(officeParts(extension)));
+    } else {
+      fs.mkdirSync(process.env.LLV_STATE_DIR!, { recursive: true });
+      filename = path.join(process.env.LLV_STATE_DIR!, "state.xlsx"); fs.writeFileSync(filename, officeZip(officeParts(extension)));
+    }
+    await expect(service.sendDocument({ ...common(`blocked-${mode}`), document: { path: filename } })).rejects.toMatchObject({
+      code: mode === "secret" ? "document_secret" : mode === "malformed" ? "document_invalid"
+        : mode === "outside-root" ? "document_outside_roots" : "document_forbidden_path",
+    });
+    expect(descriptors).toBe(0); expect(rightsReads).toBe(0); expect(sends).toEqual([]);
+    expect(bot.callsOf("sendDocument")).toHaveLength(0);
+  });
+test("document pixel-limit refusal names the attachment and dimension check", async () => {
+  bot.handlers.getChatMember = () => ok({ status: "kicked" });
+  const [extension, mime] = officeFormats[0]; limits.files.document.mime_types.push(mime);
+  limits.files.document.max_pixels = 20_000_000;
+  await expect(service.sendDocument({ ...common("document-pixel-limit"), document: officeFile(extension) })).rejects.toMatchObject({
+    code: "photo_invalid", message: expect.stringContaining("The document attachment exceeds the clone relay's pixel limit or its dimensions could not be read."),
+  });
+  expect(sends).toEqual([]); expect(bot.callsOf("sendDocument")).toHaveLength(0);
 });
 test.each(["approve", "revoke"] as const)("pairing-only file confirmation can %s under current clone custody", async mode => {
   fs.rmSync(telegramBotTokenPath());
