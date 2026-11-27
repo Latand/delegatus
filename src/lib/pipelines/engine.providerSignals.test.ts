@@ -141,10 +141,12 @@ test.each(["current", "changed during capture"] as const)(
       f.h.ports.sourcePathAllowed = file => file === agentPath || allowPath(file);
       const real = engineModule.defaultPipelinePorts();
       f.h.ports.stageHostResident = real.stageHostResident;
-      f.h.ports.stopStageAgent = async (target, options) => {
+      f.h.ports.stopStageAgent = async (target, { onlyIfIdle, operationId, providerRecovery, requireIdleEvidence } = {}) => {
+        expect(onlyIfIdle).toBe(true);
         expect(await real.stageHostResident(target)).toBe(true);
         const result = await engineModule.retirePipelineStageAgent(target, {
-          ...options, client: null, action: async () => { throw new Error("orphan must use recorded identity"); },
+          operationId, providerRecovery, requireIdleEvidence,
+          client: null, action: async () => { throw new Error("orphan must use recorded identity"); },
           termination: { processIdentity: identity, bootEpoch: () => ref.bootEpoch ?? null, pidAlive: living,
             ppidMap: () => new Map(), processGroupId: () => null,
             signal: candidate => { signals.push(candidate); alive = false; },
