@@ -173,7 +173,8 @@ describe("a send this tab makes waits for its reply (sound map S8)", () => {
     await send(() => Response.json({ operationId: "op-1" }, { status: 200 }), "conversation-accepted");
     expect(awaitingReplies.size()).toBe(before + 1);
     expect(awaitingReplies.settle({ conversationId: "conversation-accepted", settledTurnId: "t1", lastTurnOutcome: "completed" } as RuntimeSession))
-      .toEqual({ cue: "reply", eventId: "reply:conversation-accepted:t1" });
+      .toEqual({ cue: "reply", eventId: "reply:conversation-accepted:t1",
+        caption: { what: "reply", subject: null, target: { kind: "conversation", conversationId: "conversation-accepted" } } });
   });
 
   test("a refused send leaves no entry", async () => {

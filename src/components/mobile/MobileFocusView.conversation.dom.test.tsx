@@ -34,6 +34,7 @@ const liveRuntime = { enabled: false, connection: "live" as const, resyncedAt: n
 mock.module("@/hooks/useRuntime", () => ({
   ...actualRuntimeHooks,
   useRuntimeBusState: () => ({ ...liveRuntime, lastEventAt: null }),
+  useRuntimeSelector: (selector: (state: unknown) => unknown) => selector({ ...liveRuntime, lastEventAt: null }),
   useRuntime: () => liveRuntime,
   useRuntimeSession: () => null,
   useRuntimeSessionByArtifact: () => null,
@@ -359,6 +360,7 @@ test("offline is screen-level: the meta line says so instead of the last state, 
   mock.module("@/hooks/useRuntime", () => ({
     ...actualRuntimeHooks,
     useRuntimeBusState: () => ({ enabled: true, connection: "offline", resyncedAt: null, lastEventAt: null, store: emptyStore() }),
+    useRuntimeSelector: (selector: (state: unknown) => unknown) => selector({ enabled: true, connection: "offline", resyncedAt: null, lastEventAt: null, store: emptyStore() }),
     useRuntime: () => ({ enabled: true, connection: "offline", resyncedAt: null, store: emptyStore() }),
     useRuntimeSession: () => null,
     useRuntimeSessionByArtifact: () => null,
@@ -391,6 +393,7 @@ test("offline is screen-level: the meta line says so instead of the last state, 
   mock.module("@/hooks/useRuntime", () => ({
     ...actualRuntimeHooks,
     useRuntimeBusState: () => ({ ...liveRuntime, lastEventAt: null }),
+    useRuntimeSelector: (selector: (state: unknown) => unknown) => selector({ ...liveRuntime, lastEventAt: null }),
     useRuntime: () => liveRuntime,
     useRuntimeSession: () => null,
     useRuntimeSessionByArtifact: () => null,

@@ -820,12 +820,13 @@ export async function captureProvisioningStepGeometry(browser: Browser, out: str
   } finally { server.stop(); }
 }
 
-export async function serveEvidenceFixture(
-  outDir: string,
-  entryFixture = "src/components/kanban/issue1695Evidence.fixture.tsx",
-  responses: Record<string, unknown> = {},
-  options: { derivationTiming?: boolean; serialComposerPrerequisites?: boolean; hostname?: "127.0.0.1" | "::1" } = {},
-): Promise<{ base: string; stop: () => void }> {
+const evidenceHtml = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"></head>'
+        + '<body><div id="root" style="height:100dvh;display:flex;flex-direction:column"></div><script type="module" src="/app.js"></script></body></html>';
+
+export async function buildEvidenceAssets(
+  outDir: string, entryFixture = "src/components/kanban/issue1695Evidence.fixture.tsx",
+  options: { derivationTiming?: boolean; serialComposerPrerequisites?: boolean; isolationCounters?: boolean } = {},
+) {
   /* Bundled in a separate process: inside the `bun test` process,
      `Bun.build` resolves the `@/` alias for some module graphs and not for
      others, and the fixture's graph is one of the others. The builder stubs
@@ -833,11 +834,22 @@ export async function serveEvidenceFixture(
   const bundle = path.join(outDir, "bundle");
   const build = Bun.spawnSync([
     process.execPath, path.resolve("src/components/kanban/buildEvidenceFixture.ts"), path.resolve(entryFixture), bundle,
+    ...(options.isolationCounters ? ["--isolation-counters"] : []),
     ...(options.serialComposerPrerequisites ? ["--serial-composer-prerequisites"] : []),
   ], { stdout: "pipe", stderr: "pipe", env: { ...process.env, LLV_DERIVATION_TIMING: options.derivationTiming ? "1" : "0" } });
   if (build.exitCode !== 0) throw new Error(`fixture bundle failed: ${build.stderr.toString()}${build.stdout.toString()}`);
   const entry = path.join(bundle, `${path.basename(entryFixture).replace(/\.tsx?$/, "")}.js`);
   const css = await postcss([tailwind()]).process(fs.readFileSync("src/app/globals.css", "utf8"), { from: path.resolve("src/app/globals.css") });
+  return { entry, css: css.css, html: evidenceHtml };
+}
+
+export async function serveEvidenceFixture(
+  outDir: string,
+  entryFixture = "src/components/kanban/issue1695Evidence.fixture.tsx",
+  responses: Record<string, unknown> = {},
+  options: { derivationTiming?: boolean; serialComposerPrerequisites?: boolean; hostname?: "127.0.0.1" | "::1" } = {},
+): Promise<{ base: string; stop: () => void }> {
+  const { entry, css } = await buildEvidenceAssets(outDir, entryFixture, options);
   const server = Bun.serve({
     hostname: options.hostname ?? "127.0.0.1",
     port: 0,
@@ -857,10 +869,9 @@ export async function serveEvidenceFixture(
       if (pathname === "/api/task-icons") return Response.json({ icons: await taskIconNodes((searchParams.get("names") ?? "").split(",")) });
       if (pathname === "/brand/delegatus-mark.svg") return new Response(Bun.file("public/brand/delegatus-mark.svg"), { headers: { "content-type": "image/svg+xml" } });
       if (pathname === "/app.js") return new Response(Bun.file(entry), { headers: { "content-type": "text/javascript" } });
-      if (pathname === "/style.css") return new Response(css.css, { headers: { "content-type": "text/css" } });
+      if (pathname === "/style.css") return new Response(css, { headers: { "content-type": "text/css" } });
       return new Response(
-        '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"></head>'
-        + '<body><div id="root" style="height:100dvh;display:flex;flex-direction:column"></div><script type="module" src="/app.js"></script></body></html>',
+        evidenceHtml,
         { headers: { "content-type": "text/html" } },
       );
     },
