@@ -2,7 +2,8 @@ import { attemptTempRemaining, sweepMonotonicNow } from "./attemptTempDeadline";
 import { reclaimOverCapScratch, type OverCapReport } from "./attemptTempOverCap";
 import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { statePath } from "@/lib/configDir";
-import { AttemptTempStore, sweepAttemptTemps, type AttemptTempAuthority, type AttemptTempOwner, type AttemptTempState, type AttemptTempSweepOptions } from "./attemptTempRetention";
+import { attemptTempEffectiveCapBytes, AttemptTempStore, sweepAttemptTemps,
+  type AttemptTempAuthority, type AttemptTempOwner, type AttemptTempState, type AttemptTempSweepOptions } from "./attemptTempRetention";
 import { pipelineChangeSource, pipelineRecordReader } from "@/lib/pipelines/store";
 import { laneFinish, FINISHED_LANE_RETENTION_MS } from "@/lib/pipelines/laneFinish";
 import type { PipelineStageAttempt } from "@/lib/pipelines/types";
@@ -11,6 +12,7 @@ import { attemptTempFailureDetail } from "./attemptTempDiagnostics";
 import { runUnregisteredScratchPass, unregisteredScratchSummary, type UnregisteredScratchReport } from "./unregisteredScratch";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import fs from "node:fs";
+import path from "node:path";
 import { createHash } from "node:crypto";
 import { RepositoryLinkInventory, type RetainedCheckoutReads } from "./attemptTempFilesystem";
 import { attributeCopyBeforeRootRetirement, sweepEvidenceCopies } from "./attemptEvidenceCopies";
@@ -289,8 +291,18 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
     // at all, reclaim goes first once, so neither can starve the other.
     const leading = previous.starvedCap !== undefined && store.bytes() > previous.starvedCap;
     // The previous report controls scheduling only. Deletion authority uses
-    // the effective cap observed for this tick.
-    const led = leading ? await reclaim(configuredCapBytes, true) : null;
+    // the current disk-adjusted cap, as does the ordinary expiry page.
+    const led = leading ? await reclaim((() => {
+      const scratch = statePath("scratch");
+      let freeBytes: number | null = null;
+      try {
+        const available = ports.availableBytes ? ports.availableBytes(scratch)
+          : (() => { const stat = fs.statfsSync(fs.existsSync(scratch) ? scratch : path.dirname(store.filename)); return stat.bavail * stat.bsize; })();
+        if (!Number.isFinite(available) || available < 0) throw new Error("invalid scratch free-space observation");
+        freeBytes = available;
+      } catch { /* Match the regular sweep: unavailable space uses the configured cap. */ }
+      return attemptTempEffectiveCapBytes(configuredCapBytes, store.bytes(), freeBytes);
+    })(), true) : null;
     const roots = await sweepAttemptTemps(store, { ...options, runBudgetMs: rootTimeLeft() });
     // A tick that ran the ledger's own pressure pass has already served the cap.
     const followed = !leading && !roots.pressure && roots.bytes > roots.capBytes ? await reclaim(roots.capBytes, false) : null;

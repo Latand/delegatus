@@ -732,6 +732,8 @@ export type TempSweepOptions = {
   /** Registered disposable roots have their own durable authority and streamed
    * preservation inspection. Legacy/unowned roots always require snapshots. */
   disposable?: boolean;
+  /** Preserve an over-cap idle window across a quarantined attempt replay. */
+  idleRequiredMs?: number;
   /** Recovered roots keep their original journal until expired authority admits replay. */
   keepRefusedTrash?: boolean;
   measure?: (directory: string) => Promise<number>;
@@ -828,6 +830,8 @@ export async function removeTreeViaTrash(directory: string, options: {
   /** Marks the intent as a stray's, so an interrupted removal is replayed
       under the stray proof rather than refused for its unowned name. */
   stray?: boolean;
+  /** Carries attempt over-cap freshness authority across ordinary replay. */
+  idleRequiredMs?: number;
   cleaner?: import("@/lib/cleaner/diskJournal").CleanerAuditBinding;
 }): Promise<boolean> {
   const trash = path.join(path.dirname(directory), `.delegatus-trash-${path.basename(directory)}-${randomUUID()}`);
@@ -838,6 +842,7 @@ export async function removeTreeViaTrash(directory: string, options: {
   const identity = `${original.dev}:${original.ino}`;
   const snapshot = options.disposable ? null : snapshotTree(directory);
   writeJsonDurably(options.journal, { directory, trash, uid, identity, snapshot, ...(options.disposable ? { disposable: true } : {}),
+    ...(Number.isFinite(options.idleRequiredMs) && options.idleRequiredMs! > 0 ? { idleRequiredMs: options.idleRequiredMs } : {}),
     ...(options.stray ? { stray: true } : {}), ...(options.context ? { context: options.context } : {}), ...(options.cleaner ? { cleaner: options.cleaner } : {}) });
   fs.renameSync(directory, trash);
   const moved = fs.lstatSync(trash);
@@ -1637,6 +1642,7 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         if (options.eligible && !await options.eligible(reachable)) { await keep("inUse", bytes); continue; }
         if (options.mode !== "dry-run" && !await removeTreeViaTrash(reachable, {
           journal: trashJournal(root, candidate), remove: options.remove, disposable: options.disposable,
+          ...(options.idleRequiredMs ? { idleRequiredMs: options.idleRequiredMs } : {}),
           ...(stray ? { stray: true } : {}),
           held: async trash => (options.eligible && !await options.eligible(trash)) || await trashMounted(root, trash, candidate, bytes)
             || (!owner && trashHolds(root, trash, candidate, bytes)),

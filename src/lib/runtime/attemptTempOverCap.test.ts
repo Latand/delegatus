@@ -360,6 +360,32 @@ test("a fresh write in quarantined scratch survives replay until idle for three 
   expect(fs.readFileSync(path.join(directory, "fresh-after-quarantine"), "utf8")).toBe("keep this new write");
 });
 
+test("an over-cap quarantine keeps a fresh write through ordinary expiry until it has been idle for three hours", async () => {
+  const f = fixture();
+  const directory = f.make("expirywrite", f.lane("lane-expirywrite", 23 + 54 / 60));
+  const interrupt = spyOn(attemptRemoval, "removeTreeWithinAttemptBudget").mockImplementation(async (_target, mutationStarted) => {
+    mutationStarted();
+    throw new Error("fixture stopped after over-cap quarantine");
+  });
+  try { await f.tick(1); } finally { interrupt.mockRestore(); }
+  const journal = JSON.parse(fs.readFileSync(attemptTempJournalPath(directory), "utf8"));
+  expect(journal.idleRequiredMs).toBe(3 * HOUR);
+  const fresh = path.join(journal.trash, "fresh-after-quarantine");
+  fs.writeFileSync(fresh, "wait for idle");
+  const writtenAt = NOW + 10 * 60_000 - 1000;
+  fs.utimesSync(fresh, new Date(writtenAt), new Date(writtenAt));
+
+  clock.mockReturnValue(NOW + 10 * 60_000);
+  const expiredTick = await f.tick(1);
+  expect(expiredTick.removed).toBe(0);
+  expect(fs.readFileSync(path.join(directory, "fresh-after-quarantine"), "utf8")).toBe("wait for idle");
+
+  clock.mockReturnValue(writtenAt + 3 * HOUR + 1000);
+  const idleTick = await f.tick(1);
+  expect(idleTick.removed).toBe(1);
+  expect(fs.existsSync(directory)).toBeFalse();
+});
+
 test("a tick whose expiry page spends the whole budget lets reclaim go first on the next one", async () => {
   const f = fixture();
   const expired = f.make("slow", f.lane("lane-slow", 40)), young = f.make("young", f.lane("lane-young", 5));
@@ -518,5 +544,24 @@ test("a fresh helper uses its current cap after a prior tick starved at one byte
     const tick = run("tool", "--minute-tick", String(100 * MiB));
     expect(tick.answer.overCap).toMatchObject({ capBytes: 100 * MiB, removed: 0 });
     expect(fs.existsSync(seeded.directory)).toBeTrue();
+  } finally { sandbox.release(); }
+}, 120_000);
+
+test("a leading retry reclaims against a zero disk-adjusted cap", () => {
+  const sandbox = ownershipSandbox();
+  try {
+    const run = (owner: "viewer" | "tool", ...argv: string[]) => {
+      const result = Bun.spawnSync({ cmd: [process.execPath, "--preload", OWNERSHIP_PRELOAD,
+        path.join(import.meta.dir, "attemptTempOverCap.fixture.ts"), ...argv],
+        cwd: process.cwd(), env: { ...sandbox.environment(), LLV_STATE_OWNER: owner }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+      expect(result.exitCode, result.stderr.toString()).toBe(0);
+      return JSON.parse(result.stdout.toString().trim().split("\n").at(-1)!);
+    };
+    const seeded = run("viewer", "--seed-previous-release", "5", path.join(sandbox.temporaryRoot(), "repo"), String(2 * MiB)).answer;
+    run("viewer", "--viewer-start");
+    run("viewer", "--record-starved-report", String(MiB));
+    const tick = run("tool", "--minute-tick-low-space", String(100 * MiB));
+    expect(tick.answer.overCap).toMatchObject({ capBytes: 0, removed: 1, ended: "cleared" });
+    expect(fs.existsSync(seeded.directory)).toBeFalse();
   } finally { sandbox.release(); }
 }, 120_000);

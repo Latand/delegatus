@@ -58,6 +58,10 @@ export type EvidenceCopy = { destination: string; pipelineId: string | null; lau
   createdAt: number; expiresAt: number | null; checkedAt: number; bytes: number };
 export const DEFAULT_ATTEMPT_TEMP_CAP_BYTES = 100 * 1024 ** 3;
 export const ATTEMPT_TEMP_LOW_SPACE_BYTES = 20 * 1024 ** 3;
+export function attemptTempEffectiveCapBytes(configuredCapBytes: number, allocatedBytes: number, freeBytes: number | null): number {
+  return freeBytes === null ? configuredCapBytes : Math.min(configuredCapBytes,
+    Math.max(0, Math.floor(Math.min((allocatedBytes + freeBytes) / 2, allocatedBytes + freeBytes - ATTEMPT_TEMP_LOW_SPACE_BYTES))));
+}
 export const ATTEMPT_TEMP_ROOT_BUDGET_MS = 5_000;
 /** Large roots of repository copies can need longer to prove and remove.
  * Their window grows by one second per recorded GiB, up to this bound and
@@ -841,8 +845,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
   const lowSpace = freeBytes !== null && freeBytes < ATTEMPT_TEMP_LOW_SPACE_BYTES;
   // Keep at least as much free space as scratch occupies, plus the absolute
   // working reserve on small filesystems. A fixed cap alone reacts too late.
-  const capBytes = freeBytes === null ? configuredCapBytes : Math.min(configuredCapBytes,
-    Math.max(0, Math.floor(Math.min((store.bytes() + freeBytes) / 2, store.bytes() + freeBytes - ATTEMPT_TEMP_LOW_SPACE_BYTES))));
+  const capBytes = attemptTempEffectiveCapBytes(configuredCapBytes, store.bytes(), freeBytes);
   // An ordinary scheduled call retires only the expiry page. The minute worker
   // reclaims a ledger over its cap through a bounded selection of its own
   // (`attemptTempOverCap.ts`); low free space also starts the Cleaner lease.
@@ -971,10 +974,21 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       const cleaner = options.cleaner;
       /** This visit found a removal an earlier one began and did not finish. */
       const cleanerProof = () => `ledger identity ${owner.identity}, ${owner.pipelineId ? "settled lane" : "dead standalone host"}, tree idle at least three hours, references and preservation fences clear`;
+      const requiredIdleMs = () => {
+        let idleMs = cleaner?.idleMs ?? 0;
+        try {
+          const journal = JSON.parse(fs.readFileSync(attemptTempJournalPath(owner.directory), "utf8"));
+          if (journal.directory === owner.directory && journal.identity === owner.identity
+            && Number.isFinite(journal.idleRequiredMs) && journal.idleRequiredMs > 0)
+            idleMs = Math.max(idleMs, journal.idleRequiredMs);
+        } catch { /* No durable over-cap replay marker. */ }
+        return idleMs;
+      };
       const cleanerHold = (directory: string) => {
-        if (!cleaner) return null;
-        if (!cleaner.allowed()) return "cleaner lost traffic ownership";
-        const cutoff = now() - cleaner.idleMs;
+        const idleMs = requiredIdleMs();
+        if (!idleMs) return null;
+        if (cleaner && !cleaner.allowed()) return "cleaner lost traffic ownership";
+        const cutoff = now() - idleMs;
         const tree = inspectTree(directory, { threshold: cutoff, ignoreRootCtime: true, git: true,
           stat: file => { checkBudget(); return fs.lstatSync(file); } });
         checkBudget();
@@ -1396,6 +1410,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       const result = await sweepStaleTempDirs({
         roots: [{ path: path.dirname(owner.directory), via: "" }], onlyDirectories: [owner.directory],
         eligible, maxAgeMs: 0, maxRemovals: 1, mode: options.mode, disposable: true, keepRefusedTrash: recoveredTrash,
+        ...(cleaner?.overCap ? { idleRequiredMs: cleaner.idleMs } : {}),
         dispatchGuard: dispatchEligible,
         remove: (directory, mutationStarted) => {
           const startRemoval = () => { beforeRemoval ??= free(); mutationStarted(); };

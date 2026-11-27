@@ -184,7 +184,7 @@ test("a keyed SQLite mutation reads only the targeted row payload", () => {
   expect(store.snapshot().file.receipts["row-read-1000"]?.error).toBe("updated");
 });
 
-test("cwd protection lookup uses its index and reads only matching rows as unrelated registry rows grow", () => {
+test("cwd protection lookup uses its index and reads only matching rows as unrelated registry rows grow", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-cwd-index-"));
   const filename = path.join(directory, "agent-registry.json"), sqliteFilename = path.join(directory, "agent-registry.sqlite");
   const seed = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename });
@@ -198,14 +198,20 @@ test("cwd protection lookup uses its index and reads only matching rows as unrel
   const initialSnapshot = seed.snapshot();
   seed.close();
   const reads = new Map<string, number>();
+  const queries = new Map<string, { sql: string; bindings: readonly (string | null)[] }>();
+  const onWorktreeProtectionQuery = (collection: "entries" | "conversations", sql: string, bindings: readonly (string | null)[]) => {
+    if (bindings.length) queries.set(collection, { sql, bindings });
+  };
   let store = new SqliteAgentRegistryStore(sqliteFilename, { initialSnapshot, normalize: normalizeRegistry,
-    onRowPayloadRead: (collection, count) => reads.set(collection, (reads.get(collection) ?? 0) + count) });
+    onRowPayloadRead: (collection, count) => reads.set(collection, (reads.get(collection) ?? 0) + count), onWorktreeProtectionQuery });
+  const scratchNamespaces = ["/worktree/target", "/stage-config/target"];
   try {
     reads.clear();
-    const snapshot = store.worktreeProtectionSnapshot(["/worktree/target"]);
+    const snapshot = store.worktreeProtectionSnapshot(scratchNamespaces);
     expect(Object.values(snapshot.entries)).toHaveLength(1);
     expect(reads.get("entries")).toBeLessThanOrEqual(1);
     expect(reads.get("conversations") ?? 0).toBe(0);
+    await store.prepareWorktreeProtectionIndexes();
     reads.clear();
     expect(Object.values(store.worktreeProtectionSnapshot([]).entries)).toHaveLength(0);
     expect(reads.get("entries") ?? 0).toBe(0);
@@ -214,29 +220,22 @@ test("cwd protection lookup uses its index and reads only matching rows as unrel
     existingDb.exec("DROP INDEX registry_entries_cwd; DROP INDEX registry_conversations_launch_cwd; "
       + "DROP INDEX registry_archive_entries_cwd; DROP INDEX registry_archive_conversations_launch_cwd");
     existingDb.close();
-    store = new SqliteAgentRegistryStore(sqliteFilename, { normalize: normalizeRegistry,
-      onRowPayloadRead: (collection, count) => reads.set(collection, (reads.get(collection) ?? 0) + count) });
+    store = new SqliteAgentRegistryStore(sqliteFilename, { initialSnapshot, normalize: normalizeRegistry,
+      onRowPayloadRead: (collection, count) => reads.set(collection, (reads.get(collection) ?? 0) + count), onWorktreeProtectionQuery });
     reads.clear();
-    expect(Object.values(store.worktreeProtectionSnapshot(["/worktree/target"]).entries)).toHaveLength(1);
+    expect(Object.values(store.worktreeProtectionSnapshot(scratchNamespaces).entries)).toHaveLength(1);
     expect(reads.get("entries")).toBeLessThanOrEqual(1);
+    await store.prepareWorktreeProtectionIndexes();
 
     const db = new Database(sqliteFilename, { readonly: true });
     try {
-      const plan = db.query<{ detail: string }, [string, string, string]>(`EXPLAIN QUERY PLAN
-        SELECT row_key,value_json,row_order FROM registry_records WHERE collection='entries' AND json_extract(value_json,'$.cwd')=?
-        UNION ALL SELECT row_key,value_json,row_order FROM registry_records WHERE collection='entries'
-          AND json_extract(value_json,'$.cwd')>=? AND json_extract(value_json,'$.cwd')<? ORDER BY row_order`)
-        .all("/worktree/target", "/worktree/target/", "/worktree/target0");
-      expect(plan.some(row => row.detail.includes("registry_entries_cwd"))).toBeTrue();
-      const conversationPlan = db.query<{ detail: string }, [string, string, string]>(`EXPLAIN QUERY PLAN
-        SELECT row_key,value_json,row_order FROM registry_records WHERE collection='conversations'
-          AND json_extract(value_json,'$.generations[#-1].launchProfile.cwd')=?
-        UNION ALL SELECT row_key,value_json,row_order FROM registry_records WHERE collection='conversations'
-          AND json_extract(value_json,'$.generations[#-1].launchProfile.cwd')>=?
-          AND json_extract(value_json,'$.generations[#-1].launchProfile.cwd')<? ORDER BY row_order`)
-        .all("/worktree/target", "/worktree/target/", "/worktree/target0");
-      expect(conversationPlan.some(row => row.detail.includes("registry_conversations_launch_cwd")), JSON.stringify(conversationPlan)).toBeTrue();
-      expect(conversationPlan.some(row => row.detail.includes("registry_archive_conversations_launch_cwd")), JSON.stringify(conversationPlan)).toBeTrue();
+      const entryLookup = queries.get("entries")!;
+      const plan = db.query<{ detail: string }, (string | null)[]>(`EXPLAIN QUERY PLAN ${entryLookup.sql}`).all(...entryLookup.bindings);
+      expect(plan.some(row => row.detail.includes("registry_entries_cwd") && row.detail.includes("<expr>")), JSON.stringify(plan)).toBeTrue();
+      const conversationLookup = queries.get("conversations")!;
+      const conversationPlan = db.query<{ detail: string }, (string | null)[]>(`EXPLAIN QUERY PLAN ${conversationLookup.sql}`).all(...conversationLookup.bindings);
+      expect(conversationPlan.some(row => row.detail.includes("registry_conversations_launch_cwd") && row.detail.includes("<expr>")), JSON.stringify(conversationPlan)).toBeTrue();
+      expect(conversationPlan.some(row => row.detail.includes("registry_archive_conversations_launch_cwd") && row.detail.includes("<expr>")), JSON.stringify(conversationPlan)).toBeTrue();
       expect(db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='index' AND name='registry_entries_cwd'").get()).toBeTruthy();
     } finally { db.close(); }
   } finally { store.close(); fs.rmSync(directory, { recursive: true, force: true }); }

@@ -25,6 +25,22 @@ import { normalizeProjectOwnership, type HeldDelivery, type ViewerConversationId
 import type { CarrierSource } from "@/lib/accounts/projectAccountsView";
 import { agentStateMetricsForStorage, type AgentProjection, type AgentStateJournal, type AgentStateMetricsRow } from "@/lib/agentState/model";
 
+/** Build the exact indexed cwd lookup used by worktree protection snapshots. */
+export function buildWorktreeProtectionLookupQuery(source: string, collection: "entries" | "conversations",
+  within: readonly string[]): { sql: string; bindings: string[] } {
+  const cwd = `json_extract(value_json,'${collection === "entries" ? "$.cwd" : "$.generations[#-1].launchProfile.cwd"}')`;
+  const branches = within.flatMap(() => [
+    `SELECT row_key,value_json,row_order FROM ${source} WHERE collection=? AND ${cwd}=?`,
+    `SELECT row_key,value_json,row_order FROM ${source} WHERE collection=? AND ${cwd}>=? AND ${cwd}<?`,
+  ]);
+  return {
+    sql: branches.length ? `${branches.join(" UNION ALL ")} ORDER BY row_order`
+      : `SELECT row_key,value_json,row_order FROM ${source} WHERE 0`,
+    bindings: within.flatMap(directory => [collection, directory, collection, directory + path.sep,
+      directory + String.fromCharCode(path.sep.charCodeAt(0) + 1)]),
+  };
+}
+
 /** Non-enumerable per-transaction accessor attached to lazy `RegistryFile` views
  * so Antigravity `AgentProjection` rows persist in `registry_antigravity_agent_states`
  * inside the exact same SQLite transaction as `agentStateJournal` and
@@ -494,6 +510,13 @@ const registryRowIndexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS registry_migration_intent_custody ON registry_rows(collection,json_extract(value_json,'$.migration.intentId'),CASE WHEN json_extract(value_json,'$.migration.phase') IN ('committed','rolled-back','failed-recoverable') THEN 'terminal' ELSE 'pending' END,row_order)",
   "CREATE INDEX IF NOT EXISTS registry_seat_children_order ON registry_rows(json_extract(value_json, '$.parentConversationId'), row_order) WHERE collection = 'lineageEdges' AND json_extract(value_json, '$.source') = 'viewer-spawn'",
   "CREATE INDEX IF NOT EXISTS registry_agent_state_journal_subject_order ON registry_rows(json_extract(value_json,'$.subject'),json_extract(value_json,'$.at') DESC,row_order DESC) WHERE collection='agentStateJournal'",
+]);
+// Archive expression indexes are created after the archive schema transaction.
+// Keeping them here lets an existing database acquire each index in its own
+// implicit SQLite transaction, after open has completed.
+const registryArchiveCwdIndexes = declaredIndexes([
+  "CREATE INDEX IF NOT EXISTS registry_archive_entries_cwd ON registry_archive(collection,json_extract(value_json,'$.cwd'),row_order)",
+  "CREATE INDEX IF NOT EXISTS registry_archive_conversations_launch_cwd ON registry_archive(collection,json_extract(value_json,'$.generations[#-1].launchProfile.cwd'),row_order)",
 ]);
 const registryLivenessIndexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS registry_liveness_receipts_order ON registry_liveness_receipts(row_order)",
@@ -1478,6 +1501,8 @@ export interface SqliteRegistryStoreOptions {
   onCreditGuardChange?(): void;
   onSnapshotLoad?(): void;
   onRowPayloadRead?(collection: RowCollection, count: number): void;
+  /** Test observer for the exact SQL used by the bounded cwd protection read. */
+  onWorktreeProtectionQuery?(collection: "entries" | "conversations", sql: string, bindings: readonly (string | null)[]): void;
   onRowPayloadParse?(collection: RowCollection, count: number): void;
   onRevisionQuery?(): void;
   /** Test seam for the hard ceiling; production uses two attempts. */
@@ -1745,9 +1770,11 @@ export class SqliteAgentRegistryStore {
   private mutationBatch = false;
   private onSnapshotLoad: (() => void) | undefined;
   private onRowPayloadRead: ((collection: RowCollection, count: number) => void) | undefined;
+  private readonly onWorktreeProtectionQuery: SqliteRegistryStoreOptions["onWorktreeProtectionQuery"];
   private onRowPayloadParse: ((collection: RowCollection, count: number) => void) | undefined;
   private onRevisionQuery: (() => void) | undefined;
   private readonly rowCache = new Map<RowCollection, Map<string, CachedRow>>();
+  private cwdIndexesPreparation: Promise<void> | null = null;
   private revisionCache: { signature: string; revision: number } | null = null;
   /** Stamped like the grant record: a complete snapshot is only ever handed
       out again over exactly the database it was loaded from. */
@@ -1902,6 +1929,7 @@ export class SqliteAgentRegistryStore {
     this.writerClock = options.writerClock ?? (() => performance.now());
     this.onSnapshotLoad = options.onSnapshotLoad;
     this.onRowPayloadRead = options.onRowPayloadRead;
+    this.onWorktreeProtectionQuery = options.onWorktreeProtectionQuery;
     this.onRowPayloadParse = options.onRowPayloadParse;
     this.onRevisionQuery = options.onRevisionQuery;
     this.mcpGrantPolicy = options.mcpGrantPolicy;
@@ -2210,10 +2238,59 @@ export class SqliteAgentRegistryStore {
     }
     registryFailureRepairIndexes.install(this.db, path.dirname(filename));
     if (this.changesReady && !options.deferColdKeyInitialization) this.refreshColdKeys();
+    if (!options.readOnly && options.allowArchiveMigration !== false) {
+      const hasMissingCwdIndex = registryArchiveCwdIndexes.statements.some(sql => {
+        const name = /^CREATE INDEX IF NOT EXISTS (\w+)/.exec(sql)?.[1];
+        return !name || !this.db.query("SELECT 1 FROM sqlite_master WHERE type='index' AND name=?").get(name);
+      });
+      if (hasMissingCwdIndex && this.db.query("SELECT 1 FROM registry_archive LIMIT 1 OFFSET 9999").get()) {
+        // A large archive is indexed cooperatively after open; first reads stay
+        // correct on the records view while the background indexes are absent.
+        void this.prepareWorktreeProtectionIndexes().catch(error => {
+        if (!this.closed) console.error("[agent registry] cwd index preparation deferred", error instanceof Error ? error.message : String(error));
+        });
+      } else registryArchiveCwdIndexes.install(this.db, path.dirname(filename));
+    }
     } catch (error) {
       try { this.db.close(); } catch { /* preserve the initialization failure */ }
       throw error;
     }
+  }
+
+  /** Build archive cwd indexes after the archive schema transaction, with a
+   * cooperative yield between each index so concurrent registry writers get
+   * separate admission windows. The lookup itself remains valid before these
+   * optional indexes exist. */
+  async prepareWorktreeProtectionIndexes(signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
+    if (this.options.readOnly || this.options.allowArchiveMigration === false || this.closed) return;
+    if (this.cwdIndexesPreparation) return this.cwdIndexesPreparation;
+    const run = async () => {
+      const deadline = performance.now() + 30_000;
+      for (const sql of registryArchiveCwdIndexes.statements) {
+        signal?.throwIfAborted();
+        if (this.closed) return;
+        const name = /^CREATE INDEX IF NOT EXISTS (\w+)/.exec(sql)?.[1];
+        if (!name) throw new Error("cwd index declaration requires a name");
+        if (this.db.query("SELECT 1 FROM sqlite_master WHERE type='index' AND name=?").get(name)) continue;
+        await yieldToRuntime(signal);
+        signal?.throwIfAborted();
+        if (this.closed) return;
+        if (performance.now() >= deadline) throw new Error("registry cwd index preparation deadline exceeded");
+        assertStateStartupMutation(path.dirname(this.filename), "registry cwd indexes");
+        const result = await this.withWriter(() => {
+          signal?.throwIfAborted();
+          performanceSpans.sync("registry.prepare.index", () => this.db.exec(sql));
+          this.db.exec("COMMIT");
+          this.writerHeld = false;
+        }, { deadlineMs: Math.max(0, deadline - performance.now()) });
+        if (!result.acquired) throw new Error("registry cwd index preparation could not acquire its writer");
+      }
+    };
+    const preparation = run();
+    this.cwdIndexesPreparation = preparation;
+    try { await preparation; }
+    finally { if (this.cwdIndexesPreparation === preparation) this.cwdIndexesPreparation = null; }
   }
 
   /** Only the legacy root-role fallback needs a cross-conversation ordering.
@@ -2715,26 +2792,24 @@ export class SqliteAgentRegistryStore {
       for (const collection of ["entries", "conversations", "heldDeliveries"] as const) {
         // The directory each guard reads from these rows. The character after
         // the separator closes the range of paths below a directory.
-        const cwd = `json_extract(value_json,'${collection === "entries" ? "$.cwd" : "$.generations[#-1].launchProfile.cwd"}')`;
         const scoped = collection === "heldDeliveries" ? undefined : within;
         // Separate equality and descendant ranges so SQLite can seek the cwd
         // expression index in both branches instead of scanning a collection
         // to evaluate an OR predicate.
-        const scopedSql = scoped ? scoped.length ? scoped.flatMap(() => [
-          `SELECT row_key,value_json,row_order FROM ${this.recordsSource} WHERE collection=? AND ${cwd}=?`,
-          `SELECT row_key,value_json,row_order FROM ${this.recordsSource} WHERE collection=? AND ${cwd}>=? AND ${cwd}<?`,
-        ]).join(" UNION ALL ") : `SELECT row_key,value_json,row_order FROM ${this.recordsSource} WHERE 0` : undefined;
+        const cwdLookup = scoped && collection !== "heldDeliveries"
+          ? buildWorktreeProtectionLookupQuery(this.recordsSource, collection, scoped) : undefined;
         // Each state gets its own index seek. Null is the legacy default
         // "held"; the normalizer still rejects corrupt idle/image commands.
         const sql = collection === "heldDeliveries"
           ? ["held", "assigned", "delivery-uncertain", null].map(() =>
             `SELECT row_key,value_json,row_order FROM ${this.recordsSource}
               WHERE collection='heldDeliveries' AND json_extract(value_json,'$.state') IS ?`).join(" UNION ALL ") + " ORDER BY row_order"
-          : scopedSql ? `${scopedSql} ORDER BY row_order`
+          : cwdLookup ? cwdLookup.sql
             : `SELECT row_key,value_json,row_order FROM ${this.recordsSource} WHERE collection=? ORDER BY row_order`;
         const bindings = collection === "heldDeliveries" ? ["held", "assigned", "delivery-uncertain", null]
-          : scoped ? scoped.flatMap(directory => [collection, directory, collection, directory + path.sep,
-            directory + String.fromCharCode(path.sep.charCodeAt(0) + 1)]) : [collection];
+          : cwdLookup?.bindings ?? [collection];
+        if (collection !== "heldDeliveries")
+          this.onWorktreeProtectionQuery?.(collection as "entries" | "conversations", sql, bindings);
         // This read owns its statement. An interrupted iterator must not leave
         // a cached Bun statement unusable after the peer repairs the row.
         const statement = this.db.prepare<{ row_key: string; value_json: string }, (string | null)[]>(sql);

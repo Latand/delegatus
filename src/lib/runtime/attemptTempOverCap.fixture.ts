@@ -13,7 +13,7 @@ import { runAttemptTempSweep } from "./attemptTempProduction";
 import { AttemptTempStore } from "./attemptTempRetention";
 import { finishedLane } from "./attemptTempRetention.testSupport";
 
-const [mode, value, repo] = process.argv.slice(2);
+const [mode, value, repo, size] = process.argv.slice(2);
 const NOW = Date.parse("2035-01-15T00:00:00Z"), HOUR = 3600_000;
 Date.now = () => NOW;
 let answer: unknown;
@@ -28,12 +28,13 @@ if (mode === "--seed-previous-release") {
   new AgentRegistry(statePath("agent-registry.json"), () => false, undefined, { sqliteMode: "sqlite" }).close();
   const directory = statePath("scratch", "llv-stage-upgrad");
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(`${directory}/payload`, Buffer.alloc(1024 ** 2, 7));
+  const bytes = Number(size ?? 1024 ** 2);
+  fs.writeFileSync(`${directory}/payload`, Buffer.alloc(bytes, 7));
   const ledger = new AttemptTempStore();
   try {
     ledger.register({ directory, pipelineId: id, launchId: id, retainUntilClose: false, createdAt: Date.parse(completedAt) - HOUR });
     ledger.release(directory);
-    ledger.measure(directory, 1024 ** 2);
+    ledger.measure(directory, bytes);
   } finally { ledger.close(); }
   // The previous release's ledger: every table of this one but the over-cap
   // position.
@@ -55,13 +56,17 @@ if (mode === "--seed-previous-release") {
   fs.mkdirSync(path.dirname(statePath("attempt-temp-report.json")), { recursive: true });
   fs.writeFileSync(statePath("attempt-temp-report.json"), JSON.stringify({
     at: new Date(NOW).toISOString(), condition: { mode: "on", overCap: true, failing: false },
-    overCap: { checked: 0, ended: "budget", capBytes: 1 },
+    overCap: { checked: 0, ended: "budget", capBytes: Number(value ?? 1) },
   }));
   answer = {};
 } else if (mode === "--minute-tick") {
   answer = await runAttemptTempSweep({ scan: () => ({ ownNamespace: null, processes: [] }),
     references: (original, current, scan) => attemptReferencesClear(original, current, scan, async () => true),
     availableBytes: () => 531e9 }, { ...process.env, LLV_TEMP_SWEEP: "on", LLV_ATTEMPT_TEMP_CAP_BYTES: value! });
+} else if (mode === "--minute-tick-low-space") {
+  answer = await runAttemptTempSweep({ scan: () => ({ ownNamespace: null, processes: [] }),
+    references: (original, current, scan) => attemptReferencesClear(original, current, scan, async () => true),
+    availableBytes: () => 19 * 1024 ** 3 }, { ...process.env, LLV_TEMP_SWEEP: "on", LLV_ATTEMPT_TEMP_CAP_BYTES: value! });
 } else throw new Error(`unknown mode: ${mode}`);
 
 process.stdout.write(JSON.stringify({ answer, report: statePath("attempt-temp-report.json") }) + "\n", () => process.exit(0));
