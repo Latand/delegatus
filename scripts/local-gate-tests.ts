@@ -15,18 +15,19 @@ export interface TestRun { failures: TestSite[]; passed: TestSite[]; elapsedMs: 
 const escapedTemporaryRoot = path.join(gateTemporaryRoot(), "delegatus-test-comparison-").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const privateTestRoot = new RegExp(`${escapedTemporaryRoot}[a-zA-Z0-9]{6}[/\\\\]test-[a-zA-Z0-9]{6}`, "g");
 const diagnosticName = (site: TestSite) => site.kind === "error" ? site.name.replace(privateTestRoot, "<sandbox>") : site.name;
-const diagnosticProvenance = (site: TestSite) => (site.provenance ?? "")
-  .replace(/(owned runner: surviving owned processes: ).*$/gm, "$1<run-owned identities>")
-  .replace(/(owned test children survived teardown: )[^\n]*(; guardian=)/g, "$1<run-owned identities>$2")
-  .replace(/(owned test scope children survived teardown: )\d+ \((?:\d+:\d+|null)\)(?:, \d+ \((?:\d+:\d+|null)\))*/g, "$1<run-owned identities>");
+const normalizedOwnedIdentities = (text: string) => text
+  .replace(/(owned runner: surviving owned processes: )(.*)$/gm, (_whole, prefix: string, members: string) =>
+    prefix + (members.trim() ? members.split(/,\s*/).map(() => "<child>").join(", ") : "<no children>"))
+  .replace(/(owned test children survived teardown: )(.*?)(; guardian=)/g, (_whole, prefix: string, members: string, guardian: string) =>
+    prefix + (members.trim() ? members.split(/,\s*/).map(() => "<child>").join(", ") : "<no children>") + guardian)
+  .replace(/(owned test scope children survived teardown: )(.*)$/gm, (_whole, prefix: string, members: string) =>
+    prefix + (members.trim() ? members.split(/,\s*/).map(() => "<child>").join(", ") : "<no children>"));
+const diagnosticProvenance = (site: TestSite) => normalizedOwnedIdentities(site.provenance ?? "");
 // Keep the concrete identities in displayed evidence. A head/base comparison
 // of the same survivor failure must not depend on the different PIDs allocated
 // to those two isolated runs.
 const key = (site: TestSite) => JSON.stringify([site.file, site.suite,
-  site.kind === "error" ? diagnosticName(site)
-    .replace(/(owned runner: surviving owned processes: ).*$/, "$1<run-owned identities>")
-    .replace(/(owned test children survived teardown: )[\d, ]*(; guardian=)/, "$1<run-owned identities>$2")
-    .replace(/(owned test scope children survived teardown: )\d+ \((?:\d+:\d+|null)\)(?:, \d+ \((?:\d+:\d+|null)\))*$/, "$1<run-owned identities>")
+  site.kind === "error" ? normalizedOwnedIdentities(diagnosticName(site))
     : diagnosticName(site), site.kind, site.selection ?? "full", diagnosticProvenance(site)]);
 const occurrenceKey = (site: TestSite) => JSON.stringify([key(site), site.occurrence ?? 0]);
 const comparisonKey = (site: TestSite) => site.kind === "test" && site.occurrence !== undefined ? occurrenceKey(site) : key(site);
@@ -41,6 +42,21 @@ const mergeObservedSites = (first: readonly TestSite[], retry: readonly TestSite
     if (missing > 0) merged.push(...retry.filter(site => comparisonKey(site) === identity).slice(0, missing));
   }
   return merged;
+};
+const collapseDiagnosticSelections = (sites: readonly TestSite[]) => {
+  const tests = sites.filter(site => site.kind !== "error");
+  const groups = new Map<string, Map<string, TestSite[]>>();
+  for (const site of sites.filter(site => site.kind === "error")) {
+    const core = JSON.stringify([site.file, site.suite, diagnosticName(site), site.kind, diagnosticProvenance(site)]);
+    const selection = site.selection ?? "full";
+    const bySelection = groups.get(core) ?? new Map<string, TestSite[]>();
+    const occurrences = bySelection.get(selection) ?? [];
+    occurrences.push(site);
+    bySelection.set(selection, occurrences);
+    groups.set(core, bySelection);
+  }
+  const diagnostics = [...groups.values()].flatMap(bySelection => [...bySelection.values()].flat());
+  return [...tests, ...diagnostics];
 };
 const digest = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 const MIN_PHASE_BUDGET_MS = 15 * 60_000;
@@ -96,14 +112,27 @@ const selectionFor = (sites: readonly TestSite[] | undefined) => {
   return JSON.stringify([...new Set(testNameFilter(tests))].sort());
 };
 const RUNNER_ERROR = "<runner error> ";
+const runnerAbortEvidence = (output: string, root: string, privateRoot: string) => output
+  .replace(privateRoot, "<sandbox>").split(root).join("<checkout>")
+  .replace(/\x1b\[[0-9;]*m/g, "")
+  .split("\n").filter(line => !/^gate-slot:/.test(line) && !/^delegatus-gate-[\w-]+\.service:/.test(line))
+  .join("\n").replace(/; elapsed \d+ms/g, "").trim().slice(-12_000);
 interface Counts { pass: number; fail: number }
 interface FlakySite extends TestSite { base: Counts; head: Counts }
 const occurrenceCount = (sites: readonly TestSite[], site: TestSite) => sites.filter(other => occurrenceKey(other) === occurrenceKey(site)).length;
 const fileDiagnostics = (run: TestRun) => run.failures.filter(site => site.kind === "error");
 const describeDiagnostics = (sites: readonly TestSite[]) => sites.map(site => `${site.file}: ${diagnosticName(site)}`).join("; ");
-const matchedDiagnosticKeys = (base: readonly TestSite[], head: readonly TestSite[]) => {
-  const remaining = new Set(base.map(key));
-  return new Set(head.flatMap(site => { const identity = key(site); if (!remaining.delete(identity)) return []; return [identity]; }));
+const matchedDiagnosticCounts = (base: readonly TestSite[], head: readonly TestSite[]) => {
+  const remaining = new Map<string, number>();
+  for (const site of base) remaining.set(key(site), (remaining.get(key(site)) ?? 0) + 1);
+  const matched = new Map<string, number>();
+  for (const site of head) {
+    const identity = key(site), count = remaining.get(identity) ?? 0;
+    if (!count) continue;
+    remaining.set(identity, count - 1);
+    matched.set(identity, (matched.get(identity) ?? 0) + 1);
+  }
+  return matched;
 };
 
 /** Confirm new assertion failures and collect file diagnostics from the same
@@ -114,8 +143,25 @@ const matchedDiagnosticKeys = (base: readonly TestSite[], head: readonly TestSit
 export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side: "base" | "head", sites: readonly TestSite[]) => TestRun | Promise<TestRun>) {
   const comparison = compareTests(base, head);
   const baseAssertions = base.failures.filter(site => site.kind === "test");
-  let baseDiagnostics = fileDiagnostics(base);
-  const establishedDiagnosticMatches = matchedDiagnosticKeys(baseDiagnostics, fileDiagnostics(head));
+  const baseDiagnostics = fileDiagnostics(base);
+  let observedBaseDiagnostics = [...baseDiagnostics];
+  let observedHeadDiagnostics = [...fileDiagnostics(head)];
+  let retainedHeadDiagnostics = [...fileDiagnostics(head)];
+  const recoveredDiagnosticKeys = new Set<string>();
+  let pendingHeadDiagnostics: TestSite[] = [];
+  const establishedDiagnosticMatches = matchedDiagnosticCounts(observedBaseDiagnostics, observedHeadDiagnostics);
+  const rememberDiagnosticPair = (baseRun: TestRun, headRun: TestRun) => {
+    observedBaseDiagnostics = mergeObservedSites(observedBaseDiagnostics, fileDiagnostics(baseRun));
+    observedHeadDiagnostics = mergeObservedSites(observedHeadDiagnostics, fileDiagnostics(headRun));
+    const judged = compareTests({ ...base, failures: observedBaseDiagnostics }, { ...head, failures: observedHeadDiagnostics });
+    comparison.introduced = [...comparison.introduced.filter(site => site.kind === "test"), ...judged.introduced];
+    comparison.preexisting = [...comparison.preexisting.filter(site => site.kind === "test"), ...judged.preexisting];
+    comparison.fixed = [...comparison.fixed.filter(site => site.kind === "test"), ...judged.fixed];
+    comparison.absent = [...comparison.absent.filter(site => site.kind === "test"), ...judged.absent];
+    for (const [identity, count] of matchedDiagnosticCounts(fileDiagnostics(baseRun), fileDiagnostics(headRun))) {
+      establishedDiagnosticMatches.set(identity, Math.max(establishedDiagnosticMatches.get(identity) ?? 0, count));
+    }
+  };
   const initialAssertions = new Set(head.failures.filter(site => site.kind === "test").map(comparisonKey));
   const needsConfirmation = (site: TestSite) => site.kind === "test" && initialAssertions.has(comparisonKey(site));
   const flaky: FlakySite[] = [];
@@ -137,16 +183,17 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
       }));
       assertWorkersSucceeded(samples);
       const baseRetry = samples[0]!.value, retry = samples[1]!.value;
-      baseDiagnostics = mergeObservedSites(baseDiagnostics, fileDiagnostics(baseRetry));
-      for (const identity of matchedDiagnosticKeys(fileDiagnostics(baseRetry), fileDiagnostics(retry))) establishedDiagnosticMatches.add(identity);
-      const observedBase = { ...base, failures: [...baseAssertions, ...baseDiagnostics] };
+      rememberDiagnosticPair(baseRetry, retry);
+      const observedBase = { ...base, failures: [...baseAssertions, ...observedBaseDiagnostics] };
       const initial = compareTests(observedBase, head);
       const recovered = new Set<string>();
       for (const site of initial.introduced.filter(site => diagnostics.includes(site))) {
         if (retry.failures.some(other => key(other) === key(site))) continue;
         recovered.add(key(site));
+        recoveredDiagnosticKeys.add(key(site));
         flaky.push({ ...site, base: { pass: base.completed.includes(site.file) ? 1 : 0, fail: 0 }, head: { pass: 1, fail: 1 } });
       }
+      retainedHeadDiagnostics = mergeObservedSites(retainedHeadDiagnostics, fileDiagnostics(retry));
       comparison.introduced = initial.introduced.filter(site => !recovered.has(key(site)));
       // Compare the complete retry against the base so base occurrences are
       // consumed once. Merge the two samples by maximum multiplicity: repeated
@@ -162,7 +209,7 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
     // Only assertions in the initial sample have the occurrence counts required
     // for filtered confirmation. New retry failures above remain blocking.
     const candidates = [...new Map(comparison.introduced.filter(needsConfirmation).map(site => [occurrenceKey(site), site])).values()];
-    if (!candidates.length) return { ...comparison, flaky, baseDiagnostics };
+    if (!candidates.length) return { ...comparison, flaky, baseDiagnostics: observedBaseDiagnostics };
     const evidence = candidates.map(site => ({ site,
       base: { pass: occurrenceCount(base.passed, site), fail: occurrenceCount(base.failures, site) },
       head: { pass: occurrenceCount(head.passed, site), fail: occurrenceCount(head.failures, site) },
@@ -194,30 +241,53 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
       // A complete paired sample can compare hook and between-tests errors
       // alongside the filtered assertions. If either sample is unusable, a
       // newly observed diagnostic still prevents a capacity-only verdict.
-      const currentDiagnosticMatches = matchedDiagnosticKeys(
+      const currentDiagnosticMatches = matchedDiagnosticCounts(
         fileDiagnostics(observed.base ?? { failures: [], passed: [], completed: [], elapsedMs: 0 }),
         fileDiagnostics(observed.head ?? { failures: [], passed: [], completed: [], elapsedMs: 0 }));
       const unpaired = sides.flatMap(side => {
         const run = observed[side];
-        const errors = run && fileDiagnostics(run).filter(site => !establishedDiagnosticMatches.has(key(site)) && !currentDiagnosticMatches.has(key(site)));
+        const seen = new Map<string, number>();
+        const errors = run && fileDiagnostics(run).filter(site => {
+          const identity = key(site), occurrence = (seen.get(identity) ?? 0) + 1;
+          seen.set(identity, occurrence);
+          return occurrence > (establishedDiagnosticMatches.get(identity) ?? 0) + (currentDiagnosticMatches.get(identity) ?? 0);
+        });
         return errors?.length ? [`${side} rerun: incomplete runner or between-tests error: ${describeDiagnostics(errors)}`] : [];
       });
+      if (observed.head) {
+        const counts = new Map<string, number>();
+        for (const site of fileDiagnostics(observed.head)) counts.set(key(site), (counts.get(key(site)) ?? 0) + 1);
+        const newIdentities = new Set([...counts].filter(([identity, count]) =>
+          count > (establishedDiagnosticMatches.get(identity) ?? 0)).map(([identity]) => identity));
+        pendingHeadDiagnostics = mergeObservedSites(pendingHeadDiagnostics,
+          fileDiagnostics(observed.head).filter(site => newIdentities.has(key(site))));
+      }
+      // Keep diagnostics from a completed peer even if its sibling hit the
+      // shared deadline. The catch path compares these observations with the
+      // established base evidence and can still issue a decisive NEW refusal.
+      if (observed.base) observedBaseDiagnostics = mergeObservedSites(observedBaseDiagnostics, fileDiagnostics(observed.base));
+      if (observed.head) observedHeadDiagnostics = mergeObservedSites(observedHeadDiagnostics, fileDiagnostics(observed.head));
       assertWorkersSucceeded(samples, unpaired);
       const baseRetry = samples[0]!.value, headRetry = samples[1]!.value;
-      baseDiagnostics = mergeObservedSites(baseDiagnostics, fileDiagnostics(baseRetry));
-      for (const identity of matchedDiagnosticKeys(fileDiagnostics(baseRetry), fileDiagnostics(headRetry))) establishedDiagnosticMatches.add(identity);
+      rememberDiagnosticPair(baseRetry, headRetry);
       // Keep the established report order while rejudging diagnostics. The
       // filtered assertion results still go through the occurrence counts.
       const observedHead = mergeObservedSites(head.failures.filter(site => site.kind === "error"), fileDiagnostics(headRetry));
-      const retried = compareTests({ ...base, failures: [...baseAssertions, ...baseDiagnostics] }, {
+      const retried = compareTests({ ...base, failures: [...baseAssertions, ...observedBaseDiagnostics] }, {
         ...head, failures: [...head.failures.filter(site => site.kind === "test"),
           ...comparison.introduced.filter(site => site.kind === "test" && !needsConfirmation(site)), ...observedHead],
         selections: { ...head.selections, ...headRetry.selections },
       });
-      comparison.introduced = retried.introduced;
-      comparison.preexisting = retried.preexisting;
-      comparison.fixed = retried.fixed;
-      comparison.absent = retried.absent;
+      comparison.introduced = [...retried.introduced.filter(site => site.kind === "test"), ...comparison.introduced.filter(site => site.kind === "error")];
+      // The retry comparison already includes the maximum observed diagnostic
+      // multiplicity. Carrying old PRE-EXISTING rows forward would duplicate
+      // the same base evidence once per confirmation round.
+      comparison.preexisting = [...retried.preexisting.filter(site => site.kind === "test"),
+        ...mergeObservedSites(comparison.preexisting.filter(site => site.kind === "error"), retried.preexisting.filter(site => site.kind === "error"))];
+      comparison.fixed = [...retried.fixed.filter(site => site.kind === "test"),
+        ...mergeObservedSites(comparison.fixed.filter(site => site.kind === "error"), retried.fixed.filter(site => site.kind === "error"))];
+      comparison.absent = [...retried.absent.filter(site => site.kind === "test"),
+        ...mergeObservedSites(comparison.absent.filter(site => site.kind === "error"), retried.absent.filter(site => site.kind === "error"))];
       for (const [index, side] of sides.entries()) {
         const run = samples[index]!.value;
         for (const item of pending) {
@@ -237,17 +307,23 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
       flaky.push({ ...item.site, base: item.base, head: item.head });
     }
     const keepNonFlaky = (sites: TestSite[]) => sites.filter(site => !flakyOccurrences.has(occurrenceKey(site)));
-    return { ...comparison, introduced: keepNonFlaky(comparison.introduced), preexisting: keepNonFlaky(comparison.preexisting), flaky, baseDiagnostics };
+    return { ...comparison, introduced: keepNonFlaky(comparison.introduced), preexisting: keepNonFlaky(comparison.preexisting), flaky,
+      baseDiagnostics: observedBaseDiagnostics };
   } catch (error) {
     // Every exceptional exit retains refusals already established against
     // the base, including retry-only assertions outside filtered confirmation.
     // Initial assertions and between-tests errors still owe their existing
     // confirmations; an ordinary runner deadline alone remains retryable.
+    const partialHead = mergeObservedSites(retainedHeadDiagnostics, pendingHeadDiagnostics)
+      .filter(site => !recoveredDiagnosticKeys.has(key(site)));
+    const partialDiagnostics = compareTests({ ...base, failures: observedBaseDiagnostics },
+      { ...head, failures: [...head.failures.filter(site => site.kind !== "error"), ...partialHead] }).introduced.filter(site => site.kind === "error");
+    const retainedDiagnostics = diagnosticRetryCompleted ? partialDiagnostics
+      : mergeObservedSites(comparison.introduced.filter(site => site.kind === "error"), partialDiagnostics);
     const retained = comparison.introduced.filter(site => site.kind === "test"
       ? !needsConfirmation(site)
-      : !establishedDiagnosticMatches.has(key(site))
-        && site.name !== `${RUNNER_ERROR}runner did not finish (124)`
-        && (diagnosticRetryCompleted || !site.name.startsWith("<between-tests error> ")));
+      : false).concat(retainedDiagnostics.filter(site => site.name !== `${RUNNER_ERROR}runner did not finish (124)`
+        && (diagnosticRetryCompleted || !site.name.startsWith("<between-tests error> "))));
     if (!retained.length) throw error;
     throw new Error([error instanceof Error ? error.message : String(error),
       ...retained.map(site => `NEW ${site.file}: ${site.suite ? `${site.suite} > ` : ""}${diagnosticName(site)}`)].join("\n"));
@@ -331,12 +407,22 @@ export function parseReport(xml: string, output: string, file: string, root: str
   // Bun omits out-of-test exceptions from JUnit. Keep these visible as named
   // file-level diagnostics instead of losing them beside an existing assertion.
   let errors = 0;
-  for (const match of output.matchAll(/# Unhandled error between tests\s*\n-+\n([\s\S]*?)\n-+/g)) {
-    const message = match[1]!.match(/^(?:[\w.]*Error|error): (.*)$/m)?.[0];
+  const headers = [...output.matchAll(/^# Unhandled error between tests\s*$/gm)];
+  for (const [index, header] of headers.entries()) {
+    const start = header.index! + header[0].length;
+    const end = headers[index + 1]?.index ?? output.length;
+    const block = output.slice(start, end);
+    const separators = [...block.matchAll(/^[-]{5,}\s*$/gm)];
+    // Exception text may itself contain Bun's divider line. The actual closing
+    // boundary is the final divider in this diagnostic block; a missing one
+    // leaves the report ambiguous and cannot certify a base match.
+    if (separators.length < 2) throw new Error("ambiguous between-tests diagnostic boundary");
+    const body = block.slice(separators[0]!.index! + separators[0]![0].length, separators.at(-1)!.index).trim();
+    const message = body.match(/^(?:[\w.]*Error|error):[^\n]*/m)?.[0];
     if (!message) throw new Error("unidentified error between tests");
     errors++;
     failures.push({ file, suite: "", name: `<between-tests error> ${message.split(root).join("<checkout>")}`, kind: "error",
-      selection, provenance: provenance(match[1]!) });
+      selection, provenance: provenance(body) });
   }
   const reportedErrors = Number(output.match(/^\s*(\d+) errors?\s*$/m)?.[1] ?? 0);
   if (errors !== reportedErrors) throw new Error("incomplete between-tests error diagnostics");
@@ -481,7 +567,14 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
         if (refusal) throw new Error(`${label}: ${file}: runner did not finish (124); ${refusal.trim()}`);
         throw new BudgetExhausted(`${label}: ${file}: runner did not finish (124); ${budgetLabel} budget exhausted`);
       }
-      if (result.signalCode || ![0, 1].includes(exitCode)) throw new Error(`runner did not finish (${result.signalCode ?? exitCode})`);
+      if (exitCode === 124 && output.includes("owned runner: deadline expired")) {
+        throw new BudgetExhausted(`${label}: ${file}: runner did not finish (124); file budget exhausted`);
+      }
+      if (result.signalCode || ![0, 1].includes(exitCode)) {
+        const evidence = runnerAbortEvidence(output, root, privateRoot);
+        if (!evidence) throw new Error(`runner did not finish (${result.signalCode ?? exitCode}); cause unavailable`);
+        throw new Error(`runner did not finish (${result.signalCode ?? exitCode}): ${evidence}`);
+      }
       const parsed = parseReport(readFileSync(report, "utf8"), output, file, root, selection);
       // A complete report still needs the service's ownership verdict.
       // Retain it so cleanup fixed on head can recover a broken baseline.
@@ -499,6 +592,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
       failures.push(...parsed.failures); passed.push(...parsed.passed); completed.push(file);
       if (parsed.failures.length) options.onFailure?.();
     } catch (error) {
+      if (error instanceof BudgetExhausted) throw error;
       if (cutShort) throw error;
       const cause = error instanceof Error ? error.message : String(error);
       const message = survivors && !cause.includes(survivors) ? `${cause}; ${survivors}` : cause;
@@ -851,8 +945,12 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     // A base file that did not finish certifies nothing, unless the head fails
     // to finish the same file with the same diagnostic: then the push changed
     // nothing there and the comparison below lists it as PRE-EXISTING.
-    const headErrors = new Set(head.failures.filter(site => site.kind === "error").map(key));
-    for (const site of baseline.failures) if (site.kind === "error" && site.name.startsWith(RUNNER_ERROR) && !headErrors.has(key(site))) throw new Error(`baseline: ${site.file}: ${diagnosticName(site).slice(RUNNER_ERROR.length)}`);
+    const headErrorFiles = new Set(head.failures.filter(site => site.kind === "error").map(site => site.file));
+    for (const site of baseline.failures) if (site.kind === "error" && site.name.startsWith(RUNNER_ERROR)) {
+      const detail = diagnosticName(site).slice(RUNNER_ERROR.length);
+      if (detail.includes("cause unavailable")) throw new Error(`baseline: ${site.file}: ${detail}`);
+      if (!headErrorFiles.has(site.file)) throw new Error(`baseline: ${site.file}: ${detail}`);
+    }
     const retryStarted = performance.now(), deadline = retryStarted - budget.elapsed() + FLAKY_BUDGET_MS;
     let reruns = 0, diagnosticReruns = 0;
     const comparison = await confirmFailures(baseline, head, async (side, sites) => {
@@ -865,6 +963,10 @@ export async function touchedTests(root: string, baseRef: string, selected: read
       if (!retryFiles.length) return { failures: [], passed: [], completed: [], elapsedMs: 0 };
       return await runFiles(side === "head" ? root : prepareBaseline(deadline), retryFiles, sandbox, inherited, `${side} rerun`, { ...runOptions, sites: fullFile ? undefined : sites, confirmationDeadline: deadline });
     });
+    // The same teardown/hook error can be observed repeatedly under one
+    // selector, or once under several selectors. Keep the maximum count within
+    // each selector; matching already happened independently per selection.
+    comparison.preexisting = collapseDiagnosticSelections(comparison.preexisting);
     // Observed intermittency cannot become a frozen baseline allowance.
     for (const file of new Set(comparison.flaky.map(site => site.file))) cache.remove(cacheKey(file));
     if (diagnosticReruns) log(`touched-tests: between-tests diagnostic retry: paired full-file selection (shared budget ${FLAKY_BUDGET_MS}ms)`);

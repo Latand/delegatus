@@ -5,13 +5,41 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 import { stopFixtureProcess } from "./fixtureProcess";
-import { ownedTestChildIsRunning } from "./testChildren";
+import { ownedTestChildIsRunning, waitForOwnedScopeDrain } from "./testChildren";
 
 test("a kernel-exited child is terminal even while its PID identity remains visible", () => {
   const identity: ProcessIdentity = { pid: 42, startIdentity: "42:100", bootEpoch: "boot" };
   expect(ownedTestChildIsRunning(identity, () => "alive", () => true)).toBeFalse();
   expect(ownedTestChildIsRunning(identity, () => "alive", () => false)).toBeTrue();
   expect(ownedTestChildIsRunning(identity, () => "dead", () => false)).toBeFalse();
+});
+
+test("scope teardown waits through a delayed exit and still refuses a persistent orphan", async () => {
+  let now = 0, polls = 0;
+  const observations: string[][] = [];
+  const drained = await waitForOwnedScopeDrain({
+    now: () => now,
+    wait: async milliseconds => { now += milliseconds; },
+    members: () => {
+      polls++;
+      const current = polls < 4 ? ["delayed child"] : [];
+      observations.push(current);
+      return current;
+    },
+  });
+  expect(observations).toEqual([["delayed child"], ["delayed child"], ["delayed child"], []]);
+  expect(drained).toEqual([]);
+
+  now = 0;
+  polls = 0;
+  const persistent = await waitForOwnedScopeDrain({
+    timeoutMs: 60,
+    now: () => now,
+    wait: async milliseconds => { now += milliseconds; },
+    members: () => { polls++; return ["persistent orphan"]; },
+  });
+  expect(polls).toBeGreaterThan(1);
+  expect(persistent).toEqual(["persistent orphan"]);
 });
 
 for (const form of ["array", "array-options", "object", "empty-env"] as const) test(`Bun ${form} spawn records ownership and supplies its runner binding before readiness`, async () => {

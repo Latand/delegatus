@@ -187,6 +187,41 @@ test.each([true, false] as const)("a later deadline respects whether the same-se
   expect(comparatorEnding(error).code).toBe(matched ? 75 : 1);
 });
 
+test("a sibling deadline stays retryable after a paired diagnostic, while a fresh peer diagnostic refuses", async () => {
+  const site: TestSite = { file: "example.test.ts", suite: "", name: "target", kind: "test", occurrence: 0 };
+  const shared: TestSite = { ...site, name: "<hook error> shared cleanup", kind: "error", selection: "full", provenance: "at cleanup (<checkout>/test.ts:2:1)" };
+  const fresh: TestSite = { ...shared, name: "<hook error> candidate cleanup", provenance: "at candidate (<checkout>/test.ts:9:1)" };
+  const base: TestRun = { failures: [shared], passed: [site], completed: [site.file], elapsedMs: 0 };
+  const head: TestRun = { ...base, failures: [site, shared], passed: [] };
+  const pairedTimeout = await confirmFailures(base, head, side => side === "base" ? base : Promise.reject(new BudgetExhausted("sibling deadline"))).catch(error => error);
+  expect(comparatorEnding(pairedTimeout).code).toBe(75);
+
+  const candidateHead: TestRun = { ...base, failures: [site], passed: [] };
+  const candidateTimeout = await confirmFailures({ ...base, failures: [], passed: [site] }, candidateHead, side => side === "base"
+    ? Promise.reject(new BudgetExhausted("sibling deadline"))
+    : { ...candidateHead, failures: [site, fresh], passed: [] }).catch(error => error);
+  expect(comparatorEnding(candidateTimeout).code).toBe(1);
+  expect(comparatorEnding(candidateTimeout).line).toContain("<hook error> candidate cleanup");
+  expect(comparatorEnding(candidateTimeout).line).toContain("NEW example.test.ts:");
+});
+
+test("extra candidate diagnostic occurrences remain a refusal after a later deadline", async () => {
+  const alpha: TestSite = { file: "example.test.ts", suite: "", name: "alpha", kind: "test", occurrence: 0 };
+  const beta: TestSite = { ...alpha, name: "beta", occurrence: 1 };
+  const diagnostic: TestSite = { ...alpha, name: "<hook error> shared detail", kind: "error", selection: "full" };
+  const base: TestRun = { failures: [diagnostic], passed: [alpha, beta], completed: [alpha.file], elapsedMs: 0 };
+  const head: TestRun = { ...base, failures: [alpha, beta, diagnostic, diagnostic], passed: [] };
+  let headRound = 0;
+  const error = await confirmFailures(base, head, side => {
+    if (side === "base") return { ...base, failures: [diagnostic], passed: [alpha, beta] };
+    headRound++;
+    if (headRound === 1) return { ...head, failures: [beta, diagnostic, diagnostic], passed: [alpha] };
+    throw new BudgetExhausted("later sibling deadline");
+  }).catch(error => error);
+  expect(comparatorEnding(error).code).toBe(1);
+  expect(comparatorEnding(error).line).toContain("NEW example.test.ts: <hook error> shared detail");
+});
+
 test.each(["deadline", "completed", "no retry refusal", "pre-existing retry refusal"] as const)("diagnostic retry assertions keep their verdict across comparator processes: %s", mode => {
   const f = fixture(source(true));
   const marker = path.join(f.dir, "retry-assertion-runs");

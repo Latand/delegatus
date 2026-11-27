@@ -134,6 +134,47 @@ for (const [index, message] of errors.entries()) describe("diagnostic " + index,
   }
 });
 
+test.each(["head-only", "shared"] as const)("confirmation rounds retain candidate hook diagnostics from the earlier selection: %s", mode => {
+  const f = fixture(`import { test, expect } from "bun:test"; test("alpha", () => expect(true).toBe(true)); test("beta", () => expect(true).toBe(true));`);
+  const counter = path.join(f.dir, "round-hook");
+  const scheduled = `import { afterAll, test, expect } from "bun:test";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { basename } from "node:path";
+const side = basename(process.cwd()) === "baseline" ? "base" : "head";
+const marker = ${JSON.stringify(counter)} + "-" + side;
+const run = existsSync(marker) ? Number(readFileSync(marker, "utf8")) + 1 : 1;
+writeFileSync(marker, String(run));
+test("alpha", () => expect(side === "base" || run > 1).toBe(true));
+test("beta", () => expect(side === "base" || run > 2).toBe(true));
+if (run === 2 && (side === "head" || ${JSON.stringify(mode)} === "shared")) afterAll(() => { throw new Error("confirmation hook detail"); });`;
+  writeFileSync(path.join(f.dir, "example.test.ts"), scheduled);
+  f.git("add", "example.test.ts"); f.git("commit", "-m", "confirmation hook schedule");
+  const base = f.git("rev-parse", "HEAD");
+  writeFileSync(path.join(f.dir, "example.test.ts"), scheduled + "\n// reviewed");
+  const outcome = cliAt(f, base);
+  expect(outcome.stdout + outcome.stderr).not.toContain("gate error");
+  expect(outcome.stdout).toContain("confirmation");
+  expect(outcome.stdout).toContain("beta");
+  expect(outcome.status, outcome.stdout + outcome.stderr).toBe(mode === "head-only" ? 1 : 0);
+  expect(outcome.stdout).toContain(`${mode === "head-only" ? "NEW" : "PRE-EXISTING"} example.test.ts: <hook error> Error: confirmation hook detail`);
+  expect(outcome.stdout).toContain(mode === "head-only" ? "1 new failures" : "0 new failures");
+  if (mode === "shared") expect(outcome.stdout).toContain("Base diagnostic example.test.ts: <hook error> Error: confirmation hook detail");
+  const headRuns = Number(readFileSync(counter + "-head", "utf8"));
+  expect(headRuns).toBeGreaterThanOrEqual(3);
+});
+
+test.each(["distinct", "shared"] as const)("same-status runner aborts require matching concrete cause: %s", mode => {
+  const f = fixture(`process.stderr.write("module import cause\\n"); process.exit(2);`);
+  const base = f.base;
+  writeFileSync(path.join(f.dir, "example.test.ts"), mode === "shared"
+    ? `// same cause\nprocess.stderr.write("module import cause\\n"); process.exit(2);`
+    : `import { test } from "bun:test"; test("candidate cause", () => { process.stderr.write("new test cause\\n"); process.exit(2); });`);
+  const outcome = cliAt(f, base);
+  expect(outcome.status, outcome.stdout + outcome.stderr).toBe(mode === "distinct" ? 1 : 0);
+  if (mode === "distinct") expect(outcome.stdout).toContain("NEW example.test.ts: <runner error> runner did not finish (2):");
+  else expect(outcome.stdout).toContain("PRE-EXISTING example.test.ts: <runner error> runner did not finish (2):");
+});
+
 test("a between-tests error present on both sides is PRE-EXISTING from the CLI and never blocks", async () => {
   const f = fixture(betweenTests("describe boom"));
   const accepted = cliAt(f, f.base);
@@ -193,8 +234,8 @@ test("stays red", () => expect(side === "base").toBe(true));`;
   expect(refused.stdout).toContain("FLAKY example.test.ts: recovers (base 2 pass/0 fail; head 1 pass/1 fail)");
   expect(refused.stdout).toContain("NEW example.test.ts: stays red");
   expect(refused.stdout).toContain(`PRE-EXISTING example.test.ts: <between-tests error> error: describe boom ${SAME_WAY}`);
-  expect(refused.stdout).toContain("1 new failures, 3 pre-existing failures, 0 fixed, 0 removed/skipped, 1 flaky");
-  expect(refused.stdout.match(/PRE-EXISTING example\.test\.ts: <between-tests error> error: describe boom/g)).toHaveLength(2);
+  expect(refused.stdout).toContain("1 new failures, 4 pre-existing failures, 0 fixed, 0 removed/skipped, 1 flaky");
+  expect(refused.stdout.match(/PRE-EXISTING example\.test\.ts: <between-tests error> error: describe boom/g)).toHaveLength(3);
   expect(refused.status).toBe(1);
 });
 

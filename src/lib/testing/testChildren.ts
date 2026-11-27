@@ -16,6 +16,27 @@ export function ownedTestChildIsRunning(
   return status(identity) === "alive" && !exited(identity.pid);
 }
 
+/** Drain short lived kernel-owned descendants before reporting an ownership
+ * leak. Under load, process exit and cgroup membership updates can lag by a few
+ * seconds; a persistent orphan still fails after the bounded drain window. */
+export async function waitForOwnedScopeDrain<T>(input: {
+  members: () => T[];
+  wait: (milliseconds: number) => Promise<unknown>;
+  now?: () => number;
+  timeoutMs?: number;
+}): Promise<T[]> {
+  const now = input.now ?? Date.now;
+  // Bun's default hook timeout is five seconds. Leave time for the cleanup
+  // hook to report a persistent orphan before that outer timeout fires.
+  const deadline = now() + (input.timeoutMs ?? 3_000);
+  let remaining = input.members();
+  while (remaining.length && now() < deadline) {
+    await input.wait(20);
+    remaining = input.members();
+  }
+  return remaining;
+}
+
 /** The preload owns real subprocess handles before spawn returns. This covers
  * imported aliases, fork/execFile and product helpers exercised by a test, too.
  * A separate guardian retains the identities if the test runner is SIGKILLed.
@@ -101,12 +122,7 @@ export function beginTestChildOwnership(root: string): () => Promise<void> {
     // Native CLIs can fork their own protocol servers. Keep the test runner
     // alive while those kernel-owned children finish shutdown, then fail with
     // identities if they exceed the bound. The service reaps persistent tails.
-    const scopeDeadline = Date.now() + 2_000;
-    let remaining = scopeChildren();
-    while (remaining.length && Date.now() < scopeDeadline) {
-      await Bun.sleep(20);
-      remaining = scopeChildren();
-    }
+    const remaining = await waitForOwnedScopeDrain({ members: scopeChildren, wait: milliseconds => Bun.sleep(milliseconds) });
     if (remaining.length) throw new Error(`owned test scope children survived teardown: ${remaining.map(pid => `${pid} (${procBackend.processIdentity(pid)})`).join(", ")}`);
     if (survivors.length || bunSurvivors.length || (guardian && guardian.exitCode !== 0)) {
       throw new Error(`owned test children survived teardown: ${[...survivors, ...bunSurvivors].map(child => child.pid).join(", ")}; guardian=${guardian?.exitCode ?? "kernel"}`);

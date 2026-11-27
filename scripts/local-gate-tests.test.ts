@@ -194,6 +194,19 @@ test("duplicate names match occurrences and keep suite ancestry", async () => {
   const result = compareTests(base, { ...base, failures: [site, site, { ...site, suite: "other" }] });
   expect(result.preexisting).toHaveLength(1); expect(result.introduced).toHaveLength(2);
 });
+test("between-tests diagnostics retain text after a divider inside the thrown message", () => {
+  const xml = `<testsuites tests="1" failures="0"><testsuite><testcase classname="suite" name="anchor" file="example.test.ts"/></testsuite></testsuites>`;
+  const report = (tail: string) => parseReport(xml, `# Unhandled error between tests\n${"-".repeat(39)}\nTypeError: shared first line\n${"-".repeat(39)}\n${tail}\n    at fault (example.test.ts:4:3)\n${"-".repeat(39)}\n1 error\n`, "example.test.ts", "/checkout");
+  const base = report("base detail").failures[0]!;
+  const head = report("candidate detail").failures[0]!;
+  expect(head.name).toContain("TypeError: shared first line");
+  expect(head.provenance).toContain("candidate detail");
+  expect(compareTests({ failures: [base], passed: [], completed: [base.file], elapsedMs: 0 },
+    { failures: [head], passed: [], completed: [head.file], elapsedMs: 0 }).introduced).toEqual([head]);
+  const same = report("base detail").failures[0]!;
+  expect(compareTests({ failures: [base], passed: [], completed: [base.file], elapsedMs: 0 },
+    { failures: [same], passed: [], completed: [same.file], elapsedMs: 0 }).preexisting).toEqual([same]);
+});
 test("scope and service guards report an identical surviving tree once across the baseline", async () => {
   const file = "fixture.test.ts";
   const failures: TestSite[] = [{ file, suite: "", kind: "error",
@@ -210,17 +223,28 @@ test("scope and service guards report an identical surviving tree once across th
   expect(selected[0]!.selection).toBe("[selected case]");
 });
 test.each([
-  ["owned test children survived teardown: 21, 22; guardian=0", "owned test children survived teardown: 31; guardian=0"],
-  ["owned test children survived teardown: ; guardian=1", "owned test children survived teardown: 31; guardian=1"],
-  ["owned test scope children survived teardown: 21 (21:1), 22 (null)", "owned test scope children survived teardown: 31 (31:3)"],
-])("teardown comparison ignores run identities and preserves evidence: %s", (oldMessage, newMessage) => {
+  ["owned test children survived teardown: 21, 22; guardian=0", "owned test children survived teardown: 31, 32; guardian=0", true],
+  ["owned test children survived teardown: ; guardian=1", "owned test children survived teardown: 31; guardian=1", false],
+  ["owned test scope children survived teardown: 21 (21:1), 22 (null)", "owned test scope children survived teardown: 31 (31:3), 32 (32:4)", true],
+  ["owned test scope children survived teardown: 31 (31:1)", "owned test scope children survived teardown: ", false],
+] as const)("teardown comparison preserves survivor counts: %s", (oldMessage, newMessage, sameCount) => {
   const site = (message: string): TestSite => ({ file: "fixture.test.ts", suite: "", kind: "error", name: `<hook error> ${message}` });
   const base: TestRun = { failures: [site(oldMessage)], passed: [], completed: ["fixture.test.ts"], elapsedMs: 0 };
   const head = { ...base, failures: [site(newMessage)] };
-  expect(compareTests(base, head)).toEqual({ introduced: [], preexisting: head.failures, fixed: [], absent: [] });
+  const compared = compareTests(base, head);
+  expect(compared.introduced).toEqual(sameCount ? [] : head.failures);
+  expect(compared.preexisting).toEqual(sameCount ? head.failures : []);
   expect(head.failures[0]!.name).toBe(`<hook error> ${newMessage}`);
   const changed = site("owned test child survived the final identity check");
   expect(compareTests(base, { ...head, failures: [changed] })).toEqual({ introduced: [changed], preexisting: [], fixed: base.failures, absent: [] });
+});
+test("runner survivor normalization preserves added members while ignoring PID churn", () => {
+  const site = (name: string): TestSite => ({ file: "fixture.test.ts", suite: "", kind: "error", name });
+  const base: TestRun = { failures: [site("<ownership error> owned runner: surviving owned processes: 12 (12:1), 13 (13:2)")], passed: [], completed: ["fixture.test.ts"], elapsedMs: 0 };
+  const same = { ...base, failures: [site("<ownership error> owned runner: surviving owned processes: 92 (92:7), 93 (93:8)")] };
+  expect(compareTests(base, same).introduced).toEqual([]);
+  const extra = { ...base, failures: [site("<ownership error> owned runner: surviving owned processes: 92 (92:7), 93 (93:8), 94 (94:9)")] };
+  expect(compareTests(base, extra).introduced).toEqual(extra.failures);
 });
 test("teardown comparison retains the guardian outcome", () => {
   const site = (guardian: number): TestSite => ({ file: "fixture.test.ts", suite: "", kind: "error",
