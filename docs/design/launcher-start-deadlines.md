@@ -69,9 +69,14 @@ to run again. There is no claim of out-of-process seat notification.
 | Viewer generation retirement completion | 10 seconds | Reject stop |
 | Combined launcher child shutdown | 20 seconds | Refuse a switch whose shutdown cannot be verified |
 | Runtime host readiness | Existing 30 seconds without progress, 5-minute absolute ceiling; socket probe has a 1-second idle timeout | Stop candidate / rollback |
-| Viewer readiness | Existing 90-second file/readiness wait, then 90-second page/chunk wait; individual HTTP attempts bounded | Stop candidate / rollback |
-| Terminal bootstrap health verification | Existing `TERMINAL_BOOTSTRAP_TIMEOUT_MS` (990 seconds), with 2-second host and 5-second HTTP probes | Report refusal |
+| Viewer readiness | 90 seconds without startup progress, capped at the current switch, rollback or startup expiry minus 90 seconds. Crash recovery has its own 10-minute ceiling. A web restart has a 10-minute expiry with the same 90-second reserve. Replacement launches and web restarts check the page and chunk within that separate budget. | Stop candidate / rollback |
+| Terminal bootstrap health verification | Switch and rollback budgets, two 20-second shutdown budgets and a 30-second margin (1,270 seconds total), with 2-second host and 5-second HTTP probes | Report refusal |
 | External service recovery verification | Existing 60-second loop with bounded host and HTTP probes | Report refusal |
+
+The readiness journal records the latest completed work in each Viewer startup
+phase. A phase transition or a higher completed-work counter advances the
+startup wait. A total of zero in a progress receipt means the number of steps
+is discovered during preparation.
 
 The outer startup expiry also bounds awaited preparation and recovery work
 whose individual completion is lost. After handoff these timers require a
