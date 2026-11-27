@@ -359,6 +359,7 @@ function boardReadFailure(tool: string, args: McpToolArgs, error: unknown): McpT
 }
 
 function responseAuthorityResult(tool: string, args: McpToolArgs, authority: McpResponseAuthority | undefined, result: McpToolResult): McpToolResult {
+  if (result.code === "outcome_unknown" && result.details?.nextAction === "original-key-lookup") return result;
   try { for (const check of authority?.checks ?? []) check(); return result; }
   catch (error) {
     if (BOARD_READ_TOOLS.has(tool)) return boardReadFailure(tool, args, error);
@@ -3000,7 +3001,9 @@ export function createMcpToolService(
         const imageNote = relayImageNote(result);
         if (!result.replayed) result = bindMcpPageCursorResult(typedTool, result, pageCaller);
         result = withoutPrototypeTaskFields(result);
-        context.assertResult?.(result);
+        if (!(result.code === "outcome_unknown" && result.details?.nextAction === "original-key-lookup")) {
+          context.assertResult?.(result);
+        }
         const rawRelayResults = result.ok && typedTool === "relay_service_tools" && Array.isArray(result.results) ? result.results : undefined;
         // Receipt identities and acknowledgement digests are protocol values.
         // The consumer must receive the exact bytes the custody ledger stores.
@@ -3081,19 +3084,23 @@ export function createMcpToolService(
         return finish(failure(typedTool, requestId, verdict.code, verdict.error, false), "failure");
       }
       let receiptTarget: McpReceiptAccess | undefined;
+      // Identity is pinned to this invocation and rechecked at claim admission.
+      // This retained guard checks live caller/target authority across awaits
+      // without resolving the invocation's identity in a new scope each time.
       const assertReceiptAccess = () => {
         context.assertCaller?.();
-        if (runWithMcpCallerResolution(() => binding.receiptIdentity?.()) !== receiptIdentity) {
+        receiptTarget?.assert();
+      };
+      const assertReceiptIdentity = () => {
+        if (binding.receiptIdentity?.() !== receiptIdentity) {
           throw new McpToolRefusal("receipt caller authority changed", { code: "caller_unidentified", retryable: false });
         }
-        receiptTarget?.assert();
       };
       try {
         if (!recoverable) {
           receiptTarget = binding.captureReceiptTarget?.(effectiveArgs);
           if (receiptTarget) context = { ...context, receiptProject: receiptTarget.project };
           if (receiptIdentity !== undefined || receiptTarget) {
-            assertReceiptAccess();
             retainResponseAuthority(context, assertReceiptAccess);
           }
         }
@@ -3154,8 +3161,10 @@ export function createMcpToolService(
       const digest = callerBoundDigest(argumentDigest, receiptIdentity, receiptTarget?.fingerprint);
       const key = receiptKey(typedTool, requestId, scope);
       const checkReceiptAccess = !recoverable && (receiptIdentity !== undefined || receiptTarget) ? assertReceiptAccess : undefined;
-      const disclose = (answer: McpToolResult): McpToolResult =>
-        responseAuthorityResult(typedTool, effectiveArgs, checkReceiptAccess ? { checks: [checkReceiptAccess] } : undefined, answer);
+      const disclose = (answer: McpToolResult): McpToolResult => {
+        if (answer.code === "outcome_unknown" && answer.details?.nextAction === "original-key-lookup") return answer;
+        return responseAuthorityResult(typedTool, effectiveArgs, checkReceiptAccess ? { checks: [checkReceiptAccess] } : undefined, answer);
+      };
       const finishReceipt = trackMcpClaim(key, digest);
       try {
       /* A recoverable mutation never joins an in-process duplicate: who is
@@ -3747,6 +3756,7 @@ export function createMcpToolService(
         };
         const beforeClaim = context.boardRead || checkReceiptAccess ? () => {
           context.boardRead?.assert();
+          assertReceiptIdentity();
           checkReceiptAccess?.();
         } : undefined;
         const claim = await measure("claim", () => {
@@ -4029,12 +4039,19 @@ export function createMcpToolService(
         // Preserve the curator committed witness if disclosure authority changes.
         curatorApply?.assertCurrent();
         context.boardRead?.assert();
-        const verified = disclose(settled);
-        if (verified !== settled) return verified;
         settled = bindMcpPageCursorResult(typedTool, settled, pageCaller);
         await measure("completion", () => receipts.complete(key, digest, settled, retention));
         context.boardRead?.assert();
         curatorApply?.assertCurrent();
+        try {
+          checkReceiptAccess?.();
+        } catch {
+          // The effect has already happened. Keep its durable receipt settled,
+          // and give the changed caller only a bounded recovery instruction.
+          return failure(typedTool, requestId, "outcome_unknown",
+            "The operation completed, but caller authority changed before its result could be disclosed. Look up the original clientRequestId.",
+            false, false, { outcome: "unknown", nextAction: "original-key-lookup" });
+        }
         return settled;
       })();
       inFlight.set(key, { digest, result });

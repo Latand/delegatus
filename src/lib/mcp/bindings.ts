@@ -1337,10 +1337,15 @@ function viewerReceiptIdentity(dependencies: ViewerMcpDomainDependencies): strin
   const confirmedId = authority?.kind !== "unidentified" ? authority?.conversationId : null;
   const attribution = !confirmedId && dependencies.callerAttribution ? attributionOf(dependencies) : undefined;
   const id = confirmedId || attribution?.via?.deputy || attribution?.conversationId || null;
-  const project = dependencies.callerProject?.() ?? (id
-    ? dependencies.workspaceProject ? dependencies.workspaceProject(id)
-      : dependencies.registrySnapshot ? callerProjectFromSnapshot(dependencies.registrySnapshot(), id) : null
-    : null);
+  const callerProject = dependencies.callerProject?.();
+  const seatProject = callerProject == null && id && dependencies.authorizedSeats
+    ? dependencies.authorizedSeats().find(seat => seat.conversationId === id)?.project ?? null
+    : null;
+  const snapshotProject = callerProject == null && !seatProject && id && dependencies.registrySnapshot
+    ? callerProjectFromSnapshot(dependencies.registrySnapshot(), id)
+    : null;
+  const project = callerProject ?? seatProject ?? snapshotProject
+    ?? (id && dependencies.workspaceProject ? dependencies.workspaceProject(id) : null);
   const transport = id ? null : receiptTransportIdentity();
   return JSON.stringify([authority?.kind ?? attribution?.kind, id, project ? canonicalProject(project) : null, transport]);
 }

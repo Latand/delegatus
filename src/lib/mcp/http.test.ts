@@ -570,9 +570,11 @@ test("task HTTP execution preserves protocol validation, exact text, caller rece
       .toMatchObject({ ok: true, replayed: true, taskId: created.taskId, revision: created.revision });
     const other = await agentClient(bob);
     try {
-      expect(payloadOf(await other.callTool({ name: "create_task", arguments: withTaskDue({ ...args, full: true }) })))
-        .toMatchObject({ ok: true, replayed: true, taskId: created.taskId, revision: created.revision,
-          task: { statusBy: (created.task as { statusBy: unknown }).statusBy } });
+      const foreignReplay = payloadOf(await other.callTool({ name: "create_task", arguments: withTaskDue({ ...args, full: true }) }));
+      expect(foreignReplay).toMatchObject({ ok: false, code: "idempotency_conflict", retryable: false });
+      expect(foreignReplay).not.toHaveProperty("taskId");
+      expect(foreignReplay).not.toHaveProperty("task");
+      expect(foreignReplay).not.toHaveProperty("statusBy");
       expect(payloadOf(await other.callTool({ name: "update_task", arguments: {
         taskId: created.taskId, note: "Second caller note", clientRequestId: "http-task-note", full: true,
       } }))).toMatchObject({ ok: true, task: { note: { author: { conversationId: bob.conversationId } } } });

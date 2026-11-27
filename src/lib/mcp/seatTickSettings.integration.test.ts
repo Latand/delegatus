@@ -205,7 +205,7 @@ test("keyed settings reads refuse foreign callers in a warm service and after re
       racingCaller = second;
       return result;
     };
-    expect(await call("racing", args)).toMatchObject({ ok: false, code: "caller_unidentified", retryable: false });
+    expect(await call("racing", args)).toMatchObject({ ok: false, code: "project_scope_refused", retryable: false });
     expect(await receipts.lookup(key)).toEqual(stored);
   } finally {
     receipts.close();
@@ -227,4 +227,59 @@ test("an adapter's connection label alone grants no receipt ownership", async ()
   const refused = await call();
   expect(refused).toMatchObject({ ok: false, code: "idempotency_conflict", retryable: false });
   expect(refused).not.toHaveProperty("settings");
+});
+
+test("a committed settings mutation settles its receipt before refusing a changed project", async () => {
+  const first = { project: "receipt-owner-project", conversationId: "conversation_receipt_owner" };
+  const second = { project: "receipt-other-project", conversationId: "conversation_receipt_other" };
+  let active = first;
+  writeSeatTickSettings(first.project, defaultSeatTickSettings(first.project));
+  writeSeatTickSettings(second.project, defaultSeatTickSettings(second.project));
+  const dependencies = {
+    ...productionDomainDependencies,
+    attentionAuthority: () => ({ kind: "worker" as const, conversationId: active.conversationId, role: "orchestrator" }),
+    callerAttribution: () => ({ kind: "manager" as const, conversationId: active.conversationId, role: "orchestrator" }),
+    callerProject: () => active.project,
+    authorizedSeats: () => [active] as never,
+  };
+  const receipts = await openAsyncMcpReceiptStore(path.join(sandbox, "changed-project-receipts.sqlite"));
+  const claimKinds: string[] = [];
+  const originalClaim = receipts.claim.bind(receipts);
+  receipts.claim = async (...claimArgs) => {
+    const claim = await originalClaim(...claimArgs);
+    claimKinds.push(claim.kind);
+    return claim;
+  };
+  const bindings = viewerMcpBindings(undefined, undefined, dependencies);
+  const original = bindings.seat_tick_settings;
+  bindings.seat_tick_settings = Object.assign(async (...args: Parameters<typeof original>) => {
+    const answer = await original(...args);
+    active = second;
+    return answer;
+  }, original);
+  const service = createMcpToolService(bindings, receipts, viewerMcpToolPolicy(dependencies));
+  const args = { clientRequestId: "changed-project-after-commit", reason: "Committed owner change" };
+  try {
+    const withheld = await runAsMcpHttpCaller({ paginationIdentity: "first" }, () => service.callTool("seat_tick_settings", args));
+    expect(withheld).toMatchObject({ ok: false, code: "outcome_unknown", retryable: false,
+      details: { outcome: "unknown", nextAction: "original-key-lookup" } });
+    expect(withheld).not.toHaveProperty("settings");
+    expect(readSeatTickSettings(first.project).reason).toBe(args.reason);
+    const receipt = await receipts.lookup(`seat_tick_settings:${args.clientRequestId}`);
+    expect(receipt?.result).toMatchObject({ ok: true, changed: true, changedFields: ["reason"],
+      toolName: "seat_tick_settings", clientRequestId: args.clientRequestId });
+    active = first;
+    const replay = await runAsMcpHttpCaller({ paginationIdentity: "first" }, () => service.callTool("seat_tick_settings", args));
+    expect(claimKinds).toEqual(["fresh", "replay"]);
+    expect(replay).toMatchObject({ ok: true, replayed: true });
+    active = second;
+    const foreign = await runAsMcpHttpCaller({ paginationIdentity: "second" }, () => service.callTool("seat_tick_settings", args));
+    expect(foreign).toMatchObject({ ok: false, code: "idempotency_conflict", retryable: false });
+    expect(foreign).not.toHaveProperty("reason");
+    expect(foreign).not.toHaveProperty("settings");
+    expect(claimKinds).toEqual(["fresh", "replay", "conflict"]);
+  } finally {
+    receipts.close();
+    active = first;
+  }
 });
