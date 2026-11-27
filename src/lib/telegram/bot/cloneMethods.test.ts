@@ -92,7 +92,7 @@ afterAll(() => { if (prior === undefined) delete process.env.LLV_STATE_DIR; else
 const common = (key: string) => ({ conversationId: "fixture-writer", clientRequestId: key, chat: "reports", topicId: 12, replyToMessageId: 17, silent: true });
 const document = (key = "pdf") => service.sendDocument({ ...common(key), document: { path: pdf, caption: "Fixture PDF" } });
 const media = (key = "photo", album = false) => service.sendMedia({ ...common(key), images: (album ? [photo, photo] : [photo]).map(path => ({ path, caption: "Fixture photo" })) });
-async function restartDocument(key: string) {
+async function restartDocument(key: string, file: { path: string; filename?: string } = { path: pdf }) {
   const script = `import {TelegramBotService,productionTelegramBotDependencies} from './src/lib/telegram/bot/service';
     import {FakeBotTransport} from './src/lib/telegram/bot/fakeTransport';
     const bot=new FakeBotTransport();
@@ -100,7 +100,7 @@ async function restartDocument(key: string) {
     try { const result=await service.sendDocument(JSON.parse(process.env.CLONE_FIXTURE_SEND)); console.log(JSON.stringify({result,calls:bot.calls})); }
     catch(error) {console.log(JSON.stringify({code:error.code,calls:bot.calls}));}
     finally {await service.stopPublications();service['store']().close();}`;
-  const child = Bun.spawn([process.execPath, "-e", script], { env: { ...process.env, CLONE_FIXTURE_SEND: JSON.stringify({ ...common(key), document: { path: pdf } }) }, stdout: "pipe", stderr: "pipe" });
+  const child = Bun.spawn([process.execPath, "-e", script], { env: { ...process.env, CLONE_FIXTURE_SEND: JSON.stringify({ ...common(key), document: file }) }, stdout: "pipe", stderr: "pipe" });
   const timer = setTimeout(() => child.kill(), 15000);
   try {
     const [output, error, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
@@ -175,6 +175,9 @@ test.each(officeFormats)("%s uses the clone when the relay advertises its MIME t
   ]);
   expect(service.listChats().chats[0]?.lastDelivery).toMatchObject({ state: "sent", bot: { name: "Report clone" } });
   expect(await send()).toMatchObject({ messageIds: [102], sentBy: { name: "Report clone" }, alreadySent: true });
+  expect(await restartDocument("office", office)).toMatchObject({
+    result: { messageIds: [102], sentBy: { name: "Report clone" }, alreadySent: true }, calls: [],
+  });
   expect(sends).toHaveLength(2);
   expect(bot.callsOf("sendDocument")).toHaveLength(0);
 });
@@ -213,6 +216,29 @@ test.each([
   });
   expect(sends).toHaveLength(mode === "mime" ? 1 : 0);
   expect(sendClone).toHaveBeenCalledTimes(0);
+  expect(bot.callsOf("sendDocument")).toHaveLength(0);
+});
+test("a fresh relay descriptor enables retry of a refused Office send under the same key", async () => {
+  bot.handlers.getChatMember = () => ok({ status: "kicked" });
+  const [extension, mime] = officeFormats[0];
+  const office = officeFile(extension);
+  const send = () => service.sendDocument({ ...common("office-after-refresh"), document: office });
+  const sendClone = spyOn(port, "send");
+
+  await expect(send()).rejects.toMatchObject({ code: "clone_files_unsupported", message: expect.stringContaining(mime) });
+  expect(sendClone).toHaveBeenCalledTimes(0);
+  expect(descriptors).toBe(1);
+  expect(sends).toEqual([]);
+
+  limits.files.document.mime_types.push(mime);
+  now += 60001;
+  rights = cloneMethodRights({ read_at: new Date(now).toISOString() });
+  expect(await send()).toMatchObject({ messageIds: [101], sentBy: { name: "Report clone" }, alreadySent: false });
+  expect(descriptors).toBe(2);
+  expect(sendClone).toHaveBeenCalledTimes(1);
+  expect(sends).toHaveLength(1);
+  expect(sends[0]!.input.client_key).toBe(cloneClientKey(relay.id, "document:fixture-writer", "office-after-refresh", 0));
+  expect(sends[0]!.files.get("document")).toMatchObject({ name: office.filename, type: mime });
   expect(bot.callsOf("sendDocument")).toHaveLength(0);
 });
 test("a clone-only Office send retains the multipart size refusal after local fallback fails", async () => {
