@@ -14323,6 +14323,7 @@ const STAGE_SETTLEMENT_PREPARATION_DETAIL = "passed-stage settlement is waiting 
 const STAGE_SETTLEMENT_OWNERSHIP_PARK = "committing the passed stage: branch ownership preparation did not stabilize within 15 minutes: ";
 const LEGACY_SETTLEMENT_OWNERSHIP_CHANGE = "pipeline branch ownership changed during settlement";
 
+/** Recover parks written before ownership changes stayed on automatic backoff. */
 function resumeParkedStageSettlement(pipeline: Pipeline, ports: PipelinePorts, explicit = false): boolean {
   const stage = currentStage(pipeline);
   const attempt = stage && currentAttempt(pipeline, stage.id);
@@ -14379,24 +14380,17 @@ async function recordStageSettlementPreparationFailure(preview: Pipeline, identi
     const reason = redactBounded(error instanceof Error ? error.message : String(error), 400);
     // Missing proof never retires the accepted pass or its publication
     // reservation. Persist the first failure and retry schedule across boot.
-    attempt.settlementPreparationWait = { ...prior, identity, startedAt: prior?.startedAt ?? now,
+    attempt.settlementPreparationWait = { identity, startedAt: prior?.startedAt ?? now,
       rounds: rounds + 1, retryAfter: new Date(unixMs(now) + delayMs).toISOString(), reason };
-    if (unixMs(now) - unixMs(attempt.settlementPreparationWait.startedAt) >= STAGE_SETTLEMENT_ADMISSION_WAIT_MS) {
-      // No Git result is accepted without fresh ownership. Stop this same
-      // intent instead of renewing it forever, retaining the accepted head
-      // and publication receipt. The commit retry resumes the same attempt.
-      const resumeState = error instanceof StageBranchOwnershipChange
-        && (attempt.state === "passed" || attempt.state === "skipped" || attempt.state === "committing") ? attempt.state : undefined;
-      if (resumeState) attempt.settlementPreparationWait.resumeState = resumeState;
-      else delete attempt.settlementPreparationWait.resumeState;
-      const action = resumeState ? `automatic recheck of the preserved head at ${attempt.settlementPreparationWait.retryAfter}`
-        : "retry-stage to settle the preserved head";
-      const detail = `${STAGE_SETTLEMENT_OWNERSHIP_PARK}${reason}; ${action}`;
+    // A recorded competing write calls for another read. Keep the accepted
+    // attempt and its dismissal intact while the controller backs off.
+    if (!(error instanceof StageBranchOwnershipChange)
+      && unixMs(now) - unixMs(attempt.settlementPreparationWait.startedAt) >= STAGE_SETTLEMENT_ADMISSION_WAIT_MS) {
+      const detail = `${STAGE_SETTLEMENT_OWNERSHIP_PARK}${reason}; retry-stage to settle the preserved head`;
       stageSettlementEffects.set(current, notes);
       try { await park(current, detail, attempt); }
       finally { stageSettlementEffects.delete(current); }
       await persist([current]);
-      if (resumeState) ports.scheduleTick?.(delayMs);
       const parked = controllerTickFingerprint(current);
       taskNoteAuthority.set(current, () => {
         const latest = findPipelineRecord(current.id);

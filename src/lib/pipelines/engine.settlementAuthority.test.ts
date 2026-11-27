@@ -1,14 +1,13 @@
 import { expect, test, fs, path, Database, loadPipelines, realWorktreeLane, finishReported, createPipelineFromRequest } from "./engine.fixture";
 import { spyOn } from "bun:test";
 import * as stateStore from "@/lib/state/sqliteStateStore";
-import { isStoredPipeline } from "./store";
+import { isStoredPipeline, takeoverPipelineDelivery, withPipelineMutation } from "./store";
 import { settlePendingStageGit } from "./engine";
 import { tickPipelinesController } from "./controllerPass";
 import { settlePipelineControllerJobs, startPipelineControllerJob, PIPELINE_CONTROLLER_MAX_JOBS } from "./controllerJobs";
-import { takeoverPipelineDelivery } from "./store";
 import { withoutControllerPipelineScope } from "./controllerScope";
 
-test("a peer delivery takeover after a failed push cannot stall the preserved pass", async () => {
+test.each(["delivery takeover", "comparison state change"] as const)("a peer %s after a failed push cannot stall the preserved pass", async change => {
   const box = await realWorktreeLane("passed-stage-delivery", [
     { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "audit" },
     { id: "audit", kind: "run", role: { roleId: "reviewer" }, prompt: "Audit", next: null },
@@ -17,7 +16,7 @@ test("a peer delivery takeover after a failed push cannot stall the preserved pa
   let clock = Date.parse(box.h.ports.now());
   box.h.ports.now = () => new Date(clock).toISOString();
   const execute = box.h.ports.exec;
-  let pushes = 0, transfers = 0;
+  let pushes = 0, writes = 0;
   let peerId: string | undefined;
   box.h.ports.exec = async (...args) => {
     const [command, argv, cwd, , options] = args;
@@ -28,9 +27,16 @@ test("a peer delivery takeover after a failed push cannot stall the preserved pa
     if (peerId && command === "git" && argv[0] === "status" && cwd === box.worktree && options?.inheritFd !== undefined) {
       const id = peerId;
       await withoutControllerPipelineScope(async () => {
-        const peer = loadPipelines().find(row => row.id === id)!;
-        expect((await takeoverPipelineDelivery(id, id, peer.delivery!.epoch, "Refresh peer delivery", null)).error).toBeUndefined();
-        transfers++;
+        if (change === "delivery takeover") {
+          const peer = loadPipelines().find(row => row.id === id)!;
+          expect((await takeoverPipelineDelivery(id, id, peer.delivery!.epoch, "Refresh peer delivery", null)).error).toBeUndefined();
+        } else await withPipelineMutation(async (rows, persist) => {
+          const peer = rows.find(row => row.id === id)!;
+          expect(["running", "needs_decision"]).toContain(peer.state);
+          peer.state = peer.state === "running" ? "needs_decision" : "running";
+          await persist([peer]);
+        });
+        writes++;
       });
     }
     return result;
@@ -48,23 +54,35 @@ test("a peer delivery takeover after a failed push cannot stall the preserved pa
     expect(failed.delivery!.operation).toMatchObject({ state: "settled", result: { ok: false, failure: { retryableDeadline: true } } });
     expect(failed.runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
     expect(failed.lastPassedCommit).not.toBe(box.base);
-    const peer = await createPipelineFromRequest({ task: "Disjoint delivery peer", repoDir: box.repo, autoStart: false,
+    const peer = await createPipelineFromRequest({ task: "Settlement peer", repoDir: box.repo, autoStart: false,
       stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }],
-      publication: "remote-branch", delivery: { branch: "refs/heads/disjoint-delivery" } }, box.h.ports);
+      publication: "remote-branch", delivery: change === "delivery takeover" ? { branch: "refs/heads/disjoint-delivery" }
+        : { branch: failed.delivery!.target.branch, comparison: true } }, box.h.ports);
     if (!peer.pipeline) throw new Error(peer.error);
     peerId = peer.pipeline.id;
-    for (const minutes of [0, 1, 5, 15, 16]) {
+    if (change === "comparison state change") {
+      expect(peer.pipeline.delivery).toMatchObject({ disposition: "comparison", active: false, ownerId: box.id, target: failed.delivery!.target });
+      await withPipelineMutation(async (rows, persist) => {
+        const comparison = rows.find(row => row.id === peerId)!;
+        comparison.state = "running";
+        await persist([comparison]);
+      });
+    }
+    for (const minutes of [0, 1, 5, 15, 16, 17, 30]) {
       clock = Date.parse(failed.runs[0]!.attempts[0]!.completedAt!) + minutes * 60_000;
       await tickPipelinesController([], box.h.ports);
       await settlePipelineControllerJobs();
       if (current().cursor?.stageId === "audit") break;
     }
-    expect(transfers).toBeGreaterThan(0);
-    expect(loadPipelines().find(row => row.id === peerId)!.delivery!.epoch).toBe(peer.pipeline.delivery!.epoch + transfers);
+    expect(writes).toBeGreaterThan(0);
+    const written = loadPipelines().find(row => row.id === peerId)!;
+    if (change === "delivery takeover") expect(written.delivery!.epoch).toBe(peer.pipeline.delivery!.epoch + writes);
+    else expect(written.delivery).toEqual(peer.pipeline.delivery);
     expect(current().cursor).toMatchObject({ stageId: "audit", activatedBy: { stageId: "build", attempt: 1, edge: "pass" } });
     expect(current().runs[0]!.attempts).toHaveLength(1);
     expect(current().lastPassedCommit).toBe(failed.lastPassedCommit);
     expect(await box.git(box.worktree, "rev-parse", "HEAD")).toBe(failed.lastPassedCommit);
+    expect(await box.git(box.origin, "rev-parse", failed.delivery!.target.branch)).toBe(failed.lastPassedCommit);
     expect(current().delivery).toMatchObject({ ownerId: box.id, epoch: failed.delivery!.epoch,
       operation: { state: "settled", sha: failed.lastPassedCommit, result: { ok: true, remote: "published" } } });
     expect(pushes).toBe(2);

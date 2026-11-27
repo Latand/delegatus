@@ -65,6 +65,9 @@ const raw = (row: string, field: string) => `${row}.value_json -> '$.${field}'`;
 const decoded = (row: string, field: string) => `json_extract(${row}.value_json,'$.${field}')`;
 const state = (row: string) => `CASE WHEN ${decoded(row, "state")} IN ('draft','provisioning','running','needs_decision','needs_review','paused','completed','closed')
   THEN ${decoded(row, "state")} IN ('completed','closed') END`;
+// Branch ownership distinguishes terminal lanes from open lanes. Keep the
+// JSON type as well so malformed state values still affect the proof.
+const stateAuthority = (row: string) => `json_array(json_type(${row}.value_json,'$.state'),${state(row)})`;
 const ambiguousMembers = (json: string) => `EXISTS (SELECT 1 FROM json_each(${json})
   GROUP BY key HAVING count(*)>1 OR instr(fullkey,char(92))>0)`;
 const unambiguous = (row: string) => `CASE WHEN json_valid(${row}.value_json) THEN
@@ -76,8 +79,8 @@ const unambiguous = (row: string) => `CASE WHEN json_valid(${row}.value_json) TH
 // sentinel. A single OLD/NEW comparison then detects every change without
 // repeating the expensive JSON validation in separate NULL branches.
 const authority = (row: string) => `CASE WHEN ${unambiguous(row)} THEN json_array(
-    json_extract(${row}.value_json,${[...authorityFields.map(field => `'$.${field}'`), "'$.state'"].join(",")}),
-    json_type(${row}.value_json,'$.delivery'))
+    json_extract(${row}.value_json,${authorityFields.map(field => `'$.${field}'`).join(",")}),
+    json_type(${row}.value_json,'$.delivery'), ${stateAuthority(row)})
     ELSE json_array('invalid',${row}.value_json) END`;
 
 // Keep the last authority write to each coordinate, including vacated ones.
@@ -100,7 +103,7 @@ const scopeKeys = (row: string) => {
       THEN json_array('unknown') END
   ) ELSE json_array(json_array('unknown')) END`;
 };
-const fieldValue = (row: string, field: string) => field === "state" ? state(row)
+const fieldValue = (row: string, field: string) => field === "state" ? stateAuthority(row)
   : field === "delivery" ? `json_type(${row}.value_json,'$.delivery')` : raw(row, field);
 const changedFields = `CASE
   WHEN OLD.collection IS NOT NEW.collection THEN 'collection'
@@ -173,9 +176,9 @@ const triggers = [
     UPDATE pipeline_evidence_clock SET revision=revision+1 WHERE id=1; ${touch("OLD")} END`,
 ];
 
-/** Installed inside the state schema's existing transaction. Historical rows
- * are not scanned at install; triggers inspect only rows being written and
- * defer expanding a captured replacement row until SQLite inserts it. */
+/** Installed inside the state schema's existing transaction. The first install
+ * of lane scopes backfills them from live and archived pipeline rows. Triggers
+ * maintain scopes for writes and expand captured replacement scopes on insert. */
 export function installPipelineEvidenceIndex(db: Database, directory: string): void {
   if (pipelineEvidenceIndexReady(db) || !mayRunStateStartupMutation(directory)) return;
   installHistoryProjection(db, directory);
