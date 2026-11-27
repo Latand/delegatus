@@ -1861,7 +1861,7 @@ test("a new controller process resumes active and repository-waiting provisionin
   const resumed = Bun.spawn([process.execPath, "-e", source, "resume"],
     { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const [code, stdout, resumeError] = await Promise.all([resumed.exited, new Response(resumed.stdout).text(), new Response(resumed.stderr).text()]);
-  expect(code, resumeError).toBe(0);
+  assertStateChildSuccess(code, resumeError);
   expect(JSON.parse(stdout)).toEqual(["running", "running"]);
   expect((await findControllerPipeline(lane.id))?.state).toBe("running");
   expect((await findControllerPipeline(peer.id))?.state).toBe("running");

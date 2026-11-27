@@ -33,7 +33,7 @@ const args = process.argv.slice(2);
 // Read the actual parent before asynchronous launch work can outlive it.
 // The gate names its child directly. A reparented runner has no authority
 // to start work, even if the gate's numeric PID is later reused.
-const gateParentPid = process.env.LLV_OWNED_RUN_GATE_PARENT_PID;
+const gateParentPid = process.platform === "linux" ? process.env.LLV_OWNED_RUN_GATE_PARENT_PID : undefined;
 delete process.env.LLV_OWNED_RUN_GATE_PARENT_PID;
 const gateParent = gateParentPid !== undefined && Number(gateParentPid) === process.ppid
   ? captureProcessIdentity(process.ppid) : undefined;
