@@ -108,7 +108,6 @@ const cleaner = fault === "observe-only" ? undefined : {
 };
 const actions = productionDiskPressureActions();
 actions.project = async () => "repo-1234abcd";
-actions.early = () => fs.appendFileSync(statePath("fixture-sweeps"), `${at}\n`);
 const readPressure = async () => {
   if (fault === "switch-owner-on-read") {
     const file = statePath("viewer-release.json");

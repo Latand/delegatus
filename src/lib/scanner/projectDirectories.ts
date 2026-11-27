@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { repositoryRootForPath } from "@/lib/projects/identity";
+import { projectAliasResolver } from "@/lib/projects/aliases";
+import { projectCurationSnapshot } from "@/lib/projects/curation";
 import { stateDir } from "@/lib/configDir";
 import { readStateCollectionRevision, readStateCollectionRows } from "@/lib/state/sqliteStateStore";
 
@@ -159,4 +161,16 @@ export function projectDirectoryFallbacks(projects: Iterable<string>): Record<st
 /** Exact project and linked-checkout directories recorded by the scanner and launchers. */
 export function knownProjectFileRoots(): string[] {
   return [...new Set(localProjectDirectories().flatMap(entry => [entry.projectRoot, entry.cwd, ...(entry.checkoutRoot ? [entry.checkoutRoot] : [])]))];
+}
+
+/** Recorded directories and explicit roots for one canonical project. */
+export function knownProjectFileRootsForProject(project: string): string[] {
+  if (!project) return [];
+  const canonicalProject = projectAliasResolver();
+  const key = canonicalProject(project);
+  const recorded = localProjectDirectories().filter(entry => canonicalProject(entry.project) === key)
+    .flatMap(entry => [entry.projectRoot, entry.cwd, ...(entry.checkoutRoot ? [entry.checkoutRoot] : [])]);
+  const manual = projectCurationSnapshot().manualProjects.filter(entry => canonicalProject(entry.project) === key)
+    .map(entry => entry.root);
+  return [...new Set([...recorded, ...manual])];
 }

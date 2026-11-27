@@ -275,6 +275,13 @@ export type PipelineAttemptDefinition = {
 
 export type PipelineGraphEditAction = "add-stage" | "remove-stage" | "reorder-stage" | "set-edge" | "override-stage";
 
+/** The actor role of a graph edit the controller makes without an operator request. */
+export const PIPELINE_CONTROLLER_ROLE = "pipeline-controller";
+
+/** Why the controller made a graph edit by itself. */
+export const PIPELINE_GRAPH_EDIT_CAUSES = ["codex-cybersecurity-refusal"] as const;
+export type PipelineGraphEditCause = typeof PIPELINE_GRAPH_EDIT_CAUSES[number];
+
 /** One accepted graph edit, as the pipeline's own journal keeps it. */
 export type PipelineGraphEdit = {
   /** Increments per pipeline, and keeps incrementing past trimmed entries. */
@@ -296,6 +303,9 @@ export type PipelineGraphEdit = {
   /** An account value explicitly set or cleared by this override. */
   accountOverride?: string | null;
   summary: string;
+  /** Set on a controller edit: the condition that made it. A record from a
+      later release can carry a cause this one does not name. */
+  cause?: PipelineGraphEditCause;
   runtimeSwitch?: { attempt: number; id: string };
 };
 
@@ -795,6 +805,8 @@ export type PipelineStageAttempt = {
   /** Proven fenced first messages replaced in this attempt. Retained across
       successful spawn handshakes and controller restarts; at most three. */
   fencedMessageRetries?: number;
+  /** A failed setup writer already received its automatic replacement. */
+  spawnWriterRetried?: true;
   /** Socketless recovery hands a failed launch back to its runnable Viewer
       for at most ten minutes. Ownership changes and controller restarts keep
       this deadline; successful retirement clears it before replacement. */
@@ -1131,6 +1143,9 @@ export type PipelineDelivery = {
   /** A final-fix body refresh deferred while Git proved publication. The body
       is reconstructed from this summary and the PR's later verified body. */
   pendingPullRequestRefresh?: { epoch: number; sha: string; number: number; summary: string; nextAttemptAt?: string };
+  /** A Git-verified pass handed off to review while the forge could not list
+      its first PR. The controller retries discovery/creation from this pass. */
+  pendingFirstPullRequest?: { epoch: number; sha: string; stageId: string; attempt: number };
   operation?: {
     id: string;
     /** Pending reservation consumed by this execution. Keeps logical recovery
@@ -1338,6 +1353,10 @@ export type Pipeline = {
       transient Git or network failure (#2115, #2176, #2220). Cleared when
       provisioning succeeds or parks. */
   provisioningWait?: PipelineBoundedWait;
+  /** Server-owned controller evidence. Never returned by a public projection. */
+  provisioningJob?: import("./provisioningRecord").ProvisioningRecord;
+  lastProvisioningInterruption?: import("./provisioningRecord").ProvisionInterruption;
+  provisioningStep?: import("./provisioningRecord").ProvisioningStepView;
   srcPath: string | null;
   srcConversationId: string | null;
   /** The seat's parallel self that created the lane on the seat's behalf

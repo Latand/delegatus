@@ -107,6 +107,14 @@ const startupEffectWriteTriggers = [
 
 export class RuntimeJournalFault extends RuntimeDataCorruptionError {}
 
+export class RuntimeJournalAdmissionDeadlineError extends Error {
+  readonly code = "STAGED_LAUNCH_DEADLINE";
+  constructor() {
+    super("staged launch publication deadline expired before the first prompt");
+    this.name = "RuntimeJournalAdmissionDeadlineError";
+  }
+}
+
 export const RUNTIME_SNAPSHOT_INACTIVE_SESSION_LIMIT = 128;
 export const RUNTIME_SNAPSHOT_TERMINAL_DEPLOYMENT_LIMIT = 50;
 export const RUNTIME_SNAPSHOT_STALE_EDGE_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -802,7 +810,9 @@ export class RuntimeJournal {
       /* Read inside the write transaction, so no other writer can land
          between this comparison and the event it admits. */
       if (input.expectedSessionRevision !== undefined && (input.scope.type !== "session"
-        || this.entity<RuntimeSession>("session", input.scope.id)?.revision !== input.expectedSessionRevision)) {
+        || (input.expectedSessionRevision === null
+          ? this.entity<RuntimeSession>("session", input.scope.id) !== null
+          : this.entity<RuntimeSession>("session", input.scope.id)?.revision !== input.expectedSessionRevision))) {
         throw new RuntimeSessionFenceError("the session row changed after this event's writer read it");
       }
       const event = this.appendInTransaction(input);
@@ -816,8 +826,10 @@ export class RuntimeJournal {
     }
   }
 
-  executeOperation(command: RuntimeOperationCommand): RuntimeOperationResult {
-    return this.executeOperationWithLineage(command);
+  executeOperation(command: RuntimeOperationCommand, options: { admissionDeadline?: number } = {}): RuntimeOperationResult {
+    return this.executeOperationWithLineage(command, undefined, options.admissionDeadline === undefined ? undefined : () => {
+      if (this.now() >= options.admissionDeadline!) throw new RuntimeJournalAdmissionDeadlineError();
+    });
   }
 
   private executeOperationWithLineage(
@@ -836,15 +848,24 @@ export class RuntimeJournal {
        legitimate idempotent replay into a request-hash conflict. */
     delete requestValue.origin;
     // The first admission owns this Viewer snapshot, including on replay.
-    if (command.kind === "kill") delete requestValue.pendingSendIds;
+    if (command.kind === "kill") {
+      delete requestValue.pendingSendIds;
+      delete requestValue.targets;
+    }
     if (command.kind === "answer") requestValue.resolution = { sha256: createHash("sha256").update(stableJson(command.resolution)).digest("hex") };
     const requestJson = stableJson(requestValue);
     const requestHash = createHash("sha256").update(requestJson).digest("hex");
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      const existing = this.db.query<{ operation_id: string; request_hash: string; receipt_json: string }, [string, string]>("SELECT operation_id, request_hash, receipt_json FROM operations WHERE conversation_id = ? AND idempotency_key = ?").get(command.conversationId, command.idempotencyKey);
+      const existing = this.db.query<{ operation_id: string; request_hash: string; request_json: string; receipt_json: string }, [string, string]>("SELECT operation_id, request_hash, request_json, receipt_json FROM operations WHERE conversation_id = ? AND idempotency_key = ?").get(command.conversationId, command.idempotencyKey);
       if (existing) {
-        if (existing.request_hash !== requestHash) throw new RuntimeIdempotencyConflictError("idempotency key already belongs to another request");
+        if (existing.request_hash !== requestHash) {
+          const admitted = JSON.parse(existing.request_json) as RuntimeOperationCommand;
+          const sameExplicitKill = command.kind === "kill" && command.targets && admitted.kind === "kill" && admitted.targets
+            && admitted.sessionKey.engine === command.sessionKey.engine
+            && createHash("sha256").update(stableJson({ ...requestValue, sessionKey: admitted.sessionKey })).digest("hex") === existing.request_hash;
+          if (!sameExplicitKill) throw new RuntimeIdempotencyConflictError("idempotency key already belongs to another request");
+        }
         const result = { operationId: existing.operation_id, receipt: this.presentReceipt(JSON.parse(existing.receipt_json) as RuntimeOperationReceipt), replayed: true };
         this.db.exec("COMMIT");
         return result;
@@ -919,8 +940,10 @@ export class RuntimeJournal {
       if ((command.kind === "interrupt" || command.kind === "kill") && receipt.status !== "rejected")
         this.retainStopBoundary(command, committedReceipt, event.seq, true);
       this.appendOperationConsequences(command, committedReceipt, operationId);
+      const durableRequest = command.kind === "kill" && command.targets
+        ? stableJson({ ...requestValue, targets: command.targets }) : requestJson;
       this.db.query("INSERT INTO operations(operation_id, conversation_id, idempotency_key, request_hash, request_json, receipt_json, event_seq) VALUES (?, ?, ?, ?, ?, ?, ?)")
-        .run(operationId, command.conversationId, command.idempotencyKey, requestHash, requestJson, stableJson(committedReceipt), event.seq);
+        .run(operationId, command.conversationId, command.idempotencyKey, requestHash, durableRequest, stableJson(committedReceipt), event.seq);
       this.db.exec("COMMIT");
       this.compactIfNeeded();
       this.notifyWaiters();
@@ -3205,19 +3228,21 @@ export class RuntimeJournal {
       operation_id: string;
       request_json: string;
       receipt_json: string;
-    }, []>(`
+    }, [string]>(`
       SELECT operations.operation_id, operations.request_json, operations.receipt_json
       FROM operations
       JOIN outbox ON outbox.id = 'effect:' || operations.operation_id
       WHERE outbox.state = 'pending' AND outbox.kind = 'runtime.reconfigure'
+        AND operations.conversation_id = ?
       ORDER BY operations.event_seq
-    `).all();
+    `).all(kill.conversationId);
+    const targets = new Set(kill.targets?.map(target => target.sessionId) ?? [kill.sessionKey.sessionId]);
     for (const row of pending) {
       const command = JSON.parse(row.request_json) as RuntimeOperationCommand;
       if (command.kind !== "reconfigure" || command.conversationId !== kill.conversationId) continue;
       if (command.sessionKey
         && (command.sessionKey.engine !== kill.sessionKey.engine
-          || command.sessionKey.sessionId !== kill.sessionKey.sessionId)) continue;
+          || !targets.has(command.sessionKey.sessionId))) continue;
       const previous = JSON.parse(row.receipt_json) as RuntimeOperationReceipt;
       const next: RuntimeOperationReceipt = {
         ...previous,
@@ -3304,7 +3329,9 @@ export class RuntimeJournal {
       const session = this.entity<RuntimeSession>("session", command.conversationId);
       const killedGeneration = session
         && session.sessionKey.engine === command.sessionKey.engine
-        && session.sessionKey.sessionId === command.sessionKey.sessionId;
+        && (command.targets?.some(target => target.sessionId === session.sessionKey.sessionId
+          && (session.writerClaim === null || session.writerClaim?.endsWith(`:${target.claimEpoch}`) === true))
+          ?? session.sessionKey.sessionId === command.sessionKey.sessionId);
       if (session && killedGeneration
         && (session.host !== "dead" || session.turn !== "idle" || session.activeTurnId !== null)) {
         this.appendInTransaction(normalizeRuntimeEventInput({

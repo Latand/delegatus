@@ -5,11 +5,12 @@ import fs from "node:fs";
 import * as fsPromises from "node:fs/promises";
 import path from "node:path";
 import tailwind from "@tailwindcss/postcss";
-import { chromium, type Browser, type ConnectOptions, type Page } from "playwright-core";
+import { chromium, type Locator, type Browser, type ConnectOptions, type Page } from "playwright-core";
 import postcss from "postcss";
 import sharp from "sharp";
 
 import { translate } from "@/lib/i18n";
+import type { Pipeline } from "@/lib/pipelines/types";
 import { taskIconNodes } from "@/lib/tasks/taskIconNodes";
 import { stubVoiceDevices as stubVoiceDevicesForSettings } from "@/test-helpers/voiceDevicesStub";
 import { createGateSandbox } from "../../../scripts/local-gate";
@@ -664,12 +665,168 @@ export function ownedBrowserSocketEnvironment() {
     close: () => fs.rmSync(directory, { recursive: true, force: true }) };
 }
 
-export async function serveEvidenceFixture(
-  outDir: string,
-  entryFixture = "src/components/kanban/issue1695Evidence.fixture.tsx",
-  responses: Record<string, unknown> = {},
-  options: { derivationTiming?: boolean; serialComposerPrerequisites?: boolean } = {},
-): Promise<{ base: string; stop: () => void }> {
+export async function captureProvisioningStepGeometry(browser: Browser, out: string, widths: number[]) {
+  const { buildPipeline, savePipelines } = await import("@/lib/pipelines/store");
+  const { pipelineRoleLookup, resolvePipelineRole } = await import("@/lib/pipelines/roles");
+  const { GET } = await import("@/app/api/pipelines/route");
+  const { NextRequest } = await import("next/server");
+  const now = Date.parse("2026-11-24T10:00:15Z");
+  const at = new Date(now - 8000).toISOString();
+  const id = "provision-geometry";
+  const task = { id: "provision-task", text: "Prepare the release checkout", project: "atlas",
+    status: "assigned", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at };
+  const role = { roleId: "builder" as const };
+  const resolved = resolvePipelineRole({ role }, "run", pipelineRoleLookup);
+  if (!resolved.role) throw new Error(resolved.error);
+  const lane = buildPipeline({ id, task: task.text, taskIds: [task.id], project: "atlas", repoDir: "/fixture/atlas",
+    srcPath: null, srcConversationId: null, now: at,
+    stages: [{ id: "build", kind: "run", role, effectiveRole: resolved.role, next: null, prompt: "{{task}}" }] });
+  const update = (phase: "checking" | "timed-out" | "retrying" | "running") => {
+    lane.state = phase === "running" ? "running" : "provisioning";
+    if (phase === "running") delete lane.provisioningJob;
+    else lane.provisioningJob = { version: 1, kind: "provision", token: "fixture-provision-owner",
+      subject: "a".repeat(64), planSubject: "b".repeat(64), generation: phase === "retrying" ? 2 : 1,
+      owner: { pid: 17, bootEpoch: "fixture-epoch", startIdentity: "fixture-start", instance: "fixture-instance", release: "fixture" },
+      step: phase === "retrying" ? "verifyingCheckout" : "checkingDependencies", since: now - (phase === "retrying" ? 1000 : 8000),
+      deadlineAt: now + 2000, executionDeadlineAt: now + 360_000, status: phase === "timed-out" ? "waiting" : "running",
+      ...(phase === "retrying" ? { interruption: { step: "checkingDependencies", since: now - 13_000,
+        deadlineAt: now - 5_000, observedAt: now - 5_000, reason: "provision-step-timeout" } } : {}),
+      ...(phase === "timed-out" ? { retryAt: now + 5000, interruption: {
+        step: "checkingDependencies", since: now - 8000, deadlineAt: now, observedAt: now, reason: "provision-step-timeout",
+      }, blockingOwnerToken: "4f3a9c21-owner-fixture" } : {}),
+    };
+    savePipelines([lane]);
+  };
+  let sequence = 0;
+  const server = await serveEvidenceFixture(path.join(process.env.TMPDIR!, "provision-geometry"), undefined, {
+    "/api/team": { mode: "solo", me: null, members: [], methods: {} },
+    "/api/tasks": { tasks: [task] },
+    "/api/files": async () => {
+      const answer = await GET(new NextRequest("http://127.0.0.1/api/pipelines"));
+      if (!answer.ok) throw new Error("fixture pipeline list is unavailable");
+      const value = await answer.json() as { pipelines: Pipeline[] };
+      expect(value.pipelines).toHaveLength(1);
+      expect(value.pipelines[0]?.provisioningJob).toBeUndefined();
+      if (lane.state === "provisioning") {
+        expect(value.pipelines[0]?.provisioningStep?.since).toBe(now - (lane.provisioningJob?.step === "verifyingCheckout" ? 1000 : 8000));
+        if (lane.provisioningJob?.step === "verifyingCheckout") expect(value.pipelines[0]?.provisioningStep?.retrying).toBe(true);
+      }
+      return Response.json({ ...value, files: [], tasks: [task], flows: [], workflows: [],
+        projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 0, smt: 1 }],
+        projectCwds: { atlas: "/fixture/atlas" }, systemHealth: {} }, { headers: { ETag: `"catalog-${++sequence}"` } });
+    },
+  });
+  const frames = [];
+  const reading = async (reason: Locator) => reason.evaluate(element => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const rectangles = [...range.getClientRects()];
+    const clippedBy: string[] = [];
+    const whole = rectangles.every(rect => {
+      if (rect.left < -1 || rect.right > innerWidth + 1 || rect.top < -1 || rect.bottom > innerHeight + 1) {
+        clippedBy.push("viewport");
+        return false;
+      }
+      for (let parent: Element | null = element; parent; parent = parent.parentElement) {
+        const style = getComputedStyle(parent), box = parent.getBoundingClientRect();
+        if ((/(clip|hidden|scroll|auto)/.test(style.overflowX) && (rect.left < box.left - 1 || rect.right > box.right + 1))
+          || (/(clip|hidden|scroll|auto)/.test(style.overflowY) && (rect.top < box.top - 1 || rect.bottom > box.bottom + 1))) {
+          clippedBy.push(parent.className?.toString() ?? "");
+          return false;
+        }
+      }
+      return true;
+    });
+    const rgb = (value: string) => (value.match(/[\d.]+/g) ?? []).map(Number);
+    const luminance = (color: number[]) => color.slice(0, 3).map(value => {
+      const channel = value / 255;
+      return channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4;
+    }).reduce((sum, value, index) => sum + value * [.2126, .7152, .0722][index]!, 0);
+    const foreground = luminance(rgb(getComputedStyle(element).color));
+    let contrast = 0;
+    for (let parent: Element | null = element; parent; parent = parent.parentElement) {
+      const background = rgb(getComputedStyle(parent).backgroundColor);
+      if (background.length !== 3 && background[3] !== 1) continue;
+      const light = luminance(background);
+      contrast = (Math.max(foreground, light) + .05) / (Math.min(foreground, light) + .05);
+      break;
+    }
+    return { whole: rectangles.length > 0 && whole, clippedBy, contrast, text: element.textContent };
+  });
+  fs.mkdirSync(out, { recursive: true });
+  try {
+    for (const width of widths) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+      update("checking");
+      const phone = width === 390;
+      const { page, context, pageErrors } = await openFixture(browser, "about:blank", { width, height: 900 }, theme, lang, "reduce", phone);
+      try {
+        page.setDefaultTimeout(8_000);
+        await context.addInitScript(theme => {
+          localStorage.setItem("llv-theme", theme);
+          localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null }));
+        }, theme);
+        await page.clock.install({ time: new Date(now) });
+        await page.goto(`${server.base}?scenario=board-timeline#p=atlas`);
+        if (phone) await page.locator('[data-phone-kanban-tab="assigned"]').click();
+        const selector = `[data-pipeline-reason="${id}"]`;
+        const reason = page.locator(selector).first();
+        const refresh = async () => {
+          await page.evaluate(() => {
+            window.dispatchEvent(new Event("llv:files-changed"));
+            window.dispatchEvent(new Event("llv:pipelines-changed"));
+          });
+          await page.clock.runFor(500);
+        };
+        const phaseTexts = lang === "en" ? ["Checking dependency inputs", "Retry pending · Checking dependency inputs", "Retrying · Verifying the worktree"]
+          : ["Перевірка вхідних даних залежностей", "Очікування повтору · Перевірка вхідних даних залежностей", "Повторна перевірка · Перевірка робочої копії"];
+        for (const [index, phase] of (["checking", "timed-out", "retrying"] as const).entries()) {
+          update(phase);
+          if (index) await refresh();
+          await reason.waitFor();
+          await page.waitForFunction(({ selector, expected }) => document.querySelector(selector)?.textContent?.startsWith(expected),
+            { selector, expected: phaseTexts[index]! });
+          const geometry = await reading(reason);
+          const name = `${width}-${lang}-${theme}-${phase}`;
+          await page.screenshot({ path: path.join(out, name + ".png") });
+          expect(geometry.whole, JSON.stringify(geometry)).toBe(true);
+          expect(geometry.contrast).toBeGreaterThanOrEqual(4.5);
+          if (phase === "timed-out") {
+            expect(geometry.text).toMatch(lang === "en"
+              ? / · \d+ s · Waiting: the step deadline expired · Owner token 4f3a9c21$/
+              : / · \d+ с · Очікування: сплив строку кроку · Токен власника 4f3a9c21$/);
+          } else expect(geometry.text).toMatch(lang === "en" ? / · \d+ s$/ : / · \d+ с$/);
+          frames.push({ name, ...geometry });
+          if (index === 0) {
+            await page.clock.runFor(31_000);
+            await page.waitForFunction(({ selector, text }) => document.querySelector(selector)?.textContent !== text,
+              { selector, text: geometry.text });
+          }
+        }
+        update("running");
+        await refresh();
+        await reason.waitFor({ state: "hidden" });
+        await page.locator(`[data-pipeline="${id}"][data-lane-state="running"]`).first().waitFor();
+        const name = `${width}-${lang}-${theme}-running`;
+        await page.screenshot({ path: path.join(out, name + ".png") });
+        frames.push({ name, cleared: true });
+        expect(pageErrors).toEqual([]);
+      } catch (error) {
+        await page.screenshot({ path: path.join(out, `${width}-${lang}-${theme}-failure.png`) });
+        throw error;
+      } finally { await context.close(); }
+    }
+    fs.writeFileSync(path.join(out, "geometry.json"), JSON.stringify(frames, null, 2) + "\n");
+    return frames.length;
+  } finally { server.stop(); }
+}
+
+const evidenceHtml = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"></head>'
+        + '<body><div id="root" style="height:100dvh;display:flex;flex-direction:column"></div><script type="module" src="/app.js"></script></body></html>';
+
+export async function buildEvidenceAssets(
+  outDir: string, entryFixture = "src/components/kanban/issue1695Evidence.fixture.tsx",
+  options: { derivationTiming?: boolean; serialComposerPrerequisites?: boolean; isolationCounters?: boolean } = {},
+) {
   /* Bundled in a separate process: inside the `bun test` process,
      `Bun.build` resolves the `@/` alias for some module graphs and not for
      others, and the fixture's graph is one of the others. The builder stubs
@@ -677,13 +834,24 @@ export async function serveEvidenceFixture(
   const bundle = path.join(outDir, "bundle");
   const build = Bun.spawnSync([
     process.execPath, path.resolve("src/components/kanban/buildEvidenceFixture.ts"), path.resolve(entryFixture), bundle,
+    ...(options.isolationCounters ? ["--isolation-counters"] : []),
     ...(options.serialComposerPrerequisites ? ["--serial-composer-prerequisites"] : []),
   ], { stdout: "pipe", stderr: "pipe", env: { ...process.env, LLV_DERIVATION_TIMING: options.derivationTiming ? "1" : "0" } });
   if (build.exitCode !== 0) throw new Error(`fixture bundle failed: ${build.stderr.toString()}${build.stdout.toString()}`);
   const entry = path.join(bundle, `${path.basename(entryFixture).replace(/\.tsx?$/, "")}.js`);
   const css = await postcss([tailwind()]).process(fs.readFileSync("src/app/globals.css", "utf8"), { from: path.resolve("src/app/globals.css") });
+  return { entry, css: css.css, html: evidenceHtml };
+}
+
+export async function serveEvidenceFixture(
+  outDir: string,
+  entryFixture = "src/components/kanban/issue1695Evidence.fixture.tsx",
+  responses: Record<string, unknown> = {},
+  options: { derivationTiming?: boolean; serialComposerPrerequisites?: boolean; hostname?: "127.0.0.1" | "::1" } = {},
+): Promise<{ base: string; stop: () => void }> {
+  const { entry, css } = await buildEvidenceAssets(outDir, entryFixture, options);
   const server = Bun.serve({
-    hostname: "127.0.0.1",
+    hostname: options.hostname ?? "127.0.0.1",
     port: 0,
     // Browser Stop aborts an in-flight HTTP response. Bun's fixture adapter
     // needs the same aborted-request boundary the Next adapter supplies.
@@ -701,16 +869,16 @@ export async function serveEvidenceFixture(
       if (pathname === "/api/task-icons") return Response.json({ icons: await taskIconNodes((searchParams.get("names") ?? "").split(",")) });
       if (pathname === "/brand/delegatus-mark.svg") return new Response(Bun.file("public/brand/delegatus-mark.svg"), { headers: { "content-type": "image/svg+xml" } });
       if (pathname === "/app.js") return new Response(Bun.file(entry), { headers: { "content-type": "text/javascript" } });
-      if (pathname === "/style.css") return new Response(css.css, { headers: { "content-type": "text/css" } });
+      if (pathname === "/style.css") return new Response(css, { headers: { "content-type": "text/css" } });
       return new Response(
-        '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"></head>'
-        + '<body><div id="root" style="height:100dvh;display:flex;flex-direction:column"></div><script type="module" src="/app.js"></script></body></html>',
+        evidenceHtml,
         { headers: { "content-type": "text/html" } },
       );
     },
   });
   adopt(() => server.stop(true));
-  return { base: `http://127.0.0.1:${server.port}/`, stop: () => server.stop(true) };
+  const hostname = options.hostname === "::1" ? "[::1]" : "127.0.0.1";
+  return { base: `http://${hostname}:${server.port}/`, stop: () => server.stop(true) };
 }
 
 export async function openFixture(
@@ -749,6 +917,356 @@ export async function openFixture(
   return { context, page, pageErrors };
 }
 
+export async function captureSecretRequestCards(browser: Browser, out: string, phone: boolean) {
+  fs.mkdirSync(out, { recursive: true });
+  const bundle = fs.mkdtempSync(path.join(process.cwd(), ".secret-request-fixture-"));
+  const server = await serveEvidenceFixture(bundle);
+  const readings: unknown[] = [];
+  const failures: string[] = [];
+  const envId = `sr_${"2".repeat(32)}`;
+  const dummy = "demo-value-only";
+  const changedPath = "/workspace/atlas/integrations/report-service/local/.env";
+  try {
+    for (const width of phone ? [390] : [800, 1440]) {
+      for (const language of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const tag = `${width}-${language}-${scheme}`;
+        const fixture = `${server.base}?decisions=secrets&lang=${language}`;
+        const { context, page, pageErrors } = await openFixture(browser, fixture, { width, height: phone ? 844 : 900 }, scheme,
+          language, "reduce", phone, 1, new Date("2026-11-26T18:00:00Z"));
+        const frame = (name: string) => page.screenshot({ path: path.join(out, `${tag}-${name}.png`) });
+        const strip = page.locator('[data-decision-strip="3"]');
+        try {
+          if (phone) await page.locator("[data-mobile2-seat-open]").click();
+          else {
+            const seat = page.locator("[data-kanban-seat]");
+            await seat.waitFor();
+            for (let index = 0; index < 3 && await page.locator("[data-attention-toast-dismiss]").count(); index++) {
+              await page.locator("[data-attention-toast-dismiss]").first().click();
+            }
+            if (await seat.getAttribute("data-collapsed") === "1") await seat.locator("[data-seat-collapse]").click();
+            await page.locator('[data-decision-strip="3"], [data-decision-tab-count="3"]').first().waitFor();
+            if (!await strip.isVisible()) await page.locator('[data-report-log-toggle="open"]').click();
+          }
+          await strip.waitFor();
+          expect((await strip.textContent())?.trim()).toBe(translate(language, "decisions.waiting", { count: 3 }));
+          await frame("01-strip");
+          await strip.click();
+          const scope = page.locator(phone ? '[data-mobile2-sheet="decisions"]' : '[data-decision-column="decisions"]');
+          const card = scope.locator("[data-secret-request]");
+          const field = card.locator("input");
+          const save = card.locator("[data-secret-save]");
+          const heights = new Map<string, number>();
+          const geometry = async (state: string) => {
+            await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+            const reading = await card.evaluate(node => {
+              const boundary = node.closest("[data-decision-list]")!.getBoundingClientRect();
+              const box = node.getBoundingClientRect();
+              const decline = node.parentElement!.querySelector("[data-secret-decline]")!.getBoundingClientRect();
+              const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+              let clipped = 0;
+              for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+                if (!text.textContent?.trim()) continue;
+                /* A line cut short on purpose ends in an ellipsis inside its own box. */
+                const owner = text.parentElement!;
+                const style = getComputedStyle(owner);
+                if (style.textOverflow === "ellipsis" && style.overflowX === "hidden") {
+                  const own = owner.getBoundingClientRect();
+                  if (own.left < box.left - 1 || own.right > box.right + 1) clipped++;
+                  continue;
+                }
+                const range = document.createRange();
+                range.selectNode(text);
+                for (const line of range.getClientRects()) {
+                  if (line.left < box.left - 1 || line.right > box.right + 1) clipped++;
+                }
+              }
+              /* The header says what it writes to on one line (operator, 2026-11-26). */
+              const titleLines = new Set([...node.querySelectorAll("[data-secret-title] > span")].map(part => Math.round(part.getBoundingClientRect().top))).size;
+              return { width: box.width, height: box.height, clipped, titleLines, overflow: node.scrollWidth - node.clientWidth,
+                top: box.top, declineBottom: decline.bottom, listTop: boundary.top, listBottom: boundary.bottom,
+                actionsVisible: box.top >= boundary.top - 1 && decline.bottom <= Math.min(boundary.bottom, innerHeight) + 1 };
+            });
+            readings.push({ tag, state, ...reading });
+            expect(reading.titleLines, `${tag} ${state}: header on one line`).toBe(1);
+            heights.set(state, reading.height);
+            expect(reading.clipped).toBe(0);
+            expect(reading.overflow).toBeLessThanOrEqual(1);
+            expect(reading.actionsVisible, JSON.stringify({ tag, state, ...reading })).toBe(true);
+          };
+          await card.waitFor();
+          expect(await card.getAttribute("data-secret-request")).toBe(`sr_${"1".repeat(32)}`);
+          expect(await scope.locator("[data-decision-tab-count]").textContent()).toBe("3");
+          await geometry("file");
+          await frame("02-file");
+          await scope.locator(`[data-decision-row="${envId}"]`).click();
+          await scope.locator(`[data-secret-request="${envId}"]`).waitFor();
+          await geometry("env");
+          expect(Math.abs(heights.get("env")! - heights.get("file")!), `${tag}: the env card is as tall as the file card`).toBeLessThanOrEqual(1);
+          await frame("03-env");
+          await field.fill(dummy);
+          await card.locator('button[aria-pressed="false"]').click();
+          expect(await field.getAttribute("type")).toBe("text");
+          await frame("04-revealed-demo");
+
+          const received = Promise.withResolvers<{ type: string | undefined; revision: string | undefined; intact: boolean }>();
+          const respond = Promise.withResolvers<void>();
+          await page.route(`**/api/secret-requests/${envId}/value`, async route => {
+            const request = route.request();
+            received.resolve({ type: request.headers()["content-type"], revision: request.headers()["x-llv-secret-revision"],
+              intact: request.postDataBuffer()?.equals(Buffer.from(dummy)) ?? false });
+            await respond.promise;
+            await route.fulfill({ status: 409, json: { code: "secret_destination_changed", secretRequests: await page.evaluate(async () => {
+              window.dispatchEvent(new Event("fixture-secret-destination-changed"));
+              const response = await fetch("/api/projects/decisions?project=atlas");
+              return (await response.json()).secretRequests;
+            }) } });
+          });
+          try {
+            await save.click();
+            expect(await received.promise).toEqual({ type: "application/octet-stream", revision: "b".repeat(64), intact: true });
+            expect(await field.inputValue()).toBe("");
+            expect(await field.getAttribute("type")).toBe("password");
+            expect(await save.isDisabled()).toBe(true);
+            await frame("05-saving");
+          } finally { respond.resolve(); }
+          await card.getByRole("alert").waitFor();
+          expect(await card.locator("[data-secret-destination]").textContent()).toBe(changedPath);
+          /* The alert asks to review the new destination, so the path stands beside it, not under Details. */
+          const changed = card.locator("[role=alert] [data-secret-changed-destination]");
+          expect(await changed.isVisible()).toBe(true);
+          expect(await changed.textContent()).toBe(changedPath);
+          expect(await field.inputValue()).toBe("");
+          expect((await card.innerHTML()).includes(dummy)).toBe(false);
+          await geometry("refused");
+          await frame("06-refused");
+          expect(pageErrors).toEqual([]);
+          if (language === "en" && scheme === "light") {
+            await page.goto(`${fixture}&project=atlas&secretRequest=${envId}`);
+            await page.locator(`[data-secret-request="${envId}"] input[type="password"]`).waitFor();
+          }
+        } catch (error) {
+          await frame("failed").catch(() => {});
+          failures.push(`${tag}: ${error instanceof Error ? error.message : String(error)}`);
+        } finally { await context.close(); }
+      }
+    }
+    fs.writeFileSync(path.join(out, `${phone ? "phone" : "desktop"}-geometry.json`), JSON.stringify(readings, null, 2) + "\n");
+    expect(failures, failures.join("\n")).toEqual([]);
+    return readings.length;
+  } finally {
+    server.stop();
+    fs.rmSync(bundle, { recursive: true, force: true });
+  }
+}
+
+/** The secret request's outcomes and its Needs-you entry, drawn through the same fixture as the cards above:
+ *  the ordinary decision beside the request, the saved, declined and expired answers, and the entry in the
+ *  Needs-you panel (desktop) or sheet (phone) with the link that opens the request. Each frame is measured
+ *  from text ranges inside the list's own box. */
+export async function captureSecretRequestOutcomes(browser: Browser, out: string, phone: boolean) {
+  fs.mkdirSync(out, { recursive: true });
+  const bundle = fs.mkdtempSync(path.join(process.cwd(), ".secret-request-outcomes-"));
+  const server = await serveEvidenceFixture(bundle);
+  const failures: string[] = [];
+  const readings: unknown[] = [];
+  const first = `sr_${"1".repeat(32)}`;
+  const second = `sr_${"2".repeat(32)}`;
+  const value = "demo-value-only";
+  const sizes = phone ? [{ width: 390, height: 844 }] : [{ width: 1000, height: 700 }, { width: 1440, height: 900 }];
+  try {
+    for (const size of sizes) for (const language of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+      const tag = `${size.width}-${language}-${scheme}`;
+      const fixture = `${server.base}?decisions=secrets&lang=${language}`;
+      const open = async () => {
+        const opened = await openFixture(browser, fixture, size, scheme, language, "reduce", phone, 1, new Date("2026-11-26T18:00:00Z"));
+        const { page } = opened;
+        if (phone) await page.locator("[data-mobile2-seat-open]").click();
+        else {
+          const seat = page.locator("[data-kanban-seat]");
+          await seat.waitFor();
+          for (let index = 0; index < 3 && await page.locator("[data-attention-toast-dismiss]").count(); index++) {
+            await page.locator("[data-attention-toast-dismiss]").first().click();
+          }
+          if (await seat.getAttribute("data-collapsed") === "1") await seat.locator("[data-seat-collapse]").click();
+          await page.locator('[data-decision-strip="3"], [data-decision-tab-count="3"]').first().waitFor();
+          if (!await page.locator('[data-decision-strip="3"]').isVisible()) await page.locator('[data-report-log-toggle="open"]').click();
+        }
+        return opened;
+      };
+      const scopeOf = (page: Page) => page.locator(phone ? '[data-mobile2-sheet="decisions"]' : '[data-decision-column="decisions"]');
+      const showDecisions = async (page: Page) => {
+        await page.locator('[data-decision-strip="3"]').click();
+        await scopeOf(page).locator("[data-secret-request]").waitFor();
+      };
+      /* Whole text lines of `selector` inside the list's own box: no line cut by its top or bottom edge. */
+      const whole = (page: Page, selector: string) => page.evaluate((query) => {
+        const list = document.querySelector("[data-decision-list]")!.getBoundingClientRect();
+        const node = document.querySelector(query);
+        if (!node) return { found: false, whole: false, lines: 0 };
+        const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+        let lines = 0;
+        let whole = true;
+        for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+          if (!text.textContent?.trim()) continue;
+          const range = document.createRange();
+          range.selectNode(text);
+          for (const line of range.getClientRects()) {
+            lines++;
+            if (line.top < list.top - 0.5 || line.bottom > list.bottom + 0.5) whole = false;
+          }
+        }
+        return { found: true, whole, lines };
+      }, selector);
+      const wait = async (page: Page) => page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      const answerWith = async (page: Page, kind: "value" | "decline", status: number, code?: string) => {
+        await page.route(`**/api/secret-requests/*/${kind}`, async route => {
+          const id = new URL(route.request().url()).pathname.split("/")[3]!;
+          const remaining = await page.evaluate(async (closed) => {
+            window.dispatchEvent(new CustomEvent("fixture-secret-closed", { detail: closed }));
+            return (await (await fetch("/api/projects/decisions?project=atlas")).json()).secretRequests;
+          }, id);
+          await route.fulfill({ status, json: { ...(code ? { code } : {}), secretRequests: remaining } });
+        });
+      };
+      const outcome = async (name: string, kind: "value" | "decline", status: number, text: string, code?: string) => {
+        const { context, page, pageErrors } = await open();
+        const frame = (suffix: string) => page.screenshot({ path: path.join(out, `${tag}-${name}${suffix}.png`) });
+        try {
+          await showDecisions(page);
+          const scope = scopeOf(page);
+          await answerWith(page, kind, status, code);
+          if (kind === "value") {
+            await scope.locator(`[data-secret-request="${first}"] input`).fill(value);
+            await scope.locator("[data-secret-save]").click();
+          } else await scope.locator("[data-secret-decline]").click();
+          await scope.locator("[data-decision-feedback]").waitFor();
+          await scope.locator(`[data-secret-request="${second}"]`).waitFor();
+          await wait(page);
+          expect((await scope.locator("[data-decision-feedback]").textContent())?.trim()).toBe(text);
+          const status_ = await whole(page, "[data-decision-feedback]");
+          const title = await whole(page, "[data-secret-title]");
+          readings.push({ tag, state: name, status: status_, title });
+          expect(status_, JSON.stringify({ tag, name, status_ })).toMatchObject({ found: true, whole: true });
+          expect(title, JSON.stringify({ tag, name, title })).toMatchObject({ found: true, whole: true });
+          expect(pageErrors).toEqual([]);
+          await frame("");
+        } catch (error) {
+          await frame("-failed").catch(() => {});
+          failures.push(`${tag} ${name}: ${error instanceof Error ? error.message : String(error)}`);
+        } finally { await context.close(); }
+      };
+      const target = (id: string) => id === first ? "report-token.txt" : "REPORT_SERVICE_TOKEN → .env";
+      const t = (key: Parameters<typeof translate>[1], values?: Record<string, string>) => translate(language, key, values);
+      const nbsp = (text: string) => text.replace(" → ", "\u00a0→\u00a0");
+      await outcome("c02-saved", "value", 200, t("secretRequest.saved", { target: nbsp(target(first)) }));
+      await outcome("c03-expired", "value", 409, t("secretRequest.closed.secret_expired", { target: nbsp(target(first)) }), "secret_expired");
+      await outcome("c06-declined", "decline", 200, t("secretRequest.declined", { target: nbsp(target(first)) }));
+
+      /* The ordinary decision beside the request: one open-card treatment. */
+      {
+        const { context, page } = await open();
+        try {
+          await showDecisions(page);
+          const scope = scopeOf(page);
+          const secretStyle = await scope.locator("[data-secret-request]").evaluate(node => ({
+            border: getComputedStyle(node).borderTopColor, head: getComputedStyle(node.querySelector("header")!).backgroundColor,
+            time: Boolean(node.querySelector("header time")) }));
+          const title = scope.locator("[data-secret-title]");
+          const env = scope.locator(`[data-decision-row="${second}"]`);
+          await env.click();
+          await scope.locator(`[data-secret-request="${second}"]`).waitFor();
+          const together = await scope.locator("[data-secret-title]").evaluate(node => {
+            const tops = new Set<number>();
+            const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+            for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+              const range = document.createRange();
+              range.selectNode(text);
+              for (const line of range.getClientRects()) tops.add(Math.round(line.top));
+            }
+            return tops.size;
+          });
+          expect(together, `${tag}: "KEY → file" shares one line`).toBe(1);
+          expect(await title.textContent()).toBe(nbsp(target(second)));
+          expect(await scope.locator(`[data-secret-request="${second}"] [data-decision-collapse]`).getAttribute("aria-label")).toContain(t("secretRequest.titleFor", { target: nbsp(target(second)) }));
+          const requester = (await scope.locator("[data-secret-request] dl dd").first().textContent()) ?? "";
+          expect(requester, `${tag}: requester line`).not.toMatch(/codex|configure|\bintegration\b/);
+          const ordinary = scope.locator("[data-decision-row]:not([data-decision-row^='sr_'])").first();
+          await ordinary.click();
+          await scope.locator('[data-decision-card="open"]').waitFor();
+          const decisionStyle = await scope.locator('[data-decision-card="open"]').evaluate(node => ({
+            border: getComputedStyle(node).borderTopColor, head: getComputedStyle(node.querySelector("header")!).backgroundColor,
+            time: Boolean(node.querySelector("header time")) }));
+          expect(secretStyle.border).toBe(decisionStyle.border);
+          expect(secretStyle.head).toBe(decisionStyle.head);
+          expect([secretStyle.time, decisionStyle.time]).toEqual([true, true]);
+          await wait(page);
+          await page.screenshot({ path: path.join(out, `${tag}-c01-ordinary-decision.png`) });
+          await scope.locator(`[data-decision-row="${second}"]`).click();
+          await scope.locator(`[data-secret-request="${second}"]`).waitFor();
+          await wait(page);
+          /* By default the card says one line of reason over the field, Save and Decline; the rest is folded. */
+          const card = scope.locator(`[data-secret-request="${second}"]`);
+          expect(await card.locator("[data-secret-details]").evaluate(node => (node as HTMLDetailsElement).open)).toBe(false);
+          expect(await card.locator("[data-secret-hint]").count()).toBe(0);
+          expect(await card.locator("[data-secret-reason]").evaluate(node => node.getClientRects().length)).toBe(1);
+          await page.screenshot({ path: path.join(out, `${tag}-c01b-open-secret-request.png`) });
+          await card.locator("input").fill("short$");
+          await card.locator('[data-secret-hint="env"]').waitFor();
+          await wait(page);
+          await page.screenshot({ path: path.join(out, `${tag}-c01c-invalid-value.png`) });
+          await card.locator("input").fill("");
+          await card.locator("[data-secret-details] summary").click();
+          await card.locator("[data-secret-destination]").waitFor({ state: "visible" });
+          await card.locator("[data-secret-details]").scrollIntoViewIfNeeded();
+          await wait(page);
+          await page.screenshot({ path: path.join(out, `${tag}-c01d-details-open.png`) });
+        } catch (error) {
+          await page.screenshot({ path: path.join(out, `${tag}-c01-failed.png`) }).catch(() => {});
+          failures.push(`${tag} c01: ${error instanceof Error ? error.message : String(error)}`);
+        } finally { await context.close(); }
+      }
+
+      /* The Needs-you entry, and the link from it to the request. */
+      {
+        const { context, page } = await open();
+        try {
+          await page.locator(phone ? '[data-mobile2-open="attention"]' : "[data-attention-count]").first().click();
+          const rows = page.locator(phone ? '[data-mobile2-row="secret-request"]' : "[data-attention-secret]");
+          await rows.first().waitFor();
+          expect(await rows.count()).toBe(2);
+          const texts = await rows.evaluateAll(nodes => nodes.map(node => node.textContent ?? ""));
+          const age = await rows.evaluateAll(nodes => nodes.map(node => Boolean(node.querySelector("[data-attention-age]"))));
+          expect(new Set(texts).size, `${tag}: two requests read differently: ${JSON.stringify(texts)}`).toBe(2);
+          expect(age).toEqual([true, true]);
+          for (const row of [first, second]) expect(texts.some(text => text.includes(target(row).split(" ")[0]!))).toBe(true);
+          /* Each row keeps where the secret goes whole; only a long variable name gives way. */
+          const files = await rows.evaluateAll(nodes => nodes.map(node => {
+            const part = node.querySelector("[data-needs-you-title-line] > span:last-child") as HTMLElement;
+            return { text: part.textContent, whole: part.scrollWidth <= part.clientWidth };
+          }));
+          expect(files.sort((a, b) => String(a.text).localeCompare(String(b.text))), `${tag}: target files`).toEqual([{ text: "\u00a0→\u00a0.env", whole: true }, { text: "report-token.txt", whole: true }]);
+          await rows.first().scrollIntoViewIfNeeded();
+          await wait(page);
+          await page.screenshot({ path: path.join(out, `${tag}-${phone ? "c04" : "c07"}-needs-you.png`) });
+          await rows.first().click();
+          await page.locator("[data-secret-request]").first().waitFor();
+          await wait(page);
+          await page.screenshot({ path: path.join(out, `${tag}-c05-opened-from-needs-you.png`) });
+        } catch (error) {
+          await page.screenshot({ path: path.join(out, `${tag}-c04-failed.png`) }).catch(() => {});
+          failures.push(`${tag} needs-you: ${error instanceof Error ? error.message : String(error)}`);
+        } finally { await context.close(); }
+      }
+    }
+    fs.writeFileSync(path.join(out, `${phone ? "phone" : "desktop"}-outcomes.json`), JSON.stringify(readings, null, 2) + "\n");
+    expect(failures, failures.join("\n")).toEqual([]);
+    return readings.length;
+  } finally {
+    server.stop();
+    fs.rmSync(bundle, { recursive: true, force: true });
+  }
+}
+
 /** Finished-frame lifetime, shared by the existing board and phone drivers.
  * Serve the real state copy after deleting this case's capture directory. */
 export async function captureDoneFrames(browser: Browser, phone: boolean) {
@@ -774,15 +1292,19 @@ export async function captureDoneFrames(browser: Browser, phone: boolean) {
     });
     for (const width of phone ? [390] : [800,1440]) for (const lang of ["en","uk"] as const) for (const theme of ["light","dark"] as const) for (const state of ["retained","missing","error"] as const) {
       const name = `${width}-${lang}-${theme}-${state}`;
-      const { page,context,pageErrors } = await openFixture(browser,`${server.base}?${new URLSearchParams({lang,open:"1",done:"1",doneframes:state,"done-frame-src":saved.src})}`,{width,height:phone?844:900},theme,lang,"reduce",phone);
+      /* «Готово» lives above the orchestrator's report log (docs/design/legatus/build-plan.md, slice 1). */
+      const { page,context,pageErrors } = await openFixture(browser,`${server.base}?${new URLSearchParams({lang,done:"1",...(phone ? {} : {seat:"beside"}),doneframes:state,"done-frame-src":saved.src})}`,{width,height:phone?844:900},theme,lang,"reduce",phone);
       try {
         if (phone) {
-          await page.waitForFunction(()=>Number(document.querySelector("[data-mobile2-attention-count]")?.getAttribute("data-mobile2-attention-count"))>1);
-          await page.locator('[data-mobile2-open="attention"]').click();
+          await page.locator("[data-mobile2-seat-open]").click({timeout:20_000});
+          await page.locator('[data-mobile2-open="reports"]').click({timeout:10_000});
+        } else {
+          const toggle = page.locator("[data-report-log-toggle]").first();
+          await toggle.waitFor({timeout:15_000});
+          if (await toggle.getAttribute("data-report-log-toggle") === "closed") await toggle.click();
         }
-        const section = page.locator(`[data-done-section="${phone ? "phone" : "desktop"}"][data-done-place="needs-you"]`);
+        const section = page.locator(`[data-report-log] [data-done-section="${phone ? "phone" : "desktop"}"][data-done-place="reports"]`);
         await section.waitFor();
-        if (!phone) await page.waitForFunction(()=>document.querySelectorAll("[data-needs-you-section]").length >= 3);
         if (state === "retained") {
           await page.waitForFunction(()=>{const image=document.querySelector<HTMLImageElement>("[data-done-thumb] img");return Boolean(image?.complete && image.naturalWidth);});
           const loaded=await section.locator("[data-done-thumb] img").evaluate((image)=>({width:(image as HTMLImageElement).naturalWidth,src:image.getAttribute("src")}));
@@ -2072,6 +2594,77 @@ const removeTool = (name: string) => async (page: Page) => {
   await page.waitForFunction(() => document.activeElement?.matches("[data-voice-tools]"), undefined, { timeout: 10_000 });
 };
 
+const planKeys = (scene: string, selector: string, interact?: (row: Locator) => Promise<unknown>): SettingsFrame => ({
+  surface: "window", name: `chatgpt-plan-${scene}`, scene: "voice-file", query: `chatgptplan=${scene}`, section: "keys",
+  steps: async page => {
+    const row = page.locator("[data-keys-row='chatgpt-plan']");
+    await row.waitFor();
+    if (await row.evaluate(element => element.previousElementSibling?.getAttribute("data-keys-row")) !== "openai")
+      throw new Error("ChatGPT plan must follow the OpenAI key");
+    await interact?.(row);
+  },
+  defining: `[data-keys-row='chatgpt-plan']${selector}`,
+});
+const noPlanAction = async (row: Locator) => {
+  if (await row.locator("button").count()) throw new Error("A read-only plan row offered an action");
+};
+const PLAN_FRAMES = [
+  planKeys("disconnected", "[data-chatgpt-plan-state='not_connected'] [data-chatgpt-plan-start]"),
+  planKeys("connecting", "[data-chatgpt-plan-state='connecting'] button"),
+  planKeys("connected", " [data-keys-menu][role=menu]", async row => {
+    await row.locator("[data-chatgpt-plan-menu]").click();
+    const menu = row.getByRole("menu");
+    await menu.locator("[data-keys-menu-item='plan-usage'][role=menuitem]").waitFor();
+    await menu.locator("[data-keys-menu-item='plan-sign-out'][role=menuitem]").waitFor();
+  }),
+  planKeys("firstUse", "[data-chatgpt-plan-state='connected'] button"),
+  planKeys("missingModel", "[data-chatgpt-plan-state='connected']"),
+  planKeys("disabled", "[data-chatgpt-plan-state='plan_disabled'] [data-chatgpt-plan-start]"),
+  planKeys("notEligible", "[data-chatgpt-plan-state='plan_disabled']", async row => {
+    await row.locator("[role=status]").nth(1).waitFor();
+    await row.locator("[data-chatgpt-plan-start]").waitFor();
+  }),
+  planKeys("requestInvalid", "[data-chatgpt-plan-state='plan_disabled']", async row => {
+    await row.locator("[role=status]").nth(1).waitFor();
+    await row.locator("[data-chatgpt-plan-start]").waitFor();
+  }),
+  planKeys("reconnect", "[data-chatgpt-plan-state='reconnect_required'] [data-chatgpt-plan-start]"),
+  planKeys("limit", "[data-chatgpt-plan-state='plan_limit'] [data-keys-menu]", async row => {
+    await row.locator("[data-chatgpt-plan-menu]").click();
+    await row.locator("[data-keys-menu-item='plan-usage'][role=menuitem]").waitFor();
+  }),
+  planKeys("retry-later", "[data-chatgpt-plan-state='retry_later'] [data-keys-menu]", async row => {
+    await row.locator("[data-chatgpt-plan-menu]").click();
+    await row.locator("[data-keys-menu-item='plan-usage'][role=menuitem]").waitFor();
+  }),
+  planKeys("remote", "[data-chatgpt-plan-state='remote_browser']", noPlanAction),
+  planKeys("staging", "[data-chatgpt-plan-state='off_staging']", noPlanAction),
+  planKeys("unconfigured", "[data-chatgpt-plan-state='off_unconfigured']", noPlanAction),
+  planKeys("unsupported", "[data-chatgpt-plan-state='off_unsupported_platform']", noPlanAction),
+  planKeys("declined", "[data-chatgpt-plan-state='not_connected'] [data-chatgpt-plan-start]"),
+  planKeys("unconfirmed", " a[href='https://chatgpt.com/settings']"),
+  planKeys("connected-unconfirmed", " a[href='https://chatgpt.com/settings']", async row => {
+    if (!(await row.innerText()).includes("OpenAI did not confirm sign-out")
+      && !(await row.innerText()).includes("OpenAI не підтвердив вихід")) throw new Error("The connected account lost its revocation warning");
+  }),
+  planKeys("error", "[data-chatgpt-plan-state='error']", noPlanAction),
+  planKeys("member", "[data-chatgpt-plan-state='connected']", async row => {
+    await noPlanAction(row);
+    if ((await row.innerText()).includes("Example account")) throw new Error("A member saw the plan owner's account");
+  }),
+  { surface: "voice", name: "chatgpt-plan-billing", scene: "voice-file", section: "voice",
+    query: "chatgptplan=billing&dev=default", details: true, defining: "[data-chatgpt-plan-billing='plan']" },
+  { surface: "voice", name: "chatgpt-plan-fallback", scene: "voice-file", section: "voice",
+    query: "chatgptplan=fallback&dev=default", details: true, defining: "[data-chatgpt-plan-billing='key']" },
+  { surface: "voice", name: "chatgpt-plan-blocked", scene: "voice-file", section: "voice",
+    query: "chatgptplan=blocked&dev=default", details: true, defining: "[data-chatgpt-plan-billing='blocked']",
+    steps: async page => {
+      const text = await page.locator("[data-chatgpt-plan-billing='blocked']").innerText();
+      if (!/No backend request was charged to the API key|Запит до бекенда не оплачувався ключем API/.test(text))
+        throw new Error("Blocked billing does not explain that the API key was not charged");
+    } },
+] satisfies SettingsFrame[];
+
 const SETTINGS_FRAMES: SettingsFrame[] = [
   /* The window. */
   { surface: "window", name: "from-menu", scene: "telegram-rest", steps: OPEN_MENU, defining: "[data-settings-title], [data-settings-section-row='general']" },
@@ -2087,7 +2680,8 @@ const SETTINGS_FRAMES: SettingsFrame[] = [
   { surface: "window", name: "over-onboarding", scene: "privacy-notice", steps: async (page) => {
     await page.evaluate(() => window.dispatchEvent(new CustomEvent("llv:open-onboarding", { detail: { mode: "guide", step: null } })));
     await page.locator("[data-onboarding-dialog]").waitFor();
-    await page.locator("[data-telemetry-notice] button").first().click();
+    /* While the guide is open the notice is the guide's own line (docs/design/onboarding-v2.md §12.2). */
+    await page.locator("[data-onboarding-dialog] [data-telemetry-guide-notice] button").first().click();
   }, defining: "[data-telemetry-settings]" },
   { surface: "window", name: "memory", scene: "telegram-rest", section: "memory", defining: "[data-memory-page]" },
   { surface: "window", name: "roles", scene: "telegram-rest", section: "roles", defining: "[data-header-menu-workers]" },
@@ -2245,6 +2839,7 @@ function readSettingsSurface(args: { phone: boolean; defining: string | null; ab
   }
   /* No bordered box in the surface's flow beyond its controls, and no control inside a control. */
   for (const element of scroller.querySelectorAll<HTMLElement>("*")) {
+    if (element.matches("[data-keys-menu][role=menu]")) continue;
     if (element.closest("button, select, input, textarea, a, [data-settings-choice-face], [data-memory-page], [data-header-menu-workers]")) continue;
     const style = getComputedStyle(element);
     if (["Top", "Right", "Bottom", "Left"].every((side) => parseFloat(style.getPropertyValue(`border-${side.toLowerCase()}-width`)) > 0) && element.getBoundingClientRect().height > 44) failures.push(`bordered box: ${element.tagName} ${element.className}`);
@@ -2466,13 +3061,13 @@ function readSettingsSurface(args: { phone: boolean; defining: string | null; ab
   return { failures: [...new Set(failures)], end: under, scrolls };
 }
 
-export async function captureSettingsWindowFrames(browser: Browser, base: string, out: string, phone: boolean, only?: (frame: string) => boolean) {
+export async function captureSettingsWindowFrames(browser: Browser, base: string, out: string, phone: boolean,
+  only?: (frame: string) => boolean, frames = SETTINGS_FRAMES) {
   fs.mkdirSync(out, { recursive: true });
   const devices = (phone ? ["phone", "landscape"] : ["desktop", "mid", "short"]) as (keyof typeof SETTINGS_DEVICES)[];
   const jobs: { frame: SettingsFrame; device: keyof typeof SETTINGS_DEVICES; lang: "en" | "uk"; theme: "light" | "dark"; key: string }[] = [];
-  for (const device of devices) for (const { lang, theme } of SETTINGS_COMBOS) for (const frame of SETTINGS_FRAMES) {
+  for (const device of devices) for (const { lang, theme } of SETTINGS_COMBOS) for (const frame of frames) {
     /* Every state in all four combinations at the named widths; the between and short heights read in two, at rest and with Details open. */
-    if ((device === "mid" || device === "short" || device === "landscape") && !((lang === "uk" && theme === "light") || (lang === "en" && theme === "dark"))) continue;
     const key = `${frame.surface}-${device}-${frame.name}-${lang}-${theme}`;
     if (only && !only(key)) continue;
     jobs.push({ frame, device, lang, theme, key });
@@ -2498,7 +3093,6 @@ export async function captureSettingsWindowFrames(browser: Browser, base: string
           await page.evaluate((section) => window.dispatchEvent(new CustomEvent("delegatus:open-settings-window", { detail: { section } })), frame.section);
           await page.locator("[data-settings-window], [data-mobile2-sheet='settings']").waitFor();
         }
-        if (frame.steps) await frame.steps(page, phone);
         if (frame.details) {
           const toggle = page.locator("[data-settings-details-toggle]").last();
           await toggle.scrollIntoViewIfNeeded();
@@ -2506,6 +3100,7 @@ export async function captureSettingsWindowFrames(browser: Browser, base: string
           await page.locator("[data-settings-details]").waitFor();
           await page.evaluate(() => { const scroller = document.querySelector("[data-settings-scroller], [data-mobile2-sheet-body]"); if (scroller) scroller.scrollTop = scroller.scrollHeight; });
         }
+        if (frame.steps) await frame.steps(page, phone);
         if (frame.defining) await page.locator(frame.defining).first().waitFor({ timeout: 20_000 }).catch(() => reading.failures.push(`never appeared: ${frame.defining}`));
         await page.evaluate(() => document.fonts.ready.then(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))));
         /* The fold's own height moved the scroller's end, and the whole-rows fit can answer after the first scroll: the frame reads the end as it settled. */
@@ -2539,9 +3134,26 @@ export async function captureSettingsWindowFrames(browser: Browser, base: string
   fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ readings, failures }, null, 2));
   /* The record: how many frames were read, what failed, and the shallowest foot under an open «Details». */
   const feet = readings.filter((reading) => reading.key.includes("details") && reading.scrolls && reading.end !== null).map((reading) => reading.end!);
-  fs.mkdirSync("evidence/settings-window", { recursive: true });
-  fs.writeFileSync(`evidence/settings-window/${phone ? "phone" : "desktop"}.json`, `${JSON.stringify({ driver: phone ? "src/components/mobile/issue1671Evidence.browser.test.tsx" : "src/components/kanban/kanbanBoard.browser.test.tsx", states: SETTINGS_FRAMES.length, frames: readings.flatMap((reading) => reading.frames).length, readings: readings.length, failures, shallowestFootUnderDetails: feet.length ? Math.min(...feet) : null }, null, 2)}\n`);
+  if (frames === SETTINGS_FRAMES) fs.mkdirSync("evidence/settings-window", { recursive: true });
+  if (frames === SETTINGS_FRAMES) fs.writeFileSync(`evidence/settings-window/${phone ? "phone" : "desktop"}.json`, `${JSON.stringify({ driver: phone ? "src/components/mobile/issue1671Evidence.browser.test.tsx" : "src/components/kanban/kanbanBoard.browser.test.tsx", states: frames.length, frames: readings.flatMap((reading) => reading.frames).length, readings: readings.length, failures, shallowestFootUnderDetails: feet.length ? Math.min(...feet) : null }, null, 2)}\n`);
   return { readings, failures };
+}
+
+export async function captureChatGPTPlanFrames(phone: boolean) {
+  const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "chatgpt-plan", phone ? "phone" : "desktop");
+  fs.mkdirSync(out, { recursive: true });
+  const server = await serveEvidenceFixture(out);
+  const sockets = ownedBrowserSocketEnvironment();
+  try {
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, env: sockets.env,
+      args: ["--no-sandbox", "--disable-dev-shm-usage"], ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try {
+      const { readings, failures } = await captureSettingsWindowFrames(browser, server.base, out, phone,
+        frame => phone ? frame.includes("-phone-") : frame.includes("-desktop-") || frame.includes("-mid-"), PLAN_FRAMES);
+      expect(readings).toHaveLength(PLAN_FRAMES.length * (phone ? 4 : 8));
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); }
+  } finally { sockets.close(); server.stop(); }
 }
 
 /** The setup states the evidence fixture draws, and what each must read. */

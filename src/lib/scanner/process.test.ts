@@ -1,16 +1,40 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import { ownFixtureTree, stopFixtureTree } from "@/lib/testing/fixtureProcess";
+import { procBackend } from "@/lib/proc";
 
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 
 import {
   accountMigrationHostArgv,
   readStructuredHostStamp,
+  resourceWritingHolders,
   STRUCTURED_HOST_STAMP_ENV,
   structuredHostEngine,
   structuredHostStamp,
 } from "./process";
+
+test("resource transcript holders use the async backend reader", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "resource-holder-reader-"));
+  const transcript = path.join(directory, "transcript.jsonl");
+  fs.writeFileSync(transcript, "fixture");
+  const syncReader = spyOn(procBackend, "scanFdTargetsFor");
+  const asyncReader = spyOn(procBackend, "resourceScanFdTargetsFor").mockImplementation(async (_paths, visit) => {
+    visit(transcript, 4321, () => true);
+  });
+  try {
+    expect(await resourceWritingHolders([transcript])).toEqual(new Map([[transcript, 4321]]));
+    expect(asyncReader).toHaveBeenCalledTimes(1);
+    expect(syncReader).not.toHaveBeenCalled();
+  } finally {
+    syncReader.mockRestore();
+    asyncReader.mockRestore();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 const CLAUDE_BROKER = [
   "claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json",

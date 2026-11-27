@@ -1,3 +1,4 @@
+import { publicProvisioningPipeline } from "@/lib/pipelines/provisioningRecord";
 import { finishedWorkIndex } from "@/lib/attention/finishedWork";
 import { withFinishedAttention } from "@/lib/attention/finishedAttention";
 import { stateWriteHealth } from "@/lib/state/diskFull";
@@ -64,6 +65,8 @@ import { readStorageIncidents } from "@/lib/state/durability";
 import { filesResponseDependencies } from "./dependencies";
 
 interface FilesRouteDependencies {
+  /** Selected by the HTTP boundary before entering the projection cache. */
+  secretRequestNotices?: FilesResponse["secretRequestNotices"];
   /** Transport encoding runs on the owned projected values, before JSON. */
   encode?: (data: FilesResponse) => { body: string; etag: string };
   listFilesWithProjectCatalog: (
@@ -1049,8 +1052,9 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
   const crownedProjects = [...new Set(
     curation.crowned.map((project) => remapProject(resolveCatalogAlias(project, projectAliases.aliases))),
   )];
+  const publicPipelines = pipelines.map(publicProvisioningPipeline);
   const summary = new URL(request.url).searchParams.get("view") === "summary"
-    ? filesReadSummary(projected.flows, pipelines) : null;
+    ? filesReadSummary(projected.flows, publicPipelines) : null;
   const agentRead = request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER);
   const data = {
     files: projected.files,
@@ -1062,7 +1066,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     ...(crownedProjects.length ? { crownedProjects } : {}),
     ...(Object.keys(projectCwds).length ? { projectCwds } : {}),
     flows: summary?.flows ?? projected.flows,
-    pipelines: summary?.pipelines ?? pipelines,
+    pipelines: summary?.pipelines ?? publicPipelines,
     ...(summary ? { readProjection: "board-summary" as const } : {}),
     workflows,
     /* A review's choice and comment belong to its project. This read has no
@@ -1071,6 +1075,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     ...(agentRead
       ? { tasks: withoutPrototypeReviews(boardTasks) }
       : { tasks: summarizedTasks, prototypeReviewNotices: prototypeReviewNotices(boardTasks, seatDecisions), ...(seatDecisions.length ? { seatDecisions } : {}) }),
+    ...(dependencies.secretRequestNotices?.length ? { secretRequestNotices: dependencies.secretRequestNotices } : {}),
     /* #2059: map lookups against the forge cache only; the sweep, not this
        request, talks to GitHub. */
     workLinks: workLinksForBoard(pipelines, boardTasks),

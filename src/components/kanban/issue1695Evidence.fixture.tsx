@@ -1,3 +1,4 @@
+import { installIsolationStream, isolationCorpus } from "./composerIsolation.fixture";
 import { AccountsPanel, MobileAccountsPanel } from "@/components/AccountsPanel";
 import { useEngineAccounts } from "@/hooks/useEngineAccounts";
 import type { Flow as ArchivedReview } from "@/lib/reviewHistory/types";
@@ -50,6 +51,7 @@ import { VoiceConversationPanel } from "@/components/VoiceConversation";
 import { VoiceCompanion } from "@/components/voiceCompanion/VoiceCompanion";
 import { sampleCallHistory, sampleTranscript, sampleOrchestratorMessage } from "@/components/voiceCompanion/transcriptSample.fixture";
 import type { CompanionEvent, CompanionPlan } from "@/lib/voiceCompanion/contract";
+import { buildStageShapes } from "./stageShapes.fixture";
 import { DEMO_IDS, SCENARIO_PLAYBACK_PAUSE, demoAnswer, demoInstruction, isScenario, scenarioScript } from "@/lib/voiceCompanion/scenarios";
 import { attachVoiceOutput, openVoiceMicrophone, type VoiceMicrophone } from "@/lib/audio/voiceDevices";
 import { createSimulatedCompanion, realClock } from "@/lib/voiceCompanion/simulator";
@@ -91,6 +93,7 @@ import { WorkspacePage } from "@/components/team/WorkspacePage";
 import { FIXTURE_WORKSPACE_IDS, workspacesFixture } from "@/components/team/workspacesEvidence.fixture";
 import { WORKSPACE_STORAGE_KEY } from "@/components/team/workspacesClient";
 import { pushSoundCaption } from "@/lib/audio/captions";
+import { secretTarget } from "@/lib/secretRequests/view";
 import { readObstacles } from "@/components/soundCaptionPlacement";
 
 /*
@@ -118,7 +121,8 @@ import { readObstacles } from "@/components/soundCaptionPlacement";
  */
 
 const SCENARIO = new URLSearchParams(location.search).get("scenario");
-const PROJECT_DERIVATION = SCENARIO === "project-derivation";
+const COMPOSER_ISOLATION = SCENARIO === "composer-isolation";
+const PROJECT_DERIVATION = SCENARIO === "project-derivation" || COMPOSER_ISOLATION;
 const OVERVIEW_PERFORMANCE = SCENARIO === "overview-performance";
 const COLD_BOARD = SCENARIO === "cold-board";
 let releaseColdBoard!: () => void;
@@ -353,7 +357,10 @@ const FEED_RECOVERY = SCENARIO === "feed-recovery";
 let feedRecoveryEcho = false;
 const delayedLaunchText = L("Keep this message until its transcript arrives.", "Збережи повідомлення до появи запису в розмові.");
 const FM_CASE = new URLSearchParams(location.search).get("case") ?? "p";
-const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE || STREAMING || FIRST_MESSAGE || FEED_CONTINUITY;
+/* `&seathost=<seconds|running>`: the orchestrator seat is hosted. A number is how long its last turn has been over, so the
+   seat is idle between turns (its head says «waiting»); `running` keeps its turn open. */
+const SEAT_HOST = new URLSearchParams(location.search).get("seathost");
+const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_HOST !== null || SEAT_NOISE || STREAMING || FIRST_MESSAGE || FEED_CONTINUITY;
 /* Review round 2 of #1712: a conversation no card holds, whose reader takes the window. */
 const LOOSE = SCENARIO === "loose";
 /* A pasted `#c=` link to a conversation the plain catalog does not carry. Its own scope is a cold projection the server
@@ -382,6 +389,11 @@ const MARKS = SCENARIO === "issue1743";
    model, a draft of the same nine waiting, and the settled states on a few;
    the ninth model is uncatalogued and keeps the dot. */
 const GLYPHS = SCENARIO === "model-glyphs";
+/* The same, for Antigravity's catalogue: one running lane per model (the Gemini
+   4 elements, Flash, GPT-OSS, both orchestrators, and the two Claude models it
+   serves), a draft of all nine waiting, two lanes that settle every model, and
+   a tenth stage on an uncatalogued model that keeps its dot. */
+const GLYPHS_AGY = SCENARIO === "model-glyphs-agy";
 /* #1865: the header lane the operator read — design → build → critique, where
    design and critique share the architect preset and critique ran twice — so
    each stage's conversation can be read for which stage it is. */
@@ -734,8 +746,8 @@ let snapshotReads = 0;
 function structuredSnapshot() {
   snapshotReads += 1;
   return {
-    schemaVersion: 1, snapshotSeq: snapshotReads, retentionFloorSeq: 0, structuredHostsEnabled: true, runtime: { hostEpoch: 1, health: "ready" }, filesRevision: 1,
-    sessions: [{
+    schemaVersion: 1, snapshotSeq: isolation ? 0 : snapshotReads, retentionFloorSeq: 0, structuredHostsEnabled: true, runtime: { hostEpoch: 1, health: "ready" }, filesRevision: 1,
+    sessions: isolation?.sessions ?? [{
       conversationId: searchVer2.conversationId, sessionKey: { engine: "claude", sessionId: "search-ver-2-session" }, hostKind: "claude-broker", host: "hosted",
       turn: FEED_RELOAD ? "idle" : FEED_CONTINUITY && feedContinuityStep >= 2 ? "unknown" : "running", provenance: "structured", revision: snapshotReads, attentionIds: [], recentReceipts: [], accountId: "default",
       ...(FEED_RELOAD ? { liveTurn: { turnId: "reload-turn", text: "", items: Array.from({ length: 12 }, (_, index) => ({
@@ -752,11 +764,11 @@ function structuredSnapshot() {
       } } : {}),
       parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: searchVer2.path,
       capabilities: { steer: false, structuredAttention: true }, activeTurnId: "turn-1", pendingReconfigure: null,
-    }, ...(SEAT_NOISE || FIRST_MESSAGE ? [{
+    }, ...(SEAT_NOISE || FIRST_MESSAGE || SEAT_HOST !== null ? [{
       conversationId: orchestrator.conversationId, sessionKey: { engine: orchestrator.engine, sessionId: `${orchestrator.name}-session` }, hostKind: orchestrator.engine === "codex" ? "codex-app-server" : "claude-broker", host: "hosted",
-      turn: "running", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: seatUndelivered(), accountId: "default",
+      turn: SEAT_HOST_IDLE === null ? "running" : "idle", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: seatUndelivered(), accountId: "default",
       parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: orchestrator.path,
-      capabilities: { steer: false, structuredAttention: true }, activeTurnId: "turn-1", pendingReconfigure: null,
+      capabilities: { steer: false, structuredAttention: true }, activeTurnId: SEAT_HOST_IDLE === null ? "turn-1" : null, pendingReconfigure: null,
     }] : []), ...(STREAMING || SEAT_UNDELIVERED ? files.filter((file) => file.activity === "live" && file.path !== searchVer2.path && (STREAMING || file === exportImpl)).map((file) => ({
       conversationId: file.conversationId, sessionKey: { engine: file.engine, sessionId: `${file.name}-session` }, hostKind: "claude-broker", host: "hosted",
       turn: "running", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: [], accountId: "default",
@@ -771,6 +783,16 @@ const uploadPlan = add(conversation("upload-plan", "Plan: 8 MB chunks, resume to
 const uploadApi = add(conversation("upload-api", "Endpoint and resume token in place", { mtime: now - 6 * 60 * MIN, engine: "codex", model: "gpt-5.6" }));
 const uploadRevApi = add(conversation("upload-rev-api", "Round 2 approved", { mtime: now - 4 * 60 * MIN, engine: "codex", model: "gpt-5.6" }));
 const uploadUi = add(conversation("upload-ui", "Wiring the resume banner", working({ plan: { current: "Wiring the resume banner" } })));
+/* `?paneid=ctx`: the lane's started stage conversations carry what real ones carry on their identity row, an effort
+   tier and the context-window chip, so the Stages sheet's pane head has its longest ordinary row to hold. */
+if (new URLSearchParams(location.search).get("paneid") === "ctx") {
+  for (const file of [uploadPlan, uploadApi, uploadRevApi, uploadUi]) {
+    Object.assign(file, { effort: "high", ctx: { usedTokens: 520_825, windowTokens: 1_000_000, pct: 52, confidence: "exact" } });
+  }
+  Object.assign(uploadPlan, { model: "claude-opus-5-5" });
+  /* A round chip as well: the longest ordinary row, which wraps among its chips. */
+  Object.assign(uploadApi, { continues: { conversationId: "conversation_upload-api-previous", path: null, round: 3 } });
+}
 /* t-export: two plain conversations. */
 const exportImpl = add(conversation("export-impl", "Implementer: simplify the export settings", working({ plan: { current: "Writing the preset model" } })));
 const exportExplore = add(conversation("export-explore", "Explorer: list every export toggle", { mtime: now - 120 * MIN, engine: "codex", model: "gpt-5.6" }));
@@ -807,6 +829,14 @@ const orchestrator = add(conversation("orchestrator", "Orchestrator for atlas", 
   plan: { current: "Watching the search fix" },
   ...(SEAT_HEAD ? { model: "claude-opus-4-5-1m", ctx: { usedTokens: 520_825, windowTokens: 1_000_000, pct: 52, confidence: "exact" } } : {}),
 })));
+const SEAT_HOST_IDLE = SEAT_HOST === null || SEAT_HOST === "running" ? null : Number(SEAT_HOST);
+if (SEAT_HOST_IDLE !== null) {
+  Object.assign(orchestrator, {
+    activity: "idle", proc: "running", pid: 5_900, mtime: now - SEAT_HOST_IDLE,
+    lastTurn: { startedAt: (now - SEAT_HOST_IDLE - 400) * 1_000, endedAt: (now - SEAT_HOST_IDLE) * 1_000 },
+    authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: iso(SEAT_HOST_IDLE), terminalKind: "completed" },
+  });
+}
 
 /* `&undelivered=N` (2026-10-11): the seat's composer holds N sends the host refused, the newest one
    with its arrival unconfirmed, so the undelivered chip and its list can be measured in the seat; and
@@ -1148,6 +1178,52 @@ const glyphPipelines: Pipeline[] = GLYPHS ? (() => {
       ran("docs", "passed", 100, done(100), add(conversation("glyphs-rework-docs", "Reworking the export guide", { model: "sonnet", ...working() }))),
       ran("critique", "running", 60, {}, agentAt("critique", "glyphs-rework-critique", "Critiquing the export guide")),
     ], { stageId: "critique", state: "running", input: null, activatedBy: null }, { createdAt: iso(130 * MIN) }),
+  ];
+})() : [];
+
+/* [stage id = glyph kind, role, model, lane title]. */
+const GLYPH_AGY_MODELS = [
+  ["neon", "architect", "gemini-4-neon", L("Lay out the import dialog", "Спроєктувати діалог імпорту")],
+  ["argon", "builder", "gemini-4-argon", L("Build the import dialog", "Зібрати діалог імпорту")],
+  ["hydrogen", "reviewer", "gemini-4-hydrogen", L("Review the import dialog", "Переглянути діалог імпорту")],
+  ["flash", "cleaner", "gemini-3.8-flash", L("Tidy the import module", "Прибрати модуль імпорту")],
+  ["opus", "architect", "claude-opus-5-5", L("Critique the import flow", "Покритикувати процес імпорту")],
+  ["sonnet", "builder", "claude-sonnet-5-5", L("Write the import guide", "Написати посібник з імпорту")],
+  ["oss", "verifier", "gpt-oss-120b-medium", L("Verify the import on a large file", "Перевірити імпорт на великому файлі")],
+  ["orch-neon", "orchestrator", "gemini-pro-orchestrator-neon", L("Plan the import release", "Спланувати випуск імпорту")],
+  ["orch-argon", "orchestrator", "gemini-pro-orchestrator-g1-pro", L("Coordinate the import fixes", "Скоординувати виправлення імпорту")],
+  ["fix", "builder", "gemini-9-krypton", L("Fix the import's file name", "Виправити назву файлу імпорту")],
+] as const;
+const glyphAgyPipelines: Pipeline[] = GLYPHS_AGY ? (() => {
+  type Entry = (typeof GLYPH_AGY_MODELS)[number];
+  const entry = (id: string) => GLYPH_AGY_MODELS.find(([stageId]) => stageId === id)!;
+  const chain = (models: ReadonlyArray<Entry>) => models.map(([id, roleId, model], index) =>
+    marksStage(id, roleId, models[index + 1]?.[0] ?? null, "antigravity", model, "high"));
+  const ran = (id: string, state: string, ago: number, over: Record<string, unknown> = {}, file: FileEntry | null = null) => {
+    const [, roleId, model] = entry(id);
+    return { stageId: id, attempts: [attempt(1, state, file, { effectiveRole: runRole(roleId, "antigravity", model, "high"), startedAt: iso(ago * MIN), ...over })] };
+  };
+  const done = (ago: number) => ({ completedAt: iso((ago - 6) * MIN) });
+  const lane = (ids: string[]) => chain(ids.map(entry));
+  const agentAt = (id: string, name: string, title: string) => {
+    const [, , model] = entry(id);
+    return add(conversation(name, title, { model, engine: "antigravity", root: "antigravity-sessions", fmt: "antigravity", ...working() }));
+  };
+  return [
+    ...GLYPH_AGY_MODELS.filter(([id]) => id !== "fix").map((model, index) => {
+      const [id, , , title] = model;
+      return pipeline(`p-glyph-agy-${id}`, title, "t-glyphs-agy-run", "running", chain([model]),
+        [ran(id, "running", 30 - index, {}, agentAt(id, `glyphs-agy-run-${id}`, title))], { stageId: id, state: "running", input: null, activatedBy: null }, { createdAt: iso((40 - index) * MIN) });
+    }),
+    pipeline("p-glyphs-agy-wait", L("Plan the import release", "Спланувати випуск імпорту"), "t-glyphs-agy", "draft", chain(GLYPH_AGY_MODELS.filter(([id]) => id !== "fix")),
+      [], { stageId: "neon", state: "pending", input: null, activatedBy: null }, { createdAt: iso(20 * MIN) }),
+    /* Passed, passed, failed, waiting on the operator, not yet run. */
+    pipeline("p-glyphs-agy-settled", L("Ship the import dialog", "Випустити діалог імпорту"), "t-glyphs-agy", "needs_decision", lane(["neon", "argon", "hydrogen", "flash", "oss"]),
+      [ran("neon", "passed", 90, done(90)), ran("argon", "passed", 70, done(70)), ran("hydrogen", "failed", 50, done(50)), ran("flash", "needs_decision", 30)],
+      { stageId: "flash", state: "needs_decision", input: null, activatedBy: null }, { createdAt: iso(100 * MIN) }),
+    pipeline("p-glyphs-agy-settled-more", L("Ship the import guide", "Випустити посібник з імпорту"), "t-glyphs-agy", "needs_decision", lane(["opus", "sonnet", "orch-neon", "orch-argon", "fix"]),
+      [ran("opus", "passed", 120, done(120)), ran("sonnet", "passed", 100, done(100)), ran("orch-neon", "failed", 80, done(80)), ran("orch-argon", "needs_decision", 60)],
+      { stageId: "orch-argon", state: "needs_decision", input: null, activatedBy: null }, { createdAt: iso(130 * MIN) }),
   ];
 })() : [];
 
@@ -1837,8 +1913,44 @@ const stagePlacePipelines: Pipeline[] = STAGE_PLACE ? [pipeline("lane-stage-plac
     { stageId: "review", attempts: [attempt(1, "running", null, { definition: { runtime: "claude-cloud" }, cloud: { phase: "failed", fallback: { at: iso(5 * MIN), reason: "Claude Cloud session can write to GitHub; read-only access was not proven, so no assignment was sent. Connect GitHub read-only for this account (docs/design/claude-code-cloud.md, setup step 2)" } } })] },
   ],
   { stageId: "review", state: "running", input: null, activatedBy: null })] : [];
+/* `?scenario=codex-refusal-move`: Codex refused the review stage twice as a cybersecurity risk, so the
+   controller moved the stage to Claude Opus; its third attempt runs there and the card says why. */
+const CODEX_REFUSAL_MOVE = SCENARIO === "codex-refusal-move";
+const codexRefusalPipelines: Pipeline[] = CODEX_REFUSAL_MOVE ? [pipeline("lane-codex-refusal", L("Harden the upload token check", "Посилити перевірку токена завантаження"), "t-codex-refusal", "running",
+  [stage("implement", "builder", "review"), stage("review", "builder", null)],
+  [
+    { stageId: "implement", attempts: [attempt(1, "passed", null, { completedAt: iso(40 * MIN) })] },
+    { stageId: "review", attempts: [
+      attempt(1, "failed", null, { effectiveRole: role("builder", "codex"), completedAt: iso(30 * MIN), error: "stage cut by Codex cybersecurity refusal" }),
+      attempt(2, "failed", null, { effectiveRole: role("builder", "codex"), completedAt: iso(20 * MIN), error: "stage cut by Codex cybersecurity refusal" }),
+      attempt(3, "running", null, { startedAt: iso(19 * MIN) }),
+    ] },
+  ],
+  { stageId: "review", state: "running", input: null, activatedBy: null },
+  { graphEdits: [{ seq: 1, at: iso(20 * MIN), actor: { kind: "agent", role: "pipeline-controller", conversationId: null }, action: "override-stage",
+    stageId: "review", pipelineState: "running", effect: "pending-next-attempt", appliesFromAttempt: 3, cause: "codex-cybersecurity-refusal",
+    summary: "moved stage review to Claude opus high after Codex refused it twice as a cybersecurity risk; applies from attempt 3" }] })] : [];
+/* `?scenario=stageshapes` (redesign S2): one lane per graph shape the Stages window must draw, each on a task of
+   its own, with invented stage ids and text (`stageShapes.fixture.ts`, which the phone's fixture reads too). */
+const STAGE_SHAPES = SCENARIO === "stageshapes";
+const stageShapeLanes = STAGE_SHAPES ? buildStageShapes({
+  project: PROJECT, iso, L,
+  file: (id, title, state) => {
+    const made = add(conversation(`shape-${id}`, title, state === "working" ? working({ plan: { current: "Reading the findings" } }) : state === "asking" ? {
+      mtime: now - 9 * MIN, lastTurn: { startedAt: (now - 14 * MIN) * 1_000, endedAt: (now - 10 * MIN) * 1_000 },
+      pendingQuestion: { kind: "question", toolUseId: `tool-shape-${id}`, transcriptPath: `/repo/shape-${id}.jsonl`, pid: 1, askedAt: iso(9 * MIN), questions: [{ question: L("Should the report keep the header row when it is exported as CSV?", "Чи лишати рядок заголовків у звіті, коли його експортують у CSV?"), header: "Export", multiSelect: false, options: [] }] },
+    } : { mtime: now - 300 * MIN }));
+    return { path: made.path, conversationId: made.conversationId! };
+  },
+}) : [];
+const shapePipelines: Pipeline[] = stageShapeLanes.map((entry) => entry.pipeline);
+const shapeTasks = (): BoardTask[] => stageShapeLanes.map((entry, index) => task(`t-shape-${entry.slug}`, "assigned", entry.pipeline.task, "", (index + 1) * MIN));
+
+
 const pipelines: Pipeline[] = [
+  ...shapePipelines,
   ...stagePlacePipelines,
+  ...codexRefusalPipelines,
   ...cloudChecksPipelines,
   ...wallPipelines,
   ...unstartedPipelines,
@@ -1854,6 +1966,7 @@ const pipelines: Pipeline[] = [
   ...labelPipelines,
   ...marksPipelines,
   ...glyphPipelines,
+  ...glyphAgyPipelines,
   ...loopsPipelines,
   ...manyPipelines,
   pipeline("p-search", "Restore search results after the index rebuild", "t-search", "running",
@@ -2121,6 +2234,7 @@ const tasks: BoardTask[] = [
     task("t-rem-old", "assigned", L("A task from a peer that predates lane rows", "Задача від вузла, що ще не знає про рядки етапів"), "", 31 * MIN, [], { machine: STAGE_INSTALL } as Partial<BoardTask>),
     task("t-rem-done", "done", L("Publish the linked boards guide", "Опублікувати посібник зі зв’язаних дошок"), "", 3 * 60 * MIN, [], { machine: STAGE_INSTALL } as Partial<BoardTask>),
   ] : []),
+  ...(STAGE_SHAPES ? shapeTasks() : []),
   ...(SOUND_CAPTIONS ? [task("t-captions", "assigned", L("Sound captions: say what each sound means", "Підписи до звуків: що означає кожен"), "", 3 * MIN)] : []),
   ...(MANY ? [task("t-many", "assigned", "Kanban: say what each pipeline of a task does", "Five pipelines on one card: two running, three finished.", 5 * MIN)] : []),
   ...(MARKS ? [task("t-marks", "assigned", "Say who runs each stage, and how often an edge fired", "Two pipelines: one fail edge fired twice of three, one with its budget spent.", 4 * MIN)] : []),
@@ -2128,6 +2242,10 @@ const tasks: BoardTask[] = [
     task("t-glyphs-run", "assigned", L("Every model at work", "Кожна модель у роботі"), L("Nine lanes, each running one model; the ninth has no glyph.", "Дев’ять конвеєрів, кожен запускає одну модель; дев’ята без гліфа."), 1 * MIN),
     task("t-glyphs", "assigned", L("Every model waiting, and the settled states", "Кожна модель чекає, і завершені стани"), L("A draft of nine stages, and two lanes that settled every model.", "Чернетка з дев’яти етапів і два конвеєри, де завершилася кожна модель."), 2 * MIN),
     task("t-glyphs-live", "assigned", L("Reviewing, committing, and working again", "Рев’ю, коміт і знову в роботі"), L("A review at work, a commit landing, and a passed stage whose conversation works again.", "Рев’ю в роботі, коміт, що завершується, і пройдений етап, чия розмова знову працює."), 3 * MIN),
+  ] : []),
+  ...(GLYPHS_AGY ? [
+    task("t-glyphs-agy-run", "assigned", L("Every Antigravity model at work", "Кожна модель Antigravity у роботі"), L("Nine lanes, each running one model.", "Дев’ять конвеєрів, кожен запускає одну модель."), 3 * MIN),
+    task("t-glyphs-agy", "assigned", L("Every Antigravity model waiting, and the settled states", "Кожна модель Antigravity чекає, і завершені стани"), L("A draft of nine stages, and two lanes that settled them.", "Чернетка з дев’яти етапів і два конвеєри, що їх завершили."), 2 * MIN),
   ] : []),
   ...(LOOPS ? [
     task("t-loops-done", "assigned", L("Show a spent review budget on the lane", "Показати вичерпаний бюджет рев’ю на лінії"), "", 4 * 60 * MIN),
@@ -2215,6 +2333,7 @@ const tasks: BoardTask[] = [
     task("t-finish-hold", "assigned", L("Merge when the review passes", "Мердж, коли ревʼю пройдено"), L("The setting, the runner, and its docs.", "Налаштування, мердж і документація."), 50 * MIN),
     task("t-finish-done", "done", L("Conversation: wider agent replies", "Ширші відповіді агентів"), "", 75 * MIN),
   ] : []),
+  ...(CODEX_REFUSAL_MOVE ? [task("t-codex-refusal", "assigned", L("Harden the upload token check", "Посилити перевірку токена завантаження"), "", 5 * MIN)] : []),
   ...(STAGE_PLACE ? [task("t-stage-place", "assigned", L("Run a stage in Claude Code cloud", "Запустити етап у хмарі Claude Code"), "", 5 * MIN)] : []),
   ...(CLOUD_CHECKS ? [task("t-cloud-checks", "assigned", L("Run heavy checks in Codex Cloud", "Важкі перевірки в Codex Cloud"), "", 5 * MIN)] : []),
   ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "An edge at rest, one fired once, a spent budget in flight, a lane parked on a spent budget, and two edges into one stage.", 3 * MIN)] : []),
@@ -3372,6 +3491,8 @@ const evidence = {
   },
 };
 Object.assign(window, { evidence });
+const isolation = COMPOSER_ISOLATION ? isolationCorpus(files, PROJECT, orchestrator, exportImpl) : null;
+if (isolation) board.prefs.hidden.push(...isolation.hiddenPaths);
 if (PROJECT_DERIVATION) Object.assign(window, {
   projectCorpus: { files: files.length, flows: flows.length, tasks: tasks.length, liveIds: files.filter(f => f.activity === "live").map(f => f.conversationId) },
   projectPoll: () => {
@@ -3430,6 +3551,12 @@ Object.assign(window, {
   EventSource: STREAMING ? StreamEventSource : QuietEventSource,
   runtimeEmit: (envelope: unknown) => streamSource?.onmessage?.({ data: JSON.stringify(envelope) }),
 });
+
+const isolationStream = isolation ? installIsolationStream(isolation, files, getRuntimeBus(),
+  envelope => streamSource?.onmessage?.({ data: JSON.stringify(envelope) }),
+  () => [board.prefs, tasks.map(t => [t.id,t.project,t.status,t.assignments.map(a => a.path)]),
+    pipelines.map(p => [p.id,p.taskIds]), flows.map(f => f.id)]) : null;
+if (isolationStream) Object.assign(window, { composerIsolation: isolationStream });
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
@@ -3529,16 +3656,24 @@ const ALBUM = params.get("album") === "1";
    member who is not the owner: no account detail. */
 const SPEND = params.get("spend");
 function spendAccount(key: string, label: string, plan: string | null, weeklyPp: number | null, tokens: number, used: number | null, taskPp: number | null, sessionPp: number | null = null): TaskSpendAccount {
-  return { key, label, plan, weeklyPp, tokens, week: used === null ? null : { usedPercent: used, taskPp }, sessionPp };
+  return { key, label, plan, planTier: key === "claude:a" ? "default_claude_max_20x" : null,
+    weeklyPp, tokens, basis: weeklyPp === null ? null : "measured", range: null, budget: null,
+    apiUsd: tokens / 10e6, apiPricedTokens: tokens, week: used === null ? null : { usedPercent: used, taskPp }, sessionPp };
 }
 function spendProvider(engine: "claude" | "codex", accounts: TaskSpendAccount[], bound: TaskSpendProvider["bound"] = "approx", floor: TaskSpendProvider["floor"] = null): TaskSpendProvider {
-  return { engine, bound, floor, accounts, weeklyPp: accounts.reduce((sum, a) => sum + (a.weeklyPp ?? 0), 0), tokens: accounts.reduce((sum, a) => sum + a.tokens, 0) };
+  const weeklyPp = accounts.reduce((sum, a) => sum + (a.weeklyPp ?? 0), 0);
+  const tokens = accounts.reduce((sum, a) => sum + a.tokens, 0);
+  return { engine, bound, floor, accounts, weeklyPp, tokens, apiUsd: tokens / 10e6, apiPricedTokens: tokens,
+    basis: bound === "tokens" ? null : "measured", range: bound === "tokens" ? null : { low: weeklyPp * 0.7, high: weeklyPp * 1.3 },
+    budgets: engine === "claude" && bound !== "tokens" ? [{ low: 900, mid: 1600, high: 2300, grade: "measured" }] : [],
+    outsideBudget: false, unpricedModels: [], unpricedTokens: 0, issues: bound === "tokens" ? ["planMissing"] : [] };
 }
 const SPEND_TASKS: Record<string, TaskSpendSummary> = {
   /* Two providers, the measured lane of the research rounded; Claude's first
      account, named as an operator names one, is in its current 5-hour window. */
   "t-search": { providers: [
-    spendProvider("claude", [spendAccount("claude:a", "Research workstation", "max", 2.1, 132_000_000, 53, 2.1, 12), spendAccount("claude:b", "B", "max", 1, 61_000_000, 31, 1)]),
+    { ...spendProvider("claude", [spendAccount("claude:a", "Research workstation", "max", 2.1, 132_000_000, 53, 2.1, 12),
+      spendAccount("claude:b", "B", "max", 1, 61_000_000, 31, 1)]), basis: "mixed" },
     spendProvider("codex", [spendAccount("codex:a", "A", "pro", 1.2, 24_000_000, 47, 1.2), spendAccount("codex:b", "B", "pro", 0.4, 9_000_000, 22, 0.4)]),
   ] },
   /* Several accounts of one provider, and a tiny Claude share. */
@@ -3547,12 +3682,15 @@ const SPEND_TASKS: Record<string, TaskSpendSummary> = {
     spendProvider("codex", [spendAccount("codex:a", "A", "pro", 4.2, 88_000_000, 61, 4.2), spendAccount("codex:b", "B", "plus", 2.1, 12_000_000, 38, 2.1), spendAccount("codex:d", "D", "pro", 1, 19_000_000, 12, 1)]),
   ] },
   /* One provider. */
-  "t-upload": { providers: [spendProvider("codex", [spendAccount("codex:a", "A", "pro", 1.1, 23_000_000, 47, 1.1)])] },
+  "t-upload": { providers: [
+    { ...spendProvider("codex", [spendAccount("codex:a", "A", "pro", 1.1, 23_000_000, 47, null)]), basis: "plan",
+      budgets: [{ low: 650, mid: 900, high: 1200, grade: "measured" }] },
+  ] },
   /* A tiny spend. */
   "t-links": { providers: [spendProvider("claude", [spendAccount("claude:b", "B", "max", 0.3, 17_000_000, 31, 0.3)])] },
   /* A Claude account with no limit readings: tokens only. */
   "t-disk": { providers: [
-    spendProvider("claude", [spendAccount("claude:c", "C", "max", null, 41_000_000, null, null)], "norate"),
+    spendProvider("claude", [spendAccount("unknown", "unknown", null, null, 41_000_000, null, null)], "tokens"),
     spendProvider("codex", [spendAccount("codex:a", "A", "pro", 1, 21_000_000, 47, 1)]),
   ] },
   /* Still being counted: the task is known and has no rows yet, so the card draws nothing. */
@@ -3564,11 +3702,63 @@ const SPEND_TASKS: Record<string, TaskSpendSummary> = {
     spendProvider("codex", [spendAccount("codex:a", "A", "pro", 21.3, 402_000_000, 74, 21.3), spendAccount("codex:d", "D", "pro", 12.9, 250_000_000, 40, 12.9)]),
   ] },
 };
+/* `&spend=critic` (and `&spend=criticguest` for a member who is not the owner):
+   the states the estimate meets with realistic figures: a plan share with the
+   full API price, two models and two bases across two providers, a model with
+   no API price, an account with no reported plan, a task whose tokens are not
+   known yet (nothing is drawn), and a large lower bound. */
+const PLAN_BUDGET = { low: 900, mid: 1600, high: 2300, grade: "inferred" } as const;
+function criticAccount(key: string, label: string, plan: string | null, tier: string | null, share: [number, number, number] | null, basis: "plan" | "measured" | null,
+  tokens: number, apiUsd: number | null, week: number | null, priced = tokens): TaskSpendAccount {
+  return { key, label, plan, planTier: tier, weeklyPp: share?.[0] ?? null, basis, range: share ? { low: share[1], high: share[2] } : null,
+    budget: basis === "plan" ? PLAN_BUDGET : null, apiUsd, apiPricedTokens: apiUsd === null ? 0 : priced, tokens,
+    week: week === null ? null : { usedPercent: week, taskPp: share?.[0] ?? null }, sessionPp: null };
+}
+function criticProvider(engine: "claude" | "codex", accounts: TaskSpendAccount[], extra: Partial<TaskSpendProvider> = {}): TaskSpendProvider {
+  const shared = accounts.filter(a => a.weeklyPp !== null);
+  const bases = new Set(shared.map(a => a.basis));
+  const api = accounts.some(a => a.apiUsd !== null) ? accounts.reduce((sum, a) => sum + (a.apiUsd ?? 0), 0) : null;
+  return { engine, bound: shared.length ? "approx" : "tokens", floor: null, accounts,
+    weeklyPp: shared.reduce((sum, a) => sum + a.weeklyPp!, 0), tokens: accounts.reduce((sum, a) => sum + a.tokens, 0),
+    basis: !shared.length ? null : bases.size > 1 ? "mixed" : shared[0]!.basis,
+    range: shared.length ? { low: shared.reduce((sum, a) => sum + a.range!.low, 0), high: shared.reduce((sum, a) => sum + a.range!.high, 0) } : null,
+    budgets: shared.some(a => a.budget) ? [PLAN_BUDGET] : [], outsideBudget: false, apiUsd: api,
+    apiPricedTokens: accounts.reduce((sum, a) => sum + a.apiPricedTokens, 0), unpricedModels: [], unpricedTokens: 0, issues: [], ...extra };
+}
+const MAX20 = "default_claude_max_20x";
+const SPEND_CRITIC: Record<string, TaskSpendSummary> = {
+  "t-upload": { providers: [criticProvider("codex", [criticAccount("codex:a", "Workstation", "pro", null, [1, 0.65, 1.75], "plan", 45_000_000, 8.52, 47)])] },
+  "t-search": { providers: [
+    criticProvider("claude", [
+      criticAccount("claude:a", "Workstation", "max", MAX20, [1.5, 0.98, 2.63], "plan", 70_000_000, 23, 53),
+      criticAccount("claude:b", "Laptop", "max", "default_claude_max_5x", [2.1, 1.37, 3.68], "measured", 45_000_000, 15, 31),
+    ]),
+    criticProvider("codex", [criticAccount("codex:a", "Workstation", "pro", null, [1.4, 0.91, 2.45], "measured", 45_000_000, 8.52, 61)]),
+  ] },
+  "t-export": { providers: [
+    criticProvider("claude", [criticAccount("claude:a", "Workstation", "max", MAX20, null, null, 18_000_000, null, 53)],
+      { unpricedTokens: 18_000_000, unpricedModels: ["claude-preview-x"] }),
+    criticProvider("codex", [criticAccount("codex:a", "Workstation", "pro", null, [2.4, 1.56, 4.2], "plan", 62_000_000, 9.87, 61, 50_000_000)],
+      { unpricedTokens: 12_000_000, unpricedModels: ["gpt-6.3-sol-preview"] }),
+  ] },
+  "t-disk": { providers: [
+    criticProvider("claude", [criticAccount("claude:a", "Server", null, null, null, null, 41_000_000, 12, null)], { issues: ["planMissing"] }),
+  ] },
+  /* The task's tokens are not known: the card draws nothing. */
+  "t-links": { providers: [] },
+  "t-interrupt": { providers: [
+    criticProvider("claude", [criticAccount("claude:a", "Workstation", "max", MAX20, [12.4, 8.06, 21.7], "measured", 610_000_000, 196, 66)], { floor: "before-counting", bound: "floor" }),
+    criticProvider("codex", [
+      criticAccount("codex:a", "Workstation", "pro", null, [21.3, 13.85, 37.28], "measured", 402_000_000, 75, 74),
+      criticAccount("codex:b", "Laptop", "plus", null, [12.9, 8.39, 22.58], "measured", 250_000_000, 47, 40),
+    ]),
+  ] },
+};
 function spendAnswer(ids: readonly string[]): { generatedAt: number; tasks: Record<string, TaskSpendSummary> } {
   const tasks: Record<string, TaskSpendSummary> = {};
   for (const id of ids) {
-    const summary = SPEND_TASKS[id];
-    if (summary) tasks[id] = SPEND === "guest" ? { providers: summary.providers.map((provider) => ({ ...provider, accounts: null })) } : summary;
+    const summary = (SPEND === "critic" || SPEND === "criticguest" ? SPEND_CRITIC : SPEND_TASKS)[id];
+    if (summary) tasks[id] = SPEND === "guest" || SPEND === "criticguest" ? { providers: summary.providers.map((provider) => ({ ...provider, accounts: null })) } : summary;
   }
   return { generatedAt: Date.now(), tasks };
 }
@@ -3792,6 +3982,31 @@ if (PROTO) {
    frames, a taskless round with no review window to open them in. `&decisions=long`
    gives the first seat question a ninety-character title and a long recommended option. */
 const DECISIONS = params.get("decisions");
+let secretRequests: import("@/lib/secretRequests/view").SecretRequestView[] = [];
+if (DECISIONS === "secrets") {
+  const common = {
+    project: PROJECT, state: "pending", expiresAt: Date.parse(iso(-55 * MIN)), format: "token", minLength: 12,
+    requester: { title: L("Integration stage", "Етап налаштування інтеграції"), engine: "codex", role: "stage",
+      stage: { id: "configure", pipelineId: "integration" },
+      seatTitle: L("Project orchestrator", "Оркестратор проєкту") },
+    purpose: L("Authenticate the scheduled report service. The deployment reads this credential before sending reports.",
+      "Під’єднати сервіс планових звітів. Під час розгортання сервіс зчитує цей секрет перед надсиланням звітів."),
+  } as const;
+  secretRequests = [
+    { ...common, id: `sr_${"1".repeat(32)}`, createdAt: Date.parse(iso(10)), destinationRevision: "a".repeat(64),
+      destination: { kind: "file", path: "/workspace/atlas/integrations/report-service/local/report-token.txt", effect: "file-create", git: "ignored" } },
+    { ...common, id: `sr_${"2".repeat(32)}`, createdAt: Date.parse(iso(20)), destinationRevision: "b".repeat(64),
+      destination: { kind: "env", path: "/workspace/atlas/integrations/report-service/.env", key: "REPORT_SERVICE_TOKEN", effect: "env-add", git: "ignored" } },
+  ];
+  window.addEventListener("fixture-secret-closed", (event) => {
+    secretRequests = secretRequests.filter(({ id }) => id !== (event as CustomEvent<string>).detail);
+  });
+  window.addEventListener("fixture-secret-destination-changed", () => {
+    const previous = secretRequests[1]!;
+    secretRequests[1] = { ...previous, destinationRevision: "c".repeat(64), destination: { ...previous.destination,
+      path: "/workspace/atlas/integrations/report-service/local/.env", effect: "env-replace" } };
+  });
+}
 const decisionPosts: unknown[] = [];
 const seatRounds: PrototypeRoundView[] = [];
 const SEAT_ASK_ID = `pr_${"d".repeat(32)}`;
@@ -3817,6 +4032,10 @@ if (DECISIONS) {
       { id: "variant", text: L("Which variant do we build?", "Який варіант будуємо?"), options: [{ label: L("1 — List by project", "1 — Список за проєктами"), recommended: true }, { label: L("2 — Summary and «Show»", "2 — Підсумок і «Показати»") }] },
       { id: "phone", text: L("On the phone: a bottom sheet or a centred window?", "На телефоні: шторка знизу чи вікно по центру?"), options: [{ label: L("Bottom sheet", "Шторка знизу"), recommended: true }, { label: L("Centred window", "Вікно по центру") }] },
     ] }];
+  if (DECISIONS === "secrets") {
+    seatRounds.splice(1);
+    delete protoRounds["t-search"];
+  }
   if (DECISIONS === "seat-frames") seatRounds[1]!.variants = [
     { number: 1, name: L("Account A for every lane", "Акаунт A на всі лейни"), description: "", videos: [], frames: [{ image: frame(265, "account A · 1440"), caption: L("Night", "Ніч"), width: 1440 }] },
     { number: 2, name: L("Split by engine", "Розподіл за рушієм"), description: "", videos: [], frames: [{ image: frame(32, "split · 1440"), caption: L("Night", "Ніч"), width: 1440 }] },
@@ -4219,15 +4438,20 @@ if (COLD_LINK) (window as unknown as { __coldLink: typeof coldLink }).__coldLink
    a minute after Create). It answers only the routes each state reads, with invented data: the accounts and the tools of each
    engine state, the factory role catalog, the bot (`&bot=`), the memory source with or without an orchestrator, and for the
    form states the seat's transcript, its decision with one question that cannot be skipped, and its "Needs you" notice.
-   States: engines-both|claude-only|codex-only|signed-out|no-cli, orchestrator-one-press|claude-only|codex-only,
+   States: engines-both|claude-only|codex-only|signed-out|no-cli, orchestrator-one-press|claude-only|codex-only|no-engine,
    later-memory-before|memory-after|telegram-later, telegram-numbered, form-greeting|decisions|needs-you,
-   settings-memory-before|memory-after. */
+   settings-memory-before|memory-after, first-visit*.
+   `first-visit*` is a first visit (docs/design/onboarding-v2.md §12.2): no agent tool, and the install notice not yet
+   dismissed. `orchestrator-no-engine` has both tools installed and signed out. */
 const FIRST_RUN = params.get("firstrun") ?? "";
 const FIRST_RUN_FORM = FIRST_RUN.startsWith("form-");
+const FIRST_VISIT = FIRST_RUN.startsWith("first-visit");
+/* What `/api/telemetry` answers on a first visit; a write is kept. */
+const firstVisitTelemetry = { enabled: true, locked: false, noticeDismissed: false, swarmRules: false };
 const FIRST_RUN_ENGINES: "both" | "claude-only" | "codex-only" | "signed-out" | "no-cli" =
   FIRST_RUN === "engines-claude-only" || FIRST_RUN === "orchestrator-claude-only" ? "claude-only"
   : FIRST_RUN === "engines-codex-only" || FIRST_RUN === "orchestrator-codex-only" ? "codex-only"
-  : FIRST_RUN === "engines-signed-out" ? "signed-out" : FIRST_RUN === "engines-no-cli" ? "no-cli" : "both";
+  : FIRST_RUN === "engines-signed-out" || FIRST_RUN === "orchestrator-no-engine" ? "signed-out" : FIRST_RUN === "engines-no-cli" || FIRST_VISIT ? "no-cli" : "both";
 /* An orchestrator exists for the memory import once the guide was reopened after Create, and on the seat's own board.
    The driver draws those states over `scenario=orchestrator-first-walk`, so the board behind the dialog carries the seat too. */
 const FIRST_RUN_SEATED = FIRST_RUN_FORM || FIRST_RUN === "later-memory-after" || FIRST_RUN === "settings-memory-after";
@@ -4291,13 +4515,19 @@ function firstRunSeatTranscript(): string {
 if (FIRST_RUN_FORM) seatRounds.push({ id: FIRST_RUN_REVIEW_ID, taskId: null, project: PROJECT, title: FIRST_RUN_TITLE, createdAt: iso(68), source: { conversationId: orchestrator.conversationId ?? null }, variants: [],
   questions: FIRST_RUN_QUESTIONS, telegramPost: { key: "first-run", state: "failed", reason: "no_relay", at: iso(68) } });
 /* What the routes behind the guide answer for a first-run state; null falls through to the board fixture. */
-function firstRunAnswer(url: URL, method: string): Response | null {
+function firstRunAnswer(url: URL, method: string, init?: RequestInit): Response | null {
   const path = url.pathname;
   if (path === "/api/onboarding" && !FIRST_RUN_FORM) {
     /* Once an orchestrator exists, the guide's first three steps are settled: the numbers turn into ticks. */
     const steps = FIRST_RUN_SEATED ? { engines: "done", project: "done", orchestrator: "done" } : {};
     const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, steps, lastHealth: null, walk: "done" };
     return json(method === "PUT" ? { marker } : { marker, legacyState: false, seatTickCheckMinutes: 5 });
+  }
+  /* Antigravity as the slice 1 states have it: not installed on a first visit, installed and signed out beside the other two. */
+  if (path === "/api/accounts/antigravity" && (FIRST_VISIT || FIRST_RUN === "orchestrator-no-engine")) return json(FIRST_VISIT ? { cli: "missing", accounts: [] } : { cli: "found", accounts: [{ auth: "signed_out", plan: null }] });
+  if (path === "/api/telemetry" && FIRST_VISIT) {
+    if (method === "PUT") Object.assign(firstVisitTelemetry, JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+    return json(firstVisitTelemetry);
   }
   if (path === "/api/accounts" && method === "GET") return json(FIRST_RUN_ACCOUNTS);
   if (path === "/api/accounts/cli") return json({ claude: FIRST_RUN_ACCOUNTS.claude.cli, codex: FIRST_RUN_ACCOUNTS.codex.cli });
@@ -4326,10 +4556,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     && ["/api/files", "/api/tasks", "/api/board/work-time"].includes(url.pathname)) return serverFetch(input, init);
 
   if (SCENARIO === "spend-credits" && url.pathname.startsWith("/api/accounts")) return serverFetch(input, init);
-  if (SCENARIO === "account-row" && /^\/api\/(?:accounts|transfer\/accounts|account-project-bindings)/.test(url.pathname)) return serverFetch(input, init);
+  if (SCENARIO === "account-row" && /^\/api\/(?:accounts|transfer\/accounts|account-project-bindings|limits\/history)/.test(url.pathname)) return serverFetch(input, init);
+  if (DECISIONS === "secrets" && url.pathname.startsWith("/api/secret-requests/")) return serverFetch(input, init);
   const method = (init?.method ?? "GET").toUpperCase();
   if (FIRST_RUN) {
-    const answered = firstRunAnswer(url, method);
+    const answered = firstRunAnswer(url, method, init);
     if (answered) return answered;
   }
   /* The lane review case answers these from the driver's own server, through
@@ -4389,7 +4620,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if (SCENARIO === "role-defaults" && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => {
     const variants = ROLE_VARIANT_DEFAULTS[role.id as keyof typeof ROLE_VARIANT_DEFAULTS];
-    return { ...role, variants, promptPreview: role.promptScaffold, shipped: { config: role.config, variants } };
+    /* `agy=1`: the builder row is mapped to Antigravity on its longest listed model, so the table measures that engine's own labels. */
+    const config = role.id === "builder" && new URLSearchParams(location.search).has("agy") ? { engine: "antigravity", model: "gpt-oss-120b-medium", effort: "high" } : role.config;
+    return { ...role, config, variants, promptPreview: role.promptScaffold, shipped: { config: role.config, variants } };
   }) });
   /* A draft's stage configuration names the stage's own role in its select. */
   if (FROM_CONVERSATION && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => ({ ...role, promptPreview: role.promptScaffold, shipped: { config: role.config } })) });
@@ -4468,7 +4701,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     }
     const review = url.searchParams.get("review");
     const round = review ? [...seatRounds, ...Object.values(protoRounds).flat()].find((entry) => entry.id === review) ?? null : undefined;
-    return json({ project: PROJECT, decisions: fixtureDecisions(), ...(round === undefined ? {} : { round }) });
+    return json({ project: PROJECT, decisions: fixtureDecisions(), ...(DECISIONS === "secrets" ? { secretRequests } : {}),
+      ...(round === undefined ? {} : { round }) });
   }
   if (url.pathname === "/api/prototype-reviews/telegram" && init?.method === "POST") {
     const body = JSON.parse(String(init.body)); protoTelegramPosts.push(body);
@@ -4625,6 +4859,16 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     });
   }
   if (url.pathname === "/api/files") {
+    if (isolationStream) {
+      const probe = isolationStream.fileProbe(method, url.searchParams);
+      if (probe) return probe;
+      const revision = isolationStream.routedRevision();
+      if (revision !== null) {
+        const headers = new Headers(init?.headers);
+        headers.set("x-isolation-revision", String(revision));
+        return serverFetch(input, { ...init, headers });
+      }
+    }
     if (COLD_BOARD && method === "HEAD") return new Response(null, { status: 204 });
     if (COLD_BOARD && url.searchParams.get("view") === "storage-health") return json({ state: "ok", since: null, freeBytes: 1024 ** 3, registryIssues: [] });
     launchAdvance();
@@ -4678,7 +4922,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const retiredBoard = SCENARIO === "retired-review" && params.get("surface") === "direct-board"
       ? { files: [orchestrator, ...directFiles], flows: [], pipelines: [], tasks: [], conversationAliases: { "old-direct-subject": "direct-subject" },
         projectCatalog: [{ project: PROJECT, conversations: directFiles.length + 1, smt: now }] } : {};
-    const body = JSON.stringify({ ...scoped, ...retiredBoard, ...((DECISIONS || REPORT_PREVIEW || FIRST_RUN_FORM) && seatDecisionNotices().length ? { seatDecisions: seatDecisionNotices() } : {}), workflows: [], systemHealth: { ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) }, ...(workLinks ? { workLinks } : {}) });
+    isolationStream?.admitCatalog(scoped.files);
+    const body = JSON.stringify({ ...scoped, ...retiredBoard,
+      ...(isolationStream ? { boardProtocol: 2, boardScope: "fixture.global" } : {}),
+      ...((DECISIONS || REPORT_PREVIEW || FIRST_RUN_FORM) && seatDecisionNotices().length ? { seatDecisions: seatDecisionNotices() } : {}),
+      ...(DECISIONS === "secrets" ? { secretRequestNotices: secretRequests.map(({ id, project, createdAt, expiresAt, destination }) => ({ id, project, createdAt, expiresAt, target: secretTarget(destination.path, destination.key) })) } : {}), workflows: [], systemHealth: { ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) }, ...(workLinks ? { workLinks } : {}) });
     if (COLD_BOARD) {
       const headers = new Headers(init?.headers);
       const required = headers.get("x-llv-files-generation");
@@ -4698,6 +4946,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         "x-llv-files-projection-cache": required ? "miss" : "bootstrap",
       } });
     }
+    if (isolationStream) {
+      isolationStream.saveCatalog(body);
+      return new Response(body, { headers: { "content-type":"application/json", ETag:'"isolation-1"', "x-llv-board-protocol":"2" } });
+    }
     if (evidence.filesDelayMs) await new Promise((resolve) => setTimeout(resolve, evidence.filesDelayMs));
     if (pollTransport) return pollResponse(body, init);
     return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
@@ -4714,13 +4966,17 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (!url.searchParams.get("deviceId")) return json({ ok: true, records });
     return json({ ok: true, rootId: "root-fixture", offer: null, live: [], expired: [], records });
   }
-  if (url.pathname === "/api/runtime/snapshot" && STRUCTURED) return json(structuredSnapshot());
+  if (url.pathname === "/api/runtime/snapshot" && STRUCTURED) {
+    if (isolationStream) isolationStream.reads.snapshots++;
+    return json(structuredSnapshot());
+  }
   if (url.pathname === "/api/runtime/snapshot") return json({ code: RUNTIME_PLANE_ABSENT }, 503);
   if (STRUCTURED && url.pathname === "/api/conversation-host" && method === "POST") {
     evidence.pillRequests.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
     return json({ ok: true, structured: true });
   }
   if (url.pathname === "/api/board") {
+    if (isolationStream && method === "GET") isolationStream.reads.board++;
     if (method === "PATCH") {
       const body = JSON.parse(String(init?.body)) as { mutations?: BoardMutationV1[] };
       evidence.boardMutations.push(...(body.mutations ?? []));
@@ -5382,6 +5638,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/resources") {
     const diskRole = new URLSearchParams(location.search).get("disk-role");
     const diskWarning = new URLSearchParams(location.search).get("disk-level") === "warning";
+    /* `memory=calm|swap|tmp`: RAM, swap and a tmpfs /tmp, quiet or over one warning line. */
+    const memory = new URLSearchParams(location.search).get("memory");
+    const swapUsed = (memory === "swap" ? 6 : 1) * 1024 ** 3;
     const host = (target: string, title: string, over: Record<string, unknown>) => ({
       target, panePid: 4_100, kind: "structured", path: null, engine: "claude", title, project: LEDGER, activity: "idle", lastActiveAt: iso(6 * 60 * MIN), cwd: "/repo/ledger",
       rssBytes: 600 * 1024 ** 2, swapBytes: 0, procCount: 3, model: "opus", role: "builder", conversationId: null, stage: "implement", ownership: "owned", seat: false, turnBusy: false, ...over,
@@ -5401,7 +5660,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
           ? [{ kind: "state", bytes: 2.1 * 1024 ** 3, measuredAt: iso(0) }, { kind: "worktrees", bytes: 187 * 1024 ** 3, measuredAt: iso(0) }, { kind: "temp", bytes: 15 * 1024 ** 3, measuredAt: iso(0) }]
           : [{ kind: "worktrees", bytes: 90 * 1024 ** 3, measuredAt: iso(0) }],
       } } : {}),
-      system: { ramTotal: 32 * 1024 ** 3, ramAvailable: 9 * 1024 ** 3, swapTotal: 8 * 1024 ** 3, swapUsed: 1024 ** 3, capturedAt: iso(30) },
+      system: { ramTotal: 32 * 1024 ** 3, ramAvailable: 9 * 1024 ** 3, swapTotal: 8 * 1024 ** 3, swapUsed, capturedAt: iso(30) },
+      ...(memory ? { memoryPressure: {
+        at: iso(0), swapWarnPercent: 50, tmpWarnBytes: 4e9,
+        episode: memory === "calm" ? null : iso(MIN), reasons: memory === "calm" ? [] : [memory],
+        ram: { usedBytes: 23 * 1024 ** 3, totalBytes: 32 * 1024 ** 3 }, swap: { usedBytes: swapUsed, totalBytes: 8 * 1024 ** 3 },
+        tmp: { usedBytes: (memory === "tmp" ? 5.5 : 1.2) * 1024 ** 3, totalBytes: 16 * 1024 ** 3, tmpfs: true, view: "host" },
+      } } : {}),
       sessions: RAIL ? [
         host("host-ledger-build", "Reconciling the ledger export", { activity: "live", lastActiveAt: iso(20), rssBytes: 1_400 * 1024 ** 2, turnBusy: true }),
         host("host-harbor-index", "Indexed the handbook", { project: "harbor-docs", cwd: "/repo/harbor", engine: "codex", model: "gpt-5.6", role: "reviewer", stage: "review" }),
@@ -5417,7 +5682,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const windowStart = now - Math.round(windowSeconds * spentShare);
       return { windowStart, resetsAt: windowStart + windowSeconds, windowSeconds, samples: Array.from({ length: 12 }, (_, index) => ({ t: windowStart + Math.round(((now - windowStart) * index) / 11), remaining: Math.round(100 - ((100 - left) * index) / 11) })) };
     };
-    return json({ claude: { session: series(18_000, 0.6, 88), weekly: series(604_800, 0.45, 70) }, codex: { session: series(18_000, 0.8, 60), weekly: series(604_800, 0.7, 90) }, claudeAccountId: "default", codexAccountId: null, historySince: iso(3 * 24 * 60 * MIN) });
+    /* A request for one account is answered stamped with that account, as the route does. */
+    const requested = url.searchParams.get("account");
+    const forEngine = url.searchParams.get("engine");
+    return json({ claude: { session: series(18_000, 0.6, 88), weekly: series(604_800, 0.45, 70) }, codex: { session: series(18_000, 0.8, 60), weekly: series(604_800, 0.7, 90) }, claudeAccountId: forEngine === "claude" && requested ? requested : forEngine === "codex" ? null : "default", codexAccountId: forEngine === "codex" && requested ? requested : null, historySince: iso(3 * 24 * 60 * MIN) });
   }
   if (RAIL_STATE === "stale" && url.pathname === "/api/limits") {
     return json({

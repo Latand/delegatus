@@ -585,7 +585,8 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onOpenStag
           </span>
         ) : null}
         {loose && item.firstAgent?.agentActivity ? <CardStatusBadge file={item.firstAgent} /> : null}
-        <NeedBadge item={item} />
+        {/* A fault the state line already names (a message stuck in delivery) draws no badge beside it. */}
+        {state?.subject.kind === "fault" ? null : <NeedBadge item={item} />}
       </span>
       {state ? (
         <CardStateLine state={state} nowMs={nowMs} title={title} phone motion={motion} spend={spendTask ? <TaskSpendMarks taskId={spendTask} interactive={false} /> : undefined}
@@ -597,7 +598,7 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onOpenStag
       {/* The needs-you question has its own slot below motion. */}
       {item.kind === "task" ? <TaskStatusNote note={card.task?.note} nowMs={nowMs} /> : null}
       {item.shown && !loose ? (
-        <PipelineBlock summary={item.shown} density="card" nowMs={nowMs} taskTitle={item.kind === "task" ? title : null} aside={othersText(t, item)} reasonLine={!state} onOpenStage={onOpen ? onOpenStage ?? undefined : undefined} stagesInFace />
+        <PipelineBlock summary={item.shown} density="card" nowMs={nowMs} taskTitle={item.kind === "task" ? title : null} aside={othersText(t, item)} reasonLine={!state || Boolean(item.shown.pipeline.provisioningStep)} onOpenStage={onOpen ? onOpenStage ?? undefined : undefined} stagesInFace />
       ) : null}
       {loose ? <LooseLine item={item} now={now} /> : <AskLine item={item} />}
       <AgentsLine item={item} nowMs={nowMs} remote={remote !== null} />

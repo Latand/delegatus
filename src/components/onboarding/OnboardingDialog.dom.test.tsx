@@ -62,6 +62,7 @@ Object.assign(globalThis, {
     if (url.includes("/api/access")) return json({ tailnetUrl: null, phone: { state: "missing", dnsName: null, viewerPort: 8898, servingPort: null, persisted: false }, phoneError: null });
     if (url.includes("/api/orchestrator/seat")) return Promise.resolve(new Response("{}", { status: 404 }));
     if (url.includes("/api/accounts/copilot")) return json({ cli: { present: false, reason: null }, active: "", accounts: [] });
+    if (url.includes("/api/accounts/antigravity") && agyBody !== null) return json(agyBody);
     if (url.endsWith("/api/accounts") || url.includes("/api/accounts?")) return json(accountsBody);
     return json({ claude: { active: "", accounts: [] }, codex: { active: "", accounts: [] } });
   },
@@ -88,6 +89,9 @@ let reportSettings: Record<string, unknown> = { reportTelegram: null, reportDest
 /* What `/api/memory/source` answers; the Memory step's cases set it. */
 let memorySourceBody: unknown = { choice: null, phase: null, orchestrator: false };
 let botStatus: unknown = { connected: false, bot: null, receiving: "stopped", lastUpdateAt: null, lastCheckedAt: null, chats: [], limits: [] };
+
+/* What `/api/accounts/antigravity` answers; null leaves it to the unrouted fallback, which carries no Antigravity section. */
+let agyBody: unknown = null;
 
 /* What `/api/accounts` answers; the orchestrator step's cases set it. */
 const signedIn = (id: string, label: string) => ({ id, label, kind: "legacy", authPresent: true, loginPending: false, loginState: "authenticated", deviceAuth: null, auth: { state: "authenticated" } });
@@ -328,7 +332,7 @@ test("an engine whose command is missing reads Not installed even with a credent
   document.body.appendChild(host);
   const root = createRoot(host);
   flushSync(() => root.render(
-    <EnginesStep claude={engineState("claude")} codex={engineState("codex")} cli={{ claude: "found", codex: "missing" }} now={0} onRecheck={() => {}} />,
+    <EnginesStep claude={engineState("claude")} codex={engineState("codex")} antigravity={{ cli: "found", auth: "signed_in", plan: null, loaded: true, probing: false, inconclusive: false, probe: async () => {}, reload: async () => {} }} cli={{ claude: "found", codex: "missing" }} now={0} onRecheck={() => {}} />,
   ));
   expect(host.querySelector("[data-onboarding-engine=claude]")?.getAttribute("data-engine-state")).toBe("connected");
   const codex = host.querySelector("[data-onboarding-engine=codex]")!;
@@ -656,8 +660,16 @@ test("#2166: step 3 says what is missing: a project, an engine, or a signed-in a
   let root = createRoot(host);
   flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="orchestrator" marker={null} projects={[]} onClose={() => {}} />));
   await until(() => (host.textContent ?? "").includes("Pick a project first."));
-  expect(host.querySelector("[data-onboarding-orchestrator-go=project]")).not.toBeNull();
+  /* The Project row says it and leads to Project; with nothing chosen it offers no Change, and nothing below repeats it. */
+  expect(host.querySelector("[data-onboarding-orchestrator-no-project]")?.textContent).toBe("Pick a project first.");
+  expect((host.querySelector("[data-onboarding-orchestrator]")?.textContent ?? "").split("Pick a project first.").length - 1).toBe(1);
+  expect([...host.querySelectorAll("[data-onboarding-orchestrator-go]")].map((button) => `${button.getAttribute("data-onboarding-orchestrator-go")}:${button.textContent}`)).toEqual(["project:Go to Project"]);
+  expect(host.querySelector("[data-onboarding-orchestrator-change=project]")).toBeNull();
+  /* The engine is connected, so its row still reads the runtime, with Change. */
+  expect(host.querySelector("[data-onboarding-orchestrator-change=runs-on]")).not.toBeNull();
   expect(host.querySelector("[data-onboarding-orchestrator-create]")).toBeNull();
+  flushSync(() => (host.querySelector("[data-onboarding-orchestrator-go=project]") as HTMLElement).click());
+  expect(host.querySelector("[data-onboarding-step=project]")?.getAttribute("aria-current")).toBe("step");
   flushSync(() => root.unmount());
 
   answerAccounts({ claude: { active: "", cli: "found", accounts: [] }, codex: { active: "", cli: "found", accounts: [] } });
@@ -693,6 +705,164 @@ test("#2166: step 3 says what is missing: a project, an engine, or a signed-in a
   flushSync(() => root.unmount());
   host.remove();
   answerAccounts({ claude: { active: "", accounts: [] }, codex: { active: "", accounts: [] } });
+});
+
+/* Onboarding v2, slice 1 (A5): with no engine the step read "Runs on Claude · Opus · account Main" and "It uses your
+   Claude plan", and without a project its only stated blocker was the project. The row now names what is missing
+   and leads to Engines; nothing on the step claims a runtime. */
+test("the orchestrator step with no engine claims no runtime: the Runs on row names what is missing and leads to Engines, with and without a project", async () => {
+  const projects = [{ project: "repo-todo", name: "todo-cli", cwd: "projects/todo-cli", conversations: 0 }];
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const step = () => host.querySelector("[data-onboarding-orchestrator]")!;
+  const named = () => host.querySelector("[data-onboarding-orchestrator-no-engine]");
+  const occurrences = (text: string) => (step().textContent ?? "").split(text).length - 1;
+
+  /* Nothing installed, nothing chosen: the walk a newcomer makes by pressing Continue twice. */
+  answerAccounts({ claude: { active: "", cli: "missing", accounts: [] }, codex: { active: "", cli: "missing", accounts: [] } });
+  let root = createRoot(host);
+  flushSync(() => root.render(<OnboardingDialog mode="guide" marker={null} markerStatus="read" projects={projects} onClose={() => {}} />));
+  await until(() => host.querySelector("[data-onboarding-engine=claude]")?.getAttribute("data-engine-state") === "missing");
+  flushSync(() => (host.querySelector("[data-onboarding-primary]") as HTMLElement).click());
+  expect(host.querySelector("[data-onboarding-dialog]")?.getAttribute("data-onboarding-current")).toBe("project");
+  flushSync(() => (host.querySelector("[data-onboarding-primary]") as HTMLElement).click());
+  expect(host.querySelector("[data-onboarding-dialog]")?.getAttribute("data-onboarding-current")).toBe("orchestrator");
+  await until(() => Boolean(named()));
+  expect(named()!.textContent).toBe("Connect Claude or Codex first.");
+  expect(host.querySelector("[data-onboarding-orchestrator-runs-on]")).toBeNull();
+  expect(host.querySelector("[data-onboarding-orchestrator-change=runs-on]")).toBeNull();
+  for (const claim of ["Opus", "account Main", "Claude plan", "API cost estimate"]) expect(step().textContent).not.toContain(claim);
+  expect(host.querySelector("[data-onboarding-cost]")).toBeNull();
+  expect(host.querySelector("[data-onboarding-permissions]")).not.toBeNull();
+  /* Both blockers are stated the same way: each once, in its own row, with the one action that leads to its step. No row with nothing chosen reads Change. */
+  expect(occurrences("Connect Claude or Codex first.")).toBe(1);
+  expect(occurrences("Pick a project first.")).toBe(1);
+  expect(host.querySelector("[data-onboarding-orchestrator-no-project]")?.textContent).toBe("Pick a project first.");
+  expect([...host.querySelectorAll("[data-onboarding-orchestrator-go]")].map((button) => `${button.getAttribute("data-onboarding-orchestrator-go")}:${button.textContent}`)).toEqual(["project:Go to Project", "engines:Go to Engines"]);
+  expect(host.querySelector("[data-onboarding-orchestrator-change]")).toBeNull();
+  expect(host.querySelector("[data-onboarding-orchestrator-create]")).toBeNull();
+  expect(host.querySelector("[data-onboarding-primary]")?.textContent).toBe("Finish without it");
+  flushSync(() => (host.querySelector("[data-onboarding-orchestrator-go=engines]") as HTMLElement).click());
+  expect(host.querySelector("[data-onboarding-step=engines]")?.getAttribute("aria-current")).toBe("step");
+  flushSync(() => root.unmount());
+
+  /* Installed and signed out, with a project chosen: the engine is the only thing missing, said once. */
+  const signedOut = { id: "work", label: "Work", kind: "managed", authPresent: false, loginPending: false, loginState: "idle", deviceAuth: null, auth: { state: "signed_out" } };
+  answerAccounts({ claude: { active: "work", cli: "found", accounts: [signedOut] }, codex: { active: "", cli: "found", accounts: [] } });
+  root = createRoot(host);
+  flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="orchestrator" marker={null} markerStatus="read" projects={projects} onClose={() => {}} />));
+  chooseProject(host, "orchestrator");
+  await until(() => Boolean(named()));
+  expect(occurrences("Connect Claude or Codex first.")).toBe(1);
+  expect(step().textContent).not.toContain("Pick a project first.");
+  expect(host.querySelector("[data-onboarding-orchestrator-no-project]")).toBeNull();
+  expect(host.querySelector("[data-onboarding-orchestrator-change=project]")?.textContent).toBe("Change");
+  expect(host.querySelector("[data-onboarding-orchestrator-runs-on]")).toBeNull();
+  expect(host.querySelector("[data-onboarding-orchestrator-signin]")).toBeNull();
+  expect(host.querySelectorAll("[data-onboarding-orchestrator-go]").length).toBe(1);
+  expect(host.querySelector("[data-onboarding-orchestrator-create]")).toBeNull();
+  expect(step().textContent).not.toContain("Claude plan");
+  flushSync(() => root.unmount());
+
+  /* The same step once an engine is signed in: the row reads the runtime again, with Change, and the plan it spends. */
+  answerAccounts({ claude: { active: "default", cli: "found", accounts: [signedIn("default", "Main")] }, codex: { active: "", cli: "found", accounts: [] } });
+  root = createRoot(host);
+  flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="orchestrator" marker={null} markerStatus="read" projects={projects} onClose={() => {}} />));
+  chooseProject(host, "orchestrator");
+  await until(() => (host.querySelector("[data-onboarding-orchestrator-runs-on]")?.textContent ?? "").includes("account Main"));
+  expect(named()).toBeNull();
+  expect(host.querySelector("[data-onboarding-orchestrator-go]")).toBeNull();
+  expect(host.querySelector("[data-onboarding-orchestrator-change=runs-on]")).not.toBeNull();
+  expect(host.querySelector("[data-onboarding-orchestrator-plan]")?.textContent).toContain("It uses your Claude plan.");
+  flushSync(() => root.unmount());
+  host.remove();
+  answerAccounts({ claude: { active: "", accounts: [] }, codex: { active: "", accounts: [] } });
+});
+
+/* While the engines' sign-in states are still being read the step claims neither: no missing engine yet. Each read
+   is held and released by the case, and the case knows when the step has taken an answer in, so no state below
+   depends on how long a read takes. */
+test("the orchestrator step does not call an engine missing before the accounts read has answered", async () => {
+  const { act } = await import("react");
+  const real = globalThis.fetch;
+  type Read = "roles" | "accounts";
+  const gate = () => {
+    let open: () => void = () => {};
+    const opened = new Promise<void>((resolve) => { open = resolve; });
+    return { opened, open };
+  };
+  let held = { roles: gate(), accounts: gate() };
+  let rolesTaken = gate();
+  let state: Record<Read, "unasked" | "held" | "answered"> = { roles: "unasked", accounts: "unasked" };
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    const read: Read | null = url.endsWith("/api/accounts") || url.includes("/api/accounts?") ? "accounts" : url.includes("/api/roles") ? "roles" : null;
+    if (read === null) return real(input, init);
+    const asked = { state, held: held[read], taken: rolesTaken };
+    asked.state[read] = "held";
+    await asked.held.opened;
+    const response = await real(input, init);
+    /* A read has answered once its caller holds the body. */
+    const body = response.json.bind(response);
+    response.json = async () => {
+      const value = await body();
+      asked.state[read] = "answered";
+      if (read === "roles") asked.taken.open();
+      return value;
+    };
+    return response;
+  }) as typeof fetch;
+  const none = { claude: { active: "", cli: "missing", accounts: [] }, codex: { active: "", cli: "missing", accounts: [] } };
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const named = () => host.querySelector("[data-onboarding-orchestrator-no-engine]");
+  const guide = <OnboardingDialog mode="guide" initialStep="orchestrator" marker={null} projects={[]} onClose={() => {}} />;
+  const actEnvironment = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+  const actBefore = actEnvironment.IS_REACT_ACT_ENVIRONMENT;
+  let root = createRoot(host);
+  try {
+    /* The roles read has answered; the accounts read has not. `act` returns after the render the roles' answer
+       caused, so the step below is the one that holds the roles and still waits for the engines. */
+    answerAccounts(none);
+    held.roles.open();
+    flushSync(() => root.render(guide));
+    actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
+    try {
+      await act(async () => { await rolesTaken.opened; });
+    } finally {
+      actEnvironment.IS_REACT_ACT_ENVIRONMENT = actBefore;
+    }
+    expect(state).toEqual({ roles: "answered", accounts: "held" });
+    expect(host.querySelector("[data-onboarding-orchestrator]")).not.toBeNull();
+    expect(named()).toBeNull();
+    held.accounts.open();
+    await until(() => Boolean(named()));
+    expect(state.accounts).toBe("answered");
+    expect(named()?.textContent).toBe("Connect Claude or Codex first.");
+    expect(host.querySelector("[data-onboarding-orchestrator-runs-on]")).toBeNull();
+    flushSync(() => root.unmount());
+
+    /* The other order: the accounts read has answered with no engine and the roles read has not. The row names the
+       missing engine without waiting for the roles. */
+    held = { roles: gate(), accounts: gate() };
+    rolesTaken = gate();
+    state = { roles: "unasked", accounts: "unasked" };
+    answerAccounts(none);
+    held.accounts.open();
+    root = createRoot(host);
+    flushSync(() => root.render(guide));
+    await until(() => Boolean(named()));
+    expect(state).toEqual({ roles: "held", accounts: "answered" });
+    expect(named()?.textContent).toBe("Connect Claude or Codex first.");
+    expect(host.querySelector("[data-onboarding-orchestrator-runs-on]")).toBeNull();
+  } finally {
+    held.roles.open();
+    held.accounts.open();
+    flushSync(() => root.unmount());
+    host.remove();
+    globalThis.fetch = real;
+    answerAccounts({ claude: { active: "", accounts: [] }, codex: { active: "", accounts: [] } });
+  }
 });
 
 test("slice 3: the Dictation menu mode shows the Voice step alone, without the step list or the footer", async () => {
@@ -1775,6 +1945,72 @@ test("the orchestrator step carries exactly one filled button, Create in the foo
     expect(host.querySelector("[data-onboarding-orchestrator]")!.querySelector("[data-onboarding-orchestrator-create]")).toBeNull();
     expect(Array.from(host.querySelectorAll("footer button")).map((button) => button.textContent)).toEqual(["Back", "Finish without it", "Create the orchestrator"]);
     /* A state with its own action in the body has no Create in the footer. */
+  } finally {
+    done();
+  }
+});
+
+/* The mapping's engine choice reads Antigravity's recorded sign-in. An `/api/accounts`
+   answer with no Antigravity section no longer reads as connected, every row on the
+   engine offers Sign in, and that action lands on the engine's own card. */
+async function openMappingOnAntigravity() {
+  const { mergeRoleDefinitions } = await import("@/lib/roles/store");
+  const { ENGINE_MODELS } = await import("@/lib/agent/models");
+  const roles = mergeRoleDefinitions({}).map((role) => ({ ...role, promptPreview: role.promptScaffold, shipped: { config: role.config } }))
+    .map((role) => role.id === "builder" ? { ...role, config: { engine: "antigravity" as const, model: ENGINE_MODELS.antigravity[0]!.id, effort: "high" } } : role);
+  rolesBody = { roles };
+  answerAccounts({ claude: { active: "default", cli: "found", accounts: [signedIn("default", "Main")] }, codex: { active: "default", cli: "found", accounts: [signedIn("default", "Main")] } });
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  flushSync(() => root.render(<OnboardingDialog mode="mapping" marker={null} onClose={() => {}} />));
+  await until(() => Boolean(host.querySelector("[data-mapping-row='builder']")));
+  return { host, done: () => { flushSync(() => root.unmount()); host.remove(); agyBody = null; rolesBody = { roles: [] }; } };
+}
+
+test("Antigravity is not connected just because the accounts read has no section for it", async () => {
+  const { host, done } = await openMappingOnAntigravity();
+  try {
+    await until(() => Boolean(host.querySelector("[data-mapping-row='builder'] [data-mapping-connect=antigravity]")));
+    const row = host.querySelector("[data-mapping-row='builder']")!;
+    expect(row.getAttribute("data-mapping-blocked")).toBe("");
+    expect(row.querySelector("[data-mapping-connect=antigravity]")?.textContent).toBe("Sign in");
+    expect(row.querySelector("[data-engine-segment=antigravity] [data-engine-state-dot]")).not.toBeNull();
+  } finally {
+    done();
+  }
+});
+
+test("a signed-in Antigravity reads connected in the mapping, and a missing agy reads How to install", async () => {
+  agyBody = { cli: "found", active: "default", accounts: [{ id: "default", label: "Default", kind: "legacy", auth: "signed_in", plan: "Google AI Pro", checkedAt: null, authPresent: true }] };
+  const connected = await openMappingOnAntigravity();
+  try {
+    await until(() => connected.host.querySelector("[data-mapping-row='builder']")?.getAttribute("data-mapping-blocked") === null);
+    expect(connected.host.querySelector("[data-mapping-connect]")).toBeNull();
+  } finally {
+    connected.done();
+  }
+  agyBody = { cli: "missing", active: "default", accounts: [{ id: "default", label: "Default", kind: "legacy", auth: "unknown", plan: null, checkedAt: null, authPresent: false }] };
+  const missing = await openMappingOnAntigravity();
+  try {
+    await until(() => Boolean(missing.host.querySelector("[data-mapping-row='builder'] [data-mapping-connect=antigravity]")));
+    expect(missing.host.querySelector("[data-mapping-row='builder'] [data-mapping-connect=antigravity]")?.textContent).toBe("How to install");
+  } finally {
+    missing.done();
+  }
+});
+
+test("Sign in on an Antigravity row opens the Engines step on the Antigravity card with focus inside it", async () => {
+  agyBody = { cli: "found", active: "default", accounts: [{ id: "default", label: "Default", kind: "legacy", auth: "signed_out", plan: null, checkedAt: null, authPresent: false }] };
+  const { host, done } = await openMappingOnAntigravity();
+  try {
+    await until(() => Boolean(host.querySelector("[data-mapping-connect=antigravity]")));
+    flushSync(() => (host.querySelector("[data-mapping-row='builder'] [data-mapping-connect=antigravity]") as HTMLElement).click());
+    await until(() => host.querySelector("[data-onboarding-engine=antigravity] [data-antigravity-check]") === document.activeElement && document.activeElement !== null);
+    expect(host.querySelector("[data-onboarding-dialog]")?.getAttribute("data-onboarding-current")).toBe("engines");
+    const card = host.querySelector("[data-onboarding-engine=antigravity]")!;
+    expect(card.getAttribute("data-engine-state")).toBe("signed-out");
+    expect(card.contains(document.activeElement)).toBe(true);
   } finally {
     done();
   }

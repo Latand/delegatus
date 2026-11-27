@@ -16,6 +16,7 @@ import { onboardingStepLists, ONBOARDING_OPTIONAL_STEP_IDS, ONBOARDING_STEP_IDS,
 import type { RoleEngine } from "@/lib/roles/types";
 
 import { AgentMappingTable, type EngineStatus } from "./AgentMappingTable";
+import { useAntigravityAccount } from "./AntigravityCard";
 import { CheckStep } from "./CheckStep";
 import { engineAccount, engineReady, EnginesStep, type CliPresence } from "./EnginesStep";
 import { MemoryStep } from "./MemoryStep";
@@ -26,6 +27,7 @@ import { ProjectStep, type GuideProject } from "./ProjectStep";
 import { RelayStep } from "./RelayStep";
 import { TelegramReportsStep } from "./TelegramReportsStep";
 import type { MemorySourceState } from "@/components/memory/MemorySourceRow";
+import { TelemetryNoticeSlot } from "@/components/telemetry/TelemetrySettings";
 import { putOnboarding, unfinishedFirstRun, useOnboarding, type OnboardingMarkerStatus, type OnboardingMode } from "./useOnboarding";
 import { VoiceStep } from "./VoiceStep";
 
@@ -150,6 +152,9 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
   const claude = useEngineAccounts("claude");
   const codex = useEngineAccounts("codex");
   const { cli, recheck } = useCliPresence();
+  /* Antigravity's recorded sign-in, with one check when `agy` is installed and nothing has recorded it. */
+  const antigravity = useAntigravityAccount({ autoProbe: true });
+  const agyCli = cli.antigravity ?? antigravity.cli;
   const now = useNow();
   const [view, setView] = useState<OnboardingMode>(mode);
   /* One read of the bot per opening of the guide. The step lists are fixed by
@@ -270,7 +275,8 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
   const statuses: Record<RoleEngine, EngineStatus> = {
     claude: { connected: engineReady(claude, cli.claude), missing: cli.claude === "missing", account: engineAccount(claude) },
     codex: { connected: engineReady(codex, cli.codex), missing: cli.codex === "missing", account: engineAccount(codex) },
-    antigravity: { connected: cli.antigravity !== "missing", missing: cli.antigravity === "missing", account: null },
+    /* Signed in is what a check or a launch observed; `agy` being installed proves nothing about its Google sign-in. */
+    antigravity: { connected: agyCli === "found" && antigravity.auth === "signed_in", missing: agyCli === "missing", account: null },
   };
   /* A visited Engines step earns its check only when an engine can run; with
      none it carries the warning its own screen shows. */
@@ -379,11 +385,26 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
     recheck();
     void claude.refresh();
     void codex.refresh();
+    void antigravity.reload();
   };
-  const onConnect = () => {
+  /* The mapping's sign-in / install actions land on the engine's own card: the Engines step, scrolled to it, its first control focused. */
+  const [connectFocus, setConnectFocus] = useState<RoleEngine | null>(null);
+  const onConnect = (engine: RoleEngine) => {
     setView("guide");
     goTo("engines");
+    setConnectFocus(engine);
   };
+  useEffect(() => {
+    if (!connectFocus || current !== "engines" || view !== "guide") return;
+    const card = panelRef.current?.querySelector<HTMLElement>(`[data-onboarding-engine="${connectFocus}"]`);
+    if (!card) return;
+    /* The card's own action first (Check sign-in, Check again), else its first control; a card still loading has none and is tried again when it settles. */
+    const control = card.querySelector<HTMLElement>("[data-antigravity-check], [data-onboarding-recheck]") ?? card.querySelector<HTMLElement>("button:not([disabled]), a[href], input, select");
+    if (!control) return;
+    card.scrollIntoView?.({ block: "nearest" });
+    control.focus({ preventScroll: true });
+    setConnectFocus(null);
+  }, [connectFocus, current, view, claude.status, codex.status, agyCli, antigravity.loaded]);
   const dismiss = () => onClose("dismissed", undefined, noticeSeen.current);
   useEffect(() => { dismissRef.current = dismiss; });
 
@@ -437,7 +458,7 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
       newcomer={unfinishedFirstRun(marker, markerStatus)}
     />
   ) : (
-    <EnginesStep claude={claude} codex={codex} cli={cli} now={now} onRecheck={recheckAll} />
+    <EnginesStep claude={claude} codex={codex} antigravity={antigravity} cli={cli} now={now} onRecheck={recheckAll} />
   );
 
   const stepRow = (id: OnboardingStepId, index: number | null) => {
@@ -575,6 +596,7 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
           {heading}
           <div className={heading ? "mt-4" : ""}>{content}</div>
         </div>
+        <TelemetryNoticeSlot />
         {footerButtons ? (
           <footer className="flex shrink-0 flex-wrap gap-2 border-t border-border bg-raised px-4 pb-[calc(10px+env(safe-area-inset-bottom))] pt-2.5">
             {footerButtons}
@@ -619,6 +641,8 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
             <div className={heading ? "mt-4" : ""}>{content}</div>
           </div>
         </div>
+        {/* The install notice, while it is undismissed: drawn here, it leaves the footer's buttons whole. */}
+        <TelemetryNoticeSlot />
         {footerButtons ? (
           <footer className="flex h-[60px] shrink-0 items-center justify-end gap-2 border-t border-border bg-raised px-4">
             {/* Between 640 and 860 px the orchestrator step needs the row for its buttons. */}

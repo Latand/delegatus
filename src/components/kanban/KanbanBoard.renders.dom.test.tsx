@@ -4,7 +4,9 @@ import { memo, type ComponentProps } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
+import { conversationNeed } from "@/components/attention/needReason";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
+import type { FileEntry } from "@/lib/types";
 
 import type { KanbanBoardProps } from "./KanbanBoard";
 import type { TaskMutationPorts } from "./useTaskMutations";
@@ -50,10 +52,12 @@ const actualCards = await import("./KanbanCard");
 /* `mock.module` rewrites the module's live bindings, so the real card is held here before it does. */
 const RealCard = actualCards.KanbanCard;
 const rendered: string[] = [];
+const lastProps = new Map<string, ComponentProps<typeof actualCards.KanbanCard>>();
 /* A render loop fails here at once, instead of growing until the machine gives out. */
 const RENDER_CEILING = 600;
 const CountedCard = memo(function CountedCard(props: ComponentProps<typeof actualCards.KanbanCard>) {
   rendered.push(props.card.id);
+  lastProps.set(props.card.id, props);
   if (rendered.length > RENDER_CEILING) throw new Error(`more than ${RENDER_CEILING} card renders in one test: a render loop`);
   return <RealCard {...props} />;
 });
@@ -67,6 +71,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) flushSync(() => root.unmount());
   document.body.replaceChildren();
   rendered.length = 0;
+  lastProps.clear();
 });
 
 const NO_PORTS: TaskMutationPorts = { patch: async () => ({ ok: false, status: 500, error: "unused" }), read: async () => null, changed: () => {} };
@@ -249,4 +254,28 @@ test("a task that moves to another column still flies there, and only that card 
   } finally {
     spy.restore();
   }
+});
+
+/* The dashboard builds `onConversationOpened` on every render, and a neighbour
+   session's event re-renders it (#4285). */
+test("a new reader callback from the page renders no card, and «Answer» reaches the newest one", () => {
+  const tasks = Array.from({ length: 10 }, (_, index) => task(index));
+  const opened: string[] = [];
+  const { host, render } = mount(tasks);
+  render(tasks, { onConversationOpened: () => { opened.push("superseded"); } });
+  const held = lastProps.get("task:t1")!;
+  expect(held.onAnswerCard).toBeDefined();
+  rendered.length = 0;
+  render(answer(tasks), { onConversationOpened: (path) => { opened.push(path); } });
+  expect(rendered).toEqual([]);
+  const since = 1_800_000_000 - 1;
+  const asking: FileEntry = { path: "/fixture/question.jsonl", project: "fixture", name: "question", title: "Question", engine: "claude",
+    root: "claude-projects", fmt: "claude", kind: "session", parent: null, conversationId: "question", mtime: since, size: 1,
+    proc: "running", pid: null, model: null, activity: "live", pendingQuestion: null,
+    waitingInput: { since, target: "%1", screenTail: "Continue?", menu: null } };
+  const need = conversationNeed(asking, 1_800_000_000)?.need;
+  if (need?.subject !== "conversation") throw new Error("the fixture conversation must be waiting for an answer");
+  flushSync(() => held.onAnswerCard!(held.card, { owner: "you", subject: { kind: "conversation", need }, lanes: [], sinceMs: need.since * 1000 },
+    host.querySelector<HTMLElement>('.card[data-id="task:t1"]')!));
+  expect(opened).toEqual([asking.path]);
 });

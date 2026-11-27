@@ -1,8 +1,58 @@
 # A cleaner agent that removes provably dead temporary work
 
-Status: design. Read-only investigation of `main` at `cb408fce` (2026-11-12). No product
-code changed, nothing on any machine deleted, stopped or modified. Written for the
-build, review and fix stages of this lane; the reviewers judge the build against it.
+The serving Viewer implements the pressure-triggered server pass described below.
+The numbered sections retain the broader November 12 design, including its
+proposed agent tools, daily schedule and approval flow.
+
+## Automatic pressure pass
+
+The serving Viewer's disk watch starts the cleaner on any monitored warning
+or critical reading, or when an observed write volume has fewer bytes free
+than `LLV_CLEANER_FREE_GB` (decimal GB, default 150). The controller starts
+before the pressure observer finishes measuring its largest consumers. One
+async lease serializes passes across Viewer generations. A pass starts at
+most once per 15 minutes after the preceding pass finishes, including empty
+or interrupted passes. `LLV_CLEANER=dry-run` previews eligibility and
+`LLV_CLEANER=off` stops scheduling.
+
+The standing November 23 operator instruction grants automatic removal for
+three classes:
+
+- Registered attempt and stage scratch uses the attempt ledger, lane
+  retirement claim, identity checks and existing native remover. A lane's
+  completion or a standalone host's proved termination establishes ownership.
+  The owner's canonical project must match the pass at selection and at
+  dispatch. The minute worker continues its ordinary scratch expiry schedule,
+  and applies this same rule to every project when the ledger is over its cap
+  ([over-cap reclaim](attempt-temp-pressure.md#over-cap-reclaim)).
+  The tree must have been idle for three hours. Open and parked lanes,
+  checkout links, live process and container references, keep markers,
+  preservation records and unknown identities keep their data. A lane or live
+  conversation working inside a root, or in the scratch directory itself, holds
+  it; one working further up, such as in the home directory, does not.
+- The checkout install's release owner can remove a registered, verified
+  release beyond the newest 15. Serving, rollback, in-flight, locked or
+  dirty releases and revisions without a surviving Git ref are kept.
+  The existing release gate closes access to the quarantined tree before
+  the final process and owner checks. Interrupted release removal checks mount
+  boundaries after reopening the gate and at recursive removal dispatch.
+- Evidence retention removes ledger-bound captures after their seven-day
+  retention and file-age checks pass. Open tasks protect captures through
+  lane and launch membership or a stored path reference. This uses the
+  evidence owner's quarantine, identity and live-reference checks. A
+  quarantine retains its authorizing pass and proof through recovery so the
+  original audit and seat report can settle.
+
+The cleaner runs removal inside the leased retention workers and leaves
+unverifiable trees in place. A candidate kept on purpose, such as one with a
+keep marker, a link inside its tree or a changed identity, is listed with that
+reason; the pass's error count covers failures, including a removal that was
+interrupted and cannot finish. A durable journal under `state/disk-cleaner`
+records path, allocated bytes, class and proof before removal, followed by
+its observed outcome. An interrupted intent is reported as uncertain. The
+project's disk card and seat wake include the free-space readings, reclaimed
+allocation by class, largest observed holds and journal reference. Seat
+delivery follows the normal wake settings and receipt handling.
 
 ## 0. Originating requirement
 
@@ -100,6 +150,57 @@ as cwd, open file, exe, root, cmdline path, mapping or `HOME`/`TMPDIR`/`LLV_STAT
 conversation runs there (`:620-622`), no pipeline worktree overlaps it (`:762-776`), and it
 holds no `.delegatus-keep` (`:746`). Removal is journal-then-rename-then-recheck
 (`:410-445`).
+
+The same sweep considers private `agyc-*`, `agent-scratch-*` and `delegatus-local-gate-*`
+roots in temporary storage. Agent trees need a registry cwd with ended ownership
+recorded after the directory was created. Gate trees need the allocation journal, a matching
+directory identity and proof that the gate process and its supervisor ended. Both use
+the existing freshness, tree-preservation and live-process checks, including argv.
+Missing owner evidence and explicit gate retention keep the directory held. A gate trash
+whose interrupted removal already took the allocation record is finished from the
+journal, whose snapshot lists that record.
+
+Every candidate this sweep names (all of the above and `llv-*`) is also compared by
+device and inode before quarantine and again at removal (`src/lib/processFileIdentity.ts`).
+The identities come from each readable process's cwd, root, executable, descriptors,
+mappings and named paths, resolved under that process's own root. This finds a holder in
+another mount namespace or behind a bind mount that spells the path differently. A file
+with a second hard link counts only through a directory of the tree, so a package cache
+shared with a running process does not pin the tree. Processes of another user,
+container root included, stay unreadable. Registered attempt roots keep their own
+reference proof.
+
+A named path includes every absolute piece of a `:`-joined value, so a tree named
+only inside `PATH`, `LD_LIBRARY_PATH` or a volume argument such as `/tree:/data` is
+referenced.
+
+For the stray, agent and gate classes Docker's mount inventory covers the container
+processes that stay unreadable. Before quarantine and again on the quarantined tree,
+the attempt sweeps' rule (`containerMountHold`) holds a tree as `container_reference`
+when a running container mounts it or anything inside it, or mounts an ancestor at
+another destination; an ancestor the container sees at its own path holds nothing by
+itself. An inventory that cannot be read holds these classes as
+`container_inventory_unknown`, and the pass reports the cause once. A host without a
+`docker` command has nothing to ask. `llv-*` names get no container check here.
+
+A process of this user that refuses inspection (non-dumpable: `ssh-agent`, `gpg-agent`,
+`scdaemon`, or any program that clears its dumpable flag) shows only its command line.
+The scan keeps it with the paths that line names, so a tree named there is held for every
+class above and by the attempt ledger's reference proof. Its working directory, open
+files, mappings and environment cannot be read: a tree of the `llv-*`, agent or gate
+class that such a process uses only through those is not protected.
+
+The same sweep also takes **strays**: a private directory of this uid, of any name,
+directly in `/tmp` or `/var/tmp`, older than 12 h by its newest write, outside the
+keep-list (which holds `delegatus-gate-record-*`, the journal that proves a gate sandbox
+free), with no reference as above and no socket inside. Because of the blindness
+above, no stray is removed while a refusing process outside the known daemon list
+(`UNINSPECTABLE_DAEMONS`) runs, or while any refusing process, listed or not, names a
+path under `/tmp` or `/var/tmp`. Both hold every candidate as `process-scan-unverified`;
+a stray the command line names is held as `process_reference`.
+
+An interrupted removal that a later pass finishes gets one row in the sweep journal for
+the original path, marked `replay`, with the bytes that were left.
 
 Cannot prove, and holds or skips instead:
 

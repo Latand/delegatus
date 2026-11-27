@@ -11,7 +11,9 @@ import { installActEnv } from "@/test-helpers/actEnv";
  * The «Готово» feed in a hidden tab (docs/design/sound-redesign.md §4.3, §8):
  * S5 and the deploy and limit faults read it, so a hidden desktop tab keeps
  * reading it at its 30 s cadence and the sound reaches the operator working
- * elsewhere; a hidden phone reads nothing (#1994).
+ * elsewhere; a hidden phone reads nothing (#1994). The feed no longer counts
+ * in «Needs you» (docs/design/legatus/build-plan.md, slice 1), and its faults
+ * still sound with nothing on that list.
  */
 
 const dom = new HappyWindow({ url: "http://127.0.0.1:8899/" });
@@ -120,4 +122,17 @@ test("a visible tab keeps its tick", async () => {
   await settle();
   await tick();
   expect(reads).toBe(2);
+});
+
+test("with «Needs you» empty a failed deploy and an account limit from the feed still sound as faults", async () => {
+  mount();
+  await settle();
+  visibility = "hidden";
+  served = [
+    { key: "deploy:rel-2", kind: "deploy", at: new Date(Date.now()).toISOString(), refs: { phase: "failed" } } as unknown as DoneItemV1,
+    { key: "limit:codex:acct-b:session:1", kind: "limit", at: new Date(Date.now()).toISOString(), refs: { account: { engine: "codex", accountId: "acct-b", window: "session", label: "B" } } } as unknown as DoneItemV1,
+  ];
+  await tick();
+  await settle();
+  expect(played.map((request) => [request.cue, request.eventId])).toEqual([["fault", "done:deploy:rel-2"], ["fault", "done:limit:codex:acct-b:session:1"]]);
 });

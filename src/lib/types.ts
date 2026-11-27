@@ -459,6 +459,7 @@ export interface ProjectCatalogEntry {
 export interface FilesResponse {
   /** One waiting prototype review per task, for the orchestrator notice and needs-you count. */
   prototypeReviewNotices?: import("@/lib/prototypeReview/types").PrototypeReviewNotice[];
+  secretRequestNotices?: import("@/lib/secretRequests/view").SecretRequestNotice[];
   /** The orchestrators' own open questions, which no task carries. */
   seatDecisions?: import("@/lib/prototypeReview/types").PrototypeReviewNotice[];
   /** Board-only read: execution bodies remain on targeted full endpoints. */
@@ -717,6 +718,8 @@ export interface EngineLimits {
   /** Read compatibility for snapshots persisted before tier lists. */
   flagship?: TierLimitWindow | null;
   plan: string | null;
+  /** Provider rate tier when reported separately from the subscription name. */
+  planTier?: string;
   /** Unix seconds of the oldest selected window observation. Null means the
       provider supplied no observation clock. */
   capturedAt: number | null;
@@ -794,6 +797,10 @@ export interface BurndownSeries {
       e.g. a Codex plan that reports only a weekly limit. The chart then names
       that reason instead of the generic "no history yet" (issue #606). */
   windowUnreported?: boolean;
+  /** The newest observation of this window, even when it falls before the
+      current window (the quota was read, then the window rolled over). The chart
+      tells "reset since the last reading" from "never observed" by it. */
+  lastReading?: LimitSample | null;
 }
 
 /** Both windows' burndown series for one engine. */
@@ -907,6 +914,8 @@ export interface ResourcesPayload {
   agentState?: import("./agentState/model").AgentStateMetrics;
   /** Free space on the volumes Delegatus writes to, and the open pressure episode. */
   diskPressure?: import("./state/diskPressure").DiskPressure;
+  /** RAM and swap use, the tmpfs /tmp, and the open memory pressure episode. */
+  memoryPressure?: import("./state/memoryPressure").MemoryPressure;
   /** The last worktree sweep, counts and bytes per reason. */
   worktreeSweep?: ReturnType<typeof import("./pipelines/worktreeSweep").worktreeSweepStatus>;
   /** Release retention counts, reclaimed cache bytes and errors. */

@@ -740,9 +740,11 @@ describe("workspace authority", () => {
   test("the board projection removes foreign rows, aliases, names and navigation maps", () => {
     const files = ["alpha", "beta"].map(name => ({ ...catalogEntryToFileEntry({ path: `${root}/${name}.jsonl`, root: "codex-sessions", name, project: `repo-${name}`, title: name, firstPrompt: "", engine: "codex", kind: "session", fmt: "codex", mtime: now / 1000, size: 10 }, now), conversationId: `conversation_${name}` as const }));
     const source: FilesResponse = { files, tasks: [...loadTasksForList()], flows: [], pipelines: [], workflows: [], systemHealth: {}, projectCatalog: [], projectAliases: { "repo-alpha": "repo-beta" }, projectDisplayNames: { "repo-alpha": "alpha", "repo-beta": "beta" }, conversationAliases: { hidden: "conversation_beta" }, launchRoutes: { hidden: "conversation_beta" }, projectCwds: { "repo-alpha": "alpha", "repo-beta": "beta" }, crownedProjects: ["repo-alpha", "repo-beta"] };
+    source.secretRequestNotices = [{ id: "secret-fixture", project: "repo-alpha", createdAt: 1, expiresAt: 2, target: "entry" }];
     const result = workspaceFiles(workspaceScope(store, member.id), source);
     expect(result.files).toHaveLength(1);
     expect(result.tasks).toHaveLength(1);
+    expect(result).not.toHaveProperty("secretRequestNotices");
     expect(JSON.stringify(result)).not.toContain("beta");
     expect(workspaceFiles(workspaceScope(store, owner.id), source)).toBe(source);
   });
@@ -833,6 +835,11 @@ describe("workspace authority", () => {
     expect(teamGate(request("/", outsider), { bearerAuthenticated: false })?.headers.get("location")).toBe("http://localhost/team");
     expect(teamGate(request("/api/team", outsider), { bearerAuthenticated: false })).toBeNull();
     expect(teamGate(request("/api/files", outsider), { bearerAuthenticated: false })?.status).toBe(403);
+  });
+
+  test("ChatGPT plan status reaches workspace members through the production team gate", () => {
+    expect(WORKSPACE_ROUTES["/api/chatgpt-plan"]).toBe("team");
+    expect(teamGate(request("/api/chatgpt-plan", member), { bearerAuthenticated: false })).toBeNull();
   });
 
   test("placement changes apply on the next request and after reopening the store", async () => {

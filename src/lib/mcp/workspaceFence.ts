@@ -53,11 +53,11 @@ const TASKS = new Set(["taskId", "taskIds", "parentTaskId", "sourceTaskId", "fin
 const PIPELINES = new Set(["pipelineId", "sourcePipelineId"]);
 
 /** Checks also surround bindings, including their HTTP dispatch after preparation. */
-export function workspaceGuardedBindings(bindings: McpToolBindings): McpToolBindings {
+export function workspaceGuardedBindings(bindings: McpToolBindings, receiptIdentity?: () => string): McpToolBindings {
   return Object.fromEntries(Object.entries(bindings).map(([name, binding]) => [name, Object.assign((...args: Parameters<typeof binding>) => {
     assertWorkspaceMcpCall();
     return binding(...args);
-  }, binding)])) as McpToolBindings;
+  }, binding, { receiptIdentity })])) as McpToolBindings;
 }
 
 export function withWorkspaceMcpFence(
@@ -90,7 +90,7 @@ export function withWorkspaceMcpFence(
     const boardRead = tool === "list_tasks" || tool === "list_pipelines";
     try {
       if (ROUTE_FENCED_TOOLS.has(tool)) {
-        const replay = await service.replayTool?.(tool, input);
+        const replay = await service.replayTool?.(tool, input, context);
         if (replay) return replay;
       }
       const store = existingTeamStore();

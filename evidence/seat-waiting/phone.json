@@ -1,0 +1,173 @@
+{
+  "readings": {
+    "en-light-bar": {
+      "text": "waiting · 17m ago",
+      "cut": false,
+      "inside": true
+    },
+    "en-light-switcher": {
+      "text": "waiting · 17m ago",
+      "tone": "neutral",
+      "cut": false,
+      "inside": true
+    },
+    "en-light-menu": {
+      "text": "waiting · 17m ago",
+      "tone": "neutral",
+      "cut": false,
+      "inside": true
+    },
+    "en-light-idle-card": {
+      "text": "waiting · 17m ago",
+      "tone": "neutral",
+      "cut": false,
+      "inside": true
+    },
+    "en-light-idle-sheet": {
+      "text": "waiting · 17m ago",
+      "tone": "neutral",
+      "cut": false,
+      "inside": true
+    },
+    "en-light-running-card": {
+      "text": "working 6:40",
+      "tone": "success",
+      "cut": false,
+      "inside": true
+    },
+    "en-light-running-sheet": {
+      "text": "working 6:40",
+      "tone": "success",
+      "cut": false,
+      "inside": true
+    },
+    "en-light-running": "working 6:41",
+    "en-dark-bar": {
+      "text": "waiting · 17m ago",
+      "cut": false,
+      "inside": true
+    },
+    "en-dark-switcher": {
+      "text": "waiting · 17m ago",
+      "tone": "neutral",
+      "cut": false,
+      "inside": true
+    },
+    "en-dark-menu": {
+      "text": "waiting · 17m ago",
+      "tone": "neutral",
+      "cut": false,
+      "inside": true
+    },
+    "en-dark-idle-card": {
+      "text": "waiting · 17m ago",
+      "tone": "neutral",
+      "cut": false,
+      "inside": true
+    },
+    "en-dark-idle-sheet": {
+      "text": "waiting · 17m ago",
+      "tone": "neutral",
+      "cut": false,
+      "inside": true
+    },
+    "en-dark-running-card": {
+      "text": "working 6:40",
+      "tone": "success",
+      "cut": false,
+      "inside": true
+    },
+    "en-dark-running-sheet": {
+      "text": "working 6:40",
+      "tone": "success",
+      "cut": false,
+      "inside": true
+    },
+    "en-dark-running": "working 6:41",
+    "uk-light-bar": {
+      "text": "чекає · 17 хв тому",
+      "cut": false,
+      "inside": true
+    },
+    "uk-light-switcher": {
+      "text": "чекає · 17 хв тому",
+      "tone": "neutral",
+      "cut": false,
+      "inside": true
+    },
+    "uk-light-menu": {
+      "text": "чекає · 17 хв тому",
+      "tone": "neutral",
+      "cut": false,
+      "inside": true
+    },
+    "uk-light-idle-card": {
+      "text": "чекає · 17 хв тому",
+      "tone": "neutral",
+      "cut": false,
+      "inside": true
+    },
+    "uk-light-idle-sheet": {
+      "text": "чекає · 17 хв тому",
+      "tone": "neutral",
+      "cut": false,
+      "inside": true
+    },
+    "uk-light-running-card": {
+      "text": "працює 6:40",
+      "tone": "success",
+      "cut": false,
+      "inside": true
+    },
+    "uk-light-running-sheet": {
+      "text": "працює 6:40",
+      "tone": "success",
+      "cut": false,
+      "inside": true
+    },
+    "uk-light-running": "працює 6:41",
+    "uk-dark-bar": {
+      "text": "чекає · 17 хв тому",
+      "cut": false,
+      "inside": true
+    },
+    "uk-dark-switcher": {
+      "text": "чекає · 17 хв тому",
+      "tone": "neutral",
+      "cut": false,
+      "inside": true
+    },
+    "uk-dark-menu": {
+      "text": "чекає · 17 хв тому",
+      "tone": "neutral",
+      "cut": false,
+      "inside": true
+    },
+    "uk-dark-idle-card": {
+      "text": "чекає · 17 хв тому",
+      "tone": "neutral",
+      "cut": false,
+      "inside": true
+    },
+    "uk-dark-idle-sheet": {
+      "text": "чекає · 17 хв тому",
+      "tone": "neutral",
+      "cut": false,
+      "inside": true
+    },
+    "uk-dark-running-card": {
+      "text": "працює 6:40",
+      "tone": "success",
+      "cut": false,
+      "inside": true
+    },
+    "uk-dark-running-sheet": {
+      "text": "працює 6:40",
+      "tone": "success",
+      "cut": false,
+      "inside": true
+    },
+    "uk-dark-running": "працює 6:41"
+  },
+  "failures": []
+}

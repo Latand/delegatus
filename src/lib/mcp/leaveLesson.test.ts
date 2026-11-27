@@ -2,6 +2,8 @@ import { afterAll, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Database } from "bun:sqlite";
+import { confirmMemoryDelivery, type MemoryDeliveryReceipt } from "@/lib/memory/deliveryLedger";
 
 /* leave_lesson and the lesson request on stage_report, through the MCP service
    with the server's own attribution stubbed; the state directory is private. */
@@ -92,7 +94,7 @@ test("leave_lesson is a registered, mutating tool with a bounded schema", () => 
   expect(TOOL_INPUT_SCHEMAS.leave_lesson.safeParse({ clientRequestId: "x", lesson: { scope: "team", rule: RULE, why: "w" } }).success).toBe(false);
 });
 
-test("applied and misled accept only rules this attempt received, including on a none answer", async () => {
+test("a stage reports applied and misled from a legacy delivery for its own attempt", async () => {
   const { learnedRulesForLaunchProfile } = await import("@/lib/memory/roleLaunch");
   const { roleMemoryCollection, lessonRequest } = await import("@/lib/memory/roleStore");
   const record = pipeline();
@@ -102,7 +104,14 @@ test("applied and misled accept only rules this attempt received, including on a
     for (const id of ids) tx.put({ kind: "rule", id, scope, rule: `Check durable ownership before replaying persisted receipts for ${id.at(-1)}.`, why: "An earlier replay accepted a receipt from another owner.", state: "active", hints: [], source: { project: PROJECT, pipelineId: "seed", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "seed" }, createdAt: "2026-10-22T00:00:00.000Z", changedAt: "2026-10-22T00:00:00.000Z" });
     tx.put({ kind: "scope", scope, revision: 1, active: ids, history: [] });
   });
-  await learnedRulesForLaunchProfile({ learnedRules: { project: PROJECT, roleId: "builder" } }, { engine: "codex", conversationId: "conversation_fix", cwd: process.env.LLV_STATE_DIR!, nativeMemoryEnabled: false, attempt: { pipelineId: record.id, stageId: "fix", attempt: 1 } });
+  let receipt: MemoryDeliveryReceipt | undefined;
+  const block = await learnedRulesForLaunchProfile({ learnedRules: { project: PROJECT, roleId: "builder" } }, { engine: "codex", conversationId: "conversation_fix", cwd: process.env.LLV_STATE_DIR!, nativeMemoryEnabled: false, attempt: { pipelineId: record.id, stageId: "fix", attempt: 1 } }, value => { receipt = value; });
+  for (const id of ids) expect(block).toContain(id);
+  const ledger = new Database(path.join(process.env.LLV_STATE_DIR!, "role-memory", "delivery.sqlite"));
+  try {
+    expect(ledger.query("UPDATE deliveries SET body=json_remove(body,'$.confirmed','$.receiptToken') WHERE sequence=?")
+      .run(receipt!.sequence).changes).toBe(1);
+  } finally { ledger.close(); }
   const api = serviceAs("conversation_fix", false, record);
   await api.callTool("stage_report", { clientRequestId: "usage-report", verdict: "pass" });
   const none = "The existing guidance covers this task.";
@@ -112,7 +121,9 @@ test("applied and misled accept only rules this attempt received, including on a
     tx.put({ ...current, id: "r_00000000000000ff" });
     tx.put({ kind: "scope", scope, revision: 2, active: [...ids, "r_00000000000000ff"], history: [] });
   });
-  await learnedRulesForLaunchProfile({ learnedRules: { project: PROJECT, roleId: "builder" } }, { engine: "codex", conversationId: "conversation_fix", cwd: process.env.LLV_STATE_DIR!, nativeMemoryEnabled: false, attempt: { pipelineId: record.id, stageId: "fix", attempt: 2 } });
+  const laterBlock = await learnedRulesForLaunchProfile({ learnedRules: { project: PROJECT, roleId: "builder" } }, { engine: "codex", conversationId: "conversation_fix", cwd: process.env.LLV_STATE_DIR!, nativeMemoryEnabled: false, attempt: { pipelineId: record.id, stageId: "fix", attempt: 2 } }, value => { receipt = value; });
+  expect(laterBlock).toContain("r_00000000000000ff");
+  await confirmMemoryDelivery(receipt);
   for (const [index, invalid] of [
     { applied: ids[0] }, { applied: [ids[0], ids[0]] }, { misled: Array(6).fill(ids[1]) }, { applied: [0] },
   ].entries()) expect(await api.callTool("leave_lesson", { clientRequestId: `usage-invalid-${index}`, none, ...invalid })).toMatchObject({ ok: false });
@@ -131,7 +142,9 @@ test.each(["lesson", "rewrite", "problem"] as const)("a %s answer preserves opti
   const added = leaveLessons({ source, request: source, lessons: [{ scope: "role", rule: "Verify all persisted owner fields before replaying an acknowledgement.", why: "An earlier replay accepted the wrong owner." }], none: null }).left[0];
   const id = added.mergedInto ?? added.id;
   const record = pipeline();
-  await learnedRulesForLaunchProfile({ learnedRules: { project: PROJECT, roleId: "builder" } }, { engine: "codex", conversationId: "conversation_fix", cwd: process.env.LLV_STATE_DIR!, nativeMemoryEnabled: false, attempt: { pipelineId: record.id, stageId: "fix", attempt: 1 } });
+  let receipt: MemoryDeliveryReceipt | undefined;
+  await learnedRulesForLaunchProfile({ learnedRules: { project: PROJECT, roleId: "builder" } }, { engine: "codex", conversationId: "conversation_fix", cwd: process.env.LLV_STATE_DIR!, nativeMemoryEnabled: false, attempt: { pipelineId: record.id, stageId: "fix", attempt: 1 } }, value => { receipt = value; });
+  await confirmMemoryDelivery(receipt);
   const api = serviceAs("conversation_fix", false, record);
   await api.callTool("stage_report", { clientRequestId: "usage-kind-report", verdict: "pass" });
   const answer = kind === "problem" ? { problem: { statement: "A retained operation is missing its ownership record.", evidence: "The isolated fixture reproduced the missing owner." } }

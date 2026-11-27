@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { costByKind, costByModel, estimateCost, priceTier, PRICE_TABLE_DATE, tokenCost, tokenRate } from "./tokenPrices";
+import { costByKind, costByModel, estimateCost, priceTier, PRICE_TABLE_DATE, pricingDateAt, tokenCost, tokenRate } from "./tokenPrices";
 import { CLAUDE_ALIAS_RELEASES } from "@/lib/agent/models";
 import type { TokenCounts } from "./tokenUsage";
 
@@ -59,10 +59,29 @@ test("tiers map recorded speeds and service tiers; an unknown tier has no price"
   expect(tokenCost("claude-sonnet-5-5", "fast", million({ input: 1e6 }))).toBeNull();
 });
 
+test("pricing cutovers use Pacific dates and indexed timelines retain all published cache rates", () => {
+  const before = Date.parse("2027-03-01T07:59:00Z");
+  const after = Date.parse("2027-03-01T08:01:00Z");
+  expect(pricingDateAt(before)).toBe("2027-02-28");
+  expect(pricingDateAt(after)).toBe("2027-03-01");
+  expect(tokenRate("gpt-6.2-astra", "ultrafast", pricingDateAt(before))?.input).toBe(24);
+  expect(tokenRate("gpt-6.2-astra", "ultrafast", pricingDateAt(after))?.input).toBe(48);
+  expect(tokenRate("gpt-6.2-astra", "standard", "2027-02-28")?.cacheWrite).toBe(10);
+  expect(tokenRate("gpt-6.1-sol", "standard", "2026-11-26")?.cacheWrite1h).toBe(5);
+});
+
 test("dated snapshot ids price as their model; unknown and synthetic models read as unpriced", () => {
   expect(tokenCost("claude-haiku-4-5-20251001", "standard", million({ input: 1e6 }))).toBe(1);
   expect(tokenCost("unknown", "standard", million({ input: 1e6 }))).toBeNull();
   expect(tokenCost("fixture-model", "standard", million({ input: 1e6 }))).toBeNull();
+});
+
+test("Codex cache writes and Flex Terra have their published API equivalents; expired promotions use no rate", () => {
+  const cached = million({ cacheWrite: 1e6, cacheWrite1h: 1e6 });
+  expect(tokenCost("gpt-6.2-sol", "standard", cached)).toBe(5);
+  expect(tokenCost("gpt-6.1-terra", "flex", million({ input: 1e6 }))).toBe(0.5);
+  expect(tokenCost("gpt-6.2-sol", "ultrafast", million({ input: 1e6 }), "2027-02-28")).toBe(6);
+  expect(tokenCost("gpt-6.2-sol", "ultrafast", million({ input: 1e6 }), "2027-03-01")).toBe(12);
 });
 
 test("an estimate sums priced rows and keeps unpriced counts and models apart", () => {

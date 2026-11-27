@@ -2,7 +2,6 @@
 
 import { CardStatusBadge } from "@/components/CardStatusBadge";
 import { rowStateWord } from "@/components/mobile/mobileBoardModel";
-import { isSettledLaunchPlaceholder } from "@/components/launchHistoryModel";
 
 import { Bot, Flag } from "lucide-react";
 import { memo, useRef, useState } from "react";
@@ -159,7 +158,7 @@ const MemberTile = memo(function MemberTile({ member, workspace, open, onOpen }:
   const parts = member.stage && place ? stageCardLabelParts(t, member.stage.stage, place) : null;
   const engine = member.file.engine === "claude" || member.file.engine === "codex" || member.file.engine === "antigravity" ? engineWord(member.file.engine) : null;
   const hint = member.stage && place ? stageLabelTitle(t, member.stage.stage, place, engine) : undefined;
-  const state = rowStateWord(t, { key: member.state, activity: member.activity, settledLaunch: isSettledLaunchPlaceholder(member.file) });
+  const state = rowStateWord(t, { key: member.state, activity: member.activity });
   const stateClass = member.needsYou ? "needs" : member.working ? "working" : member.state;
   return (
     <button
@@ -476,7 +475,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   /* A card that waits with no reason of its own waits on its prototype
      review: its review button says so in words, and the card's label names
      it for assistive tech. The choice clears it, so there is no dismissal. */
-  const reasons = !card.needsYou ? "" : card.reasons.length ? reasonsText(t, card.reasons) : t(card.task?.prototypeReview?.asks === "questions" ? "proto.notice.questions" : "proto.notice.ready");
+  const reasons = card.reasons.length ? reasonsText(t, card.reasons) : !card.needsYou ? "" : t(card.task?.prototypeReview?.asks === "questions" ? "proto.notice.questions" : "proto.notice.ready");
   const remote = card.task ? props.remote ?? null : null;
   const aria = [title, statusText, card.working ? t("kanban.activityWorking", { count: card.working }) : "", reasons, collapsed ? t("kanban.collapsed") : "", remote ? t("kanban.remote.hint", { host: remote.host }) : ""]
     .filter(Boolean)
@@ -486,7 +485,8 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
      state word on its tile and no longer colours the card. */
   const attention = card.motion.key === "needs-you" ? "needs" : undefined;
   /* The flag's Dismiss and its Undo live in the card's ⋯ (§2.2). */
-  const dismissable = (card.needsYou && card.reasons.length > 0) || (!card.needsYou && card.cleared.length > 0);
+  /* A stuck delivery is a reason too, so it dismisses though it owes no answer. */
+  const dismissable = card.reasons.length > 0 || (!card.needsYou && card.cleared.length > 0);
   /* Who has the card now (§5): the state line, the dot and «Answer» read it. */
   const state = cardState(card, nowMs / 1000);
   const answers = collapsed && cardAnswers(state) && props.onAnswerCard ? props.onAnswerCard : null;

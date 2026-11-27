@@ -28,6 +28,8 @@ import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
 import { contextReading, readOrchestratorTranscriptFacts } from "@/lib/orchestrator/health";
 import type { SeatContextUsage } from "./seatAutoRotation";
 import { readDiskPressure, diskPressureLabel, diskPressureWakeReady, type DiskPressure } from "@/lib/state/diskPressure";
+import { currentMemoryPressure, memoryPressureLine, memoryPressureSignals, type MemoryPressure } from "@/lib/state/memoryPressure";
+import { tempSweepStatus } from "@/lib/tempSweep";
 import { maintenanceRuns } from "@/lib/boardMaintenance/store";
 import { memoryProblemSignals, prepareMemoryProblemRead } from "@/lib/memory/roleProblems";
 import { acknowledgeCurationNoAccountWarning, curationNoAccountWarning } from "@/lib/memory/curation/store";
@@ -67,6 +69,7 @@ import { recordDeploySnapshots } from "@/lib/bridge/taskChanges";
 import type { SeatTickReportLog } from "./seatTickReports";
 import { operatorLocale } from "@/lib/operator/settings";
 import { bridgeReportsEnabled } from "@/lib/projects/settings";
+import { diskCleanerSignals } from "@/lib/cleaner/diskReport";
 import { viewerRepositoryProjects } from "@/lib/projects/viewerRepository";
 import viewerPackageManifest from "../../../package.json";
 import type { AgentLivenessRecord } from "@/lib/lifecycle/liveness";
@@ -558,6 +561,10 @@ export interface SeatTickSources {
   reviveSeatHost?: import("./seatHostRecovery").SeatHostRevival;
   seatContextUsage?: (conversationId: string) => SeatContextUsage | null;
   diskPressure?: () => Promise<DiskPressure>;
+  /** RAM, swap and the tmpfs /tmp; absent reads as no machine line. */
+  memoryPressure?: () => MemoryPressure | null;
+  /** The last temp sweep's stray counts, for the machine line. */
+  tempSweep?: () => ReturnType<typeof tempSweepStatus>;
   maintenanceRuns?: (project: string) => readonly MaintenanceRun[];
   seatFor: typeof orchestratorSeatFor;
   /** Whether an orchestrator ever held the project (#2170). Absent: assumed,
@@ -866,6 +873,8 @@ export function defaultSeatTickSources(): SeatTickSources {
     deploymentByKey: findSeatDeploymentByKey,
     deployment: (deploymentId) => ledgerDeployment(deploymentId),
     diskPressure: () => readDiskPressure(),
+    memoryPressure: () => currentMemoryPressure(),
+    tempSweep: () => tempSweepStatus(),
     retirementReport: () => {
       const report = readJsonCache(statePath("host-retirement-report.json"));
       return report && typeof report === "object" ? report as StructuredHostRetirementReport : null;
@@ -1723,6 +1732,21 @@ function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatT
     found.push({ id: "seat-host", label: `the seat's own turn is ${seatActivity.lifecycle} in ${project} (${seatActivity.reason})` });
   }
   return found;
+}
+
+/** Read once per check; a failed read leaves the machine line and its item out. */
+function memoryPressureOf(sources: SeatTickSources): MemoryPressure | null {
+  try { return sources.memoryPressure?.() ?? null; } catch { return null; }
+}
+
+/** The wake's machine line: memory, swap, the tmpfs /tmp, and what the last
+    temp sweep removed from /tmp and /var/tmp. */
+export function seatTickMachineLine(pressure: MemoryPressure | null, sweep: ReturnType<typeof tempSweepStatus> | null | undefined): string | null {
+  if (!pressure) return null;
+  const stray = sweep?.stray;
+  return memoryPressureLine(pressure) + (stray && sweep
+    ? ` Last temp sweep at ${sweep.at}: removed ${stray.removed} stray director${stray.removed === 1 ? "y" : "ies"} older than ${stray.maxAgeHours} h from /tmp and /var/tmp (${(stray.removedBytes / 1e9).toFixed(2)} GB), ${stray.deferred} deferred.`
+    : "");
 }
 
 async function diskPressureSignals(sources: SeatTickSources): Promise<SeatTickSignalInput[]> {
@@ -3596,10 +3620,15 @@ async function gatherSeatTickInputWork(
   });
 
   await yieldToRuntime();
+  const memory = memoryPressureOf(sources);
+  let sweep: ReturnType<typeof tempSweepStatus> = null;
+  try { sweep = sources.tempSweep?.() ?? null; } catch { /* The line goes without the sweep. */ }
+  const machine = seatTickMachineLine(memory, sweep);
   const gathered: SeatTickCheckInput = {
     project: canonical,
     now,
     seat,
+    ...(machine ? { machine } : {}),
     workers: { ...(() => {
       const limit = effectiveWorkerLimit(canonical);
       return { limit: limit.value, source: limit.source, machine: limit.machine };
@@ -3618,7 +3647,7 @@ async function gatherSeatTickInputWork(
     pullRequestsUnavailable,
     pullRequestsObserved,
     pullRequestEvidenceKey: pullRequestEvidenceKeyAtRead,
-    signals: [...ledgerWarnings, ...signals(canonical, seat, sources, state.itemsShown ?? [], canonicalProject.keys(canonical)), ...(localPending ?? []), ...(sources.memoryProblems?.(canonical, state.itemsShown ?? [], seat?.conversationId ? seat : null) ?? []), ...await diskPressureSignals(sources)],
+    signals: [...ledgerWarnings, ...signals(canonical, seat, sources, state.itemsShown ?? [], canonicalProject.keys(canonical)), ...(localPending ?? []), ...(sources.memoryProblems?.(canonical, state.itemsShown ?? [], seat?.conversationId ? seat : null) ?? []), ...await diskPressureSignals(sources), ...await diskCleanerSignals(canonical, state.itemsShown ?? [], seat), ...memoryPressureSignals(memory)],
     ownLanes,
     settledDeploys,
     settledMaintenance,

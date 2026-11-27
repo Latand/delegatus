@@ -22,12 +22,13 @@ import { EMPTY_FILES_WORK_LINKS, type FilesWorkLinks } from "@/lib/forge/workLin
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
+import type { SecretRequestNotice } from "@/lib/secretRequests/view";
 import type { StateWriteHealth } from "@/lib/state/diskFull";
 import type { FileEntry, FilesResponse, ProjectCatalogEntry } from "@/lib/types";
 import type { Workflow } from "@/lib/workflows/types";
 
 import { createBoundedPublisher, type BoundedPublisher } from "./boundedTransition";
-import { getRuntimeBus, isRuntimeUiEnabled } from "./runtimeBus";
+import { getRuntimeBus, isRuntimeUiEnabled, type RuntimeFrame } from "./runtimeBus";
 
 /** The universal fallback cadence — also the only source for legacy sessions. */
 const POLL_MS = 10_000;
@@ -87,6 +88,7 @@ export interface FilesData {
   /** The orchestrators' own open questions, which no task carries
       (docs/design/operator-decision-forms.md §2.2). */
   seatDecisions?: PrototypeReviewNotice[];
+  secretRequestNotices?: SecretRequestNotice[];
   /** Set when the server's pipelines store failed closed for this poll. */
   pipelinesError?: string;
   systemHealth: FilesResponse["systemHealth"];
@@ -277,6 +279,7 @@ function parsedFilesData(parsed: FilesResponse | FileEntry[], requestScope: stri
     workflows: parsed.workflows ?? [],
     tasks: parsed.tasks ?? [],
     ...(parsed.seatDecisions?.length ? { seatDecisions: parsed.seatDecisions } : {}),
+    ...(parsed.secretRequestNotices?.length ? { secretRequestNotices: parsed.secretRequestNotices } : {}),
     pipelinesError: parsed.pipelinesError,
     systemHealth: parsed.systemHealth ?? HEALTHY_SYSTEM,
     conversationAliases: parsed.conversationAliases ?? {},
@@ -311,6 +314,7 @@ function patchFilesData(previous: FilesData, incoming: FilesData): FilesData {
     workflows: patchRows(previous.workflows, incoming.workflows, (workflow) => workflow.id),
     tasks: patchRows(previous.tasks, incoming.tasks, (task) => task.id),
     ...(incoming.seatDecisions ? { seatDecisions: equalValue(previous.seatDecisions, incoming.seatDecisions) ? previous.seatDecisions : incoming.seatDecisions } : {}),
+    ...(incoming.secretRequestNotices ? { secretRequestNotices: equalValue(previous.secretRequestNotices, incoming.secretRequestNotices) ? previous.secretRequestNotices : incoming.secretRequestNotices } : {}),
     systemHealth: equalValue(previous.systemHealth, incoming.systemHealth) ? previous.systemHealth : incoming.systemHealth,
     conversationAliases: equalValue(previous.conversationAliases, incoming.conversationAliases)
       ? previous.conversationAliases
@@ -872,6 +876,7 @@ export function createFilesClientCache(
           creationWritePending = true;
           creationWrites = creationWrites.then(async () => {
             if (!ownsCreation(generation) || !store?.updateCreations) return;
+            if (global.raw.secretRequestNotices) return;
             await store.updateCreations(authority!.owner, [], materialized, () => ownsCreation(generation),
               { version: FILES_SNAPSHOT_VERSION, savedAt: Date.now(), etag: global.etag, text: catalogText(global.raw) }, authority!.signature);
             if (!ownsCreation(generation)) return;
@@ -1558,7 +1563,7 @@ export function useMaterializedCreationIds(): readonly string[] {
 function persistFilesSnapshot(): void {
   const store = snapshotStore;
   const current = filesClientCache.certifiedGlobal();
-  if (!store || !current || current.etag === persistedEtag) return;
+  if (!store || !current || current.etag === persistedEtag || current.raw.secretRequestNotices) return;
   let text: string;
   try {
     text = catalogText(current.raw);
@@ -1776,7 +1781,29 @@ export function useFiles(project?: string | null, pinnedPath?: string | null): F
     let alive = true;
     const cache = filesClientCache;
     const bus = isRuntimeUiEnabled() && typeof window !== "undefined" ? getRuntimeBus() : null;
-    const currentStatus = (next: FilesData) => bus ? projectStatus(next, bus.getState()) : next;
+    let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+    let scheduledExpiry = Infinity;
+    function scheduleExpiry() {
+      const due = projectStatus.nextExpiry();
+      if (scheduledExpiry === due) return;
+      if (expiryTimer !== undefined) clearTimeout(expiryTimer);
+      scheduledExpiry = due;
+      if (Number.isFinite(due)) {
+        expiryTimer = setTimeout(() => {
+          scheduledExpiry = Infinity;
+          expiryTimer = undefined;
+          if (!alive) return;
+          if (projectStatus.expire()) publishBackgroundData(cache.readScope(pinnedPath));
+          scheduleExpiry();
+        }, Math.min(2_147_483_647, Math.max(0, due - Date.now())));
+      }
+    }
+    function currentStatus(next: FilesData) {
+      if (!bus) return next;
+      const value = projectStatus(next, bus.getState());
+      scheduleExpiry();
+      return value;
+    }
     /* Scanner generations can change one live row inside a large catalog.
        Keep that reconciliation interruptible so reload, typing and board
        gestures do not wait behind a synchronous whole-Viewer render. A stream
@@ -1956,15 +1983,16 @@ export function useFiles(project?: string | null, pinnedPath?: string | null): F
       }
     };
     if (bus) {
-      const applyConnection = () => {
+      const applyConnection = (frame?: RuntimeFrame) => {
         const runtime = bus.getState();
         setCadence(filesPollCadence(runtime.connection));
         // Session turn events carry status independently of files.revision and
         // its coalesced inventory scan. Every useFiles surface sees this frame.
-        if (projectStatus.updateRuntime(runtime)) publishBackgroundData(cache.readScope(pinnedPath));
+        if (projectStatus.updateRuntime(runtime, frame)) publishBackgroundData(cache.readScope(pinnedPath));
       };
       applyConnection();
       unsubBus = bus.subscribe(applyConnection);
+      scheduleExpiry();
       unsubFiles = bus.subscribeFilesRevision((revision) => {
         pendingRevision = pendingRevision === null ? revision : Math.max(pendingRevision, revision);
         /* Hidden desktop: a throttle, not a debounce — a busy board must not
@@ -2010,6 +2038,7 @@ export function useFiles(project?: string | null, pinnedPath?: string | null): F
 
     return () => {
       alive = false;
+      if (expiryTimer !== undefined) clearTimeout(expiryTimer);
       publisher.dispose();
       if (publisherRef.current === publisher) publisherRef.current = null;
       document.removeEventListener("visibilitychange", onVisibility);

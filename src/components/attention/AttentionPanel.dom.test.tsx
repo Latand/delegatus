@@ -16,6 +16,11 @@ import type { BoardTask } from "@/lib/tasks/types";
  * «Dismiss all» per project and for everything, and Undo, each go through the
  * one durable dismissal and take the row out of the count at once; and a row
  * whose cause is gone leaves with no dismissal at all.
+ *
+ * The harness builds the list the Viewer hands the panel
+ * (docs/design/legatus/build-plan.md, slice 1): the forms that wait and the
+ * waits no seat answers yet. An orchestrator's open questions stay in its
+ * report log, and finished work («Готово») is not drawn here at all.
  */
 
 const dom = new Window({ url: "http://127.0.0.1:8899/" });
@@ -40,7 +45,7 @@ Object.assign(globalThis, {
 
 const { AttentionPanel } = await import("./AttentionPanel");
 const { translate } = await import("@/lib/i18n");
-const { buildNeedsYouQueue } = await import("./attentionQueue");
+const { buildNeedsYouQueue, needsYouHolds } = await import("./attentionQueue");
 const { resetDismissalOverlayForTests, useDismissalOverlay } = await import("./dismissalOverlay");
 type FileEntry = import("@/lib/types").FileEntry;
 type Pipeline = import("@/lib/pipelines/types").Pipeline;
@@ -59,7 +64,8 @@ function conversation(path: string, project: string, over: Partial<FileEntry> = 
   } as FileEntry;
 }
 
-const spawned = (role: string) => ({ durableLineage: { kind: "spawn", role, parentConversationId: null, reviewsConversationId: null, memberships: [] } }) as unknown as Partial<FileEntry>;
+/** A worker a lane or a seat started (delegation depth one) in a project with no seat routing its waits. */
+const spawned = (role: string) => ({ durableLineage: { kind: "spawn", role, depth: 1, parentConversationId: null, reviewsConversationId: null, memberships: [] } }) as unknown as Partial<FileEntry>;
 
 function question(header: string, secondsAgo: number): FileEntry["pendingQuestion"] {
   return { kind: "question", toolUseId: `toolu-${header}`, transcriptPath: "", pid: null, askedAt: iso(secondsAgo), questions: [{ header, question: `${header}?`, multiSelect: false, options: [] }] } as unknown as FileEntry["pendingQuestion"];
@@ -78,7 +84,7 @@ function lane(id: string, project: string, state: Pipeline["state"] = "needs_dec
 /* alpha, the project on screen: a builder's question, a reviewer's
    permission prompt, a parked lane whose review stage stopped on the
    operator, and the orchestrator seat with two open questions in the report
-   log. beta: a planner's plan approval. */
+   log, which stay there. beta: a planner's plan approval. */
 function world() {
   const files: FileEntry[] = [
     conversation("/builder", ALPHA, { ...spawned("builder"), pendingQuestion: question("Base branch", 600) }),
@@ -132,7 +138,7 @@ afterEach(async () => {
 
 function Harness({ files, pipelines, current = ALPHA }: { files: FileEntry[]; pipelines: Pipeline[]; current?: string | null }) {
   const layered = useDismissalOverlay(files, pipelines);
-  const queue = buildNeedsYouQueue(layered.files, layered.pipelines, NOW, []);
+  const queue = buildNeedsYouQueue(layered.files, layered.pipelines, NOW, []).filter(needsYouHolds);
   return (
     <AttentionPanel
       queue={queue}
@@ -174,8 +180,8 @@ test("the list is grouped by project, the project on screen first and open, the 
   const host = await mount();
   const sections = [...host.querySelectorAll("[data-needs-you-section]")];
   expect(sections.map((section) => section.getAttribute("data-needs-you-section"))).toEqual([ALPHA, BETA]);
-  expect(sections.map((section) => section.querySelector("[data-needs-you-section-count]")!.textContent)).toEqual(["5", "1"]);
-  expect(title(host)).toBe("Waiting for you · 6");
+  expect(sections.map((section) => section.querySelector("[data-needs-you-section-count]")!.textContent)).toEqual(["3", "1"]);
+  expect(title(host)).toBe("Needs you · 4");
   /* beta is folded: its count shows, its row does not, until it is opened. */
   expect(sections[1]!.hasAttribute("data-folded")).toBe(true);
   expect(sections[1]!.querySelector("[data-needs-you-row]")).toBeNull();
@@ -191,7 +197,7 @@ test("the list is grouped by project, the project on screen first and open, the 
 test("on the Overview every project's section is open", async () => {
   const host = await mount(world(), null);
   expect([...host.querySelectorAll("[data-needs-you-section][data-folded]")]).toHaveLength(0);
-  expect(rowIds(host)).toHaveLength(6);
+  expect(rowIds(host)).toHaveLength(4);
 });
 
 test("every row carries the role of the agent behind it, in the role palette's own emblem and colour", async () => {
@@ -205,26 +211,33 @@ test("every row carries the role of the agent behind it, in the role palette's o
   expect(roleOf('[data-needs-you-row="/reviewer:permission:request-1"]')).toEqual({ row: "reviewer", tag: "reviewer", word: "Reviewer", emblem: true });
   /* The lane wears the role of the stage it stopped on. */
   expect(roleOf('[data-needs-you-row="lane-review"]')).toEqual({ row: "reviewer", tag: "reviewer", word: "Reviewer", emblem: true });
-  /* The orchestrator's questions are the seat's. */
-  expect(roleOf('[data-needs-you-row="ask-limit"]')).toEqual({ row: "orchestrator", tag: "orchestrator", word: "Orchestrator", emblem: true });
+
   /* The colour is the palette's, keyed by `data-role`: the tag draws no colour of its own. */
   expect(host.querySelector('[data-role-tag="builder"]')!.getAttribute("style")).toBeNull();
 });
 
-test("each open question in the report log is its own row, the question its title, and dismissing it resolves that report", async () => {
+test("an orchestrator's open questions stay in its report log: they are no rows and no count here", async () => {
   const host = await mount();
-  const rows = ["ask-limit", "ask-digest"].map((id) => host.querySelector(`[data-needs-you-row="${id}"]`)!);
-  expect(rows.map((row) => row.querySelector("[data-needs-you-title-line]")!.textContent)).toEqual(["Raise the attachment limit to 100 MB or keep 25?", "Ship the digest on weekends too?"]);
-  /* The question is the title; the line says what to do and what happens next. */
-  expect(rows.map((row) => row.querySelector("[data-attention-decision]")!.textContent)).toEqual([
-    "Answer the orchestrator's question in its conversation; it carries on with your answer.",
-    "Answer the orchestrator's question in its conversation; it carries on with your answer.",
-  ]);
-  await click(host.querySelector('[data-needs-you-dismiss="ask-limit"]')!);
-  expect(posted).toEqual([{ target: { kind: "subjects", subjects: [{ kind: "report", seq: 11 }] }, undo: false, surface: "desktop" }]);
   expect(rowIds(host)).not.toContain("ask-limit");
-  expect(rowIds(host)).toContain("ask-digest");
-  expect(title(host)).toBe("Waiting for you · 5");
+  expect(rowIds(host)).not.toContain("ask-digest");
+  expect(host.querySelector('[data-needs-you-role="orchestrator"]')).toBeNull();
+  /* The whole queue, which the board's N key walks, still holds them. */
+  const state = world();
+  expect(buildNeedsYouQueue(state.files, state.pipelines, NOW, []).map((entry) => entry.id)).toEqual(expect.arrayContaining(["ask-limit", "ask-digest"]));
+});
+
+test("a question in the operator's own session, an owed message and a failed launch stay on their cards", async () => {
+  const state = world();
+  state.files.push(
+    conversation("/mine", ALPHA, { pendingQuestion: question("Mine", 100) }),
+    conversation("/owed", ALPHA, { ...spawned("builder"), stuckDelivery: { since: iso(3_600), state: "delivery-uncertain" } } as Partial<FileEntry>),
+    conversation("/launch", ALPHA, { path: "spawn:launch-1", spawn: { state: "failed", admittedAt: (NOW - 300) * 1000, error: "Account B is signed out" } } as unknown as Partial<FileEntry>),
+  );
+  const host = await mount(state);
+  expect(rowIds(host)).toEqual(["lane-review", "toolu-Base branch", "/reviewer:permission:request-1"]);
+  expect(title(host)).toBe("Needs you · 4");
+  /* Each of them is still the operator's on the whole queue, which its card reads. */
+  expect(buildNeedsYouQueue(state.files, state.pipelines, NOW, []).map((entry) => entry.id)).toEqual(expect.arrayContaining(["toolu-Mine", "spawn:launch-1:launch-failed"]));
 });
 
 test("«Dismiss» takes the row out of the count at once, and Undo brings it back through the same record", async () => {
@@ -236,12 +249,12 @@ test("«Dismiss» takes the row out of the count at once, and Undo brings it bac
     surface: "desktop",
   });
   expect(rowIds(host)).not.toContain("toolu-Base branch");
-  expect(title(host)).toBe("Waiting for you · 5");
+  expect(title(host)).toBe("Needs you · 3");
 
   await click(host.querySelector("[data-needs-you-undo]")!);
   expect(posted[1]).toEqual({ ...posted[0]!, undo: true });
   expect(rowIds(host)).toContain("toolu-Base branch");
-  expect(title(host)).toBe("Waiting for you · 6");
+  expect(title(host)).toBe("Needs you · 4");
   expect(host.querySelector("[data-needs-you-undo]")).toBeNull();
 });
 
@@ -249,27 +262,27 @@ test("«Dismiss all» on a section clears that project only; «Dismiss all» in 
   const host = await mount();
   await click(host.querySelector(`[data-needs-you-dismiss-section="${ALPHA}"]`)!);
   /* In the section's order: oldest wait first, the lane among the conversations. */
-  expect(posted[0]!.target.subjects!.map((subject) => subject.kind)).toEqual(["pipeline", "conversation", "conversation", "report", "report"]);
+  expect(posted[0]!.target.subjects!.map((subject) => subject.kind)).toEqual(["pipeline", "conversation", "conversation"]);
   expect(host.querySelector(`[data-needs-you-section="${ALPHA}"]`)).toBeNull();
-  expect(title(host)).toBe("Waiting for you · 1");
+  expect(title(host)).toBe("Needs you · 1");
 
   await click(host.querySelector("[data-needs-you-dismiss-all]")!);
   expect(posted[1]!.target.subjects).toEqual([{ kind: "conversation", conversationId: "conversation_architect", path: "/architect", reasonId: "toolu-plan", reason: "plan" }]);
-  expect(title(host)).toBe("Waiting for you · 0");
+  expect(title(host)).toBe("Needs you");
   expect(host.querySelector("[data-needs-you-empty]")).not.toBeNull();
 
   /* Undo is for the last dismissal: the head's batch comes back, alpha's stays cleared. */
   await click(host.querySelector("[data-needs-you-undo]")!);
   expect(posted[2]).toEqual({ ...posted[1]!, undo: true });
-  expect(title(host)).toBe("Waiting for you · 1");
+  expect(title(host)).toBe("Needs you · 1");
 });
 
 test("the head's «Dismiss all» and a section's read differently, each naming how many rows it clears; Undo appears in the head and moves no row", async () => {
   const host = await mount();
   const head = host.querySelector("[data-needs-you-dismiss-all]")!;
   const section = host.querySelector(`[data-needs-you-dismiss-section="${ALPHA}"]`)!;
-  expect(head.textContent).toBe("Dismiss all 6");
-  expect(section.textContent).toBe("Dismiss 5");
+  expect(head.textContent).toBe("Dismiss all 4");
+  expect(section.textContent).toBe("Dismiss 3");
   expect(head.textContent).not.toBe(section.textContent);
   /* In Ukrainian too. */
   expect(translate("uk", "attention.dismissAll", { count: 6 })).not.toBe(translate("uk", "attention.dismissSection", { count: 5 }));
@@ -290,7 +303,7 @@ test("the head's «Dismiss all» and a section's read differently, each naming h
 test("a row whose cause is gone leaves by itself: the question answered, the permission decided, the lane moved on, the report answered", async () => {
   const state = world();
   const host = await mount(state);
-  expect(rowIds(host)).toHaveLength(5);
+  expect(rowIds(host)).toHaveLength(3);
   const [builder, reviewer, seat, architect] = state.files;
   await rerender({
     files: [
@@ -301,8 +314,8 @@ test("a row whose cause is gone leaves by itself: the question answered, the per
     ],
     pipelines: [{ ...state.pipelines[0]!, state: "running", cursor: { stageId: "review", state: "running", input: null, activatedBy: null } } as Pipeline],
   });
-  expect(rowIds(host)).toEqual(["ask-limit"]);
-  expect(title(host)).toBe("Waiting for you · 2");
+  expect(rowIds(host)).toEqual([]);
+  expect(title(host)).toBe("Needs you · 1");
   expect(posted).toEqual([]);
 });
 
@@ -329,7 +342,7 @@ test("an agent that asked the operator in prose is a row with its role, the agen
   expect([tag.getAttribute("data-role"), tag.textContent, Boolean(tag.querySelector(".role-tag-emblem svg"))]).toEqual(["architect", "Architect", true]);
   expect(row.querySelector("[data-needs-you-title-line]")!.textContent).toBe("Export formats");
   expect(row.querySelector("[data-attention-decision]")!.textContent).toBe("The agent asks «Keep the per-format presets, or fold them into one «Export» button?»; reply in its conversation and it continues with your answer.");
-  expect(title(host)).toBe("Waiting for you · 7");
+  expect(title(host)).toBe("Needs you · 5");
   await click(host.querySelector(`[data-needs-you-dismiss="${askId}"]`)!);
   expect(posted).toEqual([{
     target: { kind: "subjects", subjects: [{ kind: "conversation", conversationId: "conversation_explore", path: "/explore", reasonId: askId, reason: "ask" }] },
@@ -337,7 +350,7 @@ test("an agent that asked the operator in prose is a row with its role, the agen
     surface: "desktop",
   }]);
   expect(rowIds(host)).not.toContain(askId);
-  expect(title(host)).toBe("Waiting for you · 6");
+  expect(title(host)).toBe("Needs you · 4");
 });
 
 test("the update decision is a counted Needs-you row with named blockers and both choices", async () => {
@@ -387,18 +400,24 @@ test("a questionnaire waiting row asks for an answer", async () => {
   const host = document.createElement("div"); document.body.appendChild(host);
   await act(async () => { root = createRoot(host); root.render(<AttentionPanel queue={[{ kind: "prototype", id: notice.id, notice }]} current={ALPHA} projectNames={{ [ALPHA]: "alpha" }} pipelines={[]} placement="docked" canDock onPlacement={() => {}} onClose={() => {}} onOpen={() => {}} />); });
   expect(host.textContent).toContain("Questions for you");
-  expect(host.querySelector("[data-attention-decision]")?.textContent).toBe("Answer the questions in the form; the project orchestrator receives your answers and carries them on.");
+  /* The kind's word says what to do, so the row repeats no instruction under its title. */
+  expect(host.querySelector("[data-attention-decision]")).toBeNull();
+  expect(host.textContent).toContain("Before work");
   expect(host.querySelector("[data-attention-prototype]")?.getAttribute("aria-label")).toBe("Answer the questions for «Before work»");
 });
 
 /*
- * «Готово» (docs/design/done-section.md §4.3, §5): finished work waits in the
- * same panel, below the decisions, until the operator accepts it. The read
- * and the acknowledgement go through the real client store against a route
- * double that records them the way the server does.
+ * «Готово» (docs/design/done-section.md §4.3, §5) left this panel with slice 1
+ * of docs/design/legatus/build-plan.md: finished work never counts in «Needs
+ * you». Its section lives on above the orchestrator's report log, so it is
+ * drawn here beside the panel, where the report log pins it, and every
+ * acceptance is checked against the panel's head, which must not move. The
+ * read and the acknowledgement go through the real client store against a
+ * route double that records them the way the server does.
  */
 
 const { refreshDoneItems, resetDoneItemsForTests, useDoneItems } = await import("./doneItems");
+const { DoneSection } = await import("./DoneSection");
 type DoneItemV1 = import("@/lib/done/types").DoneItemV1;
 
 function doneItem(key: string, over: Partial<DoneItemV1> = {}): DoneItemV1 {
@@ -444,11 +463,15 @@ function serveDone(): void {
 
 function DoneHarness({ files, pipelines, current = ALPHA }: { files: FileEntry[]; pipelines: Pipeline[]; current?: string | null }) {
   const layered = useDismissalOverlay(files, pipelines);
-  const queue = buildNeedsYouQueue(layered.files, layered.pipelines, NOW, []);
+  const queue = buildNeedsYouQueue(layered.files, layered.pipelines, NOW, []).filter(needsYouHolds);
   const done = useDoneItems();
+  const names = { [ALPHA]: "alpha", [BETA]: "beta" };
   return (
-    <AttentionPanel queue={queue} current={current} projectNames={{ [ALPHA]: "alpha", [BETA]: "beta" }} pipelines={layered.pipelines}
-      placement="docked" canDock onPlacement={() => {}} onClose={() => {}} onOpen={() => {}} done={done} />
+    <>
+      <AttentionPanel queue={queue} current={current} projectNames={names} pipelines={layered.pipelines}
+        placement="docked" canDock onPlacement={() => {}} onClose={() => {}} onOpen={() => {}} />
+      <DoneSection items={done} current={current} projectNames={names} surface="desktop" place="reports" band="max-h-[45%]" />
+    </>
   );
 }
 
@@ -472,21 +495,20 @@ const doneRows = (host: HTMLElement) => [...host.querySelectorAll("[data-done-ro
   return `group:${row.getAttribute("data-done-group") ?? row.getAttribute("data-done-group-receipt")}`;
 });
 
-test("«Готово» is pinned above the decisions, newest first, and the panel's title counts both", async () => {
+test("the panel draws no «Готово» and its head counts the decisions alone; the report log's section lists finished work newest first", async () => {
   doneServer = doneWorld();
   const host = await mountDone();
-  const body = host.querySelector("[data-needs-you-body]")!;
+  const panel = host.querySelector("[data-needs-you-panel]")!;
   const section = host.querySelector("[data-done-section]")!;
-  /* Under the head and outside the decisions' scroller, so it never scrolls away. */
-  expect(body.contains(section)).toBe(false);
-  expect(section.nextElementSibling).toBe(body);
-  expect(section.getAttribute("data-done-place")).toBe("needs-you");
+  expect(panel.querySelector("[data-done-section]")).toBeNull();
+  expect(panel.contains(section)).toBe(false);
+  expect(section.getAttribute("data-done-place")).toBe("reports");
   expect(section.querySelector("[data-done-list]")!.className).toContain("overflow-y-auto");
-  expect(title(host)).toBe("Waiting for you · 12");
+  expect(title(host)).toBe("Needs you · 4");
   expect(section.querySelector("[data-done-count]")!.textContent).toBe("6");
   expect(section.querySelector("[data-done-accept-all]")!.textContent).toBe("Seen all");
-  /* «Dismiss all» still counts the decisions it clears. */
-  expect(host.querySelector("[data-needs-you-dismiss-all]")!.textContent).toBe("Dismiss all 6");
+  /* «Dismiss all» counts the decisions it clears. */
+  expect(host.querySelector("[data-needs-you-dismiss-all]")!.textContent).toBe("Dismiss all 4");
   /* Newest first: a row at its own time, a group at its newest member's. */
   expect([...section.querySelectorAll("[data-done-row], [data-done-group]")].map((row) => row.getAttribute("data-done-row") ?? row.getAttribute("data-done-group")))
     .toEqual(["deploy:d1", "closed", "technical", "pr:acme/widgets#2691", "limit:codex:acct-b:session:1"]);
@@ -507,12 +529,12 @@ test("«Готово» is pinned above the decisions, newest first, and the pane
   expect(section.querySelector('[data-done-member="task:t-closed"]')!.textContent).toContain("beta · Removed the empty hidden tray");
 });
 
-test("«Accept» takes a row out of every count at once and leaves «… · accepted» with Undo, which takes it back", async () => {
+test("«Accept» takes a row out of the section's count and leaves «… · accepted» with Undo, which takes it back; «Needs you» never moves", async () => {
   doneServer = doneWorld();
   const host = await mountDone();
   await click(host.querySelector('[data-done-accept="deploy:d1"]')!);
   expect(acknowledged).toEqual([{ keys: ["deploy:d1"], undo: false, surface: "desktop" }]);
-  expect(title(host)).toBe("Waiting for you · 11");
+  expect(title(host)).toBe("Needs you · 4");
   expect(host.querySelector("[data-done-count]")!.textContent).toBe("5");
   const receipt = host.querySelector('[data-done-receipt="deploy:d1"]')!;
   expect(receipt.textContent!.replace(/\u00a0/g, " ")).toContain("Delegatus was updated · accepted");
@@ -524,7 +546,8 @@ test("«Accept» takes a row out of every count at once and leaves «… · acce
   expect(doneRows(host)).toEqual(["receipt:deploy:d1", "group:closed", "group:technical", "pr:acme/widgets#2691", "limit:codex:acct-b:session:1"]);
   await click(receipt.querySelector("[data-done-undo]")!);
   expect(acknowledged[1]).toEqual({ keys: ["deploy:d1"], undo: true, surface: "desktop" });
-  expect(title(host)).toBe("Waiting for you · 12");
+  expect(title(host)).toBe("Needs you · 4");
+  expect(host.querySelector("[data-done-count]")!.textContent).toBe("6");
   expect(host.querySelector('[data-done-row="deploy:d1"]')).not.toBeNull();
 });
 
@@ -550,7 +573,7 @@ test("a group accepts whole with one button, opens to its members, and a member 
   await click(group().querySelector('[data-done-accept-group="technical"]')!);
   expect(acknowledged[1]).toEqual({ keys: ["pr:acme/widgets#2699"], undo: false, surface: "desktop" });
   expect(host.querySelector('[data-done-group-receipt="technical"]')!.textContent!.replace(/\u00a0/g, " ")).toContain("Technical fixes: 2 accepted");
-  expect(title(host)).toBe("Waiting for you · 10");
+  expect(title(host)).toBe("Needs you · 4");
 });
 
 test("a collapsed group lists short topics while they fit and ends in «and N more», never a cut word", async () => {
@@ -603,7 +626,7 @@ test("the head folds the list to «Done · N» and remembers it; «Seen all» st
   expect(fold().getAttribute("data-done-fold")).toBe("folded");
   expect(host.querySelector("[data-done-list]")).toBeNull();
   expect(host.querySelector("[data-done-count]")!.textContent).toBe("6");
-  expect(dom.localStorage.getItem("llvDoneFolded:needs-you:desktop")).toBe("1");
+  expect(dom.localStorage.getItem("llvDoneFolded:reports:desktop")).toBe("1");
   /* Another mount on this device opens folded. */
   await act(async () => { root?.unmount(); });
   root = null;
@@ -611,23 +634,23 @@ test("the head folds the list to «Done · N» and remembers it; «Seen all» st
   expect(fold().getAttribute("data-done-fold")).toBe("folded");
   await click(host.querySelector("[data-done-accept-all]")!);
   expect(acknowledged[0]!.keys).toHaveLength(6);
-  expect(title(host)).toBe("Waiting for you · 6");
+  expect(title(host)).toBe("Needs you · 4");
   await click(fold());
   expect(host.querySelector("[data-done-all-accepted]")).not.toBeNull();
 });
 
-test("«Accept all» leaves only the decisions in the count, and one receipt takes the whole batch back", async () => {
+test("«Accept all» accepts the whole list, and one receipt takes the whole batch back", async () => {
   doneServer = doneWorld();
   const host = await mountDone();
   await click(host.querySelector("[data-done-accept-all]")!);
   expect(acknowledged[0]!.keys.sort()).toEqual(doneWorld().map((item) => item.key).sort());
-  expect(title(host)).toBe("Waiting for you · 6");
+  expect(title(host)).toBe("Needs you · 4");
   expect(host.querySelector("[data-done-accept-all]")).toBeNull();
   const all = host.querySelector("[data-done-all-accepted]")!;
   expect(all.textContent).toContain("All accepted · 6 items");
   await click(all.querySelector("[data-done-undo]")!);
   expect(acknowledged[1]!.undo).toBe(true);
-  expect(title(host)).toBe("Waiting for you · 12");
+  expect(title(host)).toBe("Needs you · 4");
 });
 
 test("a thumbnail opens the image viewer with the before and after of its frame", async () => {
@@ -656,7 +679,7 @@ test("lost and evicted done frames show a clear placeholder and leave acceptance
   expect(host.querySelector('[data-done-receipt="pr:lost"]')).not.toBeNull();
 });
 
-test("an empty «Готово» draws nothing, and «Nothing is waiting» shows only when both are empty", async () => {
+test("an empty «Готово» draws nothing, and finished work alone leaves «Needs you» empty at zero", async () => {
   doneServer = [];
   const host = await mountDone({ files: [], pipelines: [] });
   expect(host.querySelector("[data-done-section]")).toBeNull();
@@ -664,8 +687,9 @@ test("an empty «Готово» draws nothing, and «Nothing is waiting» shows 
   await act(async () => { root?.unmount(); });
   doneServer = [doneItem("task:t-only", { kind: "task", look: "closed" })];
   const other = await mountDone({ files: [], pipelines: [] });
-  expect(other.querySelector("[data-needs-you-empty]")).toBeNull();
-  expect(title(other)).toBe("Waiting for you · 1");
+  expect(other.querySelector("[data-done-section]")).not.toBeNull();
+  expect(other.querySelector("[data-needs-you-empty]")).not.toBeNull();
+  expect(title(other)).toBe("Needs you");
 });
 
 test("a read that left before an acceptance never brings the row back, nor one that left before its Undo", async () => {

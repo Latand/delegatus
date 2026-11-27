@@ -23,8 +23,9 @@ import type {
 
 import type { ViewerDeploymentAdapter } from "./deployment";
 import { candidatePerformanceDetail, candidatePerformanceEvidence, type CandidatePerformanceEvidence } from "./candidatePerformance";
+import { adapterFailureReason } from "./deploymentFailureReport";
 import { candidateLogExcerpt } from "./deploymentHealth";
-import { PROMOTE_ACTION_TIMEOUT_MS } from "./deploymentHotState";
+import { PROMOTE_ACTION_TIMEOUT_MS, ROLLBACK_ACTION_TIMEOUT_MS } from "./deploymentHotState";
 import type { McpHealthProbeAdmissions } from "./mcpHealthProbeAdmission";
 import {
   createMcpHealthProbeAdmissionChannel,
@@ -58,7 +59,7 @@ const ACTION_TIMEOUTS: Record<AdapterAction, number | null> = {
   // PROGRESS_CEILINGS for how long a Viewer that keeps progressing may take.
   "verify-promoted": 5 * 60_000,
   "candidate-log": 10_000,
-  rollback: 90_000,
+  rollback: ROLLBACK_ACTION_TIMEOUT_MS,
   retire: 60_000,
   "retain-only": 60_000,
   "stage-host-successor": 60_000,
@@ -647,7 +648,7 @@ export class HostCommandViewerDeploymentAdapter implements ViewerDeploymentAdapt
           throw new Error(`deployment adapter ${action} timed out while ${phase}${bound}`);
         }
         const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
-        if (outcome.exitCode !== 0) throw new Error((stderr.trim() || `deployment adapter ${action} failed`).slice(0, 500));
+        if (outcome.exitCode !== 0) throw new Error(adapterFailureReason(stderr) || `deployment adapter ${action} failed`);
         try { return JSON.parse(stdout) as unknown; }
         catch { throw new Error(`deployment adapter ${action} returned invalid JSON`); }
       } finally {

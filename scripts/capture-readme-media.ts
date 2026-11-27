@@ -133,33 +133,30 @@ const cropToColumns = (statuses: string[]) => async (page: Page): Promise<CropRe
   const bottom = Math.max(...content) + 2 * margin;
   return { x: left, y: top, width: right - left, height: bottom - top };
 }, statuses);
-/* The named stages' panes lie whole inside the lane's visible box, and no
-   other pane shows as a sliver of a border at its edge. A pane's head
-   starts with its position and name («1. Build»). */
-async function assertPanesWhole(page: Page, names: string[]): Promise<void> {
-  const cut = await page.evaluate((names) => {
-    const lane = document.querySelector<HTMLElement>("[data-stages-sheet] .lane");
-    if (!lane) return ["no stage lane on the sheet"];
+/* The window shows one tab per stage and the selected stage's pane under
+   them. The named stages each have a tab, and the selected pane lies whole
+   inside the pane area, with no other pane drawn beside it. A tab's label
+   starts with its position and name («1 Build»). */
+async function assertStageTabsAndPane(page: Page, names: string[]): Promise<void> {
+  const problems = await page.evaluate((names) => {
+    const sheet = document.querySelector<HTMLElement>("[data-stages-sheet]");
+    const lane = sheet?.querySelector<HTMLElement>(".lane");
+    if (!sheet || !lane) return ["no stage pane area on the sheet"];
     const bounds = lane.getBoundingClientRect();
     const problems: string[] = [];
+    const tabs = [...sheet.querySelectorAll<HTMLElement>('[role="tab"][data-tab-stage]')];
     for (const name of names) {
-      const pane = [...lane.querySelectorAll<HTMLElement>(".pane[data-stage]")].find((candidate) => new RegExp(`^\\d+\\. ${name}\\b`).test(candidate.innerText.trim()));
-      if (!pane) {
-        problems.push(`${name}: no pane`);
-        continue;
-      }
-      const rect = pane.getBoundingClientRect();
-      if (rect.left < bounds.left - 0.5 || rect.right > bounds.right + 0.5) problems.push(`${name}: pane ${Math.round(rect.left)}..${Math.round(rect.right)} outside the lane ${Math.round(bounds.left)}..${Math.round(bounds.right)}`);
+      if (!tabs.some((tab) => new RegExp(`\\b${name}\\b`).test(tab.innerText))) problems.push(`${name}: no tab`);
     }
-    /* No other pane shows as a sliver of its border at either edge. */
-    for (const pane of lane.querySelectorAll<HTMLElement>(".pane[data-stage]")) {
+    const panes = [...lane.querySelectorAll<HTMLElement>(".pane[data-stage]")];
+    if (panes.length !== 1) problems.push(`${panes.length} panes under the tabs, one expected`);
+    for (const pane of panes) {
       const rect = pane.getBoundingClientRect();
-      const shown = Math.min(rect.right, bounds.right) - Math.max(rect.left, bounds.left);
-      if (shown > 0.5 && shown < rect.width - 0.5) problems.push(`pane ${pane.dataset.stage} is cut by the lane edge (${Math.round(shown)} of ${Math.round(rect.width)} px; lane ${Math.round(bounds.width)} px)`);
+      if (rect.left < bounds.left - 0.5 || rect.right > bounds.right + 0.5) problems.push(`pane ${pane.dataset.stage}: ${Math.round(rect.left)}..${Math.round(rect.right)} outside the pane area ${Math.round(bounds.left)}..${Math.round(bounds.right)}`);
     }
     return problems;
   }, names);
-  if (cut.length) throw new Error(`pipeline: stage panes not whole in the lane: ${cut.join("; ")}`);
+  if (problems.length) throw new Error(`pipeline: stage tabs and pane not whole: ${problems.join("; ")}`);
 }
 
 /* A stage's reader rests on the tail of its conversation, and its top edge
@@ -179,6 +176,28 @@ async function alignReadersToMessages(page: Page, scope: string): Promise<void> 
       scroller.scrollTop = scroller.scrollHeight;
     }
   }, scope);
+}
+
+/* Rest a feed on the tail of its conversation with the step whose row names
+   `label` at its top edge: the feed gets just enough room under its tail to
+   scroll that step's row to the edge, so no earlier step shows a cut box. */
+async function restFeedOnStep(page: Page, scope: string, label: string): Promise<void> {
+  const rested = await page.evaluate(({ scope, label }) => {
+    for (const scroller of document.querySelectorAll<HTMLElement>(`${scope} [data-log-feed-scroller]`)) {
+      const row = [...scroller.querySelectorAll<HTMLElement>("li")].find((item) => item.textContent?.includes(label));
+      if (!row) continue;
+      const bottom = scroller.scrollHeight - scroller.clientHeight;
+      const start = Math.round(row.getBoundingClientRect().top - (scroller.getBoundingClientRect().top - scroller.scrollTop));
+      if (start > bottom) {
+        const padding = Number.parseFloat(getComputedStyle(scroller).paddingBottom) || 0;
+        scroller.style.setProperty("padding-bottom", `${padding + start - bottom}px`, "important");
+      }
+      scroller.scrollTop = scroller.scrollHeight;
+      return true;
+    }
+    return false;
+  }, { scope, label });
+  if (!rested) throw new Error(`no step row «${label}» in ${scope}`);
 }
 
 /* A reader resting on the tail of its conversation can stop with a line of
@@ -296,7 +315,7 @@ export const SHOTS: ReadmeShot[] = [
     /* The shortest screen the desktop board draws at: below 600 px the phone
        layout takes over. */
     viewport: { width: WIDE.width, height: 600 },
-    requiredText: ["Idempotent refunds", "Rotate webhook signing keys", "Move invoices to the new ledger", "Document refund error codes", "Needs your answer", "1 needs you", "Waiting outside: finance to confirm the rounding rule"],
+    requiredText: ["Idempotent refunds", "Rotate webhook signing keys", "Move invoices to the new ledger", "Document refund error codes", "Needs your answer", "1 card needs your answer", "Waiting outside: finance to confirm the rounding rule"],
     /* "resume ·" is a pane recovery opened for the seat: a stray agent card. */
     absentText: ["tmux", "Untitled task", "resume ·", "no reason given", ...MONITOR_ALARM_TEXT],
     prepare: foldOrchestrator,
@@ -343,6 +362,9 @@ export const SHOTS: ReadmeShot[] = [
       await page.waitForTimeout(500);
       await clickText(page, "wrote 1 file");
       await page.waitForTimeout(500);
+      /* The reader rests on the second step, whole: its top edge would
+         otherwise cut the first step's diff box under the pinned bar. */
+      await restFeedOnStep(page, ".reader.conv", "Edit handler.ts");
       await alignFeedsToWholeLines(page, ".reader.conv");
     },
     crop: cropTo(".reader.conv"),
@@ -352,17 +374,14 @@ export const SHOTS: ReadmeShot[] = [
     id: "pipeline",
     subjects: ["[data-stages-sheet]"],
     target: { kind: "project", project: "harbor-api" },
-    /* Each stage column keeps its agent's head on one line and the tail of
-       its conversation whole. The sheet is 26 px narrower than the screen and
-       a pane is 600 px up to a 1363 px screen, so at 1272 px the lane holds the
-       first two panes with the same 12 px edge on both sides and the third
-       pane starts just past its right edge. A wider screen shows a sliver of
-       that pane. */
+    /* The stage tabs run along the top of the sheet and the selected stage's
+       pane stands under them, so the frame holds one conversation whole
+       beside no sliver of another. */
     viewport: { width: 1272, height: WIDE.height },
-    /* "first stage" is the Build pane's own line, so the frame fails without
-       the builder's column; innerText counts a column scrolled out of the
-       lane, which the whole-column check in prepare covers. */
-    requiredText: ["Idempotent refunds", "Build", "Review", "Verify", "passed", "running", "waiting", "first stage", "Worked for"],
+    /* The tabs name every stage and its state, and the selected Review pane
+       is mid-turn and carries its commentary ("Reading the diff"); the
+       tabs-and-pane check in prepare covers the layout. */
+    requiredText: ["Idempotent refunds", "Build", "Review", "Verify", "passed", "running", "waiting", "Reading the diff"],
     prepare: async (page) => {
       await foldOrchestrator(page);
       await page.waitForTimeout(500);
@@ -373,28 +392,24 @@ export const SHOTS: ReadmeShot[] = [
       await page.locator('[data-open-stages][aria-label^="Idempotent refunds"]').first().click();
       await page.waitForSelector("[data-stages-sheet]");
       await page.waitForTimeout(1_000);
-      /* The sheet opens scrolled to the stage the lane row named (the running
-         Review), and at this width the stage panes are wider than the lane,
-         which pushes the first one off its left edge. The frame starts at the
-         lane's start: the builder's conversation and the reviewer's, side by
-         side, whole. */
-      await page.locator("[data-stages-sheet] .lane").evaluate((lane) => {
-        (lane as HTMLElement).scrollTo({ left: 0, behavior: "instant" });
-      });
+      /* The sheet opens on the stage the lane row named (the running Review):
+         its tab is selected and its conversation stands under the tabs, whole,
+         beside a tab for every other stage. */
       await page.waitForTimeout(500);
       await alignReadersToMessages(page, "[data-stages-sheet]");
-      await assertPanesWhole(page, ["Build", "Review"]);
+      await assertStageTabsAndPane(page, ["Build", "Review"]);
     },
     crop: cropTo("[data-stages-sheet]"),
-    description: "A pipeline opened from its card: the stage graph with its fail edge, and each stage's conversation side by side.",
+    description: "A pipeline opened from its card: the stage tabs with the fail rule under them, and the selected stage's conversation.",
   },
   {
     id: "card-menu",
     subjects: ['[role="menu"]'],
     target: { kind: "project", project: "harbor-api" },
     viewport: WIDE,
-    requiredText: ["Idempotent refunds", "Inbox", "Done", "Top of the Inbox", "Appearance", "Pipeline actions", "keeps working"],
-    absentText: ["tmux", "Untitled task", "resume ·"],
+    /* The priority hints («Top of the Inbox») belong to an Inbox card; this card is assigned, so its menu shows the three priorities as bare segments. */
+    requiredText: ["Idempotent refunds", "Inbox", "Done", "High", "Normal", "Low", "Appearance", "Pipeline actions", "keeps working"],
+    absentText: ["tmux", "Untitled task", "resume ·", "Top of the Inbox", "Bottom of the Inbox"],
     prepare: async (page) => {
       await foldOrchestrator(page);
       await page.waitForTimeout(500);

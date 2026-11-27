@@ -669,3 +669,177 @@ test("the phone's device sign-in line shows until the next read says the account
   await view.rerender([engineState("codex", [codexMain, { ...codexSpare }], "cx-main")]);
   expect(line()).toBeNull();
 });
+
+/** The history route's answer for the phone's chart: nothing observed, so the
+    panel draws from the account's own reading. */
+function historyFetch(urls: string[]): typeof fetch {
+  return (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.startsWith("/api/transfer/accounts")) return Response.json({ ok: true, result: [] });
+    urls.push(url);
+    return new Response("{}", { status: 500 });
+  }) as typeof fetch;
+}
+
+const dialog = () => document.body.querySelector("[data-burndown-dialog]");
+
+test.each(["en", "uk"] as const)("a non-active phone row opens its own burndown chart from its reading, and switches nothing, in %s", async (locale) => {
+  const previous = getLocale();
+  setLocale(locale);
+  try {
+    const urls: string[] = [];
+    globalThis.fetch = historyFetch(urls);
+    let selections = 0;
+    const view = await mount([engineState("claude", [claudeMain, claudeLab], claudeMain.id, { select: async () => { selections++; return true; } })]);
+    const press = view.host.querySelector('[data-mobile2-account="cl-lab"] [data-account-chart="cl-lab"]') as HTMLElement;
+    expect(press).not.toBeNull();
+    expect(press.getAttribute("aria-label")).toBe(translate(locale, "burndown.openAria", { engine: "Claude · Lab" }));
+    // The press covers the reading, so no extra chrome stands beside it.
+    expect(press.parentElement?.querySelector('[data-account-limits="cl-lab"]')).not.toBeNull();
+    await click(press);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    const panel = dialog();
+    expect(panel).not.toBeNull();
+    expect(panel?.getAttribute("aria-label")).toBe(translate(locale, "burndown.openAria", { engine: "Claude · Lab" }));
+    expect(panel?.className).not.toContain("sm:absolute");
+    expect(urls).toEqual(["/api/limits/history?engine=claude&account=cl-lab"]);
+    // The chart still draws, from the row's own reading, though the history failed.
+    expect(panel?.querySelector('svg[role="img"]')).not.toBeNull();
+    expect(press.getAttribute("aria-expanded")).toBe("true");
+    // The tap opened a chart: the row stayed closed and nothing was switched.
+    expect(view.host.querySelector('[data-account-toggle="cl-lab"]')?.getAttribute("aria-expanded")).toBe("false");
+    expect(selections).toBe(0);
+  } finally {
+    setLocale(previous);
+  }
+});
+
+test("a phone row with no reading gains no line; its open row's «no data yet» is the press that opens the chart, and a second press, Escape or an outside tap close it", async () => {
+  globalThis.fetch = historyFetch([]);
+  const bare = account({ id: "cl-bare", label: "Bare" });
+  const signedOut = account({ id: "cl-out", label: "Out", authPresent: false, authHealth: "signed_out" });
+  const view = await mount([engineState("claude", [claudeMain, bare, signedOut], claudeMain.id)]);
+  const row = (id: string) => view.host.querySelector(`[data-mobile2-account="${id}"]`) as HTMLElement;
+  expect(row("cl-bare").querySelector('[data-account-limits]')).toBeNull();
+  // Closed, the row shows what it showed before the chart existed: no extra line, no press.
+  expect(row("cl-bare").querySelector("[data-account-chart]")).toBeNull();
+  expect(row("cl-bare").textContent).not.toContain(translate(getLocale(), "burndown.title").replace(/^./u, (c) => c.toUpperCase()));
+  await open(view.host, "cl-bare");
+  const press = () => row("cl-bare").querySelector('[data-account-chart="cl-bare"]') as HTMLElement;
+  expect(press().textContent).toBe(translate(getLocale(), "accounts.noDataYet"));
+  await click(press());
+  expect(dialog()?.getAttribute("aria-label")).toContain("Bare");
+  await click(press());
+  expect(dialog()).toBeNull();
+  await click(press());
+  expect(dialog()).not.toBeNull();
+  await act(async () => { dialog()?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+  expect(dialog()).toBeNull();
+  await click(press());
+  await act(async () => { view.host.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })); });
+  expect(dialog()).toBeNull();
+  // The tap's own click, which the sheet consumes.
+  await click(view.host);
+  // A signed-out account has no quota to chart: opened or not, it offers no press.
+  await open(view.host, "cl-out");
+  expect(row("cl-out").querySelector("[data-account-chart]")).toBeNull();
+});
+
+test("the phone chart sheet is docked to the bottom edge over a dimming scrim, which closes it", async () => {
+  globalThis.fetch = historyFetch([]);
+  const view = await mount([engineState("claude", [claudeMain, claudeLab], claudeMain.id)]);
+  await click(view.host.querySelector('[data-account-chart="cl-main"]'));
+  const panel = dialog() as HTMLElement;
+  expect(panel.className).toContain("bottom-0");
+  expect(panel.className).toContain("inset-x-0");
+  expect(panel.className).toContain("env(safe-area-inset-bottom)");
+  expect(panel.className).not.toContain("bottom-3");
+  const scrim = document.body.querySelector("[data-burndown-scrim]") as HTMLElement;
+  expect(scrim).not.toBeNull();
+  expect(scrim.className).toContain("bg-black/40");
+  expect(scrim.getAttribute("aria-hidden")).toBe("true");
+  await act(async () => { scrim.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })); });
+  expect(dialog()).toBeNull();
+  expect(document.body.querySelector("[data-burndown-scrim]")).toBeNull();
+  // The tap's own click, which the sheet consumes.
+  await click(view.host);
+});
+
+test("opening another account's chart replaces the first, and a provider row with no reading gets no chart line", async () => {
+  globalThis.fetch = historyFetch([]);
+  const provider = account({ id: "cl-provider", label: "Provider", provider: { baseUrl: "https://example.invalid/anthropic", model: "large", smallFastModel: null } });
+  const view = await mount([engineState("claude", [claudeMain, claudeLab, provider], claudeMain.id)]);
+  await click(view.host.querySelector('[data-account-chart="cl-main"]'));
+  expect(dialog()?.getAttribute("aria-label")).toContain("Main");
+  await click(view.host.querySelector('[data-account-chart="cl-lab"]'));
+  expect(document.body.querySelectorAll("[data-burndown-dialog]").length).toBe(1);
+  expect(dialog()?.getAttribute("aria-label")).toContain("Lab");
+  expect(view.host.querySelector('[data-account-chart="cl-provider"]')).toBeNull();
+});
+
+test("a Claude and a Codex account that share an id each open their own chart, one sheet at a time, and the history request names the pressed engine", async () => {
+  const urls: string[] = [];
+  globalThis.fetch = historyFetch(urls);
+  const withReading = (label: string) => ({ ...claudeLab, id: "default", label });
+  const view = await mount([
+    engineState("claude", [{ ...claudeMain, id: "other", label: "Other" } as AccountOption, withReading("ClaudeShared")], "other"),
+    engineState("codex", [{ ...codexMain, id: "other-cx", label: "OtherCx" } as AccountOption, { ...codexMain, id: "default", label: "CodexShared" } as AccountOption], "other-cx"),
+  ]);
+  const press = (engine: string) => view.host.querySelector(`[data-mobile2-accounts-engine="${engine}"] [data-account-chart="default"]`) as HTMLElement;
+  expect(press("claude").getAttribute("data-account-chart-engine")).toBe("claude");
+  expect(press("codex").getAttribute("data-account-chart-engine")).toBe("codex");
+  await click(press("claude"));
+  expect(document.body.querySelectorAll("[data-burndown-dialog]").length).toBe(1);
+  expect(dialog()?.getAttribute("aria-label")).toContain("ClaudeShared");
+  // The pointer goes down on the other engine's press first, as a tap does.
+  await act(async () => { press("codex").dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })); });
+  await click(press("codex"));
+  expect(document.body.querySelectorAll("[data-burndown-dialog]").length).toBe(1);
+  expect(dialog()?.getAttribute("aria-label")).toContain("CodexShared");
+  await act(async () => { press("claude").dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })); });
+  await click(press("claude"));
+  expect(document.body.querySelectorAll("[data-burndown-dialog]").length).toBe(1);
+  expect(dialog()?.getAttribute("aria-label")).toContain("ClaudeShared");
+  expect(urls).toEqual([
+    "/api/limits/history?engine=claude&account=default",
+    "/api/limits/history?engine=codex&account=default",
+    "/api/limits/history?engine=claude&account=default",
+  ]);
+});
+
+test("a tap outside the phone chart sheet closes it and reaches nothing behind it, and the next tap works again", async () => {
+  globalThis.fetch = historyFetch([]);
+  let selections = 0;
+  const view = await mount([engineState("claude", [claudeMain, claudeLab], claudeMain.id, { select: async () => { selections++; return true; } })]);
+  await click(view.host.querySelector('[data-account-chart="cl-main"]'));
+  expect(dialog()).not.toBeNull();
+  const row = view.host.querySelector('[data-account-toggle="cl-lab"]') as HTMLElement;
+  expect(row.getAttribute("aria-expanded")).toBe("false");
+  // One tap: pointerdown dismisses the sheet, its click is consumed.
+  await act(async () => { row.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })); });
+  expect(dialog()).toBeNull();
+  await click(row);
+  expect(row.getAttribute("aria-expanded")).toBe("false");
+  expect(selections).toBe(0);
+  // The following tap, with no sheet open, is an ordinary press.
+  await click(row);
+  expect(row.getAttribute("aria-expanded")).toBe("true");
+});
+
+test("the phone chart sheet keeps Tab inside itself", async () => {
+  globalThis.fetch = historyFetch([]);
+  const view = await mount([engineState("claude", [claudeMain, claudeLab], claudeMain.id)]);
+  await click(view.host.querySelector('[data-account-chart="cl-main"]'));
+  const panel = dialog() as HTMLElement;
+  const stops = Array.from(panel.querySelectorAll<HTMLElement>("button"));
+  const last = stops[stops.length - 1]!;
+  last.focus();
+  const tab = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+  await act(async () => { last.dispatchEvent(tab); });
+  expect(tab.defaultPrevented).toBe(true);
+  expect(document.activeElement).toBe(stops[0]!);
+  const back = new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true });
+  await act(async () => { stops[0]!.dispatchEvent(back); });
+  expect(back.defaultPrevented).toBe(true);
+  expect(document.activeElement).toBe(last);
+});

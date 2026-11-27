@@ -46,6 +46,10 @@ export class TemporaryDataStore {
   due(now: number, limit = 8) {
     return this.db.query<TemporaryDataCandidate, [number, number]>("SELECT * FROM candidates WHERE checkedAt<=? ORDER BY checkedAt,directory LIMIT ?").all(now, limit);
   }
+  dueEvidence(now: number) {
+    return this.db.query<TemporaryDataCandidate, [number, string]>(
+      "SELECT * FROM candidates WHERE checkedAt<=? AND kind<>'journal' AND scope=? ORDER BY checkedAt,directory LIMIT 128").all(now, statePath("evidence"));
+  }
   record(directory: string, checkedAt: number, bytes: number, reason: string) {
     this.db.query("UPDATE candidates SET checkedAt=?,bytes=?,reason=? WHERE directory=?").run(checkedAt, bytes, reason, directory);
   }
@@ -58,8 +62,9 @@ export class TemporaryDataStore {
     assertRetentionTestPath(directory);
     this.db.query("INSERT OR IGNORE INTO namespaces VALUES(?,?,?,'',0)").run(directory, kind, owner);
   }
-  namespaces(now: number, limit = 4) {
-    const rows = this.db.query<TemporaryNamespace, [number, number]>("SELECT * FROM namespaces WHERE checkedAt<=? ORDER BY checkedAt,directory LIMIT ?").all(now, limit);
+  namespaces(now: number, limit = 4, evidenceOnly = false) {
+    const rows = this.db.query<TemporaryNamespace, [number, number]>(
+      `SELECT * FROM namespaces WHERE checkedAt<=? ${evidenceOnly ? "AND kind<>'journals'" : ""} ORDER BY checkedAt,directory LIMIT ?`).all(now, limit);
     for (const row of rows) assertRetentionTestPath(row.directory);
     return rows;
   }

@@ -7,6 +7,7 @@ export { TelegramBotError } from "./errors";
 import path from "node:path";
 import { decodeHTML } from "entities";
 import type { TelegramPublishReceipt } from "@/lib/externalRelay/publish";
+import { cloneSenderIdentity } from "@/lib/externalRelay/cloneDirectory";
 import { ownerReviewDestination, publishDurableTelegramMessage, telegramPublicationTarget } from "@/lib/externalRelay/telegramPublication";
 import type { OwnerDestinationFailure } from "@/lib/externalRelay/ownerDestination";
 
@@ -49,7 +50,6 @@ import { TelegramBotStore, type BotRow, type ChatRow, type TgChat, type TgUpdate
 import { admitReportReplies, drainReportReplies, productionReportReplyPorts, type ReportReplyPorts } from "./reportReplies";
 import { outboundPostingAllowed, recordOutbound, outboundState, type OutboundMessage, type PublicationTarget } from "./outbound";
 import { OutboundPublication } from "./outboundPublication";
-import { ReviewPollQueue, type ReviewPollInput } from "./reviewPolls";
 import { telegramReactionCatalogSchema, telegramReactionMessageIdSchema, telegramReactionSchema, type TelegramReactionCatalog } from "./reactions";
 import {
   createBotApiTransport,
@@ -76,7 +76,6 @@ export interface TelegramRichMessage {
   markdown: string;
   plainText?: string;
   images: Array<{ id: string; blob: Blob }>;
-  review?: ReviewPollInput;
 }
 
 export interface TelegramBotDependencies {
@@ -299,9 +298,6 @@ function lookupFailure(result: Extract<BotCallResult, { ok: false }>): TelegramB
 }
 
 export class TelegramBotService {
-  private readonly reviewPolls = new ReviewPollQueue();
-  async waitForReviewPolls(): Promise<void> { await this.reviewPolls.idle(); }
-  hasReviewPollWork(reviewId: string, key: string): boolean { return this.reviewPolls.owns(reviewId, key); }
   readonly #sendingTransports = new Map<string, { fingerprint: string; transport: BotTransport }>();
   private selectorCache: BotSelector | null = null;
   private transportCache: BotTransport | null = null;
@@ -328,45 +324,48 @@ export class TelegramBotService {
     return { conversationId: input.conversationId, clientRequestId: String(input.clientRequestId).trim(), chat: chat.chatId,
       topicId: positive(input.topicId), replyToMessageId: positive(input.replyToMessageId), format: input.format === "html" ? "html" : "plain", silent: input.silent === true };
   }
-  private fileApprovalCheck(chat: ChatRow, approval: FileSendApproval | undefined): (() => void) | undefined {
-    if (!approval) return undefined;
-    const botId = this.fileSenderIdentity(chat);
-    return () => {
+  private fileApprovalCheck(chat: ChatRow, approval: FileSendApproval, botId: string): (selected?: PostingBot) => void {
+    return selected => {
       approval.authorize();
       const current = this.store().chat(chat.chatId);
-      if (Date.parse(approval.expiresAt) <= this.deps.now().getTime() || !botId || this.fileSenderIdentity(chat) !== botId)
+      if (Date.parse(approval.expiresAt) <= this.deps.now().getTime() || this.fileSenderIdentity(chat) !== botId
+        || (selected && botId.startsWith("clone:") && (!selected.clone || cloneSenderIdentity(selected.clone) !== botId)))
         throw new TelegramBotError("confirmation_invalid", "This confirmation expired or the connected bot changed.");
       const refusal = current ? postRefusal(current) : null;
       if (!current || refusal) throw new TelegramBotError(refusal?.code ?? "chat_not_allowed", refusal?.reason ?? "The destination is no longer available.");
     };
   }
-  private admitFileSend(kind: "document" | "media", chat: ChatRow, options: FileSendOptions, files: FileConfirmationView["files"], reasons: DocumentWarning[], approval?: FileSendApproval): void {
-    const snapshot = { kind, chatId: chat.chatId, chatTitle: chat.title, topicId: options.topicId, options, files, reasons, botId: this.fileSenderIdentity(chat)! };
+  private admitFileSend(kind: "document" | "media", chat: ChatRow, options: FileSendOptions, files: FileConfirmationView["files"], reasons: DocumentWarning[], approval?: FileSendApproval) {
+    if (!approval && !reasons.length) return;
+    const botId = this.fileSenderIdentity(chat);
+    const snapshot = { kind, chatId: chat.chatId, chatTitle: chat.title, topicId: options.topicId, options, files, reasons };
     if (approval) {
-      if (fileSendDigest(snapshot) !== approval.digest) throw new TelegramBotError("confirmation_invalid", "The file or destination changed after this confirmation was requested.");
-      this.fileApprovalCheck(chat, approval)!();
-    } else if (reasons.length) {
-      const confirmation = this.fileConfirmations.request(snapshot);
-      const first = reasons[0]!;
-      throw new TelegramBotError(first.code, `${first.reason} The owner can confirm this exact send in Delegatus: ${confirmation.url}`, { secretClass: reasons.find(reason => reason.secretClass)?.secretClass, confirmation });
+      if (!botId || fileSendDigest({ ...snapshot, botId }) !== approval.digest)
+        throw new TelegramBotError("confirmation_invalid", "The file, destination or sender changed after this confirmation was requested.");
+      const authorize = this.fileApprovalCheck(chat, approval, botId);
+      authorize();
+      return authorize;
     }
+    const first = reasons[0]!, secretClass = reasons.find(reason => reason.secretClass)?.secretClass;
+    if (!botId) throw new TelegramBotError(first.code, `${first.reason} Refresh the chat's sender in Delegatus before requesting confirmation.`, { secretClass });
+    const confirmation = this.fileConfirmations.request({ ...snapshot, botId });
+    throw new TelegramBotError(first.code, `${first.reason} The owner can confirm this exact send in Delegatus: ${confirmation.url}`, { secretClass, confirmation });
   }
 
   private fileSenderIdentity(chat: ChatRow): string | null {
     const botId = this.storedBotId();
     if (botId) return botId;
-    const route = chat.type !== "private" ? this.deps.clones?.peek(chat.chatId) : null;
-    return route?.methodsFeature && route.send && this.deps.clones?.valid(route, chat.chatId) ? route.id : null;
+    return chat.type !== "private" ? this.deps.clones?.confirmationSender(chat.chatId) ?? null : null;
   }
   private async fileSendStore(input: TelegramFileSendInput): Promise<TelegramBotStore> {
     if (this.storedBotId()) return this.connectedStore();
     const store = this.store();
     let chat: ChatRow | null = null;
     try { chat = this.resolveChat(store, input.chat); } catch { /* Preserve the legacy disconnected refusal below. */ }
-    if (chat && chat.type !== "private") {
-      const route = await this.deps.clones?.route(chat.chatId);
-      if (route && this.deps.clones?.valid(route, chat.chatId)) return store;
-    }
+    // File admission (root, type, secret scan and Office inspection) must
+    // finish before the selector discovers a paired relay. A known group can
+    // use the shared store for those checks without resolving its sender yet.
+    if (chat && chat.type !== "private") return store;
     return this.connectedStore();
   }
 
@@ -451,14 +450,15 @@ export class TelegramBotService {
   private receiptFields(row: import("./store").SendRow) {
     return { ...(row.botIdentity ? { sentBy: row.botIdentity } : {}), ...(row.attempts.length ? { refusals: publicRefusals(row.attempts) } : {}) };
   }
-  private selection(chat: ChatRow, caller: string, key: string, capability: "canPost" | "canSendPhotos" | "canSendDocuments", owner?: () => void) {
+  private selection(chat: ChatRow, caller: string, key: string, capability: "canPost" | "canSendPhotos" | "canSendDocuments",
+    authority?: { owner?: () => void; file?: (bot?: PostingBot) => void }) {
     return this.selector().selection(chat, caller, key, capability, id => this.deps.publicationTarget?.(id) ?? null, () => {
-      if (owner) owner();
+      if (authority?.owner) authority.owner();
       else {
         const current = this.store().chat(chat.chatId) ?? (chat.alias ? this.store().resolveChat(chat.alias) : null);
         if (!current || !current.postAllowed || !current.alias) throw new TelegramBotError("chat_not_allowed", "posting permission changed");
       }
-    });
+    }, authority?.file);
   }
 
   async addBot(token: unknown): Promise<TelegramBotStatusPayload> {
@@ -1340,18 +1340,7 @@ export class TelegramBotService {
     };
     authorize();
     store.recordLookedUpChat(found.result, null, this.deps.now());
-    const result = await this.sendRich({ ...input, chat: selected.chatId }, { authorize, chat: store.chat(selected.chatId)! });
-    if (input.message.review && result.messageIds[0]) {
-      // Optional polls cannot prevent reconciliation of the form's receipt.
-      // Resolve their custody before enqueueing any new Telegram work.
-      try {
-        const pollPublication = this.publicationMetadata(botId, "poll", `review:${input.clientRequestId}`);
-        this.reviewPolls.enqueue({ review: input.message.review,
-          key: input.clientRequestId, chatId: result.chatId, messageId: result.messageIds[0], transport, authorize,
-          publish: (message, text) => this.publishConfirmed(botId, message, result.chatId, null, text, { ...pollPublication, replyToMessageId: result.messageIds[0]! }) });
-      } catch { console.warn("Telegram review polls unavailable", "publication_unavailable"); }
-    }
-    return result;
+    return this.sendRich({ ...input, chat: selected.chatId }, { authorize, chat: store.chat(selected.chatId)! });
   }
 
   /** One prototype message under a durable claim; ambiguous sends retain it. */
@@ -1387,7 +1376,7 @@ export class TelegramBotService {
       return { chat: store.chat(claim.row.chatId)?.alias ?? claim.row.chatId, chatId: claim.row.chatId,
         messageIds: claim.row.messageIds, sentAt: claim.row.sentAt!, attributedTo, parts: claim.row.parts, ...this.receiptFields(claim.row), alreadySent: true };
     }
-    const selection = this.selection(chat, callerKey, key, input.message.images.length ? "canSendPhotos" : "canPost", owner?.authorize);
+    const selection = this.selection(chat, callerKey, key, input.message.images.length ? "canSendPhotos" : "canPost", { owner: owner?.authorize });
     const transport = selection.transport;
     const publication = this.publicationMetadata(null, "review", `review:${input.clientRequestId}`);
     const topicId = Number.isSafeInteger(input.topicId) && input.topicId! > 0 ? input.topicId! : null;
@@ -1486,6 +1475,7 @@ export class TelegramBotService {
     }
 
     let images: Array<TelegramBotMediaInput & { blob: Blob; sha256: string; resolvedPath: string }>;
+    let authorizeFile: ((bot?: PostingBot) => void) | undefined;
     const reasons: DocumentWarning[] = [];
     try {
       const roots = this.documentRoots(store).roots;
@@ -1500,14 +1490,14 @@ export class TelegramBotService {
         if (caption.length > PHOTO_CAPTION_MAX_CHARS) throw new TelegramBotError("text_too_long", `photo ${index + 1} caption exceeds 1024 characters`);
         images.push({ path: filename, caption, ...await photoBlob(filename, index, roots, environment, reasons) });
       }
-      this.admitFileSend("media", chat, { ...this.fileOptions(input, chat), images: images.map(image => ({ path: image.path, caption: image.caption })) },
+      authorizeFile = this.admitFileSend("media", chat, { ...this.fileOptions(input, chat), images: images.map(image => ({ path: image.path, caption: image.caption })) },
         images.map(image => ({ path: image.path, resolvedPath: image.resolvedPath, filename: path.basename(image.path), sha256: image.sha256, bytes: image.blob.size })), reasons, approval);
     } catch (error) {
       store.failSend(sendCallerKey, sendRequestId, error instanceof TelegramBotError ? error.code : "photo_invalid", []);
       throw error;
     }
 
-    const selection = this.selection(chat, sendCallerKey, sendRequestId, "canSendPhotos", this.fileApprovalCheck(chat, approval));
+    const selection = this.selection(chat, sendCallerKey, sendRequestId, "canSendPhotos", { file: authorizeFile });
     const transport = selection.transport;
     const replyTo = typeof input.replyToMessageId === "number" && Number.isSafeInteger(input.replyToMessageId) && input.replyToMessageId > 0 ? input.replyToMessageId : null;
     const topicId = typeof input.topicId === "number" && Number.isSafeInteger(input.topicId) && input.topicId > 0 ? input.topicId : null;
@@ -1587,11 +1577,12 @@ export class TelegramBotService {
     }
 
     let document: ReturnType<typeof loadDocument>;
+    let authorizeFile: ((bot?: PostingBot) => void) | undefined;
     const reasons: DocumentWarning[] = [];
     try {
       document = loadDocument(input.document, this.documentRoots(store).roots, this.deps.documentEnvironment(), reasons);
       const filename = (input.document as { path: string }).path;
-      this.admitFileSend("document", chat, { ...this.fileOptions(input, chat), document: { path: filename, filename: document.filename, caption: document.caption } },
+      authorizeFile = this.admitFileSend("document", chat, { ...this.fileOptions(input, chat), document: { path: filename, filename: document.filename, caption: document.caption } },
         [{ path: filename, resolvedPath: document.real, filename: document.filename, sha256: document.sha256, bytes: document.bytes }], reasons, approval);
     } catch (error) {
       const refused = error instanceof TelegramBotError ? error : error instanceof DocumentRefusal
@@ -1601,7 +1592,7 @@ export class TelegramBotService {
       throw refused;
     }
 
-    const selection = this.selection(chat, callerKey, clientRequestId, "canSendDocuments", this.fileApprovalCheck(chat, approval));
+    const selection = this.selection(chat, callerKey, clientRequestId, "canSendDocuments", { file: authorizeFile });
     const transport = selection.transport;
     const replyTo = typeof input.replyToMessageId === "number" && Number.isSafeInteger(input.replyToMessageId) && input.replyToMessageId > 0 ? input.replyToMessageId : null;
     const topicId = typeof input.topicId === "number" && Number.isSafeInteger(input.topicId) && input.topicId > 0 ? input.topicId : null;

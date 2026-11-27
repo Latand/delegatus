@@ -614,12 +614,14 @@ function* projectedScopeRowSteps(rowKeys: readonly string[]): Generator<RoleMemo
     FROM state_rows WHERE collection='role_memory' AND row_key=?`);
   const history = db.prepare<{ fields_json: string }, [string]>(`SELECT json_extract(h.value,
     '$.revision', '$.revisionScope', '$.at', '$.by', '$.pass', '$.counts',
-    '$.revertedAt', '$.added', '$.merged', '$.rewritten', '$.archived') AS fields_json
+    '$.revertedAt', '$.added', '$.merged', '$.rewritten', '$.archived', '$.before',
+    '$.created', '$.restored', '$.moved', '$.split') AS fields_json
     FROM state_rows s, json_each(s.value_json, '$.history') h
     WHERE s.collection='role_memory' AND s.row_key=?`);
   const rows = db.prepare<{ fields_json: string }, [string, string]>(`SELECT json_extract(value_json,
     '$.entry.revision', '$.entry.revisionScope', '$.entry.at', '$.entry.by', '$.entry.pass', '$.entry.counts',
-    '$.entry.revertedAt', '$.entry.added', '$.entry.merged', '$.entry.rewritten', '$.entry.archived') AS fields_json ${HISTORY_ROWS_SQL}`);
+    '$.entry.revertedAt', '$.entry.added', '$.entry.merged', '$.entry.rewritten', '$.entry.archived', '$.entry.before',
+    '$.entry.created', '$.entry.restored', '$.entry.moved', '$.entry.split') AS fields_json ${HISTORY_ROWS_SQL}`);
   try {
     for (const rowKey of rowKeys) {
       const header = base.get(rowKey);
@@ -630,11 +632,15 @@ function* projectedScopeRowSteps(rowKeys: readonly string[]): Generator<RoleMemo
       if (!Array.isArray(active) || header!.history_type !== "array") throw new Error("invalid projected memory scope");
       const changes: ScopeHistoryEntry[] = [];
       const change = (fields: string) => {
-        const [changeRevision, changeScope, at, by, pass, counts, revertedAt, added, merged, rewritten, archived] = JSON.parse(fields) as unknown[];
+        const [changeRevision, changeScope, at, by, pass, counts, revertedAt, added, merged, rewritten, archived,
+          before, created, restored, moved, split] = JSON.parse(fields) as unknown[];
         changes.push({ revision: changeRevision as number, ...(changeScope === null ? {} : { revisionScope: changeScope as string }), at: at as string,
           by: by as ScopeHistoryEntry["by"], ...(pass === null ? {} : { pass: pass as string }), ...(counts === null ? {} : { counts: counts as ScopeHistoryEntry["counts"] }),
           ...(revertedAt === null ? {} : { revertedAt: revertedAt as string }), added: added as string[], merged: merged as ScopeHistoryEntry["merged"],
-          ...(rewritten === null ? {} : { rewritten: rewritten as ScopeHistoryEntry["rewritten"] }), archived: archived as string[] });
+          ...(rewritten === null ? {} : { rewritten: rewritten as ScopeHistoryEntry["rewritten"] }), archived: archived as string[],
+          ...(before === null ? {} : { before: before as string[] }), ...(created === null ? {} : { created: created as string[] }),
+          ...(restored === null ? {} : { restored: restored as string[] }), ...(moved === null ? {} : { moved: moved as ScopeHistoryEntry["moved"] }),
+          ...(split === null ? {} : { split: split as ScopeHistoryEntry["split"] }) });
       };
       // Entries moved out of the scope row come first: they are the older ones.
       if (stored) {
@@ -940,10 +946,14 @@ export function otherProjectRoleRules(scope: string): RoleMemoryRule[] {
 /** Search only active membership, projecting rule text before decoding. CROSS
  * JOIN keeps scopes and active ids ahead of rule lookups; otherwise SQLite can
  * start from every historical rule. Histories and versions stay out of recall. */
-export function activeRoleRuleRows(input: { project?: string; terms?: string[]; id?: string; limit: number }): Pick<RoleMemoryRule, "id" | "scope" | "rule" | "changedAt">[] {
+export function activeRoleRuleRows(input: { project?: string; reader?: "legatus"; terms?: string[]; id?: string; limit: number }): Pick<RoleMemoryRule, "id" | "scope" | "rule" | "changedAt">[] {
   if (!roleMemoryCollection()) return [];
   const project = input.project ? canonicalProject(input.project) : null;
-  const scopes = roleScopeKeys().filter(scope => !project || scope === "machine" || isCrossProjectRoleScope(scope) || canonicalProject(scopeProject(scope) ?? "") === project);
+  const scopes = roleScopeKeys().filter(scope => {
+    const resolved = canonicalScope(scope);
+    if (input.reader && scopeRole(resolved) && scopeRole(resolved) !== input.reader) return false;
+    return !project || resolved === "machine" || isCrossProjectRoleScope(resolved) || scopeProject(resolved) === project;
+  });
   if (!scopes.length) return [];
   // Succession can leave a rule's original scope on the row after its active
   // membership has joined the canonical scope. Admit that recorded alias family.

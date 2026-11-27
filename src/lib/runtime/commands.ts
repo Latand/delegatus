@@ -2,7 +2,7 @@ import { modelFromBody } from "@/lib/agent/models";
 import { parseSelectedContextRef } from "@/lib/selection/selectedContext";
 import { parseMessageOrigin } from "./messageOrigin";
 
-import type { RuntimeOperationCommand, RuntimeOperationKind, RuntimeReconfigureCommand, RuntimeSendSettings } from "./contracts";
+import type { RuntimeKillTarget, RuntimeOperationCommand, RuntimeOperationKind, RuntimeReconfigureCommand, RuntimeSendSettings } from "./contracts";
 import { parseStructuredImageRefs, structuredContent } from "./structuredContent";
 
 const MAX_OPERATION_BYTES = 256 * 1024;
@@ -91,6 +91,28 @@ function runtimeSessionKey(value: unknown): { engine: "codex" | "claude" | "copi
   const sessionId = typeof candidate.sessionId === "string" ? candidate.sessionId.trim() : "";
   if (!engine || !sessionId || sessionId.includes(":") || /\s/.test(sessionId)) throw new Error("sessionKey is invalid");
   return { engine, sessionId };
+}
+
+export function parseRuntimeKillTargets(value: unknown, key: ReturnType<typeof runtimeSessionKey>): RuntimeKillTarget[] {
+  if (!Array.isArray(value) || value.length === 0) throw new Error("kill targets are invalid");
+  const seen = new Set<string>();
+  const targets = value.map((item: unknown): RuntimeKillTarget => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("kill target is invalid");
+    const { sessionId, claimEpoch, process } = item as Record<string, unknown>;
+    const native = runtimeSessionKey({ engine: key.engine, sessionId });
+    if (seen.has(native.sessionId) || (claimEpoch !== null
+      && (!Number.isSafeInteger(claimEpoch) || (claimEpoch as number) < 0))) throw new Error("kill target is invalid");
+    seen.add(native.sessionId);
+    if (process === null) return { sessionId: native.sessionId, claimEpoch: claimEpoch as number | null, process };
+    if (claimEpoch === null || !process || typeof process !== "object" || Array.isArray(process)) throw new Error("kill target process is invalid");
+    const { pid, startIdentity, bootEpoch } = process as Record<string, unknown>;
+    if (!Number.isSafeInteger(pid) || (pid as number) <= 1 || (startIdentity !== null && typeof startIdentity !== "string")
+      || (bootEpoch !== undefined && bootEpoch !== null && typeof bootEpoch !== "string")) throw new Error("kill target process is invalid");
+    return { sessionId: native.sessionId, claimEpoch: claimEpoch as number,
+      process: { pid: pid as number, startIdentity, ...(bootEpoch !== undefined ? { bootEpoch } : {}) } };
+  });
+  if (!seen.has(key.sessionId)) throw new Error("kill targets omit the current generation");
+  return targets;
 }
 
 function idempotency(body: Record<string, unknown>, operationId: string | undefined, durableReplay = false): string {
@@ -272,12 +294,15 @@ export function parseRuntimeCommand(kind: RuntimeOperationKind, value: unknown, 
     if (body.providerRecovery !== undefined && body.onlyIfIdle === undefined) {
       throw new Error("provider recovery requires an idle-only kill");
     }
+    if (body.targets !== undefined && body.onlyIfIdle !== undefined) throw new Error("idle-only kill cannot have conversation targets");
+    const sessionKey = runtimeSessionKey(body.sessionKey);
     return {
       kind,
       conversationId,
       ...(operationId ? { operationId } : {}),
       idempotencyKey,
-      sessionKey: runtimeSessionKey(body.sessionKey),
+      sessionKey,
+      ...(body.targets !== undefined ? { targets: parseRuntimeKillTargets(body.targets, sessionKey) } : {}),
       ...(parseMessageOrigin(body.origin) ? { origin: parseMessageOrigin(body.origin)! } : {}),
       ...(body.pendingSendIds !== undefined ? { pendingSendIds: [...new Set(body.pendingSendIds as string[])] } : {}),
       ...(body.onlyIfIdle !== undefined ? { onlyIfIdle: parseRuntimeIdleKillFence(body.onlyIfIdle) } : {}),

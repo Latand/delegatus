@@ -171,7 +171,7 @@ export interface RuntimeEventInput {
       writer that decides from a reading, with no host of its own behind the
       event, names the reading here so a row a new owner has published since
       is left as that owner wrote it. */
-  expectedSessionRevision?: number;
+  expectedSessionRevision?: number | null;
   /** A delta folded from consecutive engine deltas names the text length of
       each one, oldest first; the last belongs to the sequence in its producer
       key and each earlier one to the sequence before. The journal keeps only
@@ -509,11 +509,20 @@ export interface RuntimeKillCommand extends RuntimeCommandBase {
   kind: "kill";
   /** Viewer-derived cohort; the first admission owns it across retries. */
   pendingSendIds?: string[];
+  /** Viewer admission snapshot for an explicit conversation stop. Older and
+      idle-only commands retain their single-generation fence. */
+  targets?: RuntimeKillTarget[];
   /** Authenticated control authorship; an automatic recovery is system custody. */
   origin?: MessageOrigin;
   onlyIfIdle?: RuntimeIdleKillFence;
   providerRecovery?: RuntimeProviderRecoveryRef;
   sessionKey: { engine: RuntimeEngine; sessionId: string };
+}
+
+export interface RuntimeKillTarget {
+  sessionId: string;
+  claimEpoch: number | null;
+  process: import("@/lib/processIdentity").ProcessIdentity | null;
 }
 
 export interface RuntimeReconfigureCommand extends RuntimeCommandBase {
@@ -980,6 +989,8 @@ export interface ViewerHealthReadiness {
 }
 
 export interface ViewerHealthEvidence {
+  /** Cold provisioning verified through the candidate's served bundle. */
+  provisioning?: { ok: boolean; workerEntry?: string; runtime?: string; readyFrame?: boolean };
   checkedAt: string;
   endpoint: string;
   processReady: boolean;
@@ -1144,7 +1155,7 @@ export interface RuntimeSocketRequest {
   /** Opt in to serial reuse; older listeners close after the answer. */
   keepAlive?: boolean;
   id: string;
-  method: "runtime-host-health" | "files-revision" | "session-read" | "startup-session-evidence" | "snapshot" | "events" | "wait" | "append" | "append-session-fenced" | "operation" | "command" | "guarded-command" | "operation-status" | "operation-delivery-action" | "operation-retry" | "effect-batch" | "operation-transition" | "operation-transition-pristine" | "operation-confirm-delivery" | "operation-projection-ack" | "producer-cursor" | "viewer-deployment-request" | "viewer-deployment-reconcile" | "viewer-deployment-read" | "viewer-deployment-list" | "viewer-deployment-find" | "viewer-deployment-cancel" | "mcp-health-probe-admission" | "native-queue-read" | "native-queue-transition" | "native-queue-settle-compacted";
+  method: "runtime-host-health" | "files-revision" | "session-read" | "startup-session-evidence" | "snapshot" | "events" | "wait" | "append" | "append-session-fenced" | "operation" | "command" | "guarded-command" | "staged-launch-command" | "operation-status" | "operation-delivery-action" | "operation-retry" | "effect-batch" | "operation-transition" | "operation-transition-pristine" | "operation-confirm-delivery" | "operation-projection-ack" | "producer-cursor" | "viewer-deployment-request" | "viewer-deployment-reconcile" | "viewer-deployment-read" | "viewer-deployment-list" | "viewer-deployment-find" | "viewer-deployment-cancel" | "mcp-health-probe-admission" | "native-queue-read" | "native-queue-transition" | "native-queue-settle-compacted";
   params?: Record<string, unknown>;
 }
 

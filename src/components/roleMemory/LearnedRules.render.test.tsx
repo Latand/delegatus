@@ -538,3 +538,53 @@ test("the window is a modal: Tab wraps within it and Escape closes it once", asy
     expect(closed).toHaveLength(1);
   });
 });
+
+test("the existing rule row shows the source of a remembered decision", () => {
+  const remembered: RuleView = { ...rule("r_remembered"), roleId: null, stageId: "decision", decisionAuthor: "voice" };
+  const seatLesson = rule("r_seat", "Keep the related form decisions together.", "legatus");
+  const opened = (focusRule: string) => renderToStaticMarkup(<RuleSection kind="project" title="Project"
+    scope={{ ...scope(100), active: [remembered, seatLesson] }} focusRule={focusRule} onDelete={() => {}} onRestore={() => {}} />);
+  expect(opened(remembered.id)).toContain(translate("en", "roleMemory.decision.voice"));
+  expect(opened(seatLesson.id)).toContain(translate("en", "roleMemory.legatus"));
+});
+
+test.each(["typed", "voice", "clicked"] as const)("archived decision rows and prior versions retain their %s attribution", async author => {
+  const left: RuleView = { ...rule(`r_left_${author}`, "An operator decision left this active scope."),
+    state: "archived", reason: "rewritten", stageId: "decision", decisionAuthor: author,
+    versions: [{ id: `v_${author}`, rule: "The prior decision wording.", why: "The source remains traceable.", hints: [], createdAt: "2026-10-08T00:00:00.000Z", decisionAuthor: author }] };
+  const label = translate("en", `roleMemory.decision.${author}`);
+  const view: RoleMemoryProjectView = { project: "atlas", enabled: true, scopes: [levelScope("project:atlas", "project", null, [], [left])] };
+  await withWindow({ view, focusRule: left.id }, async ({ dom }) => {
+    const row = dom.document.querySelector(`[data-left-rule="${left.id}"]`)!;
+    expect(row.textContent).toContain(label);
+    expect(row.textContent!.split(label).length - 1).toBe(2);
+  });
+});
+
+test("an agent rewrite version shows its current wording author without the original typed label", () => {
+  const revised: RuleView = { ...rule("r_legatus_rewrite"), roleId: "legatus", stageId: "decision",
+    revisedBy: { by: "agent", at: "2026-10-08T00:00:00.000Z", roleId: "legatus" },
+    versions: [{ id: "v_legatus_rewrite", rule: "The revised wording.", why: "It follows the latest answer.", hints: [],
+      createdAt: "2026-10-08T00:00:00.000Z", revisedBy: { by: "agent", at: "2026-10-08T00:00:00.000Z", roleId: "legatus" } }] };
+  const html = renderToStaticMarkup(<RuleSection kind="project" title="Project" scope={{ ...scope(100), active: [revised] }}
+    focusRule={revised.id} onDelete={() => {}} onRestore={() => {}} />);
+  expect(html).toContain("rewritten by Legatus");
+  expect(html).not.toContain(translate("en", "roleMemory.decision.typed"));
+});
+
+test("the archived row shows the Legatus rewrite author alongside the prior typed version", async () => {
+  const left: RuleView = { ...rule("r_archived_rewrite", "Keep the revised choice visible."),
+    state: "archived", reason: "stale", stageId: "decision",
+    revisedBy: { by: "agent", at: "2026-10-09T00:00:00.000Z", roleId: "legatus" },
+    versions: [{ id: "v_before_archive", rule: "Remember the original choice.", why: "The operator wrote this.", hints: [],
+      createdAt: "2026-10-08T00:00:00.000Z", decisionAuthor: "typed" }] };
+  const view: RoleMemoryProjectView = { project: "atlas", enabled: true, scopes: [levelScope("project:atlas", "project", null, [], [left])] };
+  await withWindow({ view, focusRule: left.id }, async ({ dom }) => {
+    const row = dom.document.querySelector(`[data-left-rule="${left.id}"]`)!;
+    const history = row.querySelector("details")!;
+    expect(row.textContent).toContain(translate("en", "roleMemory.left.stale"));
+    expect(row.textContent).toContain("rewritten by Legatus");
+    expect(history.textContent).toContain(translate("en", "roleMemory.decision.typed"));
+    expect(history.textContent).not.toContain("rewritten by Legatus");
+  });
+});

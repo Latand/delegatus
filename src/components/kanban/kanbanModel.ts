@@ -11,7 +11,7 @@ import { taskMotion, type TaskMotion } from "@/lib/tasks/motion";
 import { deriveTaskSteps, type TaskStepsSummary } from "@/lib/tasks/steps";
 import { priorityRank } from "@/lib/tasks/priority";
 import type { FileEntry } from "@/lib/types";
-import { byNeedAge, conversationNeed, laneNeed, type ClearedNeed, type NeedReason } from "@/components/attention/needReason";
+import { byNeedAge, conversationNeed, laneNeed, needOwesAnswer, type ClearedNeed, type NeedReason } from "@/components/attention/needReason";
 import { mobileRowState, nowFragment, type MobileRowState, type MobileRowStateKey } from "@/components/mobile/mobileBoardModel";
 import { latestAttempt, stageAttempts, type StageChipState } from "@/components/pipelines/pipelineModel";
 import { deckKey } from "@/components/scheme/agentLinks";
@@ -484,9 +484,11 @@ export function cardMatches(card: KanbanCard, query: string): boolean {
 }
 
 /** The Overview and filters use the board's motion, including provisioning
-    and declared operator holds. Paused historical stage chips are not work. */
+    and declared operator holds. Paused historical stage chips are not work.
+    A card whose reason is a fault (a message stuck in delivery, a failed
+    launch) stays in view though it waits on nobody: its state line names it. */
 export function cardHasLiveWork(card: KanbanCard): boolean {
-  return card.motion.key === "working" || card.motion.key === "needs-you";
+  return card.motion.key === "working" || card.motion.key === "needs-you" || card.reasons.length > 0;
 }
 
 interface CachedCard {
@@ -953,7 +955,9 @@ function deriveKanbanModel(input: KanbanModelInput, cache?: ModelCache): KanbanM
     const workingSinceMs = working > 0 || inFlight.length > 0
       ? Math.max(0, ...inFlight, ...members.filter((member) => member.working).map((member) => memberStartMs(member.file)))
       : null;
-    const needsYou = reasons.length > 0 || prototypeWaitsOnOperator(task?.prototypeReview, task);
+    /* A stuck delivery or a failed launch stays among the reasons, named on
+       the state line, and makes no card wait on the operator. */
+    const needsYou = reasons.some(needOwesAnswer) || prototypeWaitsOnOperator(task?.prototypeReview, task);
     const hide: GroupHideState = task
       ? groupHideState(task, { members: members.map((member) => member.file), pipelines: summaries.map((summary) => summary.pipeline), seat: input.seat })
       : { hidden: false, resurfaced: null };

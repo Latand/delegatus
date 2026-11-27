@@ -1,5 +1,90 @@
 # Attempt temp under disk pressure
 
+Two things start retirement ahead of the ordinary clock:
+
+| Pressure | Owner | Reach |
+| --- | --- | --- |
+| Free space (a warning reading or less than `LLV_CLEANER_FREE_GB` free) | The serving Viewer's [Cleaner](cleaner-agent.md#automatic-pressure-pass) | Roots of the Cleaner pass's project, 16 per slice in directory order |
+| Ledger allocation over its effective cap | The minute worker ([Over-cap reclaim](#over-cap-reclaim)) | Registered lane roots of every project, oldest finish first |
+
+The minute timer keeps its ordinary expiry page and reports the working reserve
+and effective cap. The persistent pressure pass described further below belongs
+to the lower-level retention sweep; no production caller starts one.
+
+## Over-cap reclaim
+
+When the recorded allocation is over the effective cap, the minute tick
+reclaims finished stage scratch until it is back under it, whatever the free
+space is (`src/lib/runtime/attemptTempOverCap.ts`). The minute worker owns this
+because it already holds the measure, runs every minute under a bounded budget
+and covers every project. The Cleaner starts on low free space, so a full ledger
+on a roomy disk had no trigger, and its pass retires one project's roots.
+
+**What qualifies.** The ledger's ordinary sweep retires a bounded exact
+selection under the Cleaner's pressure rule:
+
+- the attempt's 24-hour expiry has passed (with the expiry page's checkout
+  dependency check), or the whole lane is closed or completed with settled
+  activity. An open or parked lane keeps a finish younger than 24 hours;
+- nothing in the tree changed for three hours;
+- no process (cwd, open file, argument or environment path), socket, checkout
+  link or container mount references it;
+- no keep marker, Git checkout, mount, linked report evidence or recorded-check
+  custody holds it, and no open lane or live conversation works inside it;
+- canonical-path admission, the lane's retirement claim, the quarantine journal
+  and the daily `disk-cleaner/ordinary-<date>.ndjson` rows (`reason: over-cap`).
+
+The open-lane and conversation check is asked many times for every root. Lanes
+are read each time. Conversations are read only where they work in a scratch
+namespace, and again once the registry has committed anything. Reading every row
+at every question took about 0.8 s each on a registry of 53,000 rows, which
+outlasted a root's window. A lane or conversation working further up, such as in
+the home directory, holds no root; this applies to the unregistered-scratch pass
+as well.
+
+**Order and bounds.** Visits follow the recorded finish, oldest first, 32 per
+page, skip roots the ledger is waiting to retry, and stop as soon as the
+allocation reaches the cap. No visit changes the expiry page's retry schedule. A durable position
+(`over_cap_cursor`) is saved before each visit, so a long run of held roots
+cannot starve younger ones and a killed helper moves on; clearing the cap
+resets it. Directories already removed by someone else stop counting before
+anything is deleted. The expiry page runs first and reclaim takes what is left
+of the tick's 40 seconds, starting a root only when its whole window fits. After
+a tick that left reclaim no time to visit anything, reclaim runs first once. A
+removal cut off after quarantine is finished by a later reclaim under the same
+proofs.
+
+**Reporting.** `attempt-temp-report.json` keeps the tick totals at the top level,
+the expiry page's share in `expiryPage` and reclaim's in `overCap` (visits,
+removals, kept roots by reason code and how it ended: `cleared`, `budget` or
+`exhausted`). The summary and the tick line name what each path removed. A
+recorded pass that ended `pressure-cleared` is left out of both while the ledger
+is over its cap.
+
+## Renumbered devices
+
+A root's identity is its device and inode. Device numbers can change across a
+reboot or remount, which used to hold such a root as `root_identity_changed`
+for good. The ledger now binds the row to the current device when the directory
+is demonstrably the recorded one: same inode, admitted canonical path, this
+user's directory with the ownership marker, born no later than its row, no
+quarantine in flight. The expiry page, the allocation queue, over-cap reclaim
+and the Cleaner pass do this; recorded-check custody follows the same inode. Any
+other identity change stays held under that reason and counts as no error. An
+approved manifest names an exact identity and is never rebound.
+
+## Cut removals
+
+A removal that is cut after it began (its window ran out, or the helper died)
+leaves the claimed tree and its journal. Trash recovery looks for an evidence
+copy or a recorded check naming that tree. When neither exists, the ledger row
+that owns the root still records the same inode and the attempt has finished, the
+row is the owner: the sweep returns the root to the ordinary path, which repeats
+every proof and then finishes the removal, or restores the tree when its 24 hours
+have not passed. Without this the root stayed `recovery_owner_unknown` on every
+visit. A tree with no matching row, an adopted row, conflicting bindings or an
+attempt that is not finished is still held.
+
 ## Persistent pressure passes
 
 The scheduler follows the worktree sweep's pass and continuation pattern
@@ -107,6 +192,8 @@ milliseconds.
 | Proof or recovery deferred | `protection_checkpoint`, `protection_marker_limit`, `protection_changed`, `checkout_changed`, `proof_unavailable`, `proof_changed`, `recovery_binding_scan` |
 | Live reference or unavailable inventory | `process_reference`, `unix_socket_reference`, `checkout_link_reference`, `checkout_unknown`, `checkout_unreadable`, `container_mount_reference`, `container_inventory_unknown` |
 | Retained data | `mount_boundary`, `git_boundary`, `keep_marker`, `namespace_tree_hold`, `recorded_evidence_hold`, `recorded_evidence_lifetime`, `linked_evidence_hold`, `declared_evidence_hold`, `operator_permissions` |
+| A selection's own guard | `open_lane`, `scratch_ancestry`, `selection_binding_changed`, `owner_project` (Cleaner), `approved_binding_changed` (approved manifest) |
+| Idle rule of a pressure selection | `recently_touched`, `idle_tree_*` (what the idle walk could not pass, such as a Git checkout or its entry limit), `cleaner_ownership`, `ordinary_sweep_recovery` |
 | Ownership or a changed guard | `owner_*`, `expiry_unconfirmed`, `expiry_admission`, `expiry_revoked`, `authority_changed`, `root_identity_changed`, `root_ancestry_changed`, `evidence_changed`, `recovery_owner_unknown`, `recovery_restored_before_expiry`, `dispatch_refused`, `dispatch_reference_or_changed` |
 
 Outside pressure, an expired

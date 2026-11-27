@@ -22,8 +22,14 @@ let discovery: WorktreeSweepDiscovery | undefined;
 const lines = createInterface({ input: process.stdin });
 for await (const line of lines) {
   try {
-    if (line.length > 1024) throw new Error("worktree sweep request exceeded its bound");
+    if (line.length > 8192) throw new Error("worktree sweep request exceeded its bound");
     const request = JSON.parse(line);
+    if (request.kind === "disk-cleaner") {
+      const { runCleanerSweep } = await import("./cleaner/diskSweep");
+      const report = await withAttemptTempDeadline(request.deadline, () => runCleanerSweep(request.sweep));
+      process.stdout.write(JSON.stringify({ report }) + "\n");
+      continue;
+    }
     if (request.kind === "maintenance") {
       // Maintenance consumers use calendar deadlines; only this boundary converts.
       request.deadline = Date.now() + (request.deadline - sweepMonotonicNow());
@@ -51,12 +57,19 @@ for await (const line of lines) {
     }
     if (request.kind === "temp") {
       const report = await runTempSweepInHelper({ ...process.env, LLV_TEMP_SWEEP: request.env?.LLV_TEMP_SWEEP,
-        LLV_TEMP_SWEEP_MAX_AGE_HOURS: request.env?.LLV_TEMP_SWEEP_MAX_AGE_HOURS });
+        LLV_TEMP_SWEEP_MAX_AGE_HOURS: request.env?.LLV_TEMP_SWEEP_MAX_AGE_HOURS,
+        LLV_TEMP_STRAY_MAX_AGE_HOURS: request.env?.LLV_TEMP_STRAY_MAX_AGE_HOURS, LLV_TEMP_STRAY_KEEP: request.env?.LLV_TEMP_STRAY_KEEP });
       process.stdout.write(JSON.stringify({ report }) + "\n");
       continue;
     }
     if (request.kind === "disk-pressure") {
       const report = await readDiskPressureInHelper();
+      process.stdout.write(JSON.stringify({ report }) + "\n");
+      continue;
+    }
+    if (request.kind === "memory") {
+      const { readHostMemoryReading } = await import("./state/hostTmpUsage");
+      const report = await readHostMemoryReading();
       process.stdout.write(JSON.stringify({ report }) + "\n");
       continue;
     }

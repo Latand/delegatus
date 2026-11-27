@@ -1,5 +1,6 @@
 "use client";
 
+import { GLOBAL_RUNTIME_GATES } from "@/hooks/runtimeSubscriptions";
 import { ScrollText } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -10,7 +11,7 @@ import { useAccountName } from "@/hooks/useEngineAccounts";
 import { useBoardState } from "@/hooks/useBoardState";
 import { useKeyboardInset } from "@/hooks/useComposer";
 import { useNowSeconds } from "@/hooks/useNowSeconds";
-import { useRuntimeBusState, useRuntimeSessionForConversation } from "@/hooks/useRuntime";
+import { useRuntimeSelector, useRuntimeSessionForConversation } from "@/hooks/useRuntime";
 import { selectionInOrder, viewBus } from "@/hooks/viewPresenceBus";
 import { projectDisplayName } from "@/lib/displayNames";
 import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
@@ -38,7 +39,9 @@ import { compactPipelineLayoutFlows } from "@/components/pipelines/pipelineModel
 import { conversationIdentity } from "@/lib/accounts/identity";
 import { useFavorites } from "@/components/favorites/FavoritesContext";
 import { useOrchestratorSeat } from "@/components/orchestrator/useOrchestratorSeat";
+import { resolveSeatFile, seatLivenessOf } from "@/components/orchestrator/seatState";
 import { useSeatPanel } from "@/components/orchestrator/useSeatPanel";
+import { useSeatSurface } from "@/components/orchestrator/useSeatSurface";
 import { SessionTitle } from "@/components/session/SessionTitle";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
 import { deckKey } from "@/components/scheme/agentLinks";
@@ -218,8 +221,7 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
   const navState = useMobileNav();
   /* Offline is screen-level (§4.2): every conversation shows the last state
      received and the bar's meta line says so. */
-  const runtime = useRuntimeBusState();
-  const offline = runtime.enabled && runtime.connection === "offline";
+  const offline = useRuntimeSelector(state => state.enabled && state.connection === "offline", false, Object.is, true, GLOBAL_RUNTIME_GATES);
   const favoritesApi = useFavorites();
   /* The pinned pane, tagged with the project it belongs to. A project switch
      re-reads that project's remembered focus DURING the render that changes
@@ -496,6 +498,25 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
   const holdsSeat = resolvedKey !== null && seatKey !== null && resolvedKey === seatKey;
   const seatPanel = useSeatPanel({ project, files, seat: seatRead, holdsSeat, open: seatSheetOpen });
   const openDecisions = useOpenDecisionCount(project);
+  /* Whether the seat's turn is idle with its host alive, read ONCE for every
+     phone surface that names the seat: the bar, the switcher row and the ⋯
+     menu head. The switcher opens over any conversation, so the seat's own
+     file and surface are read here and not only through `useSeatPanel`, which
+     answers while the seat itself is on screen. */
+  const seatFile = useMemo(
+    () => resolveSeatFile({
+      files,
+      conversationId: seatConversationId,
+      seatPath: seatStatus?.seat?.path ?? null,
+      currentPath: null,
+    }),
+    [files, seatConversationId, seatStatus?.seat?.path],
+  );
+  const seatSurface = useSeatSurface(seatFile);
+  const seatWaiting = seatPanel
+    ? seatPanel.state.kind === "live" && seatPanel.state.liveness === "waiting"
+    : seatConversationId !== null
+      && seatLivenessOf({ file: seatFile, surface: seatSurface, incumbent: null, hostLive: false }) === "waiting";
   /* A rotation confirmed from here lands in the SUCCESSOR: the incumbent stays
      live under the draft for as long as the rotation takes, so the phone waits
      for the seat read to name a conversation other than this one — and for the
@@ -596,6 +617,7 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
         offline={offline}
         seat={holdsSeat}
         decisionWaiting={holdsSeat && openDecisions > 0}
+        seatWaiting={holdsSeat && seatWaiting}
         stage={stage}
         bump={bumpPulse?.side ?? null}
         renamed={renamed && renamed.path === activeFile.path ? renamed.title : null}
@@ -627,6 +649,8 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
           title={displayName}
           entries={switchEntries}
           currentKey={resolvedKey}
+          seatWaiting={seatWaiting}
+          decisionWaiting={openDecisions > 0}
           onPick={(entry) => { close(); switchTo(entry, true); }}
           onBoard={canLeave ? () => { close(); nav.back(); } : undefined}
           onProjects={canLeave || !host ? undefined : () => nav.openSheet("projects")}
@@ -638,6 +662,8 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
       return (
         <MobileConversationMenu
           file={activeFile}
+          seatWaiting={holdsSeat && seatWaiting}
+          decisionWaiting={holdsSeat && openDecisions > 0}
           hasPinned={pinnedRelations.length > 0}
           backgroundCount={backgroundTasks.length}
           onOpenPinned={() => nav.openSheet("pinned")}
@@ -958,13 +984,15 @@ function ChatAccountTag({ file }: { file: FileEntry }) {
  * operator must not read as a running one because its own word ran out of room
  * (2026-08 audit findings 3 and 4).
  */
-export function ChatBarTitle({ file, offline, stage, bump, renamed = null, taskChange = null, seat = false, decisionWaiting = false }: { file: FileEntry; offline: boolean; stage: StagePosition | null; bump: "left" | "right" | null; renamed?: string | null; taskChange?: string | null;
+export function ChatBarTitle({ file, offline, stage, bump, renamed = null, taskChange = null, seat = false, decisionWaiting = false, seatWaiting = false }: { file: FileEntry; offline: boolean; stage: StagePosition | null; bump: "left" | "right" | null; renamed?: string | null; taskChange?: string | null;
   /** The project's orchestrator: its title is its role's name, whole, and its account is under ⋯ → Details. */
   seat?: boolean;
   /** A decision form of the seat's project is open: a finished turn reads «waiting». */
-  decisionWaiting?: boolean }) {
+  decisionWaiting?: boolean;
+  /** The seat is hosted and idle with no form open: its finished turn reads «waiting», quietly. */
+  seatWaiting?: boolean }) {
   const { t } = useLocale();
-  const bits = chatStateBits(t, file, { offline, decisionWaiting });
+  const bits = chatStateBits(t, file, { offline, decisionWaiting, seatWaiting });
   /* While the server is being reconnected (#2071 D7) the quiet reconnecting
      line takes the meta line's place: the state it would show is the state
      from before the outage. */

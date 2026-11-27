@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { createTask, patchTask } from "@/lib/tasks/commands";
 import { loadTasksForList, mutateTasks, mutateTasksFile } from "@/lib/tasks/store";
 import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
+import { holdPullRequestState, seatRoundLookup } from "@/lib/tasks/holdEvidence";
 import { waitingRoute, waitingRouteIndex } from "@/lib/tasks/waitingRoute";
 import { overlayAttentionRoutes } from "@/lib/attention/routeOverlay";
 import { waitingRoundIds } from "@/lib/attention/routing";
@@ -161,9 +162,12 @@ function maintenanceWaiting(project: string, tasks: ReturnType<SeatTickSources["
   const summarized = withPrototypeReviewSummaries(tasks, undefined, now);
   const waiting = summarized.filter(task => task.status === "blocked" && canonicalOrchestratorProject(task.project) === project);
   const lanes = sources.pipelines().filter(lane => canonicalOrchestratorProject(lane.project) === project).map(lane => ({ ...lane }));
-  overlayAttentionRoutes([], lanes, waitingRoundIds(summarized, seatDecisionNotices(project)), now / 1000);
-  const index = waitingRouteIndex(tasks, lanes, new Set(evidence.flatMap(row => row.workers
-    .filter(worker => worker.lifecycle === "running" || worker.lifecycle === "starting").map(worker => worker.conversationId))));
+  const seatDecisions = seatDecisionNotices(project);
+  overlayAttentionRoutes([], lanes, waitingRoundIds(summarized, seatDecisions), now / 1000);
+  // The same prerequisite evidence the seat tick reads, so both classify a wait alike.
+  const index = waitingRouteIndex(summarized, lanes, new Set(evidence.flatMap(row => row.workers
+    .filter(worker => worker.lifecycle === "running" || worker.lifecycle === "starting").map(worker => worker.conversationId))),
+  {}, holdPullRequestState(summarized, sources.pipelines()), seatRoundLookup(seatDecisions));
   const working = new Set(evidence.filter(row => row.workers.some(worker =>
     worker.via === "assignment" && (worker.lifecycle === "running" || worker.lifecycle === "starting"))).map(row => row.taskId));
   const lines: string[] = [];

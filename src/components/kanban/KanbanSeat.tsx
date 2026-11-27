@@ -5,6 +5,7 @@ import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, 
 
 import { COMPOSER_FIELD_RESIZE_EVENT } from "@/lib/composerFocus";
 import { seatGrowth } from "@/lib/composerScroll";
+import { observeSeatGrowthInputs } from "./seatGrowthInputs";
 import { useLocale } from "@/lib/i18n";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
@@ -97,8 +98,8 @@ export function KanbanSeat({ project, projectName, projectCwd, files, tasks, boa
      is not always the whole of it: a seat dragged to the grip's lower stop is
      too short for the transcript's minimum and the control strip alone, and
      the form cannot report more overflow than its own content, so the step
-     repeats until it changes nothing. It runs on every change inside the seat and before the frame is
-     painted, so the form is never drawn cut. The side seat is the full height
+     repeats until it changes nothing. Changes to the field, transcript or form rows can
+     change this budget. The side seat is the full height
      of the page and a folded one draws no conversation. */
   useLayoutEffect(() => {
     const section = sectionRef.current;
@@ -106,7 +107,7 @@ export function KanbanSeat({ project, projectName, projectCwd, files, tasks, boa
     let grown = 0;
     const step = () => {
       const conversation = section.querySelector<HTMLElement>("[data-orchestrator-conversation]");
-      const form = conversation?.querySelector<HTMLElement>("form");
+      const form = conversation?.querySelector<HTMLElement>(":scope > form");
       const transcript = conversation?.querySelector<HTMLElement>("[data-composer-yields]");
       let next = 0;
       if (form && transcript) {
@@ -131,14 +132,7 @@ export function KanbanSeat({ project, projectName, projectCwd, files, tasks, boa
       for (let pass = 0; pass < SEAT_GROWTH_PASSES && step(); pass += 1);
     };
     measure();
-    /* A transcript that streams changes nothing here: its row is held at its
-       minimum whatever is in it, so its own mutations are not measured. */
-    const observer = new MutationObserver((records) => {
-      const transcript = section.querySelector("[data-composer-yields]");
-      if (transcript && records.every((record) => transcript.contains(record.target))) return;
-      measure();
-    });
-    observer.observe(section, { subtree: true, childList: true, attributes: true, attributeFilter: ["style"] });
+    const stopObserving = observeSeatGrowthInputs(section, measure);
     section.addEventListener(COMPOSER_FIELD_RESIZE_EVENT, measure);
     window.addEventListener("resize", measure);
     /* The seat eases its height, so the commit that sets a new height is
@@ -147,7 +141,7 @@ export function KanbanSeat({ project, projectName, projectCwd, files, tasks, boa
     const arrived = (event: TransitionEvent) => { if (event.target === section && event.propertyName === "height") measure(); };
     section.addEventListener("transitionend", arrived);
     return () => {
-      observer.disconnect();
+      stopObserving();
       section.removeEventListener(COMPOSER_FIELD_RESIZE_EVENT, measure);
       window.removeEventListener("resize", measure);
       section.removeEventListener("transitionend", arrived);

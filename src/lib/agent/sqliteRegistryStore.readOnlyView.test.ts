@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import * as sqliteReads from "@/lib/sqliteReadAttribution";
 
 import { AgentRegistry, normalizeRegistry, type RegistryFile } from "./registry";
 import { registryHasLookupIndex, registryRowProjection, registryRowsMatching, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
@@ -49,6 +50,45 @@ function fixture() {
 function transactionState(store: SqliteAgentRegistryStore) {
   return store as unknown as { db: Database; writerHeld: boolean };
 }
+
+test("a synchronous all-hot snapshot bounds receipt batches by rows and text size", () => {
+  const { initial, kept, open, filename } = fixture();
+  const template = initial.receipts[kept]!;
+  const keys = Array.from({ length: 36 }, (_, index) => `page-receipt-${35 - index}`);
+  const receipts = Object.fromEntries(keys.map((id, index) => [id, {
+    launchId: id, engine: template.engine, cwd: template.cwd, conversationId: template.conversationId,
+    createdAt: template.createdAt, state: template.state, title: index === 19 ? "x".repeat(20_000) : id,
+  }]));
+  initial.conversationRevision.codex = 37;
+  const expected = normalizeRegistry({ ...initial, receipts });
+  const reader = open();
+  const peer = new Database(filename);
+  try {
+    expect(peer.query("SELECT COUNT(*) AS n FROM registry_cold").get()).toEqual({ n: 0 });
+    // Compact stored receipts reach the row limit. One large title reaches the text limit.
+    peer.transaction(() => {
+      peer.run("DELETE FROM registry_rows WHERE collection='receipts'");
+      const insert = peer.query("INSERT INTO registry_rows(collection,row_key,value_json,row_order) VALUES ('receipts',?,?,?)");
+      keys.forEach((key, index) => insert.run(key, JSON.stringify(receipts[key]), index));
+    })();
+  } finally { peer.close(); }
+  const batches = spyOn(sqliteReads, "nextSqliteRows");
+  try {
+    const snapshot = reader.readOnlySnapshot();
+    expect(Object.keys(snapshot.file.receipts)).toEqual(keys);
+    expect(snapshot.file.receipts).toEqual(expected.receipts);
+    expect(snapshot.file.conversationRevision).toEqual(expected.conversationRevision);
+    const pages = batches.mock.results.map(r => r.value as { row_key: string; value_json: string }[])
+      .filter(rows => Array.isArray(rows) && rows[0]?.row_key?.startsWith("page-receipt-") && typeof rows[0].value_json === "string");
+    expect(pages.flatMap(rows => rows.map(row => row.row_key))).toEqual(keys);
+    expect(pages.some(rows => rows.length === 16)).toBe(true);
+    expect(pages.some(rows => rows.length < 16 && rows.at(-1)!.value_json.length >= 16_384)).toBe(true);
+    for (const rows of pages) {
+      expect(rows.length).toBeLessThanOrEqual(16);
+      expect(rows.slice(0, -1).reduce((n, row) => n + row.value_json.length, 0)).toBeLessThan(16_384);
+    }
+  } finally { batches.mockRestore(); }
+});
 
 test("a nested snapshot during stepwise journal replay borrows the open read transaction", () => {
   const { open, kept } = fixture();
@@ -525,6 +565,18 @@ test("cooperative preparation publishes one complete frozen view and follows pee
       ('registry_lookup_requestDigest','registry_lookup_supersedes_conversationId','registry_archive_request_digest','registry_archive_supersedes',
        'registry_lookup_structuredHost_kind','registry_archive_structured_host_kind')`).get()?.count).toBe(6);
   } finally { db.close(); }
+});
+
+test("a caller joining snapshot preparation sees its completed slices", async () => {
+  const { open } = fixture();
+  const store = open();
+  let slices = 0;
+  const preparation = store.prepareReadOnlySnapshot(undefined, { recoveryIndexes: false });
+  const concurrent = store.prepareReadOnlySnapshot(undefined, {
+    recoveryIndexes: false, onSlice: () => { slices++; },
+  });
+  expect((await concurrent).file).toBe((await preparation).file);
+  expect(slices).toBeGreaterThan(0);
 });
 
 test("a prepared reader cooperatively rebuilds its view after a peer archives a row", async () => {

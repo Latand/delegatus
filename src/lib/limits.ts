@@ -6,8 +6,8 @@ import { claudeTierDisplayName, normalizeClaudeLaunchModel } from "@/lib/agent/m
 import fs from "node:fs";
 import path from "node:path";
 
-import { accountForSpawn, UnknownAccountError, type CodexAccount } from "@/lib/accounts/codex";
-import { claudeAccountForSpawn, UnknownClaudeAccountError, type ClaudeAccount } from "@/lib/accounts/claude";
+import { accountForSpawn, activeCodexAccountId, UnknownAccountError, type CodexAccount } from "@/lib/accounts/codex";
+import { activeClaudeAccountId, claudeAccountForSpawn, listClaudeAccounts, UnknownClaudeAccountError, type ClaudeAccount } from "@/lib/accounts/claude";
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
 import { agentRegistry } from "@/lib/agent/registry";
 import { activeCopilotAccountId, listCopilotAccounts } from "@/lib/accounts/copilot";
@@ -19,7 +19,7 @@ import type { AppServerRateLimits } from "@/lib/accounts/codexAppServer";
 import { redactAppServerDetail } from "@/lib/accounts/codexAppServerProtocol";
 import { statePath } from "@/lib/configDir";
 import { readJsonCache, writeJsonDurably } from "@/lib/state/durableJson";
-import { WINDOW_SECONDS, clampPercent, mergeSamples, type WindowKey } from "@/lib/burndown";
+import { WINDOW_SECONDS, buildSeries, clampPercent, mergeSamples, type WindowKey } from "@/lib/burndown";
 import { relabelCachedWindows, routeWindowsByHorizon, SESSION_WINDOW_MINUTES, WEEKLY_WINDOW_MINUTES } from "@/lib/limitWindows";
 import { historySamples, historySince, recordLimitSample, RETENTION_S } from "@/lib/limitsHistoryStore";
 import { startupDiagnostic } from "@/lib/startupDiagnostics";
@@ -618,8 +618,8 @@ export async function fetchClaudeLimits(
       const data = claudeCliWindows(cli.records, clock());
       if (data) {
         const metadata = readClaudeCredentials(home);
-        const plan = metadata.state === "present" ? metadata.document.claudeAiOauth?.subscriptionType : null;
-        return { data: { ...data, plan: typeof plan === "string" ? plan : null }, reason: null, source: "live" };
+        const oauth = metadata.state === "present" ? metadata.document.claudeAiOauth : undefined;
+        return { data: { ...data, ...claudePlan(oauth) }, reason: null, source: "live" };
       }
     }
   } catch { /* Unavailable CLI data can use only the explicitly enabled fallback. */ }
@@ -636,7 +636,6 @@ export async function fetchClaudeLimits(
   // Keep this local named for its role: a credential assignment reads as a
   // secret to the publication gate.
   const oauthToken = oauth.accessToken;
-  const plan = typeof oauth.subscriptionType === "string" ? oauth.subscriptionType : null;
   try {
     if (!subscriptionApiConsent().enabled) return { data: null, reason: "direct subscription API calls are off", source: "unavailable" };
     const res = await fetch(OAUTH_USAGE_URL, {
@@ -655,7 +654,7 @@ export async function fetchClaudeLimits(
       session: oauthWindow(json.five_hour, SESSION_WINDOW_MINUTES),
       weekly: oauthWindow(json.seven_day, WEEKLY_WINDOW_MINUTES),
       tiers: oauthTierWindows(json),
-      plan,
+      ...claudePlan(oauth),
       capturedAt: null,
     };
     if (!data.session && !data.weekly) return { data: null, reason: "oauth usage response had no windows", source: "unavailable" };
@@ -667,6 +666,12 @@ export async function fetchClaudeLimits(
 
 /** The CLI validates usage_report; still validate every numeric field at this
  * boundary. Meter kinds decide the general windows; labels never do. */
+function claudePlan(oauth: Record<string, unknown> | undefined): Pick<EngineLimits, "plan" | "planTier"> {
+  const plan = typeof oauth?.subscriptionType === "string" ? oauth.subscriptionType : null;
+  const planTier = oauth?.rateLimitTier;
+  return { plan, ...(typeof planTier === "string" && planTier.trim() ? { planTier } : {}) };
+}
+
 function claudeCliWindows(records: Record<string, unknown>[], now: number): EngineLimits | null {
   for (const record of [...records].reverse()) {
     const report = record.usage_report ?? record.usageReport;
@@ -1386,37 +1391,16 @@ export function collectCodexRateLimitSeries(sessionsDir: string, sinceUnix: numb
   return { session, weekly, sessionWindowSeconds, weeklyWindowSeconds, sessionResetsAt, weeklyResetsAt };
 }
 
-/** Assemble one window's burndown from forward poll samples, an optional
-    transcript backfill and the current live value, scoped to the current window.
-    Exported for the window-scoping regression test. */
-export function buildSeries(
-  forward: LimitSample[],
-  backfill: LimitSample[],
-  live: LimitWindow | null,
-  now: number,
-  windowSeconds: number,
-  backfillResetsAt: number | null,
-): BurndownSeries {
-  const resetsAt = live?.resetsAt ?? backfillResetsAt ?? null;
-  const windowStart = resetsAt !== null ? resetsAt - windowSeconds : null;
-  const livePoint: LimitSample[] = live && typeof live.usedPercent === "number" ? [{ t: now, remaining: clampPercent(100 - live.usedPercent) }] : [];
-  const merged = mergeSamples(forward, backfill, livePoint);
-  // Strictly scope to the current window: a sample from before windowStart
-  // belongs to the previous window, and after a rollover it would sit in the
-  // series as a low pre-reset value ahead of the ~100% post-reset point. That
-  // boundary rise reads as a refill and would suppress the pace projection for
-  // the whole new window, so those pre-window samples are dropped here.
-  const samples = windowStart !== null ? merged.filter((s) => s.t >= windowStart) : merged;
-  return { windowStart, resetsAt, windowSeconds, samples };
-}
+export { buildSeries };
 
-function buildEngineBurndown(
+export function buildEngineBurndown(
   engine: EngineName,
   accountId: string,
   limits: EngineLimits | null,
   now: number,
   backfill: CodexTranscriptSeries | null,
 ): EngineBurndown {
+  const liveAt = limits?.capturedAt ?? null;
   const forward = (window: WindowKey) => historySamples(engine, accountId, window, now);
   // Only a snapshot that reports some window is evidence about horizons: it
   // shows what the plan has, so a horizon missing from it is one the plan does
@@ -1439,7 +1423,7 @@ function buildEngineBurndown(
     if (snapshotNamesAWindow && !live && backfillSamples.length === 0) {
       return { windowStart: null, resetsAt: null, windowSeconds, samples: [], windowUnreported: true };
     }
-    return buildSeries(forward(key), backfillSamples, live, now, windowSeconds, backfillResetsAt);
+    return buildSeries(forward(key), backfillSamples, live, now, windowSeconds, backfillResetsAt, liveAt);
   };
   return {
     session: seriesFor("session", backfill?.session ?? [], backfill?.sessionWindowSeconds ?? null, backfill?.sessionResetsAt ?? null),
@@ -1468,6 +1452,37 @@ export async function readBurndown(options: { codexLiveReader?: CodexLiveLimitsR
     codex,
     claudeAccountId: payload.claudeAccountId,
     codexAccountId: payload.codexAccountId,
+    historySince: historySince(),
+  };
+}
+
+/** Burndown history for one named account of an engine, or null when the engine
+    lists no such account. The engine's active account answers through
+    {@link readBurndown}, with its live read. Any other account makes no provider
+    read: its chart is the stored history plus the registry's latest observation,
+    the reading its footer line shows, and a Codex account adds its transcript
+    backfill. The id is only a lookup key, never part of a path. */
+export async function readAccountBurndown(engine: "claude" | "codex", accountId: string): Promise<BurndownPayload | null> {
+  const codexAccount = engine === "codex" ? listedAccount(() => accountForSpawn(accountId)) : null;
+  if (engine === "codex" ? !codexAccount || codexAccount.id !== accountId : !listClaudeAccounts().some((account) => account.id === accountId)) return null;
+  const activeId = engine === "claude" ? activeClaudeAccountId() : activeCodexAccountId();
+  if (activeId === accountId) {
+    const payload = await readBurndown();
+    return (engine === "claude" ? payload.claudeAccountId : payload.codexAccountId) === accountId ? payload : null;
+  }
+  const now = Math.round(Date.now() / 1000);
+  const observation = agentRegistry().quotaObservations(engine).find((row) => row.accountId === accountId) ?? null;
+  const observedAt = observation ? Date.parse(observation.observedAt) / 1000 : NaN;
+  const live: EngineLimits | null = observation?.limits
+    ? { ...observation.limits, capturedAt: observation.limits.capturedAt ?? (Number.isFinite(observedAt) ? Math.round(observedAt) : null) }
+    : null;
+  const backfill = codexAccount ? collectCodexRateLimitSeries(codexAccount.sessionsDir, now - RETENTION_S, codexAccount.id) : null;
+  const series = buildEngineBurndown(engine, accountId, live, now, backfill);
+  return {
+    claude: engine === "claude" ? series : null,
+    codex: engine === "codex" ? series : null,
+    claudeAccountId: engine === "claude" ? accountId : null,
+    codexAccountId: engine === "codex" ? accountId : null,
     historySince: historySince(),
   };
 }

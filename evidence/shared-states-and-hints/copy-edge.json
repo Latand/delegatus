@@ -1,0 +1,45 @@
+{
+  "readings": {
+    "390-en-light": {
+      "command": 352,
+      "output": 352,
+      "commandCopies": 1
+    },
+    "390-en-dark": {
+      "command": 352,
+      "output": 352,
+      "commandCopies": 1
+    },
+    "390-uk-light": {
+      "command": 352,
+      "output": 352,
+      "commandCopies": 1
+    },
+    "390-uk-dark": {
+      "command": 352,
+      "output": 352,
+      "commandCopies": 1
+    },
+    "1280-en-light": {
+      "command": 1244,
+      "output": 1244,
+      "commandCopies": 1
+    },
+    "1280-en-dark": {
+      "command": 1244,
+      "output": 1244,
+      "commandCopies": 1
+    },
+    "1280-uk-light": {
+      "command": 1244,
+      "output": 1244,
+      "commandCopies": 1
+    },
+    "1280-uk-dark": {
+      "command": 1244,
+      "output": 1244,
+      "commandCopies": 1
+    }
+  },
+  "failures": []
+}

@@ -99,6 +99,7 @@ async function build(request: FilesResponseWorkerRequest): Promise<Record<string
     headers: new Headers(request.headers),
   }), {
     listFilesWithProjectCatalog: async () => snapshot,
+    secretRequestNotices: request.secretRequestNotices,
     ...(request.boardEpoch && request.deltaScope ? { encode: (data: import("@/lib/types").FilesResponse) => {
       encoded = boardEncoder.encode(request.deltaScope!, request.boardEpoch!, data as unknown as Record<string, unknown>, Date.now(),
         certified ? {
@@ -130,6 +131,7 @@ async function build(request: FilesResponseWorkerRequest): Promise<Record<string
     ?? { state: "ok", since: null, freeBytes: null };
   if (url.searchParams.get("view") === "summary" && !url.searchParams.get("path")?.trim()
     && !new Headers(request.headers).has(VIEWER_SPAWN_CAPABILITY_HEADER)
+    && !request.secretRequestNotices?.length
     && stateWrites.state === "ok") {
     try { await writeSummaryBootstrap(stateDir(), body, etag, encoded ? { scope: request.deltaScope!, epoch: request.boardEpoch! } : undefined); }
     catch { console.warn("[board bootstrap] cache write failed; live response remains available"); }
@@ -165,9 +167,10 @@ async function seatSource(request: SeatSourceWorkerRequest): Promise<Record<stri
     const { needsYouAnswer } = await import("@/lib/attention/needsYouProjection");
     const { canonicalOrchestratorProject } = await import("@/lib/orchestrator/seats");
     const { loadPipelinesForSeatAgenda } = await import("@/lib/pipelines/store");
+    const { holdPullRequestState, seatRoundLookup } = await import("@/lib/tasks/holdEvidence");
     const { overlayAttentionRoutes } = await import("@/lib/attention/routeOverlay");
     const { waitingRoundIds } = await import("@/lib/attention/routing");
-    // Imports and file IO finish before this synchronous projection. The scope
+    // Imports and asynchronous file reads finish before this projection. The scope
     // ends before result persistence or another request can observe it.
     value = withProjectAliasSnapshot(projectAliasSnapshot(), (): import("@/lib/monitor/types").SeatTickAgendaInput => {
       const project = canonicalOrchestratorProject(request.project);
@@ -190,7 +193,13 @@ async function seatSource(request: SeatSourceWorkerRequest): Promise<Record<stri
         tasks: body.tasks ?? [], pipelines: body.pipelines ?? [], dismissals: [], reports: null, admissions: [], unavailable: [], workLinks: body.workLinks, seatConversationId: request.seatConversationId,
       }, { kinds: ["prototype", "lane-decision", "lane-review"], full: true }, "stale-first", { rows: Number.MAX_SAFE_INTEGER, bytes: Infinity });
       const pauses = new Map<string, string[]>();
-      const asks = seatAgendaAsks({ ...body, pipelines: [...body.pipelines, ...retained] }, request.now, project, pauses, request.pauses);
+      const lanes = [...body.pipelines, ...retained];
+      const asks = seatAgendaAsks({
+        ...body,
+        pipelines: lanes,
+        pullRequestState: holdPullRequestState(body.tasks, lanes, taskId => body.workLinks?.tasks[taskId]?.repository),
+        seatRound: seatRoundLookup(body.seatDecisions),
+      }, request.now, project, pauses, request.pauses);
       return { asks, ...(pauses.size ? { pauseWaitingTasks: Object.fromEntries([...pauses].map(([id, tasks]) => [id, tasks.sort()])) } : {}),
         forms: { rows: forms.rows, count: forms.count, routedToSeat: forms.routedToSeat } };
     });

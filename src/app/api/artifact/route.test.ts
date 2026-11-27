@@ -6,6 +6,7 @@ import path from "node:path";
 
 import { NextRequest } from "next/server";
 import { KEEP_PNG, KEEP_TEXT, localFileKeepFixture, legacyReportPictureFixture } from "@/lib/artifact/localFile.fixture";
+import { admittedAs, lexicalAllowedRoots } from "@/lib/artifact/localFile";
 import { reportMediaRoot } from "@/lib/reportMedia/lookup";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-artifact-route-"));
@@ -329,7 +330,7 @@ test("an evidence image under /var/tmp opens by default (#2084)", async () => {
   }
 });
 
-test("an evidence root serves images only, and nothing outside the roots opens", async () => {
+test("direct evidence reads serve raster images only", async () => {
   const evidence = fs.mkdtempSync(path.join(sandbox, "evidence-"));
   const elsewhere = fs.mkdtempSync(path.join(sandbox, "elsewhere-"));
   process.env.LLV_EVIDENCE_ROOTS = evidence;
@@ -351,6 +352,132 @@ test("an evidence root serves images only, and nothing outside the roots opens",
     expect(res.status).toBe(403);
     expect(await errorCode(res)).toBe("access-denied");
   }
+});
+
+test("evidence HTML metadata never exposes a direct body or download", async () => {
+  const content = "<h1>Fixture disk report</h1>";
+  const abs = write("state/evidence/agents/fixture/report.HTM", content);
+  const meta = await GET(request({ path: abs, mode: "meta" }));
+  expect(meta.status).toBe(200);
+  const body = await meta.text();
+  expect(JSON.parse(body)).toMatchObject({ name: "report.HTM", kind: "text", frameOnly: true });
+  expect(body).not.toContain(content);
+  const queries: Record<string, string>[] = [{ path: abs }, { path: abs, download: "1" }];
+  for (const params of queries) {
+    const res = await GET(request(params, { range: "bytes=0-9" }));
+    expect(res.status).toBe(403);
+    expect(await errorCode(res)).toBe("access-denied");
+  }
+  process.env.LLV_ARTIFACT_MAX_BYTES = "8";
+  expect((await GET(request({ path: abs, mode: "meta" }))).status).toBe(413);
+});
+
+test.skipIf(process.platform === "win32")("default legacy temp admits rasters and denies HTML metadata", async () => {
+  delete process.env.LLV_EVIDENCE_ROOTS;
+  const legacy = path.join("/var/tmp", path.basename(home), "report");
+  const denied = await GET(request({ path: `${legacy}.html`, mode: "meta" }));
+  expect(denied.status).toBe(403);
+  expect(await errorCode(denied)).toBe("access-denied");
+  expect(admittedAs(`${legacy}.png`, lexicalAllowedRoots())).toBe("evidence");
+
+  const explicit = fs.mkdtempSync(path.join(sandbox, "opted-in-evidence-"));
+  process.env.LLV_EVIDENCE_ROOTS = explicit;
+  const raster = path.join(explicit, "chart.png");
+  const report = path.join(explicit, "report.html");
+  fs.writeFileSync(raster, KEEP_PNG);
+  fs.writeFileSync(report, "<h1>Opted-in report</h1>");
+  const image = await GET(request({ path: raster }));
+  expect(image.status).toBe(200);
+  expect(Buffer.from(await image.arrayBuffer())).toEqual(KEEP_PNG);
+  const metadata = await GET(request({ path: report, mode: "meta" }));
+  expect(metadata.status).toBe(200);
+  expect(await metadata.json()).toMatchObject({ frameOnly: true });
+});
+
+test("evidence metadata refuses escapes, hidden reports, the picture store and other formats", async () => {
+  const abs = write("state/evidence/agents/fixture/report.html", "<p>Fixture report</p>");
+  const outside = write("state/private/index.html", "<p>Private fixture</p>");
+  const hidden = write("state/evidence/agents/fixture/.local/index.html", "<p>Private fixture</p>");
+  const markdown = write("state/evidence/agents/fixture/notes.md", "# Fixture notes");
+  const alias = path.join(path.dirname(abs), "alias.html");
+  fs.symlinkSync(outside, alias);
+  const pictureStore = path.join(reportMediaRoot(), "index.html");
+  fs.mkdirSync(path.dirname(pictureStore), { recursive: true });
+  fs.writeFileSync(pictureStore, "<p>Private fixture</p>");
+
+  for (const file of [`${home}/state/evidence/../private/index.html`, alias, hidden, markdown, pictureStore]) {
+    const res = await GET(request({ path: file, mode: "meta" }));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ code: "access-denied" });
+  }
+});
+
+test("a same-directory evidence HTML alias opens and a missing report returns not found", async () => {
+  const report = write("state/evidence/agents/aliases/report.html", "<h1>Alias report</h1>");
+  const alias = path.join(path.dirname(report), "latest.html");
+  fs.symlinkSync(report, alias);
+  const admitted = await GET(request({ path: alias, mode: "meta" }));
+  expect(admitted.status).toBe(200);
+  const metadata = await admitted.json() as { frame?: string };
+  expect(metadata.frame).toMatch(/\/report\.html$/);
+
+  const missing = await GET(request({ path: path.join(path.dirname(report), "missing.html"), mode: "meta" }));
+  expect(missing.status).toBe(404);
+  expect(await errorCode(missing)).toBe("not-found");
+});
+
+test("evidence HTML grants stay inside the admitting root and report directory", async () => {
+  const firstRoot = fs.mkdtempSync(path.join(sandbox, "evidence-root-a-"));
+  const secondRoot = fs.mkdtempSync(path.join(sandbox, "evidence-root-b-"));
+  process.env.LLV_EVIDENCE_ROOTS = [firstRoot, secondRoot].join(path.delimiter);
+  const firstReportDir = path.join(firstRoot, "agents", "first");
+  const secondReportDir = path.join(secondRoot, "agents", "second");
+  fs.mkdirSync(firstReportDir, { recursive: true });
+  fs.mkdirSync(secondReportDir, { recursive: true });
+  const report = path.join(firstReportDir, "index.html");
+  const otherReport = path.join(secondReportDir, "index.html");
+  fs.writeFileSync(report, "<p>first report</p>");
+  fs.writeFileSync(otherReport, "<p>second report</p>");
+  fs.symlinkSync(otherReport, path.join(firstReportDir, "cross-root.html"));
+
+  const sibling = path.join(firstRoot, "agents", "sibling");
+  fs.mkdirSync(sibling, { recursive: true });
+  const siblingReport = path.join(sibling, "index.html");
+  fs.writeFileSync(siblingReport, "<p>sibling report</p>");
+  fs.symlinkSync(siblingReport, path.join(firstReportDir, "out-of-directory.html"));
+
+  for (const alias of ["cross-root.html", "out-of-directory.html"]) {
+    const response = await GET(request({ path: path.join(firstReportDir, alias), mode: "meta" }));
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: "access-denied" });
+  }
+  expect((await GET(request({ path: report, mode: "meta" }))).status).toBe(200);
+});
+
+test("managed evidence root symlinks serve the report and raster, then refuse a retargeted root", async () => {
+  const managed = path.join(process.env.LLV_STATE_DIR!, "evidence");
+  fs.rmSync(managed, { recursive: true, force: true });
+  const canonical = fs.mkdtempSync(path.join(sandbox, "managed-evidence-target-"));
+  fs.symlinkSync(canonical, managed, "dir");
+  const report = path.join(canonical, "agents", "fixture", "index.html");
+  fs.mkdirSync(path.dirname(report), { recursive: true });
+  fs.writeFileSync(report, "<p>managed report</p>");
+  fs.writeFileSync(path.join(path.dirname(report), "chart.png"), KEEP_PNG);
+  const response = await GET(request({ path: path.join(managed, "agents", "fixture", "index.html"), mode: "meta" }));
+  expect(response.status).toBe(200);
+  const { frame } = await response.json() as { frame: string };
+  const signedDir = Buffer.from(frame.split("/")[4]!.split(".")[0]!, "base64url").toString("utf8");
+  expect(signedDir).toBe(path.dirname(report));
+  const { GET: getFrame } = await import("./frame/[...rest]/route");
+  const read = async (url: string) => getFrame(new NextRequest(new URL(url, "http://127.0.0.1:8898"), { headers: { host: "127.0.0.1:8898" } }));
+  expect(await (await read(frame)).text()).toContain("managed report");
+  const chart = await read(frame.replace("index.html", "chart.png"));
+  expect(chart.status).toBe(200);
+  await chart.arrayBuffer();
+  const replacement = fs.mkdtempSync(path.join(sandbox, "retargeted-evidence-root-"));
+  fs.rmSync(managed);
+  fs.symlinkSync(replacement, managed, "dir");
+  expect((await read(frame)).status).toBe(403);
 });
 
 test("an evidence image opens from the tailnet origin the phone uses", async () => {

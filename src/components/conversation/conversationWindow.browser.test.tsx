@@ -35,6 +35,30 @@ const LAUNCH: LaunchOptions = {
 };
 const FIXTURE = "src/components/conversation/conversationWindowEvidence.fixture.tsx";
 
+function fixtureRasterPng(): Buffer {
+  const chunk = (type: string, data: Buffer) => {
+    const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(Bun.hash.crc32(body) >>> 0);
+    return Buffer.concat([length, body, crc]);
+  };
+  const width = 64, height = 24;
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0); header.writeUInt32BE(height, 4); header[8] = 8; header[9] = 2;
+  const rows = Buffer.alloc((width * 3 + 1) * height);
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const offset = y * (width * 3 + 1) + 1 + x * 3;
+    const bar = (x % 16) < 10 && y > 23 - Math.floor(x / 8) * 3;
+    rows[offset] = bar ? 38 : 219; rows[offset + 1] = bar ? 108 : 232; rows[offset + 2] = bar ? 164 : 242;
+  }
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", header), chunk("IDAT", deflateSync(rows)), chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
 describe("Claude native admission receipts", () => {
   const nativeBrowserTest = browserCase(process.env.LLV_CONVERSATION_BROWSER_TEST === "1"
     && process.env.LLV_NATIVE_RECEIPT_EVIDENCE !== undefined);
@@ -7098,7 +7122,16 @@ describe("owner confirmation of one Telegram file send", () => {
      written after the describe, and only when every case's frames are recorded. */
   const output = path.resolve(".artifacts/telegram-file-confirmation");
   const recorded = new Map<string, Record<string, unknown>>();
-  const STATES = ["pending", "details", "status", "sending", "sent", "rejected", "expired", "uncertain", "failed", "unavailable", "owner"] as const;
+  /* `gap-*`: the owner has not met a step this page needs yet, and the page says which and offers it (the server's `missing`). */
+  const GAPS = ["team", "owner", "pairing", "telegram_link", "telegram_account", "telegram_session"] as const;
+  /* `step-*`: a gap's Telegram step driven to one stage, with the gap that offers it: waiting for Start, the code form,
+     the name shown before the cookie is taken, and each way the step can end in an alert. */
+  const STEPS = { waiting: "telegram_link", code: "telegram_link", confirmed: "telegram_session", notLinked: "telegram_session", taken: "telegram_link", expired: "telegram_link", unavailable: "telegram_link" } as const;
+  type StepName = keyof typeof STEPS;
+  const STEP_NAMES = Object.keys(STEPS) as StepName[];
+  const STATES = ["pending", "details", "status", "sending", "sent", "rejected", "expired", "uncertain", "failed", "unavailable", "owner", ...GAPS.map(gap => `gap-${gap}` as const), ...STEP_NAMES.map(step => `step-${step}` as const)] as const;
+  const gapOf = (state: string) => GAPS.find(gap => state === `gap-${gap}`);
+  const stepOf = (state: string) => STEP_NAMES.find(step => state === `step-${step}`);
   type Frame = { width: 390 | 600 | 820 | 1000 | 1440; lang: "en" | "uk"; theme: "light" | "dark"; state: (typeof STATES)[number]; data?: "media" | "long" };
   const LONG_FILE = `quarterly-${"revenue-".repeat(5)}export-final-v2.json`;
   const LONG_CHAT = "Fixture reports for the regional and international operations office";
@@ -7120,8 +7153,9 @@ describe("owner confirmation of one Telegram file send", () => {
         const phone = width === 390;
         const viewport = { width, height: phone ? 844 : 900 };
         const chat = data === "long" ? LONG_CHAT : "Fixture reports";
-        const opened = ["pending", "details", "status", "sending", "sent", "rejected"].includes(state) ? "pending" : state;
-        const query = `case=file-confirmation&state=${opened}&lang=${lang}&id=fixture-confirmation${data ? `&data=${data}` : ""}${state === "sending" ? "&post=hold" : ""}`;
+        const step = stepOf(state);
+        const opened = ["pending", "details", "status", "sending", "sent", "rejected"].includes(state) ? "pending" : step ? `gap-${STEPS[step]}` : state;
+        const query = `case=file-confirmation&state=${opened}${step ? `&step=${step}` : ""}&lang=${lang}&id=fixture-confirmation${data ? `&data=${data}` : ""}${state === "sending" ? "&post=hold" : ""}`;
         const { context, page, pageErrors } = await openFixture(browser, `${served.base}?${query}`, viewport, theme, lang, "reduce", phone);
         try {
           await page.locator("[data-file-confirmation-heading]").waitFor();
@@ -7130,8 +7164,32 @@ describe("owner confirmation of one Telegram file send", () => {
           const pendingHeading = typesetFileConfirmation(data === "media"
             ? (lang === "uk" ? "Обидва зображення поза теками, з яких дозволено надсилати (handoff)" : "Both images are outside the folders files may be sent from (handoff)")
             : (lang === "uk" ? "Схоже, у цьому файлі приватний ключ" : "This file looks like it holds a private key"), lang);
-          const heading = { pending: pendingHeading, details: pendingHeading, status: pendingHeading, sending: pendingHeading, sent: typesetFileConfirmation(words.sentTitle(chat), lang), rejected: typesetFileConfirmation(words.rejectedTitle(chat), lang), expired: words.expiredTitle, uncertain: words.uncertainTitle, failed: words.failedTitle, unavailable: words.unavailableTitle, owner: words.ownerTitle }[state];
+          const gapHeadings = Object.fromEntries(GAPS.map(gap => [`gap-${gap}`, typesetFileConfirmation(words.missing[gap].title, lang)])) as Record<`gap-${(typeof GAPS)[number]}`, string>;
+          const heading = { pending: pendingHeading, details: pendingHeading, status: pendingHeading, sending: pendingHeading, sent: typesetFileConfirmation(words.sentTitle(chat), lang), rejected: typesetFileConfirmation(words.rejectedTitle(chat), lang), expired: words.expiredTitle, uncertain: words.uncertainTitle, failed: words.failedTitle, unavailable: words.unavailableTitle, owner: words.ownerTitle,
+            ...gapHeadings, ...Object.fromEntries(STEP_NAMES.map(name => [`step-${name}`, gapHeadings[`gap-${STEPS[name]}`]])) as Record<`step-${StepName}`, string> }[state];
           const asking = ["pending", "details", "status", "sending"].includes(state);
+          if (step) {
+            /* The person presses the step, and what the bot answers is the fixture's; the page stays where it is and leads nowhere else. */
+            await page.click(`[data-telegram-step="${STEPS[step] === "telegram_session" ? "sign-in" : "link"}"]`);
+            const alert = { notLinked: words.notLinked, taken: translate(lang, "team.error.telegramTaken"), expired: translate(lang, "team.signIn.expired"), unavailable: translate(lang, "team.telegram.unavailable") } as Partial<Record<StepName, string>>;
+            if (step === "waiting") {
+              await page.locator('[data-telegram-step-stage="waiting"]').waitFor();
+              if (await page.locator("[data-telegram-step-open]").getAttribute("href") !== "https://t.me/fixture_bot?start=one-time") failures.push(`${name}: the Open Telegram link is missing`);
+            } else if (step !== "unavailable") {
+              await page.locator("[data-telegram-code]").waitFor();
+              if (step !== "code") { await page.fill("[data-telegram-code]", "123456"); await page.press("[data-telegram-code]", "Enter"); }
+            }
+            if (step === "confirmed") {
+              await page.locator('[data-telegram-step-stage="confirmed"]').waitFor();
+              if (!(await page.locator("[data-file-confirmation-card]").innerText()).includes(translate(lang, "team.signIn.signingInAs", { name: "Owner" }))) failures.push(`${name}: «Signing in as» is missing`);
+              if (await page.locator("[data-telegram-step-not-me]").count() !== 1) failures.push(`${name}: «Not me» is missing`);
+            } else if (alert[step]) {
+              await page.locator('[role="alert"]').waitFor();
+              if ((await page.locator('[role="alert"]').innerText()).trim() !== alert[step]) failures.push(`${name}: the alert reads «${await page.locator('[role="alert"]').innerText()}», expected «${alert[step]}»`);
+            }
+            if (await page.locator('a[href*="/sign-in"]').count() !== 0) failures.push(`${name}: a link leads to sign-in`);
+            if (await page.evaluate(() => location.pathname + location.search) !== `/?${query}`) failures.push(`${name}: the page navigated away`);
+          }
           /* Before any press or scroll: the heading, and while the decision is open both answers and the real file, are whole on the first screen. */
           const firstScreen = await page.evaluate((media) => {
             const whole = (box: DOMRect | undefined) => box ? box.top >= 0 && box.bottom <= innerHeight && box.left >= 0 && box.right <= innerWidth : null;
@@ -7231,6 +7289,21 @@ describe("owner confirmation of one Telegram file send", () => {
           if (state === "owner") {
             const href = await page.getByRole("link", { name: words.signIn, exact: true }).getAttribute("href");
             if (href !== `/sign-in?next=${encodeURIComponent(`/?${query}`)}`) failures.push(`${name}: sign-in link ${href}`);
+          }
+          const gap = gapOf(state);
+          if (gap) {
+            /* The body says why, the one action is the step itself, and no link on the page leads to sign-in unless it is the owner's own. */
+            const body = await page.locator("[data-file-confirmation-card]").innerText();
+            const reason = typesetFileConfirmation(words.missing[gap].body, lang);
+            if (!body.includes(reason)) failures.push(`${name}: the reason «${reason}» is missing`);
+            const actions = await page.locator("[data-file-confirmation-card] a, [data-file-confirmation-card] button:not([data-file-confirmation-status])").evaluateAll(nodes => nodes.map(node => ({ tag: node.tagName, text: (node.textContent ?? "").trim(), href: node.getAttribute("href") })));
+            const expected = {
+              team: [{ tag: "A", text: "action", href: "/team" }], owner: [{ tag: "A", text: "action", href: `/sign-in?next=${encodeURIComponent(`/?${query}`)}` }], pairing: [],
+              telegram_link: [{ tag: "BUTTON", text: translate(lang, "team.telegram.link"), href: null }], telegram_account: [{ tag: "BUTTON", text: translate(lang, "team.telegram.link"), href: null }],
+              telegram_session: [{ tag: "BUTTON", text: translate(lang, "team.signIn.telegram"), href: null }],
+            }[gap].map(action => action.text === "action" ? { ...action, text: (words.missing as Record<string, { action?: string }>)[gap]!.action! } : action);
+            if (JSON.stringify(actions) !== JSON.stringify(expected)) failures.push(`${name}: actions ${JSON.stringify(actions)}, expected ${JSON.stringify(expected)}`);
+            if (await page.evaluate(() => location.pathname + location.search) !== `/?${query}`) failures.push(`${name}: the page navigated away`);
           }
           await page.waitForTimeout(150);
           const reading = await page.evaluate(({ coarse, uk, strip }) => {
@@ -7334,7 +7407,7 @@ describe("owner confirmation of one Telegram file send", () => {
               cardWidth: Math.round(cardBox.width),
               background: getComputedStyle(main).backgroundColor,
             };
-          }, { coarse: phone, uk: lang === "uk", strip: [chat, "Fixture reports", data === "long" ? LONG_FILE : "weekly-report.json", "Requested file", "Before", "After"] });
+          }, { coarse: phone, uk: lang === "uk", strip: [chat, "Fixture reports", data === "long" ? LONG_FILE : "weekly-report.json", "Requested file", "Before", "After", "Owner", "Stranger"] });
           if (reading.offscreen.length) failures.push(`${name}: outside the window: ${reading.offscreen.join(" | ")}`);
           if (reading.clipped.length) failures.push(`${name}: clipped: ${reading.clipped.join(" | ")}`);
           if (reading.covered.length) failures.push(`${name}: the popover covers: ${reading.covered.join(" | ")}`);
@@ -7349,7 +7422,7 @@ describe("owner confirmation of one Telegram file send", () => {
           if (latin.length) failures.push(`${name}: Latin words in a Ukrainian frame: ${[...new Set(latin)].join(", ")}`);
           if (state === "status" && !reading.popover) failures.push(`${name}: no popover`);
           if (reading.popover && !reading.popover.inCard) failures.push(`${name}: the popover crosses or touches the card's edge`);
-          if (state !== "owner") {
+          if (state !== "owner" && !gap && !step) {
             if (reading.dotOffChevron === null || Math.abs(reading.dotOffChevron) > 1) failures.push(`${name}: the status dot's centre is ${reading.dotOffChevron} px off the Details chevron's`);
             if (!reading.detailsRow || /\d/.test(reading.detailsRow)) failures.push(`${name}: the Details row reads «${reading.detailsRow}»`);
           }
@@ -7372,6 +7445,8 @@ describe("owner confirmation of one Telegram file send", () => {
   const themed = (width: Frame["width"], lang: Frame["lang"]) => (["light", "dark"] as const).flatMap((theme) => STATES.map((state): Frame => ({ width, lang, theme, state })));
   const CASES: Array<[title: string, list: Frame[]]> = [
     ...([390, 1440] as const).flatMap((width) => (["en", "uk"] as const).map((lang): [string, Frame[]] => [`${width} px, ${lang}: every state in light and dark`, themed(width, lang)])),
+    /* One width between the phone and the desktop for every missing step and for each stage of the Telegram step. */
+    ["820 px: the missing steps and the Telegram step's stages in both languages and themes", (["en", "uk"] as const).flatMap(lang => (["light", "dark"] as const).flatMap(theme => STATES.filter(state => state.startsWith("gap-") || state.startsWith("step-")).map((state): Frame => ({ width: 820, lang, theme, state })))) ],
     ["820 px pending in both languages; long names at 390 px", [
       { width: 820, lang: "en", theme: "light", state: "pending" },
       { width: 820, lang: "uk", theme: "light", state: "pending" },
@@ -7644,6 +7719,287 @@ describe("telegram file confirmation prototype (docs/design/telegram-file-confir
 
 
 describe("message document links", () => {
+  browserTest("evidence HTML opens a sandboxed report only after a message link is activated", async () => {
+    const { NextRequest } = await import("next/server");
+    const { GET: artifact } = await import("@/app/api/artifact/route");
+    const { GET: frame } = await import("@/app/api/artifact/frame/[...rest]/route");
+    const { statePath } = await import("@/lib/configDir");
+    const { proxy } = await import("@/proxy");
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "evidence-report-"));
+    const agents = statePath("evidence", "agents");
+    fs.mkdirSync(agents, { recursive: true });
+    const directory = fs.mkdtempSync(path.join(agents, "preview-"));
+    const report = path.join(directory, "disk-usage.html");
+    const localRaster = path.join(directory, "chart.png");
+    fs.writeFileSync(localRaster, fixtureRasterPng());
+    const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "evidence-html-preview");
+    const heading = "Disk usage report";
+    const reportSource = `<!doctype html><html lang="en"><meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <meta http-equiv="refresh" content="0;url=https://outside.invalid/refresh">
+      <title>${heading}</title>
+      <style>
+        body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: #172332; background: #f4f7fa; }
+        main { margin: 24px; padding: 20px; border: 1px solid #d6e0eb; border-radius: 12px; background: white; }
+        h1 { margin: 0; font-size: 24px; }
+        p { margin: 10px 0 18px; }
+        progress { width: 100%; accent-color: #236ca0; }
+      </style>
+      <main><h1>${heading}</h1><p>Root volume · 24 GiB of 40 GiB used</p>
+      <img alt="Local usage chart" style="width:160px;height:48px" src="chart.png"><img aria-hidden="true" alt="" style="display:none" src="/outside.png">
+      <template shadowrootmode="open"><a href="https://outside.invalid/template">Template destination</a></template>
+      <a href="https://outside.invalid/leave" target="_self" ping="https://outside.invalid/ping">Outside destination</a>
+      <script>location.href = "https://outside.invalid/script"</script>
+      <progress aria-label="Root volume used" max="40" value="24">60%</progress></main></html>`;
+    fs.writeFileSync(report, reportSource);
+    fs.mkdirSync(out, { recursive: true });
+    let metadataReads = 0;
+    let frameReads = 0;
+    let lastFramePath = "";
+    let offScopeServerRequests = 0;
+    const observedFrameRequests: string[] = [];
+    const conversationOffScopeRequests: string[] = [];
+    const directTabOffScopeRequests: string[] = [];
+    const chartResponses: Array<{ status: number; contentType: string | null; length: number | null }> = [];
+    const framePolicies: string[] = [];
+    const browserMessages: string[] = [];
+    const offScopeNavigations: string[] = [];
+    const throughProxy = async (request: Request, handler: (req: InstanceType<typeof NextRequest>) => Promise<Response>) => {
+      const req = new NextRequest(request);
+      const admission = proxy(req);
+      return admission.headers.get("x-middleware-next") === "1" ? handler(req) : admission;
+    };
+    const responses: Record<string, (request: Request) => Promise<Response>> = {
+      "/api/artifact": async request => {
+        metadataReads++;
+        const response = await throughProxy(request, artifact);
+        if (response.ok) {
+          const meta = await response.clone().json() as { frame?: string };
+          if (meta.frame) lastFramePath = meta.frame;
+          // The fixture server dispatches by exact pathname.
+          if (meta.frame) responses[meta.frame] = async request => {
+            frameReads++;
+            const response = await throughProxy(request, frame);
+            framePolicies.push(response.headers.get("content-security-policy") ?? "");
+            return response;
+          };
+          if (meta.frame) {
+            const prefix = meta.frame.slice(0, meta.frame.lastIndexOf("/") + 1);
+            responses[`${prefix}chart.png`] = async request => {
+              frameReads++;
+              const response = await throughProxy(request, frame);
+              chartResponses.push({ status: response.status, contentType: response.headers.get("content-type"), length: Number(response.headers.get("content-length")) || null });
+              return response;
+            };
+          }
+        }
+        return response;
+      },
+      "/outside.png": async () => {
+        offScopeServerRequests++;
+        const png = fixtureRasterPng();
+        const body = new Uint8Array(png.byteLength);
+        body.set(png);
+        return new Response(body.buffer, { headers: { "content-type": "image/png" } });
+      },
+    };
+    const sockets = ownedBrowserSocketEnvironment();
+    let served: Awaited<ReturnType<typeof serveEvidenceFixture>> | undefined;
+    let alternateListener: ReturnType<typeof Bun.serve> | undefined;
+    let browser: Browser | undefined;
+    try {
+      served = await serveEvidenceFixture(scratch, FIXTURE, responses);
+      browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [390, 1280]) {
+        const phone = width === 390;
+        const reportLabel = lang === "uk" ? "Звіт про використання диска" : "Disk usage report";
+        const query = new URLSearchParams({ case: "document-links", lang, cwd: scratch, parent: scratch, evidenceReport: report, reportLabel });
+        const beforeOpen = metadataReads;
+        const frameReadsBeforeOpen = frameReads;
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?${query}`,
+          { width, height: phone ? 844 : 900 }, theme, lang, "no-preference", phone);
+        page.on("request", request => {
+          const url = new URL(request.url());
+          if (url.pathname.includes("/api/artifact/frame/")) observedFrameRequests.push(url.pathname);
+          if (url.hostname === "outside.invalid") conversationOffScopeRequests.push(url.href);
+        });
+        page.on("console", message => { if (message.type() === "error") browserMessages.push(message.text()); });
+        page.on("request", request => { if (request.url().startsWith("https://outside.invalid/")) offScopeNavigations.push(request.url()); });
+        try {
+          const link = page.getByRole("link", { name: reportLabel, exact: true });
+          const pane = page.locator("[data-artifact-preview]");
+          await link.waitFor();
+          expect(await pane.count()).toBe(0);
+          expect(await page.locator("iframe").count()).toBe(0);
+          expect(metadataReads).toBe(beforeOpen);
+          expect(frameReads).toBe(frameReadsBeforeOpen);
+          if (phone) await link.tap();
+          else await link.click();
+
+          await pane.locator("iframe, [role=alert]").waitFor();
+          expect(await pane.getAttribute("data-artifact-state")).toBe("ready");
+          const reportFrame = pane.locator("iframe[data-preview-frame]");
+          const title = reportFrame.contentFrame().getByRole("heading", { name: heading });
+          await title.waitFor();
+          expect(await reportFrame.contentFrame().getByText("Template destination", { exact: true }).count()).toBe(0);
+          const localImage = reportFrame.contentFrame().getByRole("img", { name: "Local usage chart" });
+          await localImage.waitFor();
+          await localImage.evaluate(image => (image as HTMLImageElement).decode());
+          const imageState = await localImage.evaluate(image => ({ complete: (image as HTMLImageElement).complete, width: (image as HTMLImageElement).naturalWidth, src: (image as HTMLImageElement).currentSrc }));
+          expect(imageState).toMatchObject({ complete: true, width: 64 });
+          expect(chartResponses.at(-1)).toMatchObject({ status: 200, contentType: "image/png" });
+          const outsideLink = reportFrame.contentFrame().getByText("Outside destination", { exact: true });
+          await outsideLink.click();
+          expect(offScopeNavigations).toEqual([]);
+          expect(await title.count()).toBe(1);
+          expect(framePolicies.at(-1)).toContain("script-src 'none'");
+          expect(framePolicies.at(-1)).toContain("/api/artifact/frame/");
+          expect(offScopeServerRequests).toBe(0);
+          expect(browserMessages.some(message => message.includes("Unrecognized Content-Security-Policy directive"))).toBe(false);
+          expect(browserMessages.some(message => message.includes("chart.png") && message.includes("violates the following Content Security Policy"))).toBe(false);
+          expect(await title.evaluate(() => {
+            try { return { origin: window.origin, cookie: document.cookie }; }
+            catch (error) { return { origin: window.origin, cookie: (error as DOMException).name }; }
+          })).toEqual({ origin: "null", cookie: "SecurityError" });
+          expect(await pane.getByText(translate(lang, "preview.denied")).count()).toBe(0);
+          expect(await pane.getByRole("link", { name: translate(lang, "preview.download") }).count()).toBe(0);
+          expect(await pane.locator('[data-preview-mode="source"]').count()).toBe(0);
+          expect(metadataReads).toBe(beforeOpen + 1);
+          expect(frameReads).toBe(frameReadsBeforeOpen + 2);
+          expect(observedFrameRequests.some(request => request.endsWith("/chart.png"))).toBe(true);
+          expect(conversationOffScopeRequests).toEqual([]);
+          const directTab = await context.newPage();
+          const directTabRequestStart = observedFrameRequests.length;
+          directTab.on("request", request => {
+            const url = new URL(request.url());
+            if (url.pathname.includes("/api/artifact/frame/")) observedFrameRequests.push(url.pathname);
+            if (url.hostname === "outside.invalid") directTabOffScopeRequests.push(url.href);
+          });
+          try {
+            await directTab.goto(new URL(lastFramePath, served.base).toString());
+            await directTab.getByRole("heading", { name: heading }).waitFor();
+            const directChart = directTab.getByRole("img", { name: "Local usage chart" });
+            await directChart.evaluate(image => (image as HTMLImageElement).decode());
+            expect(observedFrameRequests.slice(directTabRequestStart).some(request => request.endsWith("/chart.png"))).toBe(true);
+            expect(await directTab.evaluate(() => window.origin)).toBe("null");
+            expect(await directTab.getByText("Template destination", { exact: true }).count()).toBe(0);
+            await directTab.getByText("Outside destination", { exact: true }).click();
+            expect(offScopeNavigations).toEqual([]);
+            expect(directTabOffScopeRequests).toEqual([]);
+            expect(await directTab.getByRole("heading", { name: heading }).count()).toBe(1);
+          } finally { await directTab.close(); }
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}.png`) });
+          await pane.getByRole("button", { name: translate(lang, "preview.close") }).click();
+          await pane.waitFor({ state: "detached" });
+        } finally { await context.close(); }
+      }
+      served.stop();
+      fs.writeFileSync(report, reportSource.replace("</main>", `
+        <picture><source media="(min-width: 1000px)" srcset="chart.png 1x, https://outside.invalid/picture.png 2x">
+          <img alt="Picture usage chart" width="160" height="48" src="/outside.png"></picture>
+        <img alt="Srcset usage chart" width="160" height="48" srcset="chart.png 1x, https://outside.invalid/srcset.png 2x">
+        </main>`));
+      served = await serveEvidenceFixture(scratch, FIXTURE, responses, { hostname: "::1" });
+      const alternateListenerRequests: string[] = [];
+      alternateListener = Bun.serve({
+        hostname: "127.0.0.1",
+        port: Number(new URL(served.base).port),
+        fetch(request) {
+          alternateListenerRequests.push(new URL(request.url).pathname);
+          return new Response("alternate loopback listener");
+        },
+      });
+      const ipv6ChartCount = chartResponses.length;
+      const ipv6Requests: string[] = [];
+      const ipv6Responses: string[] = [];
+      const ipv6Failures: string[] = [];
+      const ipv6Messages: string[] = [];
+      const ipv6OffScope: string[] = [];
+      const recordIpv6OffScope = (request: { url(): string }) => {
+        const url = new URL(request.url());
+        if (url.hostname === "outside.invalid" || url.pathname === "/outside.png") ipv6OffScope.push(url.href);
+      };
+      const { context: ipv6Context, page: ipv6Page, pageErrors: ipv6Errors } = await openFixture(browser,
+        `${served.base}?${new URLSearchParams({ case: "document-links", lang: "en", cwd: scratch, parent: scratch, evidenceReport: report, reportLabel: "Disk usage report" })}`,
+        { width: 1280, height: 900 }, "light", "en");
+      ipv6Page.on("request", request => {
+        recordIpv6OffScope(request);
+        const url = new URL(request.url());
+        ipv6Requests.push(`${url.host} ${url.pathname.replace(/\/api\/artifact\/frame\/[^/]+/, "/api/artifact/frame/:scope")}`);
+      });
+      ipv6Page.on("response", response => {
+        const url = new URL(response.url());
+        if (url.pathname.includes("/api/artifact/frame/")) ipv6Responses.push(`${response.status()} ${response.headers()["content-type"] ?? ""} ${url.pathname.replace(/\/api\/artifact\/frame\/[^/]+/, "/api/artifact/frame/:scope")}`);
+      });
+      ipv6Page.on("requestfailed", request => ipv6Failures.push(`${request.failure()?.errorText ?? "unknown"} ${new URL(request.url()).pathname.replace(/\/api\/artifact\/frame\/[^/]+/, "/api/artifact/frame/:scope")}`));
+      ipv6Page.on("console", message => { if (message.type() === "error") ipv6Messages.push(message.text()); });
+      try {
+        const link = ipv6Page.getByRole("link", { name: "Disk usage report", exact: true });
+        await link.click();
+        const frame = ipv6Page.locator("[data-preview-frame]");
+        await frame.contentFrame().getByRole("heading", { name: heading }).waitFor();
+        expect(framePolicies.at(-1)).toContain("base-uri 'none'");
+        expect(framePolicies.at(-1)).not.toContain("localhost");
+        const chart = frame.contentFrame().getByRole("img", { name: "Local usage chart" });
+        await chart.waitFor();
+        const chartState = await chart.evaluate(async image => {
+          const element = image as HTMLImageElement;
+          try { await element.decode(); } catch (error) { return { width: element.naturalWidth, src: element.currentSrc, error: (error as Error).message }; }
+          return { width: element.naturalWidth, src: element.currentSrc, error: null };
+        });
+        expect({ chartState, chartCount: chartResponses.length - ipv6ChartCount, requests: ipv6Requests, responses: ipv6Responses, failures: ipv6Failures, csp: framePolicies.at(-1), messages: ipv6Messages })
+          .toMatchObject({ chartState: { width: 64, error: null }, chartCount: 0 });
+        expect(chartState.src).toMatch(/^data:image\/png;base64,/);
+        expect(browserMessages.some(message => message.includes("chart.png") && message.includes("violates the following Content Security Policy"))).toBe(false);
+        expect(framePolicies.at(-1)).toContain("img-src data:");
+        expect(framePolicies.at(-1)).not.toContain("localhost");
+        const responsiveNames = ["Picture usage chart", "Srcset usage chart"];
+        for (const name of responsiveNames) {
+          const image = frame.contentFrame().getByRole("img", { name });
+          const raster = await image.evaluate(async node => {
+            const image = node as HTMLImageElement;
+            await image.decode();
+            return { width: image.naturalWidth, source: image.currentSrc };
+          });
+          expect(raster.width).toBe(64);
+          expect(raster.source).toMatch(/^data:image\/png;base64,/);
+        }
+        const direct = await ipv6Context.newPage();
+        direct.on("request", recordIpv6OffScope);
+        try {
+          const response = await direct.goto(new URL(lastFramePath, served.base).href);
+          expect(response?.status()).toBe(200);
+          for (const name of responsiveNames) {
+            const image = direct.getByRole("img", { name });
+            const raster = await image.evaluate(async node => {
+              const image = node as HTMLImageElement;
+              await image.decode();
+              return { width: image.naturalWidth, source: image.currentSrc };
+            });
+            expect(raster.width).toBe(64);
+            expect(raster.source).toMatch(/^data:image\/png;base64,/);
+          }
+          expect(await direct.evaluate(() => window.origin)).toBe("null");
+          await direct.screenshot({ path: path.join(out, "ipv6-direct.png") });
+        } finally { await direct.close(); }
+        await ipv6Page.screenshot({ path: path.join(out, "ipv6-preview.png") });
+        expect(ipv6OffScope).toEqual([]);
+        expect(offScopeServerRequests).toBe(0);
+        expect(ipv6Requests.some(request => request.includes("localhost"))).toBe(false);
+        expect(alternateListenerRequests).toEqual([]);
+        expect(ipv6Errors).toEqual([]);
+      } finally { await ipv6Context.close(); }
+    } finally {
+      await browser?.close();
+      alternateListener?.stop(true);
+      served?.stop();
+      sockets.close();
+      fs.rmSync(scratch, { recursive: true, force: true });
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  }, 90_000);
+
   browserTest("actual message clicks read exact source-worktree bytes through authenticated artifact routes", async () => {
     const { NextRequest } = await import("next/server");
     const { GET } = await import("@/app/api/artifact/route");

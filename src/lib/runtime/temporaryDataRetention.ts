@@ -1,7 +1,10 @@
 import fs from "node:fs";
+import { cleanerAuditPending, isCleanerAuditBinding, settleCleanerAudit, type CleanerAuditBinding, type CleanerHold, type CleanerJournal } from "@/lib/cleaner/diskJournal";
+import { reconcileDiskCleanerReport } from "@/lib/cleaner/diskReport";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
+import { statePath } from "@/lib/configDir";
 import { attemptTempJournalPath, finishTreeTrash, mountPointsUnder, removeTreeViaTrash } from "@/lib/tempSweep";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { readEnvelope } from "@/lib/recordedChecks/wire";
@@ -25,6 +28,8 @@ export type TemporaryDataPorts = {
   now?: () => number; clock?: () => number; budgetMs?: number; mode?: "on" | "dry-run";
   onRemoved?: (row: TemporaryDataCandidate) => void;
   checkoutReads?: RetainedCheckoutReads;
+  taskReferences?: (row: TemporaryDataCandidate, authority: TemporaryDataAuthority, current: string) => boolean;
+  cleaner?: { id: string; allowed: () => boolean; journal: CleanerJournal; processClear: (directory: string, target: string) => boolean };
 };
 const identity = (stat: fs.Stats) => `${stat.dev}:${stat.ino}`;
 const signature = (stat: fs.BigIntStats) => [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
@@ -143,6 +148,10 @@ function mutationCurrent(files: readonly string[], directories: readonly string[
   }
 }
 
+/** What the protection walk finds that keeps a candidate on purpose. */
+const PROTECTION_HOLDS = new Set(["identity-changed", "indirect-parent", "indirect-tree", "invalid-scope", "keep-marker",
+  "lifecycle-control", "preservation-record", "permission-repair-needed", "protection-budget"]);
+
 /** Protection and measured bytes come from the same bounded, physical walk.
  * Every directory and file is checked again after asynchronous observations.
  * Incomplete measurements retain their reason instead of inventing a size. */
@@ -163,11 +172,13 @@ export function temporaryDataProtection(row: TemporaryDataCandidate, target: str
   }
   const pending = [target], seen = new Set<string>();
   let bytes = 0;
+  let newest = 0;
   while (pending.length) {
     if (clock() >= deadline || entries.size >= MAX_PROTECTION_ENTRIES) throw new Error("protection-budget");
     const file = pending.pop()!, stat = fs.lstatSync(file, { bigint: true });
     if (stat.dev !== BigInt(root.dev) || stat.isSymbolicLink() || !stat.isFile() && !stat.isDirectory()) throw new Error("indirect-tree");
     const name = path.basename(file);
+    newest = Math.max(newest, Number(stat.mtimeNs) / 1e6);
     if (name === ".delegatus-keep") throw new Error("keep-marker");
     if (file !== target && lifecycleControlName(name)) throw new Error("lifecycle-control");
     if (PRESERVATION_NAMES.has(name)) throw new Error("preservation-record");
@@ -187,10 +198,17 @@ export function temporaryDataProtection(row: TemporaryDataCandidate, target: str
           pending.push(path.join(file, entry.name));
         }
       } finally { stream.closeSync(); }
+      if (names.has("HEAD") && names.has("objects") && names.has("refs")) {
+        const head = fs.lstatSync(path.join(file, "HEAD"), { throwIfNoEntry: false });
+        const objects = fs.lstatSync(path.join(file, "objects"), { throwIfNoEntry: false });
+        const refs = fs.lstatSync(path.join(file, "refs"), { throwIfNoEntry: false });
+        if (head?.isFile() && !head.isSymbolicLink() && objects?.isDirectory() && !objects.isSymbolicLink()
+          && refs?.isDirectory() && !refs.isSymbolicLink()) throw new Error("git-data");
+      }
       listings.set(file, names);
     }
   }
-  return { bytes, files: [...entries.keys()], directories: [...parents.keys(), ...listings.keys()], current: () => {
+  return { bytes, newest, files: [...entries.keys()], directories: [...parents.keys(), ...listings.keys()], current: () => {
     try {
       if (![...entries, ...parents].every(([file, before]) => signature(fs.lstatSync(file, { bigint: true })) === before)) return false;
       // Directory clocks can share a kernel granule. Compare the actual names
@@ -210,7 +228,15 @@ export function temporaryDataProtection(row: TemporaryDataCandidate, target: str
   } };
 }
 
-type FileIntent = { version: 1; kind: "temporary-file"; directory: string; trash: string; identity: string; uid: number };
+type FileIntent = { version: 1; kind: "temporary-file"; directory: string; trash: string; identity: string; uid: number; cleaner?: CleanerAuditBinding };
+function candidateIntent(row: TemporaryDataCandidate, journal: string) {
+  const intent = readEnvelope(journal) as { kind?: string; directory?: unknown; identity?: unknown; trash?: unknown; cleaner?: unknown };
+  if (intent.directory !== row.directory || intent.identity !== row.identity || typeof intent.trash !== "string"
+    || path.dirname(intent.trash) !== path.dirname(row.directory)
+    || !path.basename(intent.trash).startsWith(`.delegatus-trash-${path.basename(row.directory)}-`)) throw new Error("journal-binding-changed");
+  if (intent.cleaner !== undefined && !isCleanerAuditBinding(intent.cleaner)) throw new Error("Cleaner audit binding changed");
+  return { kind: intent.kind, trash: intent.trash, cleaner: intent.cleaner as CleanerAuditBinding | undefined };
+}
 function fileIntent(row: TemporaryDataCandidate, journal: string): FileIntent {
   const intent = readEnvelope(journal) as FileIntent;
   if (intent.version !== 1 || intent.kind !== "temporary-file" || intent.directory !== row.directory || intent.identity !== row.identity
@@ -219,19 +245,20 @@ function fileIntent(row: TemporaryDataCandidate, journal: string): FileIntent {
   return intent;
 }
 
-function restoreCandidate(row: TemporaryDataCandidate, journal: string) {
+function restoreCandidate(row: TemporaryDataCandidate, journal: string, retainJournal: boolean) {
   assertRetentionTestPath(row.directory);
   if (!fs.existsSync(journal)) return;
   if (fs.realpathSync(path.dirname(row.directory)) !== path.dirname(row.directory)) throw new Error("indirect-parent");
   const intent = readEnvelope(journal) as { kind?: unknown };
-  if (intent.kind !== "temporary-file") { restoreRefusedAttemptTrash(row.directory, row.identity); return; }
+  if (intent.kind !== "temporary-file") { restoreRefusedAttemptTrash(row.directory, row.identity, retainJournal); return; }
   const file = fileIntent(row, journal), target = fs.lstatSync(file.trash, { throwIfNoEntry: false });
   const original = fs.lstatSync(row.directory, { throwIfNoEntry: false });
   const owned = (stat: fs.Stats | undefined) => stat?.isFile() && !stat.isSymbolicLink() && identity(stat) === row.identity
     && stat.uid === file.uid && (!process.getuid || stat.uid === process.getuid());
-  if (owned(original) && !target) { fs.unlinkSync(journal); return; }
+  if (owned(original) && !target) { if (!retainJournal) fs.unlinkSync(journal); return; }
   if (original || !owned(target)) throw new Error("quarantine-identity-changed");
-  fs.renameSync(file.trash, row.directory); fs.unlinkSync(journal);
+  fs.renameSync(file.trash, row.directory);
+  if (!retainJournal) fs.unlinkSync(journal);
 }
 
 /** The same admission as automatic copies serializes overlapping discovery.
@@ -260,11 +287,14 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
         return super.targets(repository, discovered);
       }
     }({ now: clock, budgetMs: Math.max(0, deadline - clock()), retained, freshMs: ports.checkoutReads ? undefined : 10000 });
-    const report = { checked: 0, removed: 0, removedBytes: 0, wouldRemove: 0, wouldRemoveBytes: 0, kept: {} as Record<string, number>, errors: 0 };
-    for (const row of store.due(now(), 128)) {
+    const keptRows: CleanerHold[] = [];
+    const report = { checked: 0, removed: 0, removedBytes: 0, wouldRemove: 0, wouldRemoveBytes: 0, kept: {} as Record<string, number>, errors: 0, keptRows };
+    const cleaner = ports.cleaner;
+    for (const row of cleaner ? store.dueEvidence(now()) : store.due(now(), 128)) {
       assertRetentionTestPath(row.directory);
       assertRetentionTestPath(row.scope);
-      if (clock() >= deadline) break;
+      if (cleaner && (row.directory !== path.resolve(row.directory) || !row.directory.startsWith(row.scope + path.sep))) continue;
+      if (clock() >= deadline || cleaner && !cleaner.allowed()) break;
       report.checked++;
       store.record(row.directory, now() + 60000, row.bytes, "pending");
       let release: (() => void) | undefined;
@@ -272,6 +302,26 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
       let bytes = row.bytes, reason = "held";
       let nextCheck = now() + 60000;
       const journal = attemptTempJournalPath(row.directory);
+      const proof = () => `evidence ledger identity ${row.identity}, ${row.kind}, seven-day expiry and tree age, open-task and live reference checks clear`;
+      let audit: CleanerAuditBinding | undefined;
+      let auditStartedHere = false;
+      const settleAudit = async (phase: "removed" | "refused") => {
+        if (!audit) return;
+        if (auditStartedHere && cleaner) {
+          cleaner.journal(phase, row.directory, audit.bytes!, audit.proof);
+          return;
+        }
+        await settleCleanerAudit(audit, "evidence", row.directory, phase);
+        if (!await reconcileDiskCleanerReport(audit.passId) && !cleaner)
+          throw new Error("awaiting original Cleaner report");
+      };
+      const restore = async () => {
+        if (!fs.existsSync(journal)) return;
+        restoreCandidate(row, journal, !!audit);
+        if (audit) { await settleAudit("refused"); fs.unlinkSync(journal); audit = undefined; }
+      };
+      const taskHeld = (authority: TemporaryDataAuthority, current = row.directory) =>
+        row.kind !== "journal" && ports.taskReferences?.(row, authority, current) === true;
       try {
         const candidateName = path.basename(row.directory);
         if (lifecycleControlName(candidateName)) {
@@ -279,20 +329,27 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
           nextCheck = now() + 3600000;
           continue;
         }
-        if (!fs.lstatSync(row.directory, { throwIfNoEntry: false }) && !fs.existsSync(journal)) {
+        const original = fs.lstatSync(row.directory, { throwIfNoEntry: false });
+        const pending = fs.existsSync(journal) ? candidateIntent(row, journal) : null;
+        audit = pending?.cleaner;
+        if (!original && !pending) {
           ports.onRemoved?.(row); store.forget(row.directory); reason = "absent"; continue;
         }
-        if (!fs.lstatSync(row.directory, { throwIfNoEntry: false }) && fs.existsSync(journal)) {
-          const intent = readEnvelope(journal) as { directory?: unknown; identity?: unknown; trash?: unknown };
-          if (intent.directory !== row.directory || intent.identity !== row.identity || typeof intent.trash !== "string"
-            || path.dirname(intent.trash) !== path.dirname(row.directory)
-            || !path.basename(intent.trash).startsWith(`.delegatus-trash-${path.basename(row.directory)}-`)) throw new Error("journal-binding-changed");
-          if (!fs.lstatSync(intent.trash, { throwIfNoEntry: false })) {
+        if (!original && pending) {
+          if (!fs.lstatSync(pending.trash, { throwIfNoEntry: false })) {
             if (fs.realpathSync(path.dirname(row.directory)) !== path.dirname(row.directory)) throw new Error("indirect-parent");
             // Both resources are absent: settle a crash after removal without
             // asking a vanished manifest to authorize bookkeeping cleanup.
+            if (ports.mode === "dry-run") { reason = "terminal recovery pending"; continue; }
+            await settleAudit("removed");
             fs.unlinkSync(journal); ports.onRemoved?.(row); store.forget(row.directory); reason = "absent"; continue;
           }
+          if (!!audit !== !!cleaner) {
+            reason = audit ? "awaiting Cleaner quarantine recovery" : "awaiting ordinary quarantine recovery";
+            nextCheck = now() + 1000;
+            continue;
+          }
+          if (audit && !await cleanerAuditPending(audit, "evidence", row.directory)) { reason = "Cleaner audit is already terminal"; continue; }
         }
         // A claim also protects replay when a previous process died in trash.
         if (ports.mode !== "dry-run") {
@@ -301,15 +358,28 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
           // The durable writer can stop before rename, or after restoration
           // but before cancelling its intent. Reconcile only the recorded
           // original identity; competing paths and identities remain fenced.
-          if (fs.lstatSync(row.directory, { throwIfNoEntry: false }) && fs.existsSync(journal)) restoreCandidate(row, journal);
+          if (original && pending) { await restore(); }
         }
         assertRetentionTestPath(row.directory);
         const authority = await ports.authority(row);
         assertRetentionTestPath(row.directory);
+        if (taskHeld(authority, pending?.trash)) {
+          // A task may have linked this evidence while the Viewer was down.
+          // Put an intact, identity-bound quarantine back at its public path
+          // before retaining it for that task.
+          if (claimed) await restore();
+          reason = "referenced by an open task";
+          nextCheck = now() + 3600000;
+          if (cleaner && !bytes && !fs.existsSync(journal)) {
+            try { bytes = temporaryDataProtection(row, row.directory, clock, deadline).bytes; }
+            catch { /* Keep the task reference as the reason even when allocation is unavailable. */ }
+          }
+          continue;
+        }
         let currentAuthority = authority;
         const due = () => currentAuthority.expiresAt !== null && now() >= currentAuthority.expiresAt && authority.current() && currentAuthority.current();
         if (!due()) {
-          if (ports.mode !== "dry-run") restoreCandidate(row, journal);
+          if (claimed) await restore();
           reason = authority.reason;
           nextCheck = authority.expiresAt !== null && authority.expiresAt > now() ? authority.expiresAt
             : authority.expiresAt === null ? now() + 3600000 : nextCheck;
@@ -318,19 +388,17 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
         let target = row.directory;
         let file: FileIntent | undefined;
         if (fs.existsSync(journal)) {
-          const intent = readEnvelope(journal) as { kind?: unknown; directory?: unknown; identity?: unknown; trash?: unknown };
+          const intent = candidateIntent(row, journal);
           if (intent.kind === "temporary-file") file = fileIntent(row, journal);
-          if (intent.directory !== row.directory || intent.identity !== row.identity || typeof intent.trash !== "string"
-            || path.dirname(intent.trash) !== path.dirname(row.directory)
-            || !path.basename(intent.trash).startsWith(`.delegatus-trash-${path.basename(row.directory)}-`)) throw new Error("journal-binding-changed");
           target = intent.trash;
         }
         if (!fs.existsSync(target)) {
           if (target === row.directory && !fs.existsSync(journal)) { store.forget(row.directory); reason = "absent"; continue; }
-          if (!fs.existsSync(row.directory) && due()) {
+          if (!fs.existsSync(row.directory) && due() && ports.mode !== "dry-run") {
             // Crash after native removal and before settling its intent. This
             // removes only our bookkeeping; no surviving resource is touched.
-            fs.unlinkSync(journal); store.forget(row.directory); reason = "absent"; continue;
+            await settleAudit("removed");
+            fs.unlinkSync(journal); ports.onRemoved?.(row); store.forget(row.directory); reason = "absent"; continue;
           }
           throw new Error("quarantine-unavailable");
         }
@@ -343,12 +411,16 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
           });
           const files = [...protection.files, ...checkouts, ...discoveries];
           const directories = [...protection.directories, ...[...repositories].flatMap(repository => retained.get(repository)?.directories.map(directory => directory.path) ?? [])];
+          if (row.kind !== "journal" && ports.taskReferences) {
+            files.push(statePath("state.sqlite"), statePath("state.sqlite-wal"), statePath("tasks.json"));
+          }
           let admitted = false;
           try { admitted = mutationCurrent(files, directories, () => clock() < deadline
             && store.get(row.directory)?.identity === row.identity
             && mounts(current).length === 0
             && inventory.unchangedAll()
             && protection?.current() === true
+            && (!cleaner || cleaner.allowed() && cleaner.processClear(row.directory, current)) && !taskHeld(currentAuthority, current)
             // Authority may change during the final filesystem snapshot reads.
             // Keep its current check adjacent to the native removal edge.
             && due(), performance.now() + Math.max(0, deadline - clock()));
@@ -364,16 +436,25 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
           assertRetentionTestPath(current);
           protection = temporaryDataProtection(row, current, clock, deadline);
           bytes = protection.bytes;
+          if ((row.kind === "lane-evidence" || row.kind === "agent-evidence" || row.kind === "ownerless-copy")
+            && protection.newest > now() - TEMPORARY_DATA_RETENTION_MS) { reason = "evidence touched within seven days"; return true; }
           const clear = await ports.references(row, current, inventory);
           assertRetentionTestPath(current);
           if (!clear) { reason = "live-reference"; return true; }
           currentAuthority = await ports.authority(row);
           assertRetentionTestPath(current);
+          if (taskHeld(currentAuthority, current)) { reason = "referenced by an open task"; return true; }
+          if (cleaner && !audit && ports.mode !== "dry-run") {
+            const binding = { passId: cleaner.id, bytes, proof: proof() };
+            cleaner.journal("intent", row.directory, binding.bytes, binding.proof);
+            audit = binding;
+            auditStartedHere = true;
+          }
           if (currentAuthority.revision !== authority.revision || !validate(current)) { reason = "fence-changed"; return true; }
           return false;
         };
         if (await held(target)) {
-          if (claimed) restoreCandidate(row, journal);
+          if (claimed) await restore();
           continue;
         }
         if (ports.mode === "dry-run") { report.wouldRemove++; report.wouldRemoveBytes += bytes; reason = "due"; continue; }
@@ -385,12 +466,13 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
             return fs.promises.rm(current, { recursive: true, force: true });
           };
           removed = fs.existsSync(journal) ? await finishTreeTrash(journal, held, remove, validate, true, dispatch)
-            : await removeTreeViaTrash(row.directory, { journal, held, remove, validate, dispatch, disposable: true });
-          if (!removed) restoreRefusedAttemptTrash(row.directory, row.identity);
+            : await removeTreeViaTrash(row.directory, { journal, held, remove, validate, dispatch, disposable: true, cleaner: audit });
+          if (!removed) await restore();
         } else {
           if (!file) {
             file = { version: 1, kind: "temporary-file", directory: row.directory,
-              trash: path.join(path.dirname(row.directory), `.delegatus-trash-${path.basename(row.directory)}-${randomUUID()}`), identity: row.identity, uid: stat.uid };
+              trash: path.join(path.dirname(row.directory), `.delegatus-trash-${path.basename(row.directory)}-${randomUUID()}`), identity: row.identity, uid: stat.uid,
+              ...(audit ? { cleaner: audit } : {}) };
             if (!validate(row.directory)) { reason = "fence-changed"; continue; }
             writeJsonDurably(journal, file);
             fs.renameSync(row.directory, file.trash);
@@ -399,28 +481,42 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
           if (!moved.isFile() || moved.uid !== file.uid || identity(moved) !== row.identity) throw new Error("file-identity-changed");
           if (!await held(file.trash) && validate(file.trash)) {
             mutationStarted = true;
-            fs.unlinkSync(file.trash); fs.unlinkSync(journal); removed = true;
-          } else if (!fs.existsSync(row.directory) && identity(fs.lstatSync(file.trash)) === row.identity) {
-            fs.renameSync(file.trash, row.directory); fs.unlinkSync(journal);
-          }
+            fs.unlinkSync(file.trash); removed = true;
+            if (!audit) fs.unlinkSync(journal);
+          } else await restore();
         }
-        if (removed) { report.removed++; report.removedBytes += bytes; ports.onRemoved?.(row); store.forget(row.directory); reason = "removed"; }
+        if (removed) {
+          await settleAudit("removed");
+          if (audit) fs.unlinkSync(journal);
+          report.removed++; report.removedBytes += bytes; ports.onRemoved?.(row); store.forget(row.directory); reason = "removed";
+        }
       } catch (error) {
         if (error instanceof RetentionTestSafetyError) throw error;
-        reason = error instanceof Error ? error.message : "inspection-unavailable"; report.errors++;
+        reason = error instanceof Error ? error.message : "inspection-unavailable";
+        // In a Cleaner pass, a hold on a candidate that was never quarantined
+        // is a reason to keep it, listed with the kept rows. The same finding
+        // in an interrupted removal means that removal cannot finish, which is
+        // a failure, as is everything unrecognised.
+        const keptOnPurpose = !!cleaner && PROTECTION_HOLDS.has(reason) && !mutationStarted && !fs.existsSync(journal);
+        if (reason !== "git-data" && !keptOnPurpose) report.errors++;
         // Protection and reference inspection can throw before dispatch, even
         // on replay. Return that verified resource to its owner in this call.
         // A native removal error keeps the intent and partial tree in custody.
         if (claimed && !mutationStarted) {
-          try { restoreCandidate(row, journal); }
+          try { await restore(); }
           catch (restoreError) { reason += `; restoration: ${restoreError instanceof Error ? restoreError.message : "unavailable"}`; }
         }
       }
       finally {
         try { release?.(); } catch { report.errors++; }
         if (reason !== "removed" && reason !== "absent") {
+          if (audit && !mutationStarted && !fs.existsSync(journal) && fs.existsSync(row.directory)) {
+            try { await settleAudit("refused"); }
+            catch (error) { reason += `; Cleaner audit: ${error instanceof Error ? error.message : "unavailable"}`; report.errors++; }
+          }
           store.record(row.directory, nextCheck, bytes, reason);
           report.kept[reason] = (report.kept[reason] ?? 0) + 1;
+          if (cleaner) keptRows.push({ path: row.directory, reason, bytes });
         }
       }
     }

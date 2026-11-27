@@ -1,7 +1,7 @@
 import { attentionReason } from "@/components/attention";
 import { roleNameById } from "@/components/builderCopy";
 import { clearedByText, laneStageLabel, needLabel } from "@/components/attention/decision";
-import { laneNeed, type ClearedNeed, type NeedReason } from "@/components/attention/needReason";
+import { laneNeed, needOwesAnswer, type ClearedNeed, type NeedReason } from "@/components/attention/needReason";
 import { laneMergeWord, mergeReasonText, pipelineMovedAtMs } from "@/components/pipelines/pipelineBlockModel";
 import { laneRouteNow, type AttentionRouteMark } from "@/lib/attention/routeTypes";
 import type { TFunction } from "@/lib/i18n";
@@ -94,6 +94,8 @@ export type CardSubject =
   | { kind: "lane"; lane: LaneState }
   /** A member's ask the seat answers first. */
   | { kind: "seat-conversation"; file: FileEntry }
+  /** A member's fault that asks nobody: a message stuck in delivery, a failed launch. */
+  | { kind: "fault"; need: Extract<NeedReason, { subject: "conversation" }> }
   /** Nothing to name beyond the card's motion. */
   | { kind: "motion" };
 
@@ -118,7 +120,8 @@ export function cardState(card: CardInput, nowSeconds: number): CardState | null
   const waitingRound = card.task && prototypeWaitsOnOperator(card.task.prototypeReview, card.task) ? card.task.prototypeReview! : null;
   const motionSince = parseMs(card.motion.since);
   if (card.needsYou || formLane) {
-    const first = card.reasons[0];
+    /* The reason that owes an answer leads; a stuck delivery beside it waits its turn. */
+    const first = card.reasons.find(needOwesAnswer);
     if (first?.subject === "conversation") return { owner: "you", subject: { kind: "conversation", need: first }, lanes, sinceMs: first.since * 1000 };
     if (first?.subject === "pipeline") {
       const lane = lanes.find((entry) => entry.pipeline.id === first.pipeline.id) ?? laneState(first.pipeline);
@@ -133,6 +136,9 @@ export function cardState(card: CardInput, nowSeconds: number): CardState | null
       return { owner: "you", subject: { kind: "form", taskId: card.task.id, reviewId: waitingRound.waitingReviewId!, title: waitingRound.title }, lanes, sinceMs: parseMs(waitingRound.createdAt) };
     }
   }
+  /* A stuck delivery or a failed launch is named as what it is, and owes no answer. */
+  const fault = card.reasons.find((need): need is Extract<NeedReason, { subject: "conversation" }> => need.subject === "conversation" && !needOwesAnswer(need));
+  if (fault) return { owner: "waiting", subject: { kind: "fault", need: fault }, lanes, sinceMs: fault.since * 1000 };
   const lead = URGENCY.map((owner) => lanes.find((lane) => lane.owner === owner)).find(Boolean) ?? null;
   if (lead?.owner === "seat") return { owner: "seat", subject: { kind: "lane", lane: lead }, lanes, sinceMs: lead.sinceMs };
   const seatMember = card.members.find((member) => attentionReason(member.file, nowSeconds)?.route?.owner === "seat");
@@ -176,14 +182,15 @@ function stageName(t: TFunction, pipeline: Pipeline, stageId: string | null): st
 
 /** Why a lane stopped, by its stop kind. `short` drops the stage, for a
     chronology entry that already names it. */
-export function laneStopWhy(t: TFunction, pipeline: Pipeline, stop: LaneStop, short = false): string {
+export function laneStopWhy(t: TFunction, pipeline: Pipeline, stop: LaneStop, short = false, nameOf?: (stageId: string) => string | null): string {
   if (stop.kind === "merge") {
     const pr = pipeline.merge?.prNumber;
     const reason = mergeReasonText(t, pipeline.merge?.reason ?? null);
     return pr ? t("cardState.why.merge", { pr, reason }) : t("cardState.why.mergeNoPr", { reason });
   }
   if (short) return t(`cardState.whyShort.${stop.kind}`);
-  const stage = stageName(t, pipeline, stop.stageId);
+  /* A window that shows the stage under its own name (the Stages window) says that name, whole; the card's label is a shorthand with the attempt. */
+  const stage = (stop.stageId ? nameOf?.(stop.stageId) : null) ?? stageName(t, pipeline, stop.stageId);
   return stage ? t(`cardState.why.${stop.kind}`, { stage }) : t(`cardState.whyShort.${stop.kind}`);
 }
 
@@ -207,6 +214,11 @@ export function cardStateText(t: TFunction, state: CardState, clock: (ms: number
   const subject = state.subject;
   if (subject.kind === "form") return subject.title ? t("cardState.you.form", { title: subject.title }) : t("cardState.you.plain");
   if (subject.kind === "conversation") return t("cardState.you.conversation", { need: needLabel(t, subject.need) });
+  if (subject.kind === "fault") {
+    const role = memberRole(t, subject.need.file);
+    const what = t(subject.need.kind === "launch" ? "cardState.fault.launch" : "cardState.fault.delivery");
+    return role ? t("cardState.fault.role", { what, role }) : what;
+  }
   if (subject.kind === "seat-conversation") {
     const role = memberRole(t, subject.file);
     return role ? t("cardState.seat.conversation", { role }) : t("cardState.seat.conversationPlain");

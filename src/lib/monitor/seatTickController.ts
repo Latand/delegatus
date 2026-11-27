@@ -286,7 +286,7 @@ function cardText(project: string, card: SeatTickCard, at: string, existing?: Bo
     ].join("\n"), CARD_TEXT_LIMIT - marker.length - 2)}\n\n${marker}`;
   }
   if (card.kind === "auto-rotation" || card.kind === "host-recovery") return redactBounded(card.detail, CARD_TEXT_LIMIT);
-  if (card.kind === "auth-failed" || card.kind === "disk-pressure") return redactBounded(`${card.detail}\n\n${MONITOR_REF_PREFIX} ${card.ref}`, CARD_TEXT_LIMIT);
+  if (card.kind === "auth-failed" || card.kind === "disk-pressure" || card.kind === "memory-pressure") return redactBounded(`${card.detail}\n\n${MONITOR_REF_PREFIX} ${card.ref}`, CARD_TEXT_LIMIT);
   if (card.kind === "no-seat") return orchestratorAlertCardText(card.detail, at);
   if (card.kind === "mcp-unavailable") return redactBounded([
     "Orchestrator seat cannot use its Viewer MCP",
@@ -325,12 +325,14 @@ function cardText(project: string, card: SeatTickCard, at: string, existing?: Bo
     host-recovery keep their monitor ref here as well. */
 function cardDetails(card: SeatTickCard): string {
   const fact = `${CARD_FACT_PREFIX} ${cardFact(card)}`;
+  if (card.kind === "disk-pressure" && card.cleanupReport) return `${fact}\n${DISK_CLEANER_CARD_MARKER}`;
   if (card.kind !== "auto-rotation" && card.kind !== "host-recovery") return fact;
   const marker = `${MONITOR_REF_PREFIX} ${card.ref}`;
   return [fact, card.record ? redactBounded(card.record, CARD_TEXT_LIMIT) : "", marker].filter(Boolean).join("\n\n");
 }
 
 const CARD_FACT_PREFIX = "monitor-fact:";
+const DISK_CLEANER_CARD_MARKER = "monitor-cleaner-report";
 
 /** Stable across checks and restarts, including after the create receipt expires.
     Recovery notices also distinguish an intermediate outcome from its terminal one. */
@@ -404,7 +406,7 @@ function completedSeatTickCard(tasks: readonly BoardTask[], project: string, car
 export function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): boolean {
   // Authentication and automatic rotation notices are separate occurrences. An older owed card can
   // finish beside a newer incident without rewriting or closing its notice.
-  if ((card.kind === "auth-failed" || card.kind === "auto-rotation" || card.kind === "host-recovery" || card.kind === "disk-pressure") && card.instance) card = { ...card, ref: `${card.ref}-${crypto.createHash("sha256").update(card.instance).digest("hex").slice(0, 32)}` };
+  if ((card.kind === "auth-failed" || card.kind === "auto-rotation" || card.kind === "host-recovery" || card.kind === "disk-pressure" || card.kind === "memory-pressure") && card.instance) card = { ...card, ref: `${card.ref}-${crypto.createHash("sha256").update(card.instance).digest("hex").slice(0, 32)}` };
   /* The board file is resolved HERE, per call, rather than taken from the
      module-load default `mutateTasksFile` would otherwise use. That default is
      frozen the first time `@/lib/tasks/store` is imported anywhere in the
@@ -430,6 +432,21 @@ export function ensureSeatTickCard(project: string, card: SeatTickCard, at: stri
        whatever the card itself turns out to need. */
     const unchanged = absorbed ? { state, result: true } : { state: undefined, result: true };
     const existing = standingSeatTickCard(state.tasks, project, card);
+    if (card.kind === "disk-pressure" && card.cleanupReport) {
+      const previous = existing ?? state.tasks.findLast(task => canonicalOrchestratorProject(task.project) === project && taskMonitorRef(task) === card.ref);
+      const text = cardText(project, card, at, previous);
+      const details = cardDetails(card);
+      if (previous?.text === text && previous.details === details && (card.state !== "resolved" || previous.status === "done")) return unchanged;
+      const created = previous ? null : createTask(state.tasks, { project, text, details, placement: "unplaced",
+        clientRequestId: monitorClientRequestId(`${card.ref}:${project}`) }, state.recentCreates, { allowBoardOverflow: true });
+      if (created && !created.ok) return { state: undefined, result: false };
+      const id = previous?.id ?? (created?.ok ? created.task.id : null);
+      if (!id) return { state: undefined, result: false };
+      const patched = patchTask(created?.ok ? created.tasks : state.tasks, id,
+        { text, details, ...(card.state === "resolved" ? { status: "done" } : {}) }, at, { allowBoardOverflow: true });
+      return patched.ok ? { state: { ...state, tasks: patched.tasks, recentCreates: created?.ok ? created.recentCreates : state.recentCreates }, result: true }
+        : { state: undefined, result: false };
+    }
     if (card.state === "resolved") {
       if (!existing) return unchanged;
       const resolvedAt = new Date().toISOString();
@@ -450,6 +467,7 @@ export function ensureSeatTickCard(project: string, card: SeatTickCard, at: stri
          card that tracks a standing state — the one kind that declares its
          `state` — is kept in step with what it describes. */
       if (card.state !== "open") return unchanged;
+      if (card.kind === "disk-pressure" && existing.details?.split("\n").includes(DISK_CLEANER_CARD_MARKER)) return unchanged;
       if (card.kind === "check-errors" && existing.details?.split("\n").includes(details)) return unchanged;
       if (existing.text === text && existing.details === details) return unchanged;
       const updated = patchTask(state.tasks, existing.id, { text, details });
@@ -501,12 +519,14 @@ function standingSeatTickCard(tasks: readonly BoardTask[], project: string, card
 /** Whether the board already holds exactly what {@link ensureSeatTickCard}
     would leave there, so the check has nothing to write. */
 function seatTickCardIsCurrent(project: string, card: SeatTickCard, at: string, tasks: readonly BoardTask[]): boolean {
+  if (card.kind === "disk-pressure" && card.cleanupReport) return false;
   if (card.kind === "wake-unresolved" && tasks.some((task) => isAttemptCard(task, project))) return false;
   const existing = standingSeatTickCard(tasks, project, card);
   if (card.state === "resolved") return !existing;
   if (completedSeatTickCard(tasks, project, card, at)) return true;
   if (!existing) return false;
   if (card.state !== "open") return true;
+  if (card.kind === "disk-pressure" && existing.details?.split("\n").includes(DISK_CLEANER_CARD_MARKER)) return true;
   const details = cardDetails(card);
   // Check-error cards retain the opening snapshot of their durable episode.
   if (card.kind === "check-errors") return existing.details?.split("\n").includes(details) ?? false;
@@ -1709,6 +1729,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
       now: input.now,
       project: input.project,
       workers: input.workers,
+      ...(input.machine ? { machine: input.machine } : {}),
       snapshotAt,
       reasons: verdict.reasons,
       ...(verdict.catchUp ? { catchUp: verdict.catchUp } : {}),

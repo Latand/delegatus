@@ -60,6 +60,19 @@ export function conversationNeed(file: FileEntry, now: number): { need: NeedReas
   return { need, cleared: { need, at: at / 1000, by: reason.dismissal.by } };
 }
 
+/** A conversation's reason that is a fault of its own and asks nobody an
+    answer: a message stuck in delivery, a launch that failed. The card names
+    it on its state line; it does not make the card wait on the operator, so
+    it neither pins nor counts as a wait (docs/design/legatus/build-plan.md,
+    slice 1, as `needsYouHolds` reads it). */
+const FAULT_KINDS: ReadonlySet<string> = new Set(["delivery", "launch"]);
+
+/** Whether a reason owes the operator an answer: a lane parked on them, or a
+    conversation that asks. A stuck delivery or a failed launch does not. */
+export function needOwesAnswer(need: NeedReason): boolean {
+  return need.subject === "pipeline" || !FAULT_KINDS.has(need.kind);
+}
+
 /** How long a card keeps a reason Delegatus cleared after its source went
     quiet: long enough to see who cleared it and to undo it, short enough
     that answered asks do not stay on every card for the record's lifetime.

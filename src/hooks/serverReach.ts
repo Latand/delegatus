@@ -5,6 +5,7 @@ import { createContext, useContext, useEffect, useState } from "react";
 import type { Locale, TFunction } from "@/lib/i18n";
 
 import { getRuntimeBus, isRuntimeUiEnabled } from "./runtimeBus";
+import { GLOBAL_RUNTIME_GATES } from "./runtimeSubscriptions";
 import { useRuntimeSelector } from "./useRuntime";
 
 function streamLastEvent(): number | null {
@@ -95,7 +96,7 @@ export function nextReachBoundary(input: ServerReachInput): number | null {
  * met by one timer, not a clock.
  */
 export function useDerivedServerReach(files: { catalogFailures: number; failingSince?: number; lastSuccessAt?: number | null }): ServerReach {
-  const connection = useRuntimeSelector<ServerReachInput["connection"]>((state) => (state.enabled ? state.connection : "live"), "live");
+  const connection = useRuntimeSelector<ServerReachInput["connection"]>((state) => (state.enabled ? state.connection : "live"), "live", Object.is, true, GLOBAL_RUNTIME_GATES);
   /* When the stream went down, and its last event before that. Read once at
      the transition, so a stream event never re-renders the Viewer. */
   const [streamDown, setStreamDown] = useState<{ since: number; lastEventAt: number | null } | null>(null);

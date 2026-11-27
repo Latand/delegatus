@@ -7,7 +7,9 @@
         "basis": "measured",
         "text": "·420",
         "height": 44,
-        "titleWidth": 240.890625
+        "titleWidth": 244.921875,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "\"useSettings\" · src1.2s·3.8k13:00",
@@ -15,7 +17,9 @@
         "basis": "measured",
         "text": "·3.8k",
         "height": 44,
-        "titleWidth": 250.96875
+        "titleWidth": 253.8125,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "Read useSettings.ts409ms·12.4k13:00",
@@ -23,7 +27,9 @@
         "basis": "measured",
         "text": "·12.4k",
         "height": 44,
-        "titleWidth": 233.75
+        "titleWidth": 237.140625,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "bun test src/lib/settings14s·27.8k13:00",
@@ -31,7 +37,9 @@
         "basis": "measured",
         "text": "·27.8k",
         "height": 44,
-        "titleWidth": 246.921875
+        "titleWidth": 250.46875,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "read 2 files13:00",
@@ -39,15 +47,19 @@
         "basis": null,
         "text": null,
         "height": 44,
-        "titleWidth": 312.265625
+        "titleWidth": 310.96875,
+        "dotBefore": null,
+        "dotAfter": null
       },
       {
-        "label": "MCP · viewerListing pipelines639ms·2.3k13:00",
+        "label": "Listing pipelinesMCP · viewer13:00639ms·2.3k",
         "band": 1,
         "basis": "measured",
         "text": "·2.3k",
         "height": 44,
-        "titleWidth": 107.609375
+        "titleWidth": 192.703125,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "ls tmp49ms13:00",
@@ -55,7 +67,9 @@
         "basis": null,
         "text": null,
         "height": 44,
-        "titleWidth": 280.625
+        "titleWidth": 278.515625,
+        "dotBefore": null,
+        "dotAfter": null
       },
       {
         "label": "bun run scripts/rebuild-everything.ts --all --verboseexit 12759s·~99.9",
@@ -63,7 +77,9 @@
         "basis": "estimate",
         "text": "·~99.9k",
         "height": 44,
-        "titleWidth": 167.5625
+        "titleWidth": 169.921875,
+        "dotBefore": 4,
+        "dotAfter": 4
       }
     ],
     "390px light uk": [
@@ -73,7 +89,9 @@
         "basis": "measured",
         "text": "·420",
         "height": 44,
-        "titleWidth": 239.359375
+        "titleWidth": 243.59375,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "\"useSettings\" · src1.2 с·3.8k13:00",
@@ -81,7 +99,9 @@
         "basis": "measured",
         "text": "·3.8k",
         "height": 44,
-        "titleWidth": 247.859375
+        "titleWidth": 251.03125,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "Читання useSettings.ts409 мс·12.4k13:00",
@@ -89,7 +109,9 @@
         "basis": "measured",
         "text": "·12.4k",
         "height": 44,
-        "titleWidth": 232.21875
+        "titleWidth": 235.8125,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "bun test src/lib/settings14 с·27.8k13:00",
@@ -97,7 +119,9 @@
         "basis": "measured",
         "text": "·27.8k",
         "height": 44,
-        "titleWidth": 243.8125
+        "titleWidth": 247.6875,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "прочитано файлів: 213:00",
@@ -105,15 +129,19 @@
         "basis": null,
         "text": null,
         "height": 44,
-        "titleWidth": 312.265625
+        "titleWidth": 310.96875,
+        "dotBefore": null,
+        "dotAfter": null
       },
       {
-        "label": "MCP · viewerListing pipelines639 мс·2.3k13:00",
+        "label": "Список пайплайнівMCP · viewer13:00639 мс·2.3k",
         "band": 1,
         "basis": "measured",
         "text": "·2.3k",
         "height": 44,
-        "titleWidth": 106.078125
+        "titleWidth": 191.375,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "ls tmp49 мс13:00",
@@ -121,7 +149,9 @@
         "basis": null,
         "text": null,
         "height": 44,
-        "titleWidth": 279.09375
+        "titleWidth": 277.1875,
+        "dotBefore": null,
+        "dotAfter": null
       },
       {
         "label": "bun run scripts/rebuild-everything.ts --all --verboseкод виходу 12759 ",
@@ -129,7 +159,9 @@
         "basis": "estimate",
         "text": "·~99.9k",
         "height": 44,
-        "titleWidth": 128.296875
+        "titleWidth": 128.78125,
+        "dotBefore": 4,
+        "dotAfter": 4
       }
     ],
     "390px dark en": [
@@ -139,7 +171,9 @@
         "basis": "measured",
         "text": "·420",
         "height": 44,
-        "titleWidth": 240.890625
+        "titleWidth": 244.921875,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "\"useSettings\" · src1.2s·3.8k13:00",
@@ -147,7 +181,9 @@
         "basis": "measured",
         "text": "·3.8k",
         "height": 44,
-        "titleWidth": 250.96875
+        "titleWidth": 253.8125,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "Read useSettings.ts409ms·12.4k13:00",
@@ -155,7 +191,9 @@
         "basis": "measured",
         "text": "·12.4k",
         "height": 44,
-        "titleWidth": 233.75
+        "titleWidth": 237.140625,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "bun test src/lib/settings14s·27.8k13:00",
@@ -163,7 +201,9 @@
         "basis": "measured",
         "text": "·27.8k",
         "height": 44,
-        "titleWidth": 246.921875
+        "titleWidth": 250.46875,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "read 2 files13:00",
@@ -171,15 +211,19 @@
         "basis": null,
         "text": null,
         "height": 44,
-        "titleWidth": 312.265625
+        "titleWidth": 310.96875,
+        "dotBefore": null,
+        "dotAfter": null
       },
       {
-        "label": "MCP · viewerListing pipelines639ms·2.3k13:00",
+        "label": "Listing pipelinesMCP · viewer13:00639ms·2.3k",
         "band": 1,
         "basis": "measured",
         "text": "·2.3k",
         "height": 44,
-        "titleWidth": 107.609375
+        "titleWidth": 192.703125,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "ls tmp49ms13:00",
@@ -187,7 +231,9 @@
         "basis": null,
         "text": null,
         "height": 44,
-        "titleWidth": 280.625
+        "titleWidth": 278.515625,
+        "dotBefore": null,
+        "dotAfter": null
       },
       {
         "label": "bun run scripts/rebuild-everything.ts --all --verboseexit 12759s·~99.9",
@@ -195,7 +241,9 @@
         "basis": "estimate",
         "text": "·~99.9k",
         "height": 44,
-        "titleWidth": 167.5625
+        "titleWidth": 169.921875,
+        "dotBefore": 4,
+        "dotAfter": 4
       }
     ],
     "390px dark uk": [
@@ -205,7 +253,9 @@
         "basis": "measured",
         "text": "·420",
         "height": 44,
-        "titleWidth": 239.359375
+        "titleWidth": 243.59375,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "\"useSettings\" · src1.2 с·3.8k13:00",
@@ -213,7 +263,9 @@
         "basis": "measured",
         "text": "·3.8k",
         "height": 44,
-        "titleWidth": 247.859375
+        "titleWidth": 251.03125,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "Читання useSettings.ts409 мс·12.4k13:00",
@@ -221,7 +273,9 @@
         "basis": "measured",
         "text": "·12.4k",
         "height": 44,
-        "titleWidth": 232.21875
+        "titleWidth": 235.8125,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "bun test src/lib/settings14 с·27.8k13:00",
@@ -229,7 +283,9 @@
         "basis": "measured",
         "text": "·27.8k",
         "height": 44,
-        "titleWidth": 243.8125
+        "titleWidth": 247.6875,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "прочитано файлів: 213:00",
@@ -237,15 +293,19 @@
         "basis": null,
         "text": null,
         "height": 44,
-        "titleWidth": 312.265625
+        "titleWidth": 310.96875,
+        "dotBefore": null,
+        "dotAfter": null
       },
       {
-        "label": "MCP · viewerListing pipelines639 мс·2.3k13:00",
+        "label": "Список пайплайнівMCP · viewer13:00639 мс·2.3k",
         "band": 1,
         "basis": "measured",
         "text": "·2.3k",
         "height": 44,
-        "titleWidth": 106.078125
+        "titleWidth": 191.375,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "ls tmp49 мс13:00",
@@ -253,7 +313,9 @@
         "basis": null,
         "text": null,
         "height": 44,
-        "titleWidth": 279.09375
+        "titleWidth": 277.1875,
+        "dotBefore": null,
+        "dotAfter": null
       },
       {
         "label": "bun run scripts/rebuild-everything.ts --all --verboseкод виходу 12759 ",
@@ -261,7 +323,9 @@
         "basis": "estimate",
         "text": "·~99.9k",
         "height": 44,
-        "titleWidth": 128.296875
+        "titleWidth": 128.78125,
+        "dotBefore": 4,
+        "dotAfter": 4
       }
     ],
     "1440px light en": [
@@ -271,7 +335,9 @@
         "basis": "measured",
         "text": "·420",
         "height": 22,
-        "titleWidth": 697.9375
+        "titleWidth": 701.015625,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "\"useSettings\" · src1.2s·3.8k13:00:02",
@@ -279,7 +345,9 @@
         "basis": "measured",
         "text": "·3.8k",
         "height": 22,
-        "titleWidth": 708.015625
+        "titleWidth": 709.90625,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "Read useSettings.ts409ms·12.4k13:00:04",
@@ -287,7 +355,9 @@
         "basis": "measured",
         "text": "·12.4k",
         "height": 22,
-        "titleWidth": 690.796875
+        "titleWidth": 693.234375,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "bun test src/lib/settings14s·27.8k13:00:05",
@@ -295,7 +365,9 @@
         "basis": "measured",
         "text": "·27.8k",
         "height": 22,
-        "titleWidth": 703.96875
+        "titleWidth": 706.5625,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "read 2 files499ms·~15.6k13:00:21",
@@ -303,15 +375,19 @@
         "basis": "estimate",
         "text": "·~15.6k",
         "height": 22,
-        "titleWidth": 683.953125
+        "titleWidth": 687.390625,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
-        "label": "MCP · viewerListing pipelines639ms·2.3k13:00:22",
+        "label": "Listing pipelinesMCP · viewer13:00:22639ms·2.3k",
         "band": 1,
         "basis": "measured",
         "text": "·2.3k",
         "height": 22,
-        "titleWidth": 588.65625
+        "titleWidth": 591.015625,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "ls tmp49ms13:00:24",
@@ -319,7 +395,9 @@
         "basis": null,
         "text": null,
         "height": 22,
-        "titleWidth": 737.671875
+        "titleWidth": 734.609375,
+        "dotBefore": null,
+        "dotAfter": null
       },
       {
         "label": "bun run scripts/rebuild-everything.ts --all --verboseexit 12759s·~99.9",
@@ -327,7 +405,9 @@
         "basis": "estimate",
         "text": "·~99.9k",
         "height": 22,
-        "titleWidth": 624.609375
+        "titleWidth": 626.015625,
+        "dotBefore": 4,
+        "dotAfter": 4
       }
     ],
     "1440px light uk": [
@@ -337,7 +417,9 @@
         "basis": "measured",
         "text": "·420",
         "height": 22,
-        "titleWidth": 696.40625
+        "titleWidth": 699.6875,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "\"useSettings\" · src1.2 с·3.8k13:00:02",
@@ -345,7 +427,9 @@
         "basis": "measured",
         "text": "·3.8k",
         "height": 22,
-        "titleWidth": 704.90625
+        "titleWidth": 707.125,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "Читання useSettings.ts409 мс·12.4k13:00:04",
@@ -353,7 +437,9 @@
         "basis": "measured",
         "text": "·12.4k",
         "height": 22,
-        "titleWidth": 689.265625
+        "titleWidth": 691.90625,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "bun test src/lib/settings14 с·27.8k13:00:05",
@@ -361,7 +447,9 @@
         "basis": "measured",
         "text": "·27.8k",
         "height": 22,
-        "titleWidth": 700.859375
+        "titleWidth": 703.78125,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "прочитано файлів: 2499 мс·~15.6k13:00:21",
@@ -369,15 +457,19 @@
         "basis": "estimate",
         "text": "·~15.6k",
         "height": 22,
-        "titleWidth": 682.421875
+        "titleWidth": 686.0625,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
-        "label": "MCP · viewerListing pipelines639 мс·2.3k13:00:22",
+        "label": "Список пайплайнівMCP · viewer13:00:22639 мс·2.3k",
         "band": 1,
         "basis": "measured",
         "text": "·2.3k",
         "height": 22,
-        "titleWidth": 587.125
+        "titleWidth": 589.6875,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "ls tmp49 мс13:00:24",
@@ -385,7 +477,9 @@
         "basis": null,
         "text": null,
         "height": 22,
-        "titleWidth": 736.140625
+        "titleWidth": 733.28125,
+        "dotBefore": null,
+        "dotAfter": null
       },
       {
         "label": "bun run scripts/rebuild-everything.ts --all --verboseкод виходу 12759 ",
@@ -393,7 +487,9 @@
         "basis": "estimate",
         "text": "·~99.9k",
         "height": 22,
-        "titleWidth": 585.34375
+        "titleWidth": 584.875,
+        "dotBefore": 4,
+        "dotAfter": 4
       }
     ],
     "1440px dark en": [
@@ -403,7 +499,9 @@
         "basis": "measured",
         "text": "·420",
         "height": 22,
-        "titleWidth": 697.9375
+        "titleWidth": 701.015625,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "\"useSettings\" · src1.2s·3.8k13:00:02",
@@ -411,7 +509,9 @@
         "basis": "measured",
         "text": "·3.8k",
         "height": 22,
-        "titleWidth": 708.015625
+        "titleWidth": 709.90625,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "Read useSettings.ts409ms·12.4k13:00:04",
@@ -419,7 +519,9 @@
         "basis": "measured",
         "text": "·12.4k",
         "height": 22,
-        "titleWidth": 690.796875
+        "titleWidth": 693.234375,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "bun test src/lib/settings14s·27.8k13:00:05",
@@ -427,7 +529,9 @@
         "basis": "measured",
         "text": "·27.8k",
         "height": 22,
-        "titleWidth": 703.96875
+        "titleWidth": 706.5625,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "read 2 files499ms·~15.6k13:00:21",
@@ -435,15 +539,19 @@
         "basis": "estimate",
         "text": "·~15.6k",
         "height": 22,
-        "titleWidth": 683.953125
+        "titleWidth": 687.390625,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
-        "label": "MCP · viewerListing pipelines639ms·2.3k13:00:22",
+        "label": "Listing pipelinesMCP · viewer13:00:22639ms·2.3k",
         "band": 1,
         "basis": "measured",
         "text": "·2.3k",
         "height": 22,
-        "titleWidth": 588.65625
+        "titleWidth": 591.015625,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "ls tmp49ms13:00:24",
@@ -451,7 +559,9 @@
         "basis": null,
         "text": null,
         "height": 22,
-        "titleWidth": 737.671875
+        "titleWidth": 734.609375,
+        "dotBefore": null,
+        "dotAfter": null
       },
       {
         "label": "bun run scripts/rebuild-everything.ts --all --verboseexit 12759s·~99.9",
@@ -459,7 +569,9 @@
         "basis": "estimate",
         "text": "·~99.9k",
         "height": 22,
-        "titleWidth": 624.609375
+        "titleWidth": 626.015625,
+        "dotBefore": 4,
+        "dotAfter": 4
       }
     ],
     "1440px dark uk": [
@@ -469,7 +581,9 @@
         "basis": "measured",
         "text": "·420",
         "height": 22,
-        "titleWidth": 696.40625
+        "titleWidth": 699.6875,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "\"useSettings\" · src1.2 с·3.8k13:00:02",
@@ -477,7 +591,9 @@
         "basis": "measured",
         "text": "·3.8k",
         "height": 22,
-        "titleWidth": 704.90625
+        "titleWidth": 707.125,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "Читання useSettings.ts409 мс·12.4k13:00:04",
@@ -485,7 +601,9 @@
         "basis": "measured",
         "text": "·12.4k",
         "height": 22,
-        "titleWidth": 689.265625
+        "titleWidth": 691.90625,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "bun test src/lib/settings14 с·27.8k13:00:05",
@@ -493,7 +611,9 @@
         "basis": "measured",
         "text": "·27.8k",
         "height": 22,
-        "titleWidth": 700.859375
+        "titleWidth": 703.78125,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "прочитано файлів: 2499 мс·~15.6k13:00:21",
@@ -501,15 +621,19 @@
         "basis": "estimate",
         "text": "·~15.6k",
         "height": 22,
-        "titleWidth": 682.421875
+        "titleWidth": 686.0625,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
-        "label": "MCP · viewerListing pipelines639 мс·2.3k13:00:22",
+        "label": "Список пайплайнівMCP · viewer13:00:22639 мс·2.3k",
         "band": 1,
         "basis": "measured",
         "text": "·2.3k",
         "height": 22,
-        "titleWidth": 587.125
+        "titleWidth": 589.6875,
+        "dotBefore": 4,
+        "dotAfter": 4
       },
       {
         "label": "ls tmp49 мс13:00:24",
@@ -517,7 +641,9 @@
         "basis": null,
         "text": null,
         "height": 22,
-        "titleWidth": 736.140625
+        "titleWidth": 733.28125,
+        "dotBefore": null,
+        "dotAfter": null
       },
       {
         "label": "bun run scripts/rebuild-everything.ts --all --verboseкод виходу 12759 ",
@@ -525,7 +651,9 @@
         "basis": "estimate",
         "text": "·~99.9k",
         "height": 22,
-        "titleWidth": 585.34375
+        "titleWidth": 584.875,
+        "dotBefore": 4,
+        "dotAfter": 4
       }
     ]
   }
