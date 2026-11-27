@@ -14,6 +14,8 @@ import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDeliver
 import { defaultStartHost } from "@/lib/runtime/structuredSpawn";
 import { projectForCwd } from "@/lib/scanner/describe";
 import { loadTasksByIds } from "@/lib/tasks/store";
+import { resetTeamStoreForTests, teamStore } from "@/lib/team/store";
+import { createWorkspace, placeProject } from "@/lib/team/workspaces";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -47,6 +49,7 @@ import { viewerMcpBindings, viewerMcpRecoverableTools, productionDomainDependenc
 
 import { createMcpToolService, createViewerMcpServer, McpDispatchUncertainError, MemoryMcpReceiptStore, receiptKey, SqliteMcpReceiptStore } from "./server";
 import { projectStartFixtureSeat } from "./projectStart.fixture";
+import { withWorkspaceMcpFence } from "./workspaceFence";
 
 /*
  * The two-axis orchestration surface: get / create / send / rotate. All four
@@ -82,7 +85,7 @@ function seatActive(project: string, conversationId: string, transcriptPath: str
   completeOrchestratorSeatIntent({ project, clientRequestId: "seed_0000001", conversationId, path: transcriptPath, now: AT });
 }
 
-for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "hostile", "recipient-replaced", "recipient-replaced-after-claim", "recipient-replaced-before-response", "codex-pre-exec", "claude-pre-exec"] as const) {
+for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "hostile", "recipient-replaced", "recipient-replaced-after-claim", "recipient-replaced-before-response", "workspace-grant-revoked", "codex-pre-exec", "claude-pre-exec"] as const) {
   test(`project start keeps original-key custody through the real Viewer's ${mode} path`, async () => {
     const oldHome = process.env.HOME;
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "project-start-home-"));
@@ -93,7 +96,17 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
     fs.mkdirSync(sourceRoot);
     let receipts: SqliteMcpReceiptStore | undefined;
     try {
-      const source = projectStartFixtureSeat(testRegistry, sandbox, sourceRoot, 51);
+      const team = mode === "workspace-grant-revoked" ? teamStore() : null;
+      const principal = { memberId: "m_member", workspaceId: `w_${"c".repeat(32)}` };
+      const owner = { id: "m_owner", name: "Fixture owner", role: "owner" as const, status: "active" as const,
+        color: "teal" as const, telegram: null, createdAt: AT, createdBy: "claim", revokedAt: null };
+      if (team) {
+        team.insertMember(owner);
+        team.insertMember({ ...owner, id: principal.memberId, name: "Fixture member", role: "member" });
+        createWorkspace(team, owner, { id: principal.workspaceId, name: "Fixture workspace", projects: [projectForCwd(sourceRoot)!] });
+        team.putWorkspaceMember(principal.workspaceId, principal.memberId, "member", owner.id, AT);
+      }
+      const source = projectStartFixtureSeat(testRegistry, sandbox, sourceRoot, 51, process.pid, team ? principal : undefined);
       const targetRoot = path.join(parent, "sample");
       const preExecEngine = mode === "codex-pre-exec" ? "codex" : mode === "claude-pre-exec" ? "claude" : null;
       if (preExecEngine) saveRoleOverrides({ orchestrator: { config: preExecEngine === "codex"
@@ -141,7 +154,7 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
       });
       let existing: ReturnType<typeof projectStartFixtureSeat> | undefined;
       let gitHead: string | undefined;
-      if (mode === "existing" || mode === "recipient-replaced" || mode === "recipient-replaced-after-claim" || mode === "recipient-replaced-before-response") {
+      if (team || mode === "existing" || mode === "recipient-replaced" || mode === "recipient-replaced-after-claim" || mode === "recipient-replaced-before-response") {
         fs.mkdirSync(targetRoot);
         fs.writeFileSync(path.join(targetRoot, "readme.txt"), "Existing fixture\n");
         const prepared = await preparePipelineRepository(targetRoot);
@@ -149,6 +162,7 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
         gitHead = prepared.repositoryInitialization.commit;
         expect(createManualProject("Existing sample", targetRoot).ok).toBe(true);
         existing = projectStartFixtureSeat(testRegistry, sandbox, targetRoot, 52);
+        if (team) placeProject(team, owner, existing.project, principal.workspaceId);
         fs.writeFileSync(path.join(targetRoot, "readme.txt"), "Uncommitted fixture\n");
       }
       if (mode === "hostile") fs.symlinkSync(sourceRoot, targetRoot, "dir");
@@ -170,12 +184,17 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
           return committed;
         };
       }
-      const bindings = viewerMcpBindings(undefined, undefined, {
+      const domain: ViewerMcpDomainDependencies = {
         ...productionDomainDependencies, attentionAuthority: () => ({
           kind: "worker", conversationId: source.conversationId, role: "orchestrator", evidence: "native-session",
         }),
-      });
-      let service = createMcpToolService(bindings, receipts);
+      };
+      const bindings = viewerMcpBindings(undefined, undefined, domain);
+      const openService = (store: SqliteMcpReceiptStore) => {
+        const service = createMcpToolService(bindings, store);
+        return team ? withWorkspaceMcpFence(service, domain) : service;
+      };
+      let service = openService(receipts);
       const accepted = await service.callTool("start_project", args);
       if (mode === "recipient-replaced-after-claim") {
         expect(accepted).toMatchObject({ ok: false, code: "target_changed" });
@@ -197,6 +216,7 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
       const key = receiptKey("start_project", args.clientRequestId, source.conversationId);
       const recorded = receipts.lookup(key);
       if (!recorded?.binding?.projectStart) throw new Error("missing project start claim");
+      if (team) expect(recorded.binding.projectStart.source.workspace).toEqual(principal);
       if (mode === "recipient-replaced-before-response") {
         if (!existing) throw new Error("fixture recipient was unavailable");
         const recipient = existing.entry;
@@ -246,7 +266,7 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
       }
       receipts.close();
       receipts = new SqliteMcpReceiptStore(file);
-      service = createMcpToolService(bindings, receipts);
+      service = openService(receipts);
       const sent: string[] = [];
       let beforeWrite = 0;
       let recipient: { conversationId: string; project: string; entry: AgentRegistryEntry } | undefined = existing;
@@ -261,6 +281,7 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
         command: async (command, authorizeBeforeWrite) => {
           beforeWrite += 1;
           if (mode === "recipient-replaced") testRegistry.upsert({ ...existing!.entry, claimOwner: "recipient-replacement" });
+          if (team) placeProject(team, owner, existing!.project, null);
           authorizeBeforeWrite?.();
           sent.push(command.operationId);
           return { operationId: command.operationId, replayed: false, receipt: {
@@ -304,6 +325,17 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
         return;
       }
       const replay = await service.callTool("start_project", { ...args, recoveryOnly: true });
+      if (team) {
+        expect(beforeWrite).toBe(1);
+        expect(sent).toEqual([]);
+        expect(launchCount).toBe(0);
+        expect(replay).toMatchObject({ ok: false, code: "workspace_forbidden" });
+        expect(replay).not.toHaveProperty("operationId");
+        expect(receipts.lookup(key)?.binding?.projectStart).toMatchObject({
+          cause: { code: "workspace_forbidden" }, effects: { task: "observed", delivery: "unknown" },
+        });
+        return;
+      }
       if (mode === "recipient-replaced") {
         expect(beforeWrite).toBe(1);
         expect(sent).toEqual([]);
@@ -381,6 +413,7 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
     } finally {
       setSeatCommandDependenciesForTests(null);
       receipts?.close();
+      if (mode === "workspace-grant-revoked") resetTeamStoreForTests();
       if (oldHome === undefined) delete process.env.HOME; else process.env.HOME = oldHome;
       fs.rmSync(home, { recursive: true, force: true });
     }

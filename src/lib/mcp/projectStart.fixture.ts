@@ -6,8 +6,9 @@ import type { AgentRegistry } from "@/lib/agent/registry";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { projectForCwd } from "@/lib/scanner/describe";
+import type { WorkspacePrincipal } from "@/lib/team/workspacePrincipal";
 
-export function projectStartFixtureSeat(registry: AgentRegistry, artifactDir: string, cwd: string, fixtureNumber: number, hostPid = process.pid) {
+export function projectStartFixtureSeat(registry: AgentRegistry, artifactDir: string, cwd: string, fixtureNumber: number, hostPid = process.pid, workspace?: WorkspacePrincipal) {
   const id = `00000000-0000-4000-8000-${String(fixtureNumber).padStart(12, "0")}`;
   const project = projectForCwd(cwd)!;
   const filename = path.join(artifactDir, `${id}.jsonl`);
@@ -27,7 +28,7 @@ export function projectStartFixtureSeat(registry: AgentRegistry, artifactDir: st
     || registry.finalizeStructuredSpawn(begun.receipt.launchId).kind !== "settled") throw new Error("fixture launch did not settle");
   const clientRequestId = `fixture-seat-${fixtureNumber}`;
   const now = new Date().toISOString();
-  beginOrchestratorSeatIntent({ project, mandate: "Coordinate the board", clientRequestId, mode: "spawn", now });
+  beginOrchestratorSeatIntent({ project, mandate: "Coordinate the board", clientRequestId, mode: "spawn", now, workspace });
   completeOrchestratorSeatIntent({ project, clientRequestId, conversationId: begun.receipt.conversationId, path: filename, now });
   return { conversationId: begun.receipt.conversationId, launchId: begun.receipt.launchId, project, entry };
 }
