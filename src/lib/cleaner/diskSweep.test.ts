@@ -1,10 +1,10 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { closeAgentRegistryForTests } from "@/lib/agent/registry";
+import { AgentRegistry, closeAgentRegistryForTests } from "@/lib/agent/registry";
 import { statePath } from "@/lib/configDir";
 import { pipelineIdentity, savePipelines } from "@/lib/pipelines/store";
 import { AttemptTempStore } from "@/lib/runtime/attemptTempRetention";
@@ -16,6 +16,7 @@ import { createTask } from "@/lib/tasks/commands";
 import { saveTasks } from "@/lib/tasks/store";
 import { persistProjectAliases } from "@/lib/projects/aliases";
 import { projectAliasStore } from "@/lib/projects/persistence";
+import { Database } from "bun:sqlite";
 
 test.skipIf(process.platform !== "linux")("guarded scratch sweep removes only quiet, unreferenced roots owned by the pass project", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "disk-cleaner-scratch-"));
@@ -108,6 +109,58 @@ test.skipIf(process.platform !== "linux")("guarded scratch sweep removes only qu
     for (const [key, value] of Object.entries({ LLV_STATE_DIR: saved.state, PORT: saved.port, LLV_CLEANER: saved.cleaner })) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;
     }
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 30_000);
+
+test.skipIf(process.platform !== "linux")("an open lane working above the scratch namespace holds no finished root, and one working inside names itself", async () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "disk-cleaner-lanes-")));
+  const saved = { LLV_STATE_DIR: process.env.LLV_STATE_DIR, PORT: process.env.PORT, LLV_CLEANER: process.env.LLV_CLEANER };
+  process.env.LLV_STATE_DIR = path.join(root, "state"); delete process.env.PORT; delete process.env.LLV_CLEANER;
+  const now = Date.UTC(2031, 10, 23), closed = new Date(now - 5 * 3600_000).toISOString();
+  const id = createHash("sha256").update("cleaner lane directories fixture").digest("hex").slice(0, 36);
+  try {
+    const lane = finishedLane(root, closed);
+    lane.runs = [{ stageId: "build", attempts: [{
+      n: 1, state: "passed", launchId: "fixture-launch", effectiveRole: lane.stages[0]!.effectiveRole,
+      conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null, startedAt: closed, completedAt: closed,
+      input: null, activatedBy: null, output: null, verdict: null, error: null,
+    }] }];
+    const names = ["clear", "renumbered", "inside"] as const;
+    const directories = Object.fromEntries(names.map((name, index) => [name, statePath("scratch", `llv-stage-lane0${index}`)])) as Record<typeof names[number], string>;
+    const openIn = (key: string, repoDir: string) => ({ ...lane, ...pipelineIdentity(key, lane.task, repoDir), id: key, repoDir,
+      state: "paused" as const, pausedState: "running" as const, closedAt: null });
+    // A lane whose repository contains the whole state directory, as a home
+    // directory does, beside one working inside a single root.
+    savePipelines([lane, openIn("lane-above", root), openIn("lane-inside", path.join(directories.inside, "checkout"))]);
+    const store = new AttemptTempStore();
+    try {
+      for (const name of names) {
+        const directory = directories[name];
+        fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+        fs.writeFileSync(path.join(directory, "payload"), "data");
+        store.register({ directory, pipelineId: lane.id, launchId: "fixture-launch", retainUntilClose: false, createdAt: now - 86400_000 });
+      }
+    } finally { store.close(); }
+    const recorded = fs.lstatSync(directories.renumbered);
+    const database = new Database(statePath("attempt-temp.sqlite"));
+    try { database.query("UPDATE roots SET identity=? WHERE directory=?").run(`${recorded.dev + 1}:${recorded.ino}`, directories.renumbered); }
+    finally { database.close(); }
+    createCleanerJournal(id);
+    writeJsonDurably(diskCleanerStateFile(), { id, startedAt: now, project: "fixture", mode: "on", episode: null, before: [] });
+    const reads = spyOn(AgentRegistry.prototype, "worktreeProtectionSnapshot");
+    let registryReads = 0;
+    const result = await runCleanerSweep({ id, class: "attempt-temp", after: "" }, {
+      scan: () => ({ ownNamespace: "fixture", processes: [] }), containerReferences: async () => true, now: () => now })
+      .finally(() => { registryReads = reads.mock.calls.length; reads.mockRestore(); });
+    expect(result.errors, JSON.stringify(result.kept)).toBe(0);
+    expect(names.map(name => fs.existsSync(directories[name])), JSON.stringify(result.kept)).toEqual([false, false, true]);
+    expect(result.kept).toEqual([expect.objectContaining({ path: directories.inside, reason: "an open lane or live conversation works inside the root" })]);
+    // One unchanged registry is read once for the whole slice.
+    expect(registryReads).toBe(1);
+  } finally {
+    closeAgentRegistryForTests();
+    for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
     fs.rmSync(root, { recursive: true, force: true });
   }
 }, 30_000);

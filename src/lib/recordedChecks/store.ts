@@ -4,6 +4,7 @@ import type { Database } from "bun:sqlite";
 import { z } from "zod";
 import { statePath } from "@/lib/configDir";
 import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
+import { sameAttemptInode } from "@/lib/runtime/attemptTempPaths";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { hotStateSqliteWriterReady } from "@/lib/state/hotStateAuthority";
 import { descriptorSchema, terminalSchema, reportSchema, identitySchema, writeEnvelope, digest, custodyClock, ENVELOPE_BYTES, CUSTODY_CLEANUP_MS } from "./wire";
@@ -353,7 +354,12 @@ export class RecordedCheckStore {
   retirement(directory: string, identity: string, journal: string, state: "admitted" | "completed" | "missing-unexplained", detail: string) {
     // One canonical tombstone per physical root. Successive checks may share
     // that root; retired history never makes this cleanup scan grow with them.
-    const root = this.db.query<{ id: string; retirement: string | null }, [string, string]>("SELECT id,retirement FROM recorded_check_roots WHERE directory=? AND identity=? ORDER BY id LIMIT 1").get(directory, identity);
+    // The exact identity first; otherwise the same inode of this directory,
+    // recorded before a reboot or remount renumbered its device.
+    const query = this.db.query<{ id: string; retirement: string | null }, [string, string]>("SELECT id,retirement FROM recorded_check_roots WHERE directory=? AND identity=? ORDER BY id LIMIT 1");
+    const earlier = () => this.db.query<{ identity: string }, [string]>("SELECT identity FROM recorded_check_roots WHERE directory=? ORDER BY id LIMIT 32")
+      .all(directory).find(row => sameAttemptInode(row.identity, identity))?.identity;
+    const root = query.get(directory, identity) ?? query.get(directory, earlier() ?? identity);
     if (!root) return;
     if (this.rootHeld(directory)) throw new Error("recorded root acquired a new evidence hold");
     const row = this.get(root.id);

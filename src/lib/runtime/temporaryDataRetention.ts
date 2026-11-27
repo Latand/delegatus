@@ -148,6 +148,10 @@ function mutationCurrent(files: readonly string[], directories: readonly string[
   }
 }
 
+/** What the protection walk finds that keeps a candidate on purpose. */
+const PROTECTION_HOLDS = new Set(["identity-changed", "indirect-parent", "indirect-tree", "invalid-scope", "keep-marker",
+  "lifecycle-control", "preservation-record", "permission-repair-needed", "protection-budget"]);
+
 /** Protection and measured bytes come from the same bounded, physical walk.
  * Every directory and file is checked again after asynchronous observations.
  * Incomplete measurements retain their reason instead of inventing a size. */
@@ -489,7 +493,12 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
       } catch (error) {
         if (error instanceof RetentionTestSafetyError) throw error;
         reason = error instanceof Error ? error.message : "inspection-unavailable";
-        if (reason !== "git-data") report.errors++;
+        // In a Cleaner pass, a hold on a candidate that was never quarantined
+        // is a reason to keep it, listed with the kept rows. The same finding
+        // in an interrupted removal means that removal cannot finish, which is
+        // a failure, as is everything unrecognised.
+        const keptOnPurpose = !!cleaner && PROTECTION_HOLDS.has(reason) && !mutationStarted && !fs.existsSync(journal);
+        if (reason !== "git-data" && !keptOnPurpose) report.errors++;
         // Protection and reference inspection can throw before dispatch, even
         // on replay. Return that verified resource to its owner in this call.
         // A native removal error keeps the intent and partial tree in custody.
