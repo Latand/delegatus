@@ -359,7 +359,7 @@ function boardReadFailure(tool: string, args: McpToolArgs, error: unknown): McpT
 }
 
 function responseAuthorityResult(tool: string, args: McpToolArgs, authority: McpResponseAuthority | undefined, result: McpToolResult): McpToolResult {
-  if (result.code === "outcome_unknown" && result.details?.nextAction === "original-key-lookup") return result;
+  if (isOriginalKeyLookupResult(result)) return result;
   try { for (const check of authority?.checks ?? []) check(); return result; }
   catch (error) {
     if (BOARD_READ_TOOLS.has(tool)) return boardReadFailure(tool, args, error);
@@ -748,6 +748,13 @@ export class McpPrototypePublicationPendingError extends Error {}
 export class McpDeploymentPendingError extends Error {}
 
 export type McpToolResult = McpToolSuccess | McpToolFailure;
+
+function isOriginalKeyLookupResult(result: McpToolResult): boolean {
+  if (result.code !== "outcome_unknown") return false;
+  const details = result.details;
+  return typeof details === "object" && details !== null
+    && "nextAction" in details && details.nextAction === "original-key-lookup";
+}
 
 /**
  * Where one recoverable mutation's dispatch stands (#1490).
@@ -3001,7 +3008,7 @@ export function createMcpToolService(
         const imageNote = relayImageNote(result);
         if (!result.replayed) result = bindMcpPageCursorResult(typedTool, result, pageCaller);
         result = withoutPrototypeTaskFields(result);
-        if (!(result.code === "outcome_unknown" && result.details?.nextAction === "original-key-lookup")) {
+        if (!isOriginalKeyLookupResult(result)) {
           context.assertResult?.(result);
         }
         const rawRelayResults = result.ok && typedTool === "relay_service_tools" && Array.isArray(result.results) ? result.results : undefined;
@@ -3162,7 +3169,7 @@ export function createMcpToolService(
       const key = receiptKey(typedTool, requestId, scope);
       const checkReceiptAccess = !recoverable && (receiptIdentity !== undefined || receiptTarget) ? assertReceiptAccess : undefined;
       const disclose = (answer: McpToolResult): McpToolResult => {
-        if (answer.code === "outcome_unknown" && answer.details?.nextAction === "original-key-lookup") return answer;
+        if (isOriginalKeyLookupResult(answer)) return answer;
         return responseAuthorityResult(typedTool, effectiveArgs, checkReceiptAccess ? { checks: [checkReceiptAccess] } : undefined, answer);
       };
       const finishReceipt = trackMcpClaim(key, digest);
