@@ -480,7 +480,7 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
       let admittedPipelineId: string;
       try {
         const admitted = await createPipelineFromRequest({
-          clientRequestId: "fixture-receiver-work", task: "First task work", taskIds: [String(replay.taskId)],
+          task: "First task work", taskIds: [String(replay.taskId)],
           repoDir: targetRoot, src: recipient.entry.artifactPath, publication: "internal",
           stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Run the first task", next: null }],
         }, { ...defaultPipelinePorts(), engineReadiness: () => "connected" }, {
