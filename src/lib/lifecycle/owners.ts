@@ -117,6 +117,11 @@ function usable(identity: ProcessIdentity | null | undefined): identity is Proce
   return !!identity && Number.isInteger(identity.pid) && identity.pid > 0;
 }
 
+export function launchSetupIdentities(receipt: Pick<SpawnReceipt, "hostSetup" | "key" | "state" | "admissionOwner">): ProcessIdentity[] {
+  const setup = !receipt.key && !receipt.hostSetup?.cleanupConfirmed ? receipt.hostSetup : undefined;
+  return [OPEN_RECEIPT.has(receipt.state) || setup ? receipt.admissionOwner : null, ...(setup?.processes ?? [])].filter(usable);
+}
+
 /** Alive while any recorded identity answers under its start identity (R4). */
 export function ownerProcessAlive(owner: Pick<RecordedOwner, "identities" | "round">, probe: LivenessProbe): boolean {
   if (owner.round) return headlessRoundVerdict(owner.round, probe) !== "gone";
@@ -172,12 +177,12 @@ const entryPath = {
 };
 
 const receiptOwnership = {
-  id: "owner-census.receipt.v1",
+  id: "owner-census.receipt.v2",
   collection: "receipts" as const,
   project: (row: SpawnReceipt) => ({
     launchId: row.launchId, conversationId: row.conversationId, engine: row.engine,
     key: row.key, artifactPath: row.artifactPath, cwd: row.cwd, state: row.state,
-    admissionOwner: row.admissionOwner, queuedPinnedSpawn: Boolean(row.queuedPinnedSpawn),
+    setupIdentities: launchSetupIdentities(row), queuedPinnedSpawn: Boolean(row.queuedPinnedSpawn),
     agent: row.verifiedHost?.agent, panePid: row.pane?.panePid,
   }),
 };
@@ -304,10 +309,10 @@ function collectOwners(registry: CensusRegistry, flows: readonly Flow[], probe: 
       binding: canonical(registry, receipt.conversationId), engine: receipt.engine, cwd: receipt.cwd,
     };
     const kind = "structured" as const;
-    if (open && usable(receipt.admissionOwner)) {
-      const admission = receipt.admissionOwner;
+    if (receipt.setupIdentities.length) {
+      const admission = receipt.setupIdentities[0]!;
       owners.push({ ...base, id: `admission:${receipt.launchId}:${admission.pid}:${admission.startIdentity}`, role: "setup", kind,
-        pid: admission.pid, identities: [admission] });
+        pid: admission.pid, identities: receipt.setupIdentities });
     } else if (open && !receipt.queuedPinnedSpawn) {
       /* A launch queued for account capacity has released its admission and
          started nothing, so it holds nothing (R2). */

@@ -29,6 +29,7 @@ test("recognizedFragment knows every fragment key the app speaks — and refuses
     "#c=conversation-1#question",
     "#f=%2Fcheckouts%2Fsession.jsonl",
     "#p=My%20Project",
+    "#task=t-1",
     "#a=%2Fcheckouts%2Ffigures%2Fdiagram.png",
   ]) {
     expect(recognizedFragment(known)).toBeTrue();
@@ -39,7 +40,7 @@ test("recognizedFragment knows every fragment key the app speaks — and refuses
 });
 
 test("a phone screen's own link is the phone's to open: the desktop still names it unknown (#2105)", () => {
-  for (const screen of ["#task=t-1", "#pipeline=lane-1", "#pipelines", "#accounts"]) {
+  for (const screen of ["#pipeline=lane-1", "#pipelines", "#accounts"]) {
     expect(recognizedFragment(screen, { phone: true })).toBeTrue();
     expect(recognizedFragment(screen)).toBeFalse();
   }

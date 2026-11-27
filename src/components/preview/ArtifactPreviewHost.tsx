@@ -433,7 +433,7 @@ function PreviewSheet({
         </div>
         {meta && failure !== "missing" && failure !== "denied" ? (
           <>
-            <a
+            {!meta.frameOnly ? <a
               href={open.source ? withDownload(open.source.contentUrl) : artifactContentUrl(target.path, { download: true })}
               download={name}
               aria-label={t("preview.download")}
@@ -441,7 +441,7 @@ function PreviewSheet({
               className={`flex shrink-0 items-center justify-center rounded-[8px] border border-border bg-canvas text-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${mobile ? "h-11 w-11" : "h-7 w-7"}`}
             >
               <Download className={mobile ? "h-5 w-5" : "h-3.5 w-3.5"} aria-hidden />
-            </a>
+            </a> : null}
             <a
               /* An HTML report opens as a page (in its sandbox), not as source text. */
               href={meta.frame ? frameSource(meta.frame, target.anchor) : contentUrl}

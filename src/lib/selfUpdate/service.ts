@@ -178,6 +178,7 @@ const DEPLOYMENT_WATCH_MS = 1_000;
 const UNDESCRIBABLE_HOLD_MS = 30_000;
 const DEPLOY_BUSY_WAIT_MS = 1000;
 const DEPLOY_ADMISSION_WAIT_MS = 10_000;
+const LAUNCH_SETUP_WAIT_MS = 60_000;
 
 type CheckoutBusyReceipt = { state: "busy"; deploymentId?: string; revision?: string;
   holder: { kind: "retention" | "restart" | "update"; role?: LauncherRole; requestId?: string; revision?: string };
@@ -711,6 +712,7 @@ export class SelfUpdateService {
       const admissionRecord = readLauncherRecord(recordFile || launcherControlFile(record.requestFile, "launcher")) ?? (recordFile ? null : admissionDecision.record);
       if ((!this.autoEnabled && !this.hasAutoCustody()) || this.active() || this.auto.pending || !ownsRestartGate(gateFile, gateId) || !this.quietAdmits(admissionProbe)
         || dispatchActivity === null || dispatchActivity !== quietDispatchVersion(quiet, this.deps.now())
+        || quiet.launchSetupPending?.()
         || admissionRecord?.launcher.autoAdmission !== 1 || admissionRecord.launcher.pid !== dispatchOwner.pid
         || admissionRecord.launcher.startIdentity !== dispatchOwner.startIdentity || admissionRecord.requestFile !== record.requestFile
         || admissionSnapshot.installed.sha !== target.sha || existsSync(record.requestFile)
@@ -1190,7 +1192,7 @@ export class SelfUpdateService {
   private quietAdmits(probe: { quiet: boolean; blockers: QuietBlockers; work: string[] } | null): boolean {
     if (!this.hasAutoCustody() && (!this.auto.drain || this.auto.deferred || this.deps.now() >= Date.parse(this.auto.drain.holdSince ?? this.auto.drain.since) + DRAIN_LEASE_MS)) return false;
     return !!probe && (probe.quiet || this.auto.drain?.force === true
-      && !probe.blockers.busy && !probe.blockers.unreadable && probe.blockers.memoryMb === null);
+      && !probe.blockers.launchSetup && !probe.blockers.busy && !probe.blockers.unreadable && probe.blockers.memoryMb === null);
   }
 
   /** Once the held cohort finishes, a stable no-start window can admit
@@ -1661,6 +1663,26 @@ export class SelfUpdateService {
     this.changes.emit();
   }
 
+  private async waitForLaunchSetup(intent: { requestId: string; target: string; startedAt: string }): Promise<void> {
+    const pending = this.deps.quiet?.launchSetupPending;
+    if (!pending) return;
+    const deadline = performance.now() + LAUNCH_SETUP_WAIT_MS;
+    const waitingUntil = this.deps.now() + LAUNCH_SETUP_WAIT_MS + DEPLOY_ADMISSION_WAIT_MS;
+    for (;;) {
+      if (this.stopped || this.apply.current?.requestId !== intent.requestId) {
+        throw new StaleApplyDispatch("Update custody changed while waiting for stage launch setup");
+      }
+      if (!activeDrain(this.drainFile, this.deps.now())) {
+        writeDrain(this.drainFile, { id: intent.requestId, target: intent.target, since: intent.startedAt,
+          until: waitingUntil, waitingUntil });
+      }
+      if (!pending()) return;
+      const remaining = deadline - performance.now();
+      if (remaining <= 0) throw new Error("Stage launch setup is still settling; the Viewer was kept running");
+      await new Promise<void>(resolve => setTimeout(resolve, Math.min(250, remaining)));
+    }
+  }
+
   private async applyBuilt(): Promise<void> {
     if (this.runner?.state.state !== "done") { this.failApply(updateFailureDetail(this.runner?.state)); return; }
     if (this.slice.available?.sha === this.runner.state.target) this.slice = { ...this.slice, installed: this.slice.available, available: null,
@@ -1668,6 +1690,7 @@ export class SelfUpdateService {
     this.saveNow();
     this.apply.patch({ state: "ready" });
     const binding = JSON.stringify(this.apply.current);
+    await this.waitForLaunchSetup(this.apply.current!);
     const activity = quietDispatchVersion(this.deps.quiet, this.deps.now());
     const current = await this.decide();
     if (!current.record) throw new StaleApplyDispatch("The launcher is unavailable; accepted custody is retained");
@@ -1681,7 +1704,7 @@ export class SelfUpdateService {
       || record.launcher.pid !== this.apply.current?.launcherPid || record.launcher.startIdentity !== this.apply.current?.launcherIdentity
       || !record.launcher.startIdentity || !this.deps.processAlive(record.launcher.pid, record.launcher.startIdentity)
       || existsSync(record.requestFile) || this.deps.quiet && activity === null
-      || activity !== quietDispatchVersion(this.deps.quiet, this.deps.now()))
+      || activity !== quietDispatchVersion(this.deps.quiet, this.deps.now()) || this.deps.quiet?.launchSetupPending?.())
       throw new StaleApplyDispatch("Stale apply dispatch was refused; accepted custody is retained");
     if (current.record.launcher.relaunch === 1) {
       const occupied = this.reserve(current.record, () => this.apply.send(current.record!), this.apply.current!.requestId);
@@ -1703,7 +1726,8 @@ export class SelfUpdateService {
       try { finalIntent = JSON.parse(readFileSync(join(this.deps.dir, "apply.json"), "utf8")); } catch { /* refused below */ }
       if (!finalRecord || finalRecord.launcher.pid !== intent.launcherPid || finalRecord.launcher.startIdentity !== intent.launcherIdentity
         || JSON.stringify(finalIntent) !== binding || JSON.stringify(this.apply.current) !== binding
-        || this.deps.quiet && activity === null || activity !== quietDispatchVersion(this.deps.quiet, this.deps.now()) || existsSync(current.record.requestFile))
+        || this.deps.quiet && activity === null || activity !== quietDispatchVersion(this.deps.quiet, this.deps.now())
+        || this.deps.quiet?.launchSetupPending?.() || existsSync(current.record.requestFile))
         throw new StaleApplyDispatch("Stale credential preflight was refused; accepted custody is retained");
       writeAtomic(launcherControlFile(current.record.requestFile, "trial"), {
         requestId: intent.requestId, target: intent.target, rollbackPointer: intent.rollbackPointer, previousEntry, state: "starting", at: intent.startedAt,
@@ -1769,6 +1793,8 @@ export class SelfUpdateService {
           rollbackRevision: record.checkout ? serving.serving.runtimeHost?.short ?? null : null, state: "building" }));
         if (occupied) return occupied;
         this.apply.patch({ externalRestart: true });
+        try { await this.waitForLaunchSetup(this.apply.current!); }
+        catch (error) { this.failApply(error); return refuse(409, "cannot-restart", error instanceof Error ? error.message : String(error)); }
         // An old bootstrap cannot read the trial if the new entry fails before
         // loading its recovery code. Reject that entry before stopping anything.
         const scratch = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/var/tmp", "delegatus-upgrade-preflight-"));
@@ -1791,7 +1817,8 @@ export class SelfUpdateService {
         if (!finalOwner || finalOwner.launcher.pid !== record.launcher.pid || finalOwner.launcher.startIdentity !== record.launcher.startIdentity
           || JSON.stringify(this.apply.current) !== preflightBinding || JSON.stringify(finalIntent) !== preflightBinding
           || this.deps.quiet && preflightActivity === null
-          || preflightActivity !== quietDispatchVersion(this.deps.quiet, this.deps.now()) || existsSync(record.requestFile))
+          || preflightActivity !== quietDispatchVersion(this.deps.quiet, this.deps.now())
+          || this.deps.quiet?.launchSetupPending?.() || existsSync(record.requestFile))
           return refuse(409, "cannot-restart", "Stale launcher preflight was refused; accepted custody is retained");
         if (!loads) {
           const previousEntry = this.deps.install ? this.deps.install.entry(record)
@@ -1853,6 +1880,11 @@ export class SelfUpdateService {
         this.saveNow(); intent = this.apply.current;
       }
       if (!intent || intent.state !== "ready") return refuse(409, "cannot-restart", "A launcher apply is already active");
+      try { await this.waitForLaunchSetup(intent); }
+      catch (error) { this.failApply(error); return refuse(409, "cannot-restart", error instanceof Error ? error.message : String(error)); }
+      if (this.apply.current?.requestId !== intent.requestId || this.apply.current.state !== "ready") {
+        return refuse(409, "cannot-restart", "Update custody changed while waiting for stage launch setup");
+      }
       const previousEntry = this.deps.install ? this.deps.install.entry(record)
         : readFileSync(`/proc/${record.launcher.pid}/cmdline`, "utf8").split("\0").find(arg => arg.endsWith("/bin/cli.mjs"));
       if (!previousEntry || !this.deps.processAlive(record.launcher.pid, record.launcher.startIdentity!)) return refuse(409, "cannot-restart", "The launcher identity changed");
@@ -2374,6 +2406,8 @@ export class SelfUpdateService {
           if (intent.trigger === "auto") {
             if (!intent.autoGateId || activeRestartGate(restartGateFile(record.requestFile), this.deps.now()) !== intent.autoGateId) {
               this.apply.restoreUntaken(record); this.apply.patch({ state: "failed", admissionRefused: true, detail: "The automatic admission expired during recovery" });
+            } else if (this.deps.quiet?.launchSetupPending?.()) {
+              this.recoverReadyApply = true;
             } else {
               const occupied = this.reserve(record, () => this.apply.send(record, intent.autoGateId), intent.requestId);
               if (occupied) throw new StaleApplyDispatch(occupied.ok ? "Apply reservation failed" : occupied.error);
