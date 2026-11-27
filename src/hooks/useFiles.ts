@@ -22,6 +22,7 @@ import { EMPTY_FILES_WORK_LINKS, type FilesWorkLinks } from "@/lib/forge/workLin
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
+import type { SecretRequestNotice } from "@/lib/secretRequests/view";
 import type { StateWriteHealth } from "@/lib/state/diskFull";
 import type { FileEntry, FilesResponse, ProjectCatalogEntry } from "@/lib/types";
 import type { Workflow } from "@/lib/workflows/types";
@@ -87,6 +88,7 @@ export interface FilesData {
   /** The orchestrators' own open questions, which no task carries
       (docs/design/operator-decision-forms.md §2.2). */
   seatDecisions?: PrototypeReviewNotice[];
+  secretRequestNotices?: SecretRequestNotice[];
   /** Set when the server's pipelines store failed closed for this poll. */
   pipelinesError?: string;
   systemHealth: FilesResponse["systemHealth"];
@@ -277,6 +279,7 @@ function parsedFilesData(parsed: FilesResponse | FileEntry[], requestScope: stri
     workflows: parsed.workflows ?? [],
     tasks: parsed.tasks ?? [],
     ...(parsed.seatDecisions?.length ? { seatDecisions: parsed.seatDecisions } : {}),
+    ...(parsed.secretRequestNotices?.length ? { secretRequestNotices: parsed.secretRequestNotices } : {}),
     pipelinesError: parsed.pipelinesError,
     systemHealth: parsed.systemHealth ?? HEALTHY_SYSTEM,
     conversationAliases: parsed.conversationAliases ?? {},
@@ -311,6 +314,7 @@ function patchFilesData(previous: FilesData, incoming: FilesData): FilesData {
     workflows: patchRows(previous.workflows, incoming.workflows, (workflow) => workflow.id),
     tasks: patchRows(previous.tasks, incoming.tasks, (task) => task.id),
     ...(incoming.seatDecisions ? { seatDecisions: equalValue(previous.seatDecisions, incoming.seatDecisions) ? previous.seatDecisions : incoming.seatDecisions } : {}),
+    ...(incoming.secretRequestNotices ? { secretRequestNotices: equalValue(previous.secretRequestNotices, incoming.secretRequestNotices) ? previous.secretRequestNotices : incoming.secretRequestNotices } : {}),
     systemHealth: equalValue(previous.systemHealth, incoming.systemHealth) ? previous.systemHealth : incoming.systemHealth,
     conversationAliases: equalValue(previous.conversationAliases, incoming.conversationAliases)
       ? previous.conversationAliases
@@ -872,6 +876,7 @@ export function createFilesClientCache(
           creationWritePending = true;
           creationWrites = creationWrites.then(async () => {
             if (!ownsCreation(generation) || !store?.updateCreations) return;
+            if (global.raw.secretRequestNotices) return;
             await store.updateCreations(authority!.owner, [], materialized, () => ownsCreation(generation),
               { version: FILES_SNAPSHOT_VERSION, savedAt: Date.now(), etag: global.etag, text: catalogText(global.raw) }, authority!.signature);
             if (!ownsCreation(generation)) return;
@@ -1558,7 +1563,7 @@ export function useMaterializedCreationIds(): readonly string[] {
 function persistFilesSnapshot(): void {
   const store = snapshotStore;
   const current = filesClientCache.certifiedGlobal();
-  if (!store || !current || current.etag === persistedEtag) return;
+  if (!store || !current || current.etag === persistedEtag || current.raw.secretRequestNotices) return;
   let text: string;
   try {
     text = catalogText(current.raw);

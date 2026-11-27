@@ -65,6 +65,8 @@ import { readStorageIncidents } from "@/lib/state/durability";
 import { filesResponseDependencies } from "./dependencies";
 
 interface FilesRouteDependencies {
+  /** Selected by the HTTP boundary before entering the projection cache. */
+  secretRequestNotices?: FilesResponse["secretRequestNotices"];
   /** Transport encoding runs on the owned projected values, before JSON. */
   encode?: (data: FilesResponse) => { body: string; etag: string };
   listFilesWithProjectCatalog: (
@@ -1073,6 +1075,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     ...(agentRead
       ? { tasks: withoutPrototypeReviews(boardTasks) }
       : { tasks: summarizedTasks, prototypeReviewNotices: prototypeReviewNotices(boardTasks, seatDecisions), ...(seatDecisions.length ? { seatDecisions } : {}) }),
+    ...(dependencies.secretRequestNotices?.length ? { secretRequestNotices: dependencies.secretRequestNotices } : {}),
     /* #2059: map lookups against the forge cache only; the sweep, not this
        request, talks to GitHub. */
     workLinks: workLinksForBoard(pipelines, boardTasks),

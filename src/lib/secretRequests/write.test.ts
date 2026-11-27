@@ -6,7 +6,8 @@ import os from "node:os";
 import path from "node:path";
 
 import { createSecretRequest } from "./store";
-import type { SecretDestination } from "./types";
+import { operatorSecretRequests } from "./operatorRead";
+import { SecretRequestError, type SecretDestination } from "./types";
 import { readSecretRequest, recoverSecretRequests, writeSecretRequest, type WriteCheckpoint } from "./write";
 
 const NOW = 1_795_000_000_000;
@@ -78,6 +79,23 @@ test("writes exact bytes at mode 600 and consumes entry once across a lost answe
     await expect(writeSecretRequest(request.id, request.destinationRevision, Buffer.from("again"), fixedClock))
       .rejects.toMatchObject({ code: "secret_not_pending" });
   }
+});
+
+test("revoking owner authority before rename removes the temporary without replacing the file", async () => {
+  const filename = path.join(project, "entry");
+  fs.writeFileSync(filename, "original");
+  const request = await create({ kind: "file", path: filename, replace: true });
+  const value = Buffer.from("private fixture");
+  let allowed = true;
+  await expect(writeSecretRequest(request.id, request.destinationRevision, value, {
+    ...fixedClock,
+    authorize() { if (!allowed) throw new SecretRequestError("owner_required"); },
+    checkpoint(step) { if (step === "before-rename") allowed = false; },
+  })).rejects.toMatchObject({ code: "owner_required" });
+  expect(value.every(byte => byte === 0)).toBe(true);
+  expect(fs.readFileSync(filename, "utf8")).toBe("original");
+  expect(fs.readdirSync(path.join(project, ".delegatus-secret-staging"))).toEqual([]);
+  expect(await readSecretRequest(request.id, NOW)).toMatchObject({ state: "pending" });
 });
 
 test("writes through a parent link into a separately authorized root", async () => {
@@ -245,6 +263,10 @@ for (const step of crashSteps) test(`recovers after process loss at ${step}`, as
   const installed = step === "renamed" || step === "directory-synced" || step === "entered";
   expect(fs.readFileSync(filename, "utf8")).toBe(installed ? after : before);
   if (step === "written") expect(await recoverSecretRequests(NOW)).toEqual([]);
+  if (step === "file-synced") {
+    expect(await operatorSecretRequests(caller.project, NOW)).toMatchObject([{ id: request.id, state: "pending", interrupted: true }]);
+  }
+  if (step === "renamed") expect(await operatorSecretRequests(caller.project, NOW)).toEqual([]);
   const recovered = await readSecretRequest(request.id, NOW);
   expect(recovered?.state).toBe(installed ? "entered" : "pending");
   if (!installed) expect(recovered?.refusals.at(-1)?.code).toBe("secret_entry_interrupted");

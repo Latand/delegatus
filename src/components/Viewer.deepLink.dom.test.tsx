@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import { en } from "@/lib/i18n/en";
+import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
 
@@ -166,6 +167,7 @@ const requestLog: string[] = [];
 /** Non-empty only where a test needs «Список» to be an available face: the
     dashboard offers the catalog list when the project is in this catalog. */
 let projectCatalog: Array<{ project: string; smt: number; conversations: number }> = [];
+let boardTasks: BoardTask[] = [];
 let historyWrites: string[] = [];
 let boards: Record<string, BoardProjectStateV1> = {};
 
@@ -194,6 +196,7 @@ beforeEach(() => {
   boards = {};
   searchHits = [];
   projectCatalog = [];
+  boardTasks = [];
 });
 
 afterEach(() => {
@@ -253,7 +256,7 @@ function stubFetch(
         );
       }
       return new Response(
-        JSON.stringify({ files: filesByPin(pin), projectCatalog, pinOverlayPaths: scopes.overlay?.(pin) ?? [] }),
+        JSON.stringify({ files: filesByPin(pin), projectCatalog, tasks: boardTasks, pinOverlayPaths: scopes.overlay?.(pin) ?? [] }),
         { headers: { "content-type": "application/json" } },
       );
     }
@@ -276,6 +279,20 @@ function stubFetch(
 }
 
 let mounted: { unmount: () => void } | null = null;
+
+test("a pasted task link opens the card on the desktop board of its owning project", async () => {
+  const task = { id: "relay-task", project: TARGET_PROJECT, status: "assigned", placement: "unplaced",
+    text: "Fix example build output", assignments: [], createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString() } as BoardTask;
+  boardTasks = [task];
+  dom.localStorage.setItem("llvProject", "other-project");
+  dom.location.hash = `task=${task.id}`;
+  stubFetch(() => [otherRow, targetRow]);
+  const host = await mountViewer();
+  expect(await waitFor(() => host.querySelector(`[data-kanban-card="task:${task.id}"]`) !== null)).toBe(true);
+  expect(dom.localStorage.getItem("llvProject")).toBe(TARGET_PROJECT);
+  expect(dom.location.hash).toBe(`#task=${task.id}`);
+  expect(dom.sessionStorage.getItem("llvTaskFocus")).toBeNull();
+});
 
 async function mountViewer(): Promise<HTMLElement> {
   const host = document.createElement("div");
