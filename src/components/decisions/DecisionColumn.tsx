@@ -38,9 +38,14 @@ export function newestDecisionsFirst(decisions: readonly OperatorDecisionView[])
   return [...decisions].reverse().sort((a, b) => at(b) - at(a));
 }
 
-/** How many decisions wait in a project: the page's one poll already counts them. */
+/** How many decisions wait in a project: the page's one poll already counts
+    them. An answered form whose delivery needs attention waits on nobody: it
+    stays in the list as its record with Retry and leaves this count, the same
+    rule as `needsYouHolds` (needs-you-restructure.md §3), so the tab, the strip
+    and the seat chip agree with the header. */
 export function useOpenDecisionCount(project: string): number {
-  return usePrototypeNoticesFor(project).length + useSecretRequestCount(project);
+  const awaitingAnswers = usePrototypeNoticesFor(project).filter((notice) => !notice.undelivered).length;
+  return awaitingAnswers + useSecretRequestCount(project);
 }
 
 export function DecisionList({ project, active = true, focus, touch = false, initial }: {
@@ -186,7 +191,8 @@ export function DecisionList({ project, active = true, focus, touch = false, ini
   );
 }
 
-/** «Рішення N» and «Звіти»: the column's two tabs. */
+/** «Потрібні ви N» and «Звіти»: the column's two tabs. The first tab carries
+    the header button's own name (docs/design/legatus/build-plan.md, slice 1). */
 export function DecisionTabs({ tab, onTab, count, touch = false }: { tab: DecisionTab; onTab: (tab: DecisionTab) => void; count: number; touch?: boolean }) {
   const { t } = useLocale();
   const button = (id: DecisionTab, label: string, badge?: number) => (
@@ -229,7 +235,7 @@ export function DecisionColumn({ project, tab, onTab, focus }: {
 }
 
 /** One line under the seat's header while decisions wait and the column is
-    out of sight: «N чекають рішення ›», opening them. */
+    out of sight: «Потрібні ви · N ›», opening them. */
 export function DecisionStripLine({ count, onOpen, touch = false }: { count: number; onOpen: () => void; touch?: boolean }) {
   const { t } = useLocale();
   if (!count) return null;

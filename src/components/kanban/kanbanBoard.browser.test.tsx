@@ -21974,6 +21974,10 @@ describe("attention auto resolve", () => {
       await page.waitForTimeout(400);
       await page.screenshot({ path: file });
     };
+    /* The header's number, read before the panel opens: a docked panel takes
+       the button out of the bar, since the panel head already says it. */
+    const chipCount = (page: Page) => page.evaluate(() =>
+      Number(document.querySelector("[data-attention-island] [data-attention-count] .tabular-nums")?.textContent ?? "") || null);
     const openList = async (page: Page, phone: boolean) => {
       if (phone) {
         await page.locator('[data-mobile2-open="attention"]').click();
@@ -21997,10 +22001,14 @@ describe("attention auto resolve", () => {
         let opened = await open("&state=before", SIZES[0], "light", lang);
         let before: Awaited<ReturnType<typeof rowsReading>>;
         try {
+          const count = await chipCount(opened.page);
           await openList(opened.page, false);
-          before = await rowsReading(opened.page, false);
+          before = { ...await rowsReading(opened.page, false), count };
           readings[`${lang}/before`] = before;
-          check(`${lang}/before`, before.count === 17, `the control counts ${before.count} before, expected 17`);
+          /* «Needs you» holds forms and the waits no seat answers (docs/design/legatus/build-plan.md,
+             slice 1): the seats' three report questions, the four retired seats' asks and
+             the owed message stay on their cards, so 9 of the panel's old 17 count before. */
+          check(`${lang}/before`, before.count === 9, `the control counts ${before.count} before, expected 9`);
           await shot(opened.page, `${lang}/1440x900-light-before`);
         } finally { await opened.context.close(); }
 
@@ -22011,18 +22019,21 @@ describe("attention auto resolve", () => {
             try {
               const page = opened.page;
               const ids = await page.evaluate(() => (window as unknown as { __needsYouAutoResolve?: Record<string, string> }).__needsYouAutoResolve ?? {});
+              const count = opened.phone ? null : await chipCount(page);
               await openList(page, opened.phone);
-              const after = await rowsReading(page, opened.phone);
+              const after = { ...await rowsReading(page, opened.phone), count };
               readings[frame] = { ids, ...after };
               const rowIds = after.rows.map((row) => row.id);
-              if (!opened.phone) check(frame, after.count === 11, `the control counts ${after.count} after, expected 11`);
-              check(frame, after.rows.length === 11, `${after.rows.length} rows after, expected 11: ${JSON.stringify(rowIds)}`);
+              /* After: the escalated form, and tg-bot's two lanes, which no seat answers. */
+              if (!opened.phone) check(frame, after.count === 3, `the control counts ${after.count} after, expected 3`);
+              check(frame, after.rows.length === 3, `${after.rows.length} rows after, expected 3: ${JSON.stringify(rowIds)}`);
               /* Cleared on evidence, and routed to the seat: none of them asks the operator. */
               for (const gone of ["ask:retired-1", "ask:retired-2", "ask:retired-3", "ask:analyst-september", ids.deployer, "lane-limit"]) check(frame, !rowIds.includes(gone ?? ""), `${gone} still asks the operator`);
               /* The seat's escalation: the wait draws no row; its decision form's row asks. */
               check(frame, !rowIds.includes(ids.escalated ?? ""), "the escalated wait still draws a row of its own");
               const form = after.rows.find((row) => row.id === `prototype:${ids.escalationRound}`);
-              check(frame, Boolean(form && form.sentence === translate(lang, "needs.ask.prototypeQuestions")),
+              /* A form's row repeats no instruction: its kind's word says what to do. */
+              check(frame, Boolean(form && form.sentence === null),
                 `the escalated wait's form row reads ${JSON.stringify(form)}`);
               /* What is being decided: the waiting round's title is the row's question, uncut. */
               const decided = lang === "en" ? "Instalment provider: the partner bank or the faster service?" : "Провайдер розстрочки: банк-партнер чи швидший сервіс?";
@@ -22031,9 +22042,9 @@ describe("attention auto resolve", () => {
               const diagnose = after.rows.find((row) => row.id === "lane-diagnose");
               check(frame, Boolean(diagnose && diagnose.question?.includes(lang === "en" ? "only mark them?" : "лише позначати їх?") && diagnose.sentence && !diagnose.sentence.includes("diagnose ·")),
                 `the stage row reads ${JSON.stringify(diagnose)}`);
-              /* Every remaining row says what to do in a sentence, whole, on screen. */
+              /* Every remaining row but a form's says what to do in a sentence, whole, on screen. */
               for (const row of after.rows) {
-                check(frame, Boolean(row.sentence && row.sentence.length > 30), `${row.id}: no sentence (${row.sentence})`);
+                if (!row.id?.startsWith("prototype:")) check(frame, Boolean(row.sentence && row.sentence.length > 30), `${row.id}: no sentence (${row.sentence})`);
                 check(frame, !row.cut, `${row.id}: its words are cut`);
                 check(frame, row.inside && row.buttonsVisible, `${row.id}: a row or button leaves the screen`);
                 if (opened.phone) check(frame, row.openerHeight >= 44, `${row.id}: a ${row.openerHeight}px target`);
@@ -26835,17 +26846,6 @@ describe("agent memory isolation", () => {
   }, 90000);
 });
 
-/*
- * «Готово» in «Чекають на вас» (docs/design/done-section.md §4.3, §5): the
- * finished work pinned above the decisions at 1440 in Ukrainian, newest first,
- * over the needs-you fixture with `&done=1`, read against variant 2's frames:
- * the morning panel with its thumbnail, the frame's before and after in the
- * existing viewer, a visible change accepted and four technical fixes accepted
- * one by one, then «Бачив усе» with only the decisions left in the count.
- * Then the same list pinned above the orchestrator's report log (`&seat=beside`)
- * in uk and en: folded to its head, and a row accepted there leaving the
- * header's count too.
- */
 describe("done frames retained in state", () => {
   browserTest("desktop frames survive lane removal and missing frames have a label", async () => {
     const { captureDoneFrames } = await import("./issue1695BrowserHarness");
@@ -26855,146 +26855,23 @@ describe("done frames retained in state", () => {
   },120_000);
 });
 
-describe("«Готово» in «Чекають на вас»", () => {
-  browserTest("the desktop panel ends in «Готово»: thumbnail, groups, acceptance and the counter at 1440 in uk", async () => {
+/*
+ * «Готово» above the orchestrator's report log (docs/design/done-section.md
+ * §4.3, §5), over the needs-you fixture with `&done=1&seat=beside`, in uk and
+ * en: pinned above the entries, newest first, its thumbnail opening the
+ * existing viewer, folded to its head. Since slice 1 of
+ * docs/design/legatus/build-plan.md finished work counts nowhere in «Needs
+ * you»: an acceptance here leaves the header's count as it was, and the panel
+ * the header opens draws no «Готово».
+ */
+describe("«Готово» above the report log", () => {
+  browserTest("the report log pins «Готово» in uk and en; accepting finished work leaves «Needs you» as it was", async () => {
     const out = path.resolve(".artifacts/done-section/desktop");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out, "src/components/attention/needsYouPanel.fixture.tsx");
     const browser = await chromium.launch(LAUNCH);
-    const readings: Record<string, unknown>[] = [];
     try {
-      for (const scheme of ["dark", "light"] as const) {
-        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?lang=uk&open=1&done=1`, VIEWPORT, scheme, "uk", "reduce");
-        try {
-          const panel = page.locator("[data-needs-you-panel]");
-          const section = panel.locator("[data-done-section]");
-          await section.waitFor({ timeout: 15_000 });
-          /* The decisions arrive with the files poll; all three boards' sections. */
-          await page.waitForFunction(() => document.querySelectorAll("[data-needs-you-panel] [data-needs-you-section]").length === 3, undefined, { timeout: 15_000 });
-          const doneCount = await page.evaluate(() => (window as unknown as { __doneFixture: { count: number } }).__doneFixture.count);
-          const island = async () => Number((await page.locator("[data-attention-count]").innerText()).match(/\d+/g)!.at(-1));
-          const decisions = (await panel.locator("[data-needs-you-section-count]").allInnerTexts()).reduce((sum, text) => sum + Number(text), 0);
-          expect(decisions).toBeGreaterThan(0);
-          expect(await island()).toBe(decisions + doneCount);
-          expect(await panel.locator("[data-needs-you-title]").innerText()).toBe(`Чекають на вас · ${decisions + doneCount}`);
-          expect(await page.title()).toBe(`(${decisions + doneCount}) Delegatus`);
-          expect(await section.locator("[data-done-accept-all]").innerText()).toBe("Бачив усе");
-          expect(await panel.locator("[data-needs-you-dismiss-all]").innerText()).toBe(`Зняти всі ${decisions}`);
-          const order = await section.locator("[data-done-row], [data-done-group]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-done-row") ?? `group:${row.getAttribute("data-done-group")}`));
-          /* Newest first: a row at its own time, a group at its newest member's. */
-          expect(order).toEqual(["group:closed", "deploy:fixture-deploy", "group:technical", "report:fixture-publication", "limit:codex:acct-b:session:1", "pr:example/delegatus#2691", "report:fixture-incident"]);
-          const layout = await panel.evaluate((element) => {
-            const body = element.querySelector("[data-needs-you-body]")!;
-            const done = element.querySelector("[data-done-section]")!;
-            const box = element.getBoundingClientRect();
-            const wide = [...done.querySelectorAll<HTMLElement>("*")].filter((node) => node.getBoundingClientRect().right > box.right + 0.5 || node.getBoundingClientRect().left < box.left - 0.5).length;
-            /* Pinned: right under the head, outside the decisions' scroller. */
-            return { pinned: done.nextElementSibling === body && !body.contains(done), top: Math.round(done.getBoundingClientRect().top - box.top), wide, overflow: document.documentElement.scrollWidth > innerWidth, panelWidth: box.width };
-          });
-          expect(layout).toMatchObject({ pinned: true, wide: 0, overflow: false });
-          /* Scrolling the decisions leaves the list where it is. */
-          const pinnedTop = await section.evaluate((element) => element.getBoundingClientRect().top);
-          await panel.locator("[data-needs-you-body]").evaluate((element) => { element.scrollTop = element.scrollHeight; });
-          expect(await section.evaluate((element) => element.getBoundingClientRect().top)).toBe(pinnedTop);
-          await panel.locator("[data-needs-you-body]").evaluate((element) => { element.scrollTop = 0; });
-          const read = () => section.evaluate((element) => {
-            const text = (node: Element | null) => (node as HTMLElement | null)?.innerText.trim() ?? "";
-            const rows = [...element.querySelectorAll<HTMLElement>("[data-done-row]")].map((row) => {
-              const check = row.querySelector<HTMLElement>("[data-done-accept]")!.getBoundingClientRect();
-              const sentence = row.querySelector<HTMLElement>("[data-done-sentence]")!.getBoundingClientRect();
-              const meta = row.querySelector<HTMLElement>("[data-done-meta]")!.getBoundingClientRect();
-              return { key: row.getAttribute("data-done-row"), checkRight: Math.round(element.getBoundingClientRect().right - check.right), ownLine: check.top >= Math.max(sentence.bottom, meta.bottom) - 1 };
-            });
-            const lines = [...element.querySelectorAll<HTMLElement>("[data-done-group-line]")].map((node) => ({ text: text(node), count: Number(node.closest("[data-done-group]")!.getAttribute("data-done-group-count")) }));
-            const receipts = [...element.querySelectorAll<HTMLElement>("[data-done-receipt-text]")].map((node) => {
-              const mark = node.lastElementChild!.getBoundingClientRect();
-              return { text: node.textContent!.replace(/\u00a0/g, " ").trim(), markClipped: mark.right > node.getBoundingClientRect().right + 0.5 || mark.width < 1 };
-            });
-            const heads = [...element.querySelectorAll<HTMLElement>("[data-done-group-title]")].map((node) => {
-              const range = document.createRange();
-              range.selectNodeContents(node);
-              const tops = [...new Set([...range.getClientRects()].map((rect) => Math.round(rect.top)))];
-              return { text: text(node), lines: tops.length };
-            });
-            return { rows, lines, receipts, heads, hash: /\b[0-9a-f]{7,40}\b/.test(text(element)) };
-          });
-          const morning = await read();
-          expect(morning.rows.every((row) => !row.ownLine), "no row keeps a line for its check").toBe(true);
-          expect(morning.hash, "no commit hash in «Готово»").toBe(false);
-          for (const { text, count } of morning.lines) {
-            /* Short topics, no cut word, lower case after the first, and «і ще N» for the rest. */
-            expect(text).not.toContain("…");
-            const [listed, rest] = text.split(" і ще ");
-            const topics = listed!.split(", ");
-            expect(topics.slice(1).every((topic) => !/^[А-ЯІЇЄҐ]/.test(topic)), text).toBe(true);
-            expect(Number(rest ?? 0), text).toBe(count - topics.length);
-          }
-          await section.evaluate((element) => element.scrollIntoView({ block: "start" }));
-          await page.screenshot({ path: path.join(out, `${scheme}-1-morning.png`) });
-
-          /* The thumbnail opens the existing viewer with the frame's pair. */
-          await section.locator('[data-done-thumb="pr:example/delegatus#2691"]').click();
-          const viewer = page.locator('[role="dialog"][aria-modal="true"]');
-          await viewer.waitFor();
-          expect(await viewer.locator("[data-lightbox-compare-side]").count()).toBe(2);
-          await page.screenshot({ path: path.join(out, `${scheme}-2-frame-after.png`) });
-          await viewer.locator('[data-lightbox-compare-side="before"]').click();
-          await page.screenshot({ path: path.join(out, `${scheme}-2-frame-before.png`) });
-          await page.keyboard.press("Escape");
-          await viewer.waitFor({ state: "detached" });
-          expect(await panel.isVisible()).toBe(true);
-
-          /* A visible change accepted, then four technical fixes one by one. */
-          await section.locator('[data-done-accept="pr:example/delegatus#2691"]').click();
-          await section.locator('[data-done-receipt="pr:example/delegatus#2691"]').waitFor();
-          expect(await island()).toBe(decisions + doneCount - 1);
-          await section.locator('[data-done-group-toggle="technical"]').click();
-          /* Open with nothing accepted: the head repeats no member. */
-          expect(await section.locator('[data-done-group="technical"] [data-done-group-line]').count()).toBe(0);
-          await section.locator('[data-done-group="technical"]').evaluate((element) => element.scrollIntoView({ block: "start" }));
-          await page.screenshot({ path: path.join(out, `${scheme}-3-expanded.png`) });
-          const checks = section.locator('[data-done-group="technical"] [data-done-member-check]');
-          for (let index = 0; index < 4; index += 1) await checks.nth(index).click();
-          await page.waitForFunction(() => document.querySelector('[data-done-group="technical"] [data-done-group-title]')?.textContent?.includes("6 з 10"));
-          expect(await section.locator('[data-done-group="technical"] [data-done-group-line]').innerText()).toBe("4 прийнято");
-          expect(await island()).toBe(decisions + doneCount - 5);
-          let after = await read();
-          for (const receipt of after.receipts) {
-            expect(receipt.text).toMatch(/прийнято$/);
-            expect(receipt.markClipped, receipt.text).toBe(false);
-          }
-          expect(after.heads.every((head) => head.lines === 1), JSON.stringify(after.heads)).toBe(true);
-          expect(after.receipts.map((receipt) => receipt.text)).toContain("Лендінг #2691 · прийнято");
-          await section.evaluate((element) => element.scrollIntoView({ block: "start" }));
-          await page.screenshot({ path: path.join(out, `${scheme}-4-partial.png`) });
-
-          /* The rest of the group through its own button; «Без PR» opened. */
-          await section.locator('[data-done-accept-group="technical"]').click();
-          await section.locator('[data-done-group-receipt="technical"]').waitFor();
-          expect(await island()).toBe(decisions + doneCount - 11);
-          await section.locator('[data-done-group-toggle="closed"]').click();
-          after = await read();
-          for (const receipt of after.receipts) {
-            expect(receipt.text).toMatch(/прийнято$/);
-            expect(receipt.markClipped, receipt.text).toBe(false);
-          }
-          expect(after.receipts.map((receipt) => receipt.text)).toContain("Технічні виправлення: 10 прийнято");
-          await section.evaluate((element) => element.scrollIntoView({ block: "start" }));
-          await page.screenshot({ path: path.join(out, `${scheme}-5-group-accepted.png`) });
-
-          /* Everything accepted: the count is the decisions again. */
-          await section.locator("[data-done-accept-all]").click();
-          await section.locator("[data-done-all-accepted]").waitFor();
-          expect(await island()).toBe(decisions);
-          expect(await page.title()).toBe(`(${decisions}) Delegatus`);
-          await section.evaluate((element) => element.scrollIntoView({ block: "end" }));
-          await page.screenshot({ path: path.join(out, `${scheme}-6-all-accepted.png`) });
-          expect(pageErrors).toEqual([]);
-          readings.push({ scheme, decisions, done: doneCount, order, ...layout, rows: morning.rows, groupLines: morning.lines, receipts: after.receipts.map((receipt) => receipt.text), afterAll: decisions });
-        } finally { await context.close(); }
-      }
-
-      /* The same list pinned above the orchestrator's report log, this board's
+      /* The list pinned above the orchestrator's report log, this board's
          slice and no board's, in uk and en. */
       const reports: Record<string, unknown>[] = [];
       for (const lang of ["uk", "en"] as const) {
@@ -27028,7 +26905,8 @@ describe("«Готово» in «Чекають на вас»", () => {
               const wide = [...done.querySelectorAll<HTMLElement>("*")].filter((node) => node.getBoundingClientRect().right > box.right + 0.5 || node.getBoundingClientRect().left < box.left - 0.5).length;
               return {
                 pinned: !scroller.contains(done) && Boolean(done.compareDocumentPosition(scroller) & Node.DOCUMENT_POSITION_FOLLOWING),
-                headingAbove: element.querySelector("h2")!.getBoundingClientRect().bottom <= done.getBoundingClientRect().top + 0.5,
+                /* The log beside the seat is headless; where it draws a heading, «Готово» sits under it. */
+                headingAbove: ((heading) => !heading || heading.getBoundingClientRect().bottom <= done.getBoundingClientRect().top + 0.5)(element.querySelector("h2")),
                 bandHeight: Math.round(band.height), logHeight: Math.round(box.height), logWidth: Math.round(box.width),
                 /* At most 45% of the log, so the entries keep their room. */
                 bounded: done.getBoundingClientRect().height <= box.height * 0.45 + 1,
@@ -27044,10 +26922,19 @@ describe("«Готово» in «Чекають на вас»", () => {
             await page.screenshot({ path: path.join(out, `reports-${key}-1-pinned.png`) });
             await page.locator("[data-kanban-seat]").screenshot({ path: path.join(out, `reports-${key}-1-seat.png`) });
 
-            /* Accepted here, gone from the header's count too: one store. */
+            /* The thumbnail opens the existing viewer with the frame's pair. */
+            await section.locator('[data-done-thumb="pr:example/delegatus#2691"]').click();
+            const viewer = page.locator('[role="dialog"][aria-modal="true"]');
+            await viewer.waitFor();
+            expect(await viewer.locator("[data-lightbox-compare-side]").count()).toBe(2);
+            await page.screenshot({ path: path.join(out, `reports-${key}-1-frame.png`) });
+            await page.keyboard.press("Escape");
+            await viewer.waitFor({ state: "detached" });
+
+            /* Accepted here; «Needs you» never counted it, so its number holds. */
             await section.locator('[data-done-accept="deploy:fixture-deploy"]').click();
             await section.locator('[data-done-receipt="deploy:fixture-deploy"]').waitFor();
-            expect(await island()).toBe(before - 1);
+            expect(await island()).toBe(before);
 
             /* Folded to its head with the count; the log takes the room. */
             await section.locator("[data-done-fold]").click();
@@ -27057,21 +26944,224 @@ describe("«Готово» in «Чекають на вас»", () => {
             expect(foldedHeight).toBeLessThanOrEqual(40);
             await page.locator("[data-kanban-seat]").screenshot({ path: path.join(out, `reports-${key}-2-folded.png`) });
 
-            /* The panel opens on the same list, the accepted row already gone. */
+            /* The panel the header opens lists what waits, and no finished work. */
             await page.locator("[data-attention-count]").click();
-            const panelSection = page.locator("[data-needs-you-panel] [data-done-section]");
-            await panelSection.waitFor({ timeout: 10_000 });
-            expect(await panelSection.locator('[data-done-row="deploy:fixture-deploy"]').count()).toBe(0);
+            const panel = page.locator("[data-needs-you-panel]");
+            await panel.waitFor({ timeout: 10_000 });
+            expect(await panel.locator("[data-done-section]").count()).toBe(0);
+            expect(await panel.locator("[data-needs-you-title]").innerText()).toBe(t("attention.panelTitle", { count: before }));
             await page.screenshot({ path: path.join(out, `reports-${key}-3-panel.png`) });
             expect(pageErrors).toEqual([]);
-            reports.push({ lang, scheme, order, ...layout, foldedHeight, islandBefore: before, islandAfter: before - 1 });
+            reports.push({ lang, scheme, order, ...layout, foldedHeight, islandBefore: before, islandAfter: before, done: doneCount });
           } finally { await context.close(); }
         }
       }
       fs.mkdirSync("evidence/done-section", { recursive: true });
-      fs.writeFileSync("evidence/done-section/desktop.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", viewport: VIEWPORT, lang: "uk", readings, reports }, null, 2) + "\n");
+      fs.writeFileSync("evidence/done-section/desktop.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", viewport: VIEWPORT, reports }, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
   }, 420_000);
+});
+
+/*
+ * «Needs you» counts the forms that wait (docs/design/legatus/build-plan.md,
+ * slice 1), over the needs-you fixture's `scenario=forms`: the real Viewer
+ * with 631 unaccepted finished items, seats that answer their workers' and
+ * lanes' waits, and N waiting forms. Normal is the operator's 9, empty is 0,
+ * busy is 27. Every state at every desktop width the slice names and one
+ * between each pair, in uk and en, light and dark: the header button at N and
+ * at zero (muted, no number), the panel with form rows only and no «Готово»,
+ * and the seat's decisions tab, strip and folded-seat chip equal to the
+ * panel's own section for the board's project. Frames go to LLV_EVIDENCE_DIR (else .artifacts); the
+ * readings are committed under evidence/needs-you-forms/.
+ */
+describe("«Needs you» counts the forms that wait", () => {
+  browserTest("the header button and its panel hold only waiting forms at 1440–664 in uk and en, light and dark", async () => {
+    const out = path.join(process.env.LLV_EVIDENCE_DIR?.trim() || path.resolve(".artifacts"), "needs-you-forms", "desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(out, "bundle-root"), "src/components/attention/needsYouPanel.fixture.tsx");
+    const browser = await chromium.launch(LAUNCH);
+    const STATES = [["normal", 9], ["empty", 0], ["busy", 27]] as const;
+    const WIDTHS = [1440, 1220, 1000, 884, 768, 664] as const;
+    const readings: Record<string, unknown>[] = [];
+    const failures: string[] = [];
+    try {
+      for (const [state, forms] of STATES) for (const width of WIDTHS) for (const lang of ["uk", "en"] as const) for (const scheme of ["light", "dark"] as const) {
+        const t = (key: string, params?: Record<string, string | number>) => translate(lang, key as never, params);
+        const frame = `${state}-${width}-${lang}-${scheme}`;
+        const check = (ok: boolean, what: string) => { if (!ok) failures.push(`${frame}: ${what}`); };
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?lang=${lang}&scenario=forms&forms=${forms}`, { width, height: 900 }, scheme, lang, "reduce");
+        try {
+          await page.waitForSelector("[data-attention-count]", { timeout: 20_000 });
+          const settled = await page.waitForFunction((n) => {
+            const island = document.querySelector("[data-attention-island]");
+            const number = island?.querySelector("[data-attention-count] .tabular-nums")?.textContent ?? null;
+            return n === 0 ? Boolean(island?.hasAttribute("data-attention-zero")) : number === String(n);
+          }, forms, { timeout: 20_000 }).then(() => true, () => false);
+          if (!settled) {
+            failures.push(`${frame}: the button never read ${forms}: «${await page.locator("[data-attention-island]").first().innerText().catch(() => "absent")}»`);
+            continue;
+          }
+          await page.locator("[data-attention-toast-dismiss]").click({ timeout: 1_000 }).catch(() => {});
+          await page.mouse.move(0, 0);
+          /* The closed button: its words whole, its own, and muted with no number at zero. */
+          const button = await page.evaluate(() => {
+            const element = document.querySelector<HTMLElement>("[data-attention-island] [data-attention-count]")!;
+            const box = element.getBoundingClientRect();
+            const ink = (node: Element | null) => { if (!node) return null; const range = document.createRange(); range.selectNodeContents(node); return range.getBoundingClientRect(); };
+            const within = (rect: DOMRect | null) => Boolean(rect && rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 && rect.top >= box.top - 0.5 && rect.bottom <= box.bottom + 0.5 && rect.left >= 0 && rect.right <= innerWidth);
+            const label = element.querySelector("[data-attention-chip-label]");
+            const number = element.querySelector(".tabular-nums");
+            /* A tight bar folds the word away while a number stands beside the dot; at zero the word is all there is. */
+            const labelShown = Boolean(label && label.getClientRects().length);
+            const labelInk = labelShown ? ink(label) : null;
+            const ownInk = labelInk ?? ink(number);
+            const hit = ownInk ? document.elementFromPoint((ownInk.left + ownInk.right) / 2, (ownInk.top + ownInk.bottom) / 2) : null;
+            const bar = element.closest("header") ?? document.body;
+            const foreign = [...bar.querySelectorAll<HTMLElement>("*")].filter((node) => !element.contains(node) && !node.contains(element) && node.childElementCount === 0 && (node.textContent ?? "").trim() && node.getClientRects().length)
+              .filter((node) => { const other = node.getBoundingClientRect(); return other.left < box.right && other.right > box.left && other.top < box.bottom && other.bottom > box.top; })
+              .map((node) => node.textContent!.trim());
+            const muted = getComputedStyle(element).color;
+            const probe = document.createElement("span");
+            probe.className = "text-muted";
+            document.body.append(probe);
+            const mutedInk = getComputedStyle(probe).color;
+            probe.remove();
+            return {
+              label: label?.textContent ?? null, number: number?.textContent ?? null, aria: element.getAttribute("aria-label"),
+              zero: document.querySelector("[data-attention-island]")!.hasAttribute("data-attention-zero"), dot: Boolean(element.querySelector("[data-attention-dot]")),
+              labelShown, mutedInk: muted === mutedInk, whole: (labelShown ? within(labelInk) : true) && (number ? within(ink(number)) : true), own: Boolean(hit && element.contains(hit)), foreign,
+              tabTitle: document.title, overflow: document.documentElement.scrollWidth > innerWidth,
+            };
+          });
+          check(button.label === t("attention.chip"), `the button reads «${button.label}»`);
+          check(button.number === (forms ? String(forms) : null), `the number reads ${button.number}`);
+          check(button.aria === (forms ? t("attention.badge", { count: forms }) : t("attention.chip")), `the button is named «${button.aria}»`);
+          check(button.zero === (forms === 0) && button.dot === (forms > 0), "zero and the dot follow the count");
+          check(button.mutedInk === (forms === 0), `the button's ink is muted: ${button.mutedInk}`);
+          check(button.labelShown || button.number !== null, "the button shows neither its word nor a number");
+          check(forms > 0 || button.labelShown, "at zero the button's word is folded away");
+          check(button.whole && button.own, "the button's words are whole, on screen and its own");
+          check(button.foreign.length === 0, `the button sits on ${JSON.stringify(button.foreign)}`);
+          check(button.tabTitle === (forms ? `(${forms}) Delegatus` : "Delegatus"), `the tab title reads «${button.tabTitle}»`);
+          check(!button.overflow, "the page scrolls sideways");
+          /* The seat's own decisions on the board's project: the column tab's badge and the strip, whichever the seat draws. */
+          /* The folded seat draws the chip in their place: its count, its words, and whether it names a stuck delivery. */
+          const decisions = await page.evaluate(() => {
+            const chip = document.querySelector<HTMLElement>("[data-orchestrator-panel] [data-prototype-notice-chip]");
+            const word = chip?.querySelector("[data-prototype-notice-chip-word]") ?? null;
+            const range = word ? document.createRange() : null;
+            range?.selectNodeContents(word!);
+            const ink = range?.getBoundingClientRect() ?? null;
+            const box = chip?.getBoundingClientRect() ?? null;
+            return {
+              strip: document.querySelector<HTMLElement>("[data-orchestrator-panel] [data-decision-strip]")?.dataset.decisionStrip ?? null,
+              tab: document.querySelector<HTMLElement>('[data-decision-tab="decisions"] [data-decision-tab-count]')?.dataset.decisionTabCount ?? null,
+              chip: chip ? {
+                count: chip.dataset.prototypeNoticeChip ?? null, word: word?.textContent ?? null, text: chip.textContent, stuck: chip.hasAttribute("data-prototype-notice-chip-stuck"),
+                whole: Boolean(ink && box && ink.left >= box.left - 0.5 && ink.right <= box.right + 0.5 && ink.left >= 0 && ink.right <= innerWidth && ink.top >= 0 && ink.bottom <= innerHeight),
+              } : null,
+            };
+          });
+          /* The seat's state word says «needs you» only while a form of its project waits; the column heads
+             count their waiting cards as a ⚠ mark and a number, with no words that echo «Needs you». */
+          const heads = await page.evaluate(() => ({
+            seat: document.querySelector("[data-orchestrator-panel] [data-orchestrator-badge]")?.textContent?.trim() ?? null,
+            columns: [...document.querySelectorAll<HTMLElement>(".kb .column .col-head")].map((head) => {
+              const needs = head.querySelector<HTMLElement>(".needs");
+              return {
+                status: head.closest<HTMLElement>(".column")?.dataset.status ?? null,
+                text: head.innerText,
+                needs: needs ? { count: needs.dataset.count ?? null, mark: getComputedStyle(needs, "::before").content, number: getComputedStyle(needs, "::after").content } : null,
+              };
+            }),
+          }));
+          if (heads.seat !== null) check((heads.seat === t("orchPanel.badgeNeedsYou")) === (forms > 0), `the seat's word reads «${heads.seat}» with ${forms} forms waiting`);
+          for (const head of heads.columns) {
+            check(!/чекають на вас|чекає на вас|needs? you\b/i.test(head.text), `the ${head.status} column head reads «${head.text}»`);
+            if (head.needs) check(head.needs.mark.includes("⚠") && (head.needs.number === `"${head.needs.count}"` || head.needs.number.includes("attr(data-count)")), `the ${head.status} column's waits draw ${head.needs.mark} ${head.needs.number}`);
+          }
+          await page.screenshot({ path: path.join(out, `${frame}-closed.png`) });
+
+          /* Opened from the button: docked beside the board where it has room, else under the button. */
+          await page.locator("[data-attention-island] [data-attention-count]").click();
+          await page.locator("[data-needs-you-panel]").waitFor({ timeout: 10_000 });
+          await page.mouse.move(0, 0);
+          const read = () => page.evaluate(() => {
+            const ink = (node: Element | null) => { if (!node) return null; const range = document.createRange(); range.selectNodeContents(node); return range.getBoundingClientRect(); };
+            const inside = (rect: DOMRect | null, box: { left: number; right: number; top: number; bottom: number }) => Boolean(rect && rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 && rect.top >= box.top - 0.5 && rect.bottom <= box.bottom + 0.5);
+            const viewport = { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
+            const panel = document.querySelector<HTMLElement>("[data-needs-you-panel]")!;
+            const panelBox = panel.getBoundingClientRect();
+            const title = panel.querySelector("[data-needs-you-title]");
+            const body = panel.querySelector<HTMLElement>("[data-needs-you-body]")!;
+            const bodyBox = body.getBoundingClientRect();
+            const rows = [...panel.querySelectorAll<HTMLElement>("[data-needs-you-row]")];
+            const visible = rows.filter((row) => { const box = row.getBoundingClientRect(); return box.bottom > bodyBox.top && box.top < bodyBox.bottom; });
+            /* A row is whole when its box sits inside the scroller: a long title ends in its own ellipsis. */
+            const whole = (row: HTMLElement | undefined) => (row ? inside(row.getBoundingClientRect(), bodyBox) : null);
+            return {
+              placement: panel.getAttribute("data-needs-you-panel"),
+              title: title?.textContent ?? null,
+              titleWhole: inside(ink(title), title!.getBoundingClientRect()) && inside(ink(title), viewport),
+              panelInViewport: inside(panelBox, viewport),
+              sections: [...panel.querySelectorAll("[data-needs-you-section]")].map((section) => [section.getAttribute("data-needs-you-section"), Number(section.querySelector("[data-needs-you-section-count]")?.textContent ?? "0"), section.hasAttribute("data-folded")]),
+              kinds: [...new Set(rows.map((row) => row.getAttribute("data-needs-you-kind")))],
+              rows: rows.length,
+              firstWhole: whole(visible[0]),
+              lastWhole: whole(rows.at(-1)),
+              dismiss: panel.querySelectorAll("[data-needs-you-dismiss], [data-needs-you-dismiss-all], [data-needs-you-dismiss-section]").length,
+              done: document.querySelectorAll("[data-done-section]").length,
+              empty: panel.querySelector("[data-needs-you-empty]")?.textContent ?? null,
+              /* A form's row: its kind and age, its title, and its question only when it says more than the title. */
+              sentences: panel.querySelectorAll("[data-needs-you-row] [data-needs-you-sentence]").length,
+              echoes: rows.filter((row) => {
+                const question = row.querySelector("[data-needs-you-question]")?.textContent?.trim();
+                return Boolean(question && question === row.querySelector("[data-needs-you-title-line]")?.textContent?.trim());
+              }).length,
+              scrolls: body.scrollHeight > body.clientHeight + 1,
+              overflow: document.documentElement.scrollWidth > innerWidth,
+            };
+          });
+          const open = await read();
+          check(open.title === (forms ? t("attention.panelTitle", { count: forms }) : t("attention.panelAria")), `the panel head reads «${open.title}»`);
+          check(open.titleWhole && open.panelInViewport, "the panel and its head are whole on screen");
+          check(open.sections.reduce((sum, section) => sum + Number(section[1]), 0) === forms, `the sections count ${JSON.stringify(open.sections)}`);
+          check(open.kinds.every((kind) => kind === "prototype"), `rows of kinds ${JSON.stringify(open.kinds)}`);
+          check(open.dismiss === 0 && open.done === 0, "no «Dismiss» and no «Готово»");
+          check(open.sentences === 0 && open.echoes === 0, `${open.sentences} rows repeat an instruction and ${open.echoes} repeat their title`);
+          check(open.empty === (forms ? null : t("attention.empty")), `the empty line reads «${open.empty}»`);
+          check(open.firstWhole !== false, "the first row is whole");
+          check(!open.overflow, "the page scrolls sideways with the panel open");
+          /* The tab and the strip count what the panel lists for that project: an answer stuck in delivery is in neither. */
+          const section = Number(open.sections.find((entry) => entry[0] === "delegatus")?.[1] ?? 0);
+          check(forms === 0 || decisions.strip !== null || decisions.tab !== null, "the seat draws neither the strip nor the tab's badge");
+          check([decisions.strip, decisions.tab].every((shown) => shown === null || shown === String(section)), `the strip reads ${decisions.strip} and the tab ${decisions.tab} beside the panel's ${section}`);
+          /* The folded seat's chip names what waits as every surface does and counts the same; a stuck answer alone reads as a stuck delivery with no number. */
+          if (decisions.chip) {
+            const chip = decisions.chip;
+            if (section) check(chip.count === String(section) && chip.word === t("decisions.waiting", { count: section }) && !chip.stuck, `the seat's chip reads «${chip.text}» (${chip.count}) beside the panel's ${section}`);
+            else check(chip.count === "0" && chip.stuck && chip.word === t("proto.notice.undelivered") && !/\d/.test(chip.text ?? ""), `with nothing waiting the seat's chip reads «${chip.text}» (${chip.count})`);
+            check(chip.whole, "the seat's chip words are cut");
+          }
+          await page.screenshot({ path: path.join(out, `${frame}-open.png`) });
+          let end: unknown = null;
+          if (open.scrolls) {
+            await page.locator("[data-needs-you-panel] [data-needs-you-body]").evaluate((body) => { body.scrollTop = body.scrollHeight; });
+            await page.waitForTimeout(150);
+            const scrolled = await read();
+            check(scrolled.lastWhole === true, "the last row is cut at the panel's end");
+            end = { lastWhole: scrolled.lastWhole };
+            await page.screenshot({ path: path.join(out, `${frame}-end.png`) });
+          }
+          check(pageErrors.length === 0, `page errors ${JSON.stringify(pageErrors)}`);
+          readings.push({ frame, state, forms, width, lang, scheme, button: { ...button, foreign: button.foreign.length }, decisions, panel: open, end });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/needs-you-forms", { recursive: true });
+      fs.writeFileSync("evidence/needs-you-forms/desktop.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", fixture: "src/components/attention/needsYouPanel.fixture.tsx?scenario=forms", failures, readings }, null, 2) + "\n");
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 1_200_000);
 });
 
 // The focused common-path case shares its assertions with the phone driver.

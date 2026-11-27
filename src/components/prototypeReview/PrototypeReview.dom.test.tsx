@@ -5,7 +5,7 @@ import { Window } from "happy-dom";
 
 import { installActEnv } from "@/test-helpers/actEnv";
 import type { DictationPhase, UseDictationOptions } from "@/hooks/useDictation";
-import type { PrototypeReviewRead } from "@/lib/prototypeReview/types";
+import type { PrototypeReviewNotice, PrototypeReviewRead } from "@/lib/prototypeReview/types";
 import { setLocale } from "@/lib/i18n";
 
 const dom = new Window({ url: "http://localhost/" });
@@ -461,23 +461,49 @@ test("a decided round frames its first chosen variant and tints only chosen rows
   expect(row(1).className).toContain("border-strong");
 });
 
-test("the phone seat card's prototype chip says the word with the count", async () => {
-  const { PrototypeNoticeChip } = await import("./PrototypeNoticeRow");
-  const { publishPrototypeNotices } = await import("./prototypeReviewStore");
-  const notice = (taskId: string) => ({ id: `n-${taskId}`, project: "project-a", taskId, reviewId: `r-${taskId}`, title: `Task ${taskId}`, createdAt: "2026-10-06T10:00:00.000Z", target: { kind: "prototype-review" as const, taskId, reviewId: `r-${taskId}` } });
-  publishPrototypeNotices([notice("a"), notice("b"), notice("c")]);
-  const host = dom.document.createElement("div") as unknown as HTMLElement;
-  dom.document.body.appendChild(host as never);
-  root = createRoot(host);
-  try {
-    await act(async () => root!.render(<PrototypeNoticeChip project="project-a" compact />));
-    const chip = host.querySelector<HTMLElement>("[data-prototype-notice-chip]")!;
-    expect(chip.textContent).toBe("Prototype3");
-    expect(chip.querySelector("[data-prototype-notice-chip-word]")?.textContent).toBe("Prototype");
-    expect(chip.className).toContain("h-11");
-  } finally {
-    publishPrototypeNotices([]);
+/* The chip where the seat's «Потрібні ви» column is put away: it counts the
+   forms that wait under the name every surface uses, and an answer stuck in
+   delivery is in no count; alone it names the stuck delivery with no number. */
+describe("the seat's form chip", () => {
+  const notice = (taskId: string, extra: Partial<PrototypeReviewNotice> = {}): PrototypeReviewNotice => ({ id: `n-${taskId}`, project: "project-a", taskId, reviewId: `r-${taskId}`, title: `Task ${taskId}`, createdAt: "2026-10-06T10:00:00.000Z", target: { kind: "prototype-review" as const, taskId, reviewId: `r-${taskId}` }, ...extra });
+  async function mountChip(notices: PrototypeReviewNotice[], compact: boolean) {
+    const { PrototypeNoticeChip } = await import("./PrototypeNoticeRow");
+    const { publishPrototypeNotices } = await import("./prototypeReviewStore");
+    publishPrototypeNotices(notices);
+    const host = dom.document.createElement("div") as unknown as HTMLElement;
+    dom.document.body.appendChild(host as never);
+    root = createRoot(host);
+    await act(async () => root!.render(<PrototypeNoticeChip project="project-a" compact={compact} />));
+    return host.querySelector<HTMLElement>("[data-prototype-notice-chip]");
   }
+  afterEach(async () => { const { publishPrototypeNotices } = await import("./prototypeReviewStore"); publishPrototypeNotices([]); });
+
+  for (const compact of [true, false]) {
+    const where = compact ? "the phone seat card" : "the folded seat";
+    test(`${where}: prototypes and questions read as «Needs you · N», without the stuck answer`, async () => {
+      const chip = (await mountChip([notice("stuck", { undelivered: true, asks: "questions" }), notice("a"), notice("b", { asks: "questions" }), notice("c")], compact))!;
+      expect(chip.dataset.prototypeNoticeChip).toBe("3");
+      expect(chip.hasAttribute("data-prototype-notice-chip-stuck")).toBe(false);
+      expect(chip.querySelector("[data-prototype-notice-chip-word]")?.textContent).toBe("Needs you · 3");
+      expect(chip.textContent).toBe("Needs you · 3");
+      /* It opens the first waiting form, never the stuck record ahead of it. */
+      expect(chip.getAttribute("aria-label")).toBe("Needs you · 3: Task a. Go to prototype");
+      if (compact) expect(chip.className).toContain("h-11");
+    });
+
+    test(`${where}: a stuck answer alone names the stuck delivery with no number`, async () => {
+      const chip = (await mountChip([notice("stuck", { undelivered: true, asks: "questions" }), notice("stuck-2", { undelivered: true })], compact))!;
+      expect(chip.dataset.prototypeNoticeChip).toBe("0");
+      expect(chip.hasAttribute("data-prototype-notice-chip-stuck")).toBe(true);
+      expect(chip.textContent).toBe(compact ? "Not delivered" : "Decision not delivered");
+      expect(chip.textContent).not.toMatch(/\d|Questions/);
+      expect(chip.getAttribute("aria-label")).toBe("Decision not delivered: Task stuck. Go to prototype");
+    });
+  }
+
+  test("nothing left draws no chip", async () => {
+    expect(await mountChip([], true)).toBeNull();
+  });
 });
 
 /* The full-screen viewer over a review: the picture pressed, the frames of its

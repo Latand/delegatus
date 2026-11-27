@@ -479,3 +479,25 @@ test("a covered prototype is unpinned and uncounted on the phone without recordi
   expect(phone.columns.assigned.pinned).toHaveLength(0);
   expect(phone.columns.assigned.cards[0]!.waitsOnPrototype).toBe(false);
 });
+
+test("a message stuck in delivery is named on its card and neither pins nor counts under the tab's ⚠; an ask beside it still leads", () => {
+  const stuckDelivery = { since: new Date((NOW - 2_400) * 1000).toISOString(), attempts: 2, state: "held" } as FileEntry["stuckDelivery"];
+  const files = [working(1, { stuckDelivery }), asking(2, 600), file(3, { stuckDelivery }), asking(4, 900)];
+  const tasks = [
+    task("stuck", "assigned", [files[0]!.path]),
+    task("asks", "assigned", [files[1]!.path]),
+    task("both", "assigned", [files[2]!.path, files[3]!.path]),
+  ];
+  const model = desktop(tasks, files);
+  const attention = files.map((entry) => attentionKey.conversation(entry.path));
+  const assigned = buildPhoneKanban({ model, attention, now: NOW }).columns.assigned;
+  /* The stuck card keeps its reason, named on its card, behind every card that waits. */
+  expect(keys(assigned.pinned).sort()).toEqual(["asks", "both"]);
+  expect(assigned.needsYou).toBe(2);
+  const stuck = assigned.cards.find((item) => item.card.task?.id === "stuck")!;
+  expect(stuck.reasons.map((need) => need.kind)).toEqual(["delivery"]);
+  expect(stuck.card.needsYou).toBe(false);
+  /* A card with an ask and a stuck delivery leads with the ask. */
+  const both = assigned.pinned.find((item) => item.card.task?.id === "both")!;
+  expect(both.need?.kind === "conversation" && both.need.reason.kind).toBe("question");
+});
