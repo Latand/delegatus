@@ -1420,23 +1420,27 @@ for (const mode of ["read", "publish"] as const) for (const target of ["seat", "
   });
 });
 
-for (const mode of ["read", "publish"] as const) for (const changed of [false, true]) test(`fresh ${mode} receipts bind HTTP scope to dispatch (project changed=${changed})`, async () => {
+for (const mode of ["read", "publish"] as const) for (const change of ["none", "viewer", "both"] as const) test(`fresh ${mode} receipts bind HTTP scope to dispatch (project change=${change})`, async () => {
   const { reviewScopePOST, reviewReadPOST, publishPOST } = await import("@/lib/prototypeReview/http");
   const { prototypeWorld } = await import("@/lib/prototypeReview/world");
   const { publishPrototype } = await import("@/lib/prototypeReview/store");
   const { loadSeatRounds } = await import("@/lib/prototypeReview/seatRounds");
   designateCaller({ memberId: member.id, workspaceId: W1 });
-  let project = own;
-  dependencies.authorizedSeats = () => [{ conversationId: "conversation_member", project, path: null }];
+  let callerProject = own;
+  let viewerProject = own;
+  let dispatches = 0;
+  dependencies.authorizedSeats = () => [{ conversationId: "conversation_member", project: callerProject, path: null }];
   await publishPrototype({ clientRequestId: "private-form", title: "Private project Beta answer", questions: formQuestions }, null, { conversationId: "conversation_private" }, other);
   const original = loadSeatRounds(other);
-  const world = { ...prototypeWorld, caller: () => ({ conversationId: "conversation_member", project }), stage: () => null, orchestrator: () => "conversation_member" };
+  const world = { ...prototypeWorld, caller: () => ({ conversationId: "conversation_member", project: viewerProject }), stage: () => null, orchestrator: () => "conversation_member" };
   const previousControl = process.env.LLV_VIEWER_CONTROL_URL;
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(incoming) {
     const scope = new URL(incoming.url).pathname.endsWith("/scope");
     const handler = scope ? reviewScopePOST : mode === "read" ? reviewReadPOST : publishPOST;
+    if (!scope) dispatches++;
     const response = await handler(new NextRequest(incoming), world);
-    if (scope && changed) project = other;
+    if (scope && change !== "none") viewerProject = other;
+    if (scope && change === "both") callerProject = other;
     return response;
   } });
   process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${server.port}`;
@@ -1450,13 +1454,26 @@ for (const mode of ["read", "publish"] as const) for (const changed of [false, t
       const tool = mode === "read" ? "read_prototype_review" : "publish_prototype_review";
       const args = { clientRequestId: "scope-dispatch-project-change", ...(mode === "publish" ? { title: "Choose", questions: formQuestions } : {}) };
       const answer = await core.callTool(tool, args);
-      expect(answer.ok).toBe(!changed);
-      if (changed) expect(answer).toMatchObject({ ...REFUSED, error: expect.stringContaining("prototype receipt identity changed"), details: { check: "prototype-receipt-scope" } });
+      expect(answer.replayed).toBe(false);
       expect(JSON.stringify(answer)).not.toContain("Private project Beta answer");
       expect(loadSeatRounds(other)).toEqual(original);
-      project = own;
-      const replay = await core.replayTool!(tool, args);
-      expect(replay).toMatchObject(changed ? { ...REFUSED, replayed: true, details: { check: "prototype-receipt-scope" } } : { ok: true, replayed: true });
+      callerProject = own;
+      viewerProject = own;
+      if (change === "both") {
+        // MCP rechecks the caller's project before claiming a receipt.
+        expect(answer).toMatchObject({ ok: false, code: "caller_unidentified", retryable: false });
+        expect(dispatches).toBe(0);
+        expect(await core.replayTool!(tool, args)).toBeNull();
+        expect(fs.existsSync(file)).toBe(false);
+        return;
+      }
+      if (change === "viewer") {
+        expect(answer).toMatchObject({ ...REFUSED, error: expect.stringContaining("prototype receipt identity changed"), details: { check: "prototype-receipt-scope", status: 403 } });
+      } else {
+        expect(answer.ok).toBe(true);
+      }
+      expect(await core.replayTool!(tool, args)).toEqual({ ...answer, replayed: true });
+      expect(dispatches).toBe(1);
       expect(fs.readFileSync(file, "utf8")).not.toContain("Private project Beta answer");
     });
   } finally {
