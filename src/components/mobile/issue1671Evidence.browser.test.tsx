@@ -10237,7 +10237,7 @@ describe("role memory curation: reversible window", () => {
     const { applyCuration } = await import("@/lib/memory/curation/apply");
     const route = await import("@/app/api/role-memory/route");
     const { NextRequest } = await import("next/server");
-    const out = path.resolve(".artifacts/role-memory-curation"); fs.mkdirSync(out, { recursive: true });
+    const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "role-memory-curation"); fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(path.join(root, "bundle"), undefined, {
       "/api/telemetry": { enabled: false, locked: false, noticeDismissed: true },
       "/api/team": { mode: "solo", me: null, members: [], methods: {} },
@@ -10250,15 +10250,21 @@ describe("role memory curation: reversible window", () => {
     try {
       browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
 
-      for (const lang of ["en", "uk"] as const) for (const width of [1440, 1000, 390]) for (const scheme of ["light", "dark"] as const) {
+      for (const lang of ["en", "uk"] as const) for (const width of [1440, 1000, 440, 390, 320]) for (const scheme of ["light", "dark"] as const) {
+        const phone = width <= 440;
         process.env.LLV_STATE_DIR = path.join(root, `${lang}-${width}-${scheme}`);
         const role = store.roleScope("atlas", "builder"), every = "role:*:builder", project = store.projectScope("atlas");
         const stamp = new Date().toISOString();
         const source = { project: "atlas", pipelineId: "fixture", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: ["conversation", "fixture"].join("_") };
         const texts = ["Inspect stored scope guidance before changing its readers.", "The earlier lane repaired orchard labels and captured its result.", "Validate the record before changing stored guidance."];
-        const ids = store.roleMemoryCollection(true)!.boundedPatch(24, tx => texts.map(rule => {
+        const ids = store.roleMemoryCollection(true)!.boundedPatch(24, tx => texts.map((rule, index) => {
           const id = store.newRuleId(tx); const held = tx.get(`s:${role}`);
-          tx.put({ kind: "rule", id, scope: role, rule, why: "An earlier write placed guidance with the wrong readers.", state: "active", hints: [], source, createdAt: stamp, changedAt: stamp });
+          const row = { kind: "rule" as const, id, scope: role, rule, why: "An earlier write placed guidance with the wrong readers.", state: "active" as const, hints: [], source, createdAt: stamp, changedAt: stamp };
+          if (index === 1) {
+            store.versionedRule(tx, { ...row, source: { origin: "decision", project: "atlas", roleId: null, fixRound: false, author: "typed", reviewId: "fixture-review" } },
+              { rule: "The archival decision keeps the latest wording.", why: row.why, hints: [] },
+              { by: "agent", at: stamp, source: { origin: "seat", project: "atlas", roleId: "legatus", fixRound: false, conversationId: source.conversationId } });
+          } else tx.put(row);
           tx.put({ kind: "scope", scope: role, revision: (held?.kind === "scope" ? held.revision : 0) + 1, active: [...(held?.kind === "scope" ? held.active : []), id], history: [] }); return id;
         }));
         const pass = curation.claimPass({ project: "atlas", repoDir: root, now: Date.now() })!;
@@ -10273,13 +10279,13 @@ describe("role memory curation: reversible window", () => {
           store.recordLessonRequest({ ...repeat, taskId, at: new Date().toISOString() });
           store.leaveLessons({ request: repeat, source: repeat, lessons: [{ scope: "role", rule: "Read the current scope revision before proposing a stored rewrite.", why: "Another task encountered the same class of stale scope." }], none: null });
         }
-        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=pipeline-block&header=1&rolememory=1`, { width, height: width === 390 ? 844 : 900 }, scheme, lang, "reduce", width === 390);
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=pipeline-block&header=1&rolememory=1`, { width, height: phone ? 844 : 900 }, scheme, lang, "reduce", phone);
         try {
           await page.evaluate(() => globalThis.dispatchEvent(new CustomEvent("delegatus:open-learned-rules", { detail: { project: "atlas" } })));
           const window = page.locator("[data-rules-window]"); await window.waitFor();
           /* A level opens beside the list, or on its own screen on a phone; the rules this block drives sit in the builder's two role levels. */
           const openLevel = async (scope: string) => {
-            if (width === 390 && await page.locator("[data-level-back]").count()) await page.locator("[data-level-back]").click();
+            if (phone && await page.locator("[data-level-back]").count()) await page.locator("[data-level-back]").click();
             await page.locator(`[data-rules-window] [data-profile-level="${scope}"]`).click();
             await page.locator(`[data-level-pane="${scope}"]`).waitFor();
           };
@@ -10309,7 +10315,24 @@ describe("role memory curation: reversible window", () => {
             expect(rect.bottom).toBeLessThanOrEqual(provenance.body.bottom + 1);
           }
           await page.locator('[data-rules-history="role"]').click();
-          await page.getByText(translate(lang, "roleMemory.left.task-specific"), { exact: true }).waitFor();
+          const archived = page.locator(`[data-left-rule="${ids[1]}"]`);
+          const author = translate(lang, "roleMemory.revised.agent", { role: translate(lang, "roleMemory.legatus") });
+          const archivedProvenance = archived.locator("[data-rule-provenance]");
+          expect(await archivedProvenance.innerText()).toContain(author);
+          expect(await archivedProvenance.innerText()).toContain(translate(lang, "roleMemory.left.task-specific"));
+          await archived.locator("summary").click();
+          const prior = archived.locator("details li");
+          expect(await prior.innerText()).toContain(translate(lang, "roleMemory.decision.typed"));
+          expect(await prior.innerText()).not.toContain(author);
+          await archived.locator("summary").click();
+          const archiveGeometry = await archivedProvenance.evaluate(node => {
+            const row = node.closest("li")!;
+            const restore = row.querySelector("button[data-left-rule-restore]")!.getBoundingClientRect();
+            const range = document.createRange(); range.selectNodeContents(node);
+            return { overflow: node.scrollWidth - node.clientWidth, textRight: Math.max(...[...range.getClientRects()].map(rect => rect.right)), restoreLeft: restore.left };
+          });
+          expect(archiveGeometry.overflow).toBeLessThanOrEqual(1);
+          expect(archiveGeometry.textRight).toBeLessThanOrEqual(archiveGeometry.restoreLeft);
           await page.locator("[data-curation-history] summary").click();
           await page.locator(`[data-curation-undo="${pass.id}"]`).waitFor();
           const geometry = await window.evaluate(node => ({ width: node.getBoundingClientRect().width, overflow: node.scrollWidth - node.clientWidth, sections: [...node.querySelectorAll('[data-rules-section]')].map(section => ({ kind: section.getAttribute('data-rules-section'), overflow: section.scrollWidth - section.clientWidth })) }));
@@ -10347,11 +10370,12 @@ describe("role memory curation: reversible window", () => {
           expect(cards).toEqual([]);
           const undoneFrame = `variant-1-${width}-${lang}-${scheme}-undone.png`; await page.screenshot({ path: path.join(out, undoneFrame) });
           expect(pageErrors).toEqual([]);
-          cases.push({ lang, width, scheme, frame, archiveFrame, undoneFrame, geometry, provenance, cards, recurringTasks: 3, revertedVersion: true, returnedRule: true, undoSkippedLaterWrites: true });
+          cases.push({ lang, width, scheme, frame, archiveFrame, undoneFrame, geometry, provenance, archiveGeometry, cards, recurringTasks: 3, revertedVersion: true, returnedRule: true, undoSkippedLaterWrites: true });
         } finally { await context.close(); }
       }
       fs.mkdirSync("evidence/role-memory-curation", { recursive: true });
       fs.writeFileSync("evidence/role-memory-curation/geometry.json", JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", cases }, null, 2) + "\n");
+      if (process.env.LLV_EVIDENCE_DIR) fs.copyFileSync("evidence/role-memory-curation/geometry.json", path.join(out, "geometry.json"));
     } finally {
       await browser?.close(); server.stop();
       /* The undo of a pass runs in the privacy worker, which this block started. */

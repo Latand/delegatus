@@ -952,7 +952,7 @@ test("a second provider instance that republishes a successor discards its pendi
   }
 });
 
-test.each(["codex", "claude"] as const)("a %s migration successor runs in the CPU cell of its conversation's class, and work it cannot contain is refused before it starts", async (engine) => {
+test.each(["codex", "claude"] as const)("a %s migration successor confirms its memory delivery and runs in the conversation's CPU cell", async (engine) => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), `llv-provider-${engine}-successor-cpu-`));
   roots.push(base);
   const source = accountRoot(engine, base, "source");
@@ -964,10 +964,12 @@ test.each(["codex", "claude"] as const)("a %s migration successor runs in the CP
     fs.writeFileSync(path.join(target.home, "memories", "memory_summary.md"), "The migration successor is launched with native memories disabled.");
   }
   const { recordLessonRequest, leaveLessons } = await import("@/lib/memory/roleStore");
+  const { deliveredRuleToConversation, memoryDeliveries } = await import("@/lib/memory/deliveryLedger");
   const lessonSource = { project: `successor-rules-${engine}`, pipelineId: `successor-rules-${engine}`, stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_successor_rules" };
   const rule = "Check the current owner before replaying a persisted acknowledgement.";
+  const hash = crypto.createHash("sha256").update(rule).digest("hex");
   recordLessonRequest({ ...lessonSource, at: "2026-10-11T00:00:00.000Z" });
-  leaveLessons({ request: lessonSource, source: lessonSource, lessons: [{ scope: "role", rule, why: "An acknowledgement was replayed with a different owner." }], none: null });
+  const id = leaveLessons({ request: lessonSource, source: lessonSource, lessons: [{ scope: "role", rule, why: "An acknowledgement was replayed with a different owner." }], none: null }).left[0]!.id;
   const fakeHost = {
     setWriterFence() {},
     health: async () => ({ status: "idle", sessionKey: "successor", endpoint: "stdio:successor", pid: process.pid, processStartIdentity: null,
@@ -1023,7 +1025,10 @@ test.each(["codex", "claude"] as const)("a %s migration successor runs in the CP
     __llvStructuredDeliveryController?: { registerActiveHost: ((item: unknown) => Promise<() => Promise<void>>) | null };
   }).__llvStructuredDeliveryController!;
   const originalRegister = controller.registerActiveHost;
-  controller.registerActiveHost = async () => async () => {};
+  controller.registerActiveHost = async () => {
+    expect(deliveredRuleToConversation(publishedConversations.at(-1)!, id, hash)).toBe(true);
+    return async () => {};
+  };
   const warn = spyOn(console, "warn").mockImplementation(() => {});
   try {
     setCpuPortsForTests({ probe: () => ({ kind: "available", systemdVersion: 255 }), cpus: 24, agentSlice: "test-agents.slice", workSlice: "test-agents-work.slice", runner: () => "" });
@@ -1033,11 +1038,11 @@ test.each(["codex", "claude"] as const)("a %s migration successor runs in the CP
       { workload: "work", slice: "test-agents-work.slice", weight: 100, quotaPercent: 300 },
       { workload: "operator", slice: "test-agents.slice", weight: 1000, quotaPercent: null },
     ]);
-    if (engine === "codex") {
-      const { memoryDeliveries } = await import("@/lib/memory/deliveryLedger");
-      for (const conversationId of publishedConversations.slice(0, 2)) {
-        expect(memoryDeliveries().find(row => row.delivery.conversationId === conversationId)?.delivery.engineMemory).toEqual([]);
-      }
+    for (const conversationId of publishedConversations) {
+      const delivery = memoryDeliveries().find(row => row.delivery.conversationId === conversationId)?.delivery;
+      expect(delivery?.rules).toEqual(expect.arrayContaining([expect.objectContaining({ id, hash })]));
+      expect(deliveredRuleToConversation(conversationId, id, hash)).toBe(true);
+      if (engine === "codex") expect(delivery?.engineMemory).toEqual([]);
     }
     const reason = "the kernel applied no CPU controls to a scope in test-agents.slice; the cpu controller is off on one of its ancestors";
     setCpuPortsForTests({ probe: (): CpuContainment => ({ kind: "missing", reason }), runner: () => "" });
