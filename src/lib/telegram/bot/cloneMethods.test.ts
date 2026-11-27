@@ -291,14 +291,20 @@ test("a live descriptor without the file feature gets the generic pairing-only r
   expect(sends).toEqual([]); expect(descriptors).toBe(1); expect(rightsReads).toBe(0);
   expect(await service.send({ ...common("legacy-pairing-text"), text: "Legacy" })).toMatchObject({ sentBy: { name: "Report clone" } });
 });
-test("pairing-only Office sends trust refreshed relay features when cached pairing metadata is stale", async () => {
-  fs.rmSync(telegramBotTokenPath()); relay.features = [];
+test.each(["empty", "missing"] as const)("pairing-only Office send discovers live capabilities when stored pairing features are %s", async stored => {
+  fs.rmSync(telegramBotTokenPath());
+  if (stored === "empty") relay.features = []; else delete relay.features;
   const [extension, mime] = officeFormats[0]; limits.files.document.mime_types.push(mime);
   const office = officeFile(extension);
   expect(await service.sendDocument({ ...common("stale-pairing-features"), document: office }))
     .toMatchObject({ messageIds: [101], sentBy: { name: "Report clone" }, alreadySent: false });
   expect(descriptors).toBe(1); expect(rightsReads).toBe(1); expect(sends).toHaveLength(1);
   expect(sends[0]!.files.get("document")).toMatchObject({ name: office.filename, type: mime });
+});
+test("chat discovery refreshes capabilities for a pairing without stored feature metadata", async () => {
+  delete relay.features;
+  expect(await directory.discoverChats()).toEqual([{ chatId: String(group.id), title: "Fixture reports" }]);
+  expect(descriptors).toBe(1); expect(rightsReads).toBe(1);
 });
 test.each(["secret", "malformed", "outside-root", "dot-directory", "state-directory"] as const)(
   "pairing-only %s document refusal happens before any relay request", async mode => {

@@ -149,7 +149,9 @@ export class CloneDirectory {
     const relays = this.relays();
     if (!this.peek(chatId)) await Promise.all(relays.filter(r => !this.snapshot(r)).map(r => this.refresh(r)));
     const route = this.peek(chatId);
-    if (route?.relay.features !== undefined) await this.#capabilities.refresh(route.relay, route.targetId);
+    // The active pairing and its pinned API origin authorize descriptor
+    // discovery; older pairing records may not store a features list.
+    if (route) await this.#capabilities.refresh(route.relay, route.targetId);
     return this.peek(chatId);
   }
   async discoverChats(): Promise<DiscoveredCloneChat[]> {
@@ -159,7 +161,7 @@ export class CloneDirectory {
       return !snapshot || this.ports.now() - snapshot.fetchedAt >= SOFT_TTL ? this.refresh(relay) : Promise.resolve();
     }));
     for (const relay of relays) for (const target of this.snapshot(relay)?.targets ?? [])
-      if (relay.features !== undefined && target.active && relay.targets.some(t => t.id === target.target_id && t.enabled))
+      if (target.active && relay.targets.some(t => t.id === target.target_id && t.enabled))
         await this.#capabilities.refresh(relay, target.target_id);
     const chats = new Map<string, DiscoveredCloneChat>();
     for (const relay of relays) {
