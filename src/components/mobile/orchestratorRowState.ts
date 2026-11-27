@@ -37,6 +37,7 @@ export type OrchestratorRowState =
   | "stalled"
   | "resumable"
   | "dead"
+  | "missing"
   | "resolving";
 
 export interface OrchestratorRowView {
@@ -70,7 +71,7 @@ export function orchestratorRowView(
       tap: options.conversationReady ? "conversation" : "sheet",
       rotation: state.rotation?.level ?? null,
       transition,
-      attention: state.liveness === "dead" || transition === "error",
+      attention: state.liveness === "dead" || state.liveness === "missing" || transition === "error",
     };
   }
   const quiet = { tap: "sheet" as const, rotation: null, transition: null };
@@ -135,6 +136,7 @@ export const SEAT_STATE_TONE: Record<OrchestratorRowState, SeatBadgeTone> = {
   stalled: "warning",
   resumable: "neutral",
   dead: "danger",
+  missing: "danger",
   resolving: "neutral",
 };
 
@@ -166,5 +168,6 @@ export const ROW_STATE_LABEL: Record<OrchestratorRowState, MessageKey> = {
   stalled: "orchPanel.badgeStalled",
   resumable: "orchPanel.badgeResumable",
   dead: "orchPanel.badgeDead",
+  missing: "orchPanel.badgeTranscriptMissing",
   resolving: "orchPanel.badgeResolving",
 };

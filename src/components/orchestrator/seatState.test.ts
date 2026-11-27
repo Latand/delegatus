@@ -651,6 +651,44 @@ describe("the dock binds the seat by its durable conversation id (#1182)", () =>
     })).toBe(successor);
   });
 
+  test("a predecessor id hit cannot stand in for a known current path", () => {
+    const predecessor = file({ path: "/transcripts/orchestrator.archived.jsonl", migratedTo: successorPath } as Partial<FileEntry>);
+    expect(resolveSeatFile({
+      files: [predecessor],
+      conversationId: "conversation_orchestrator",
+      seatPath: predecessor.path,
+      currentPath: successorPath,
+    })).toBeNull();
+    const successor = file({ path: successorPath, conversationId: "conversation_successor" });
+    expect(resolveSeatFile({
+      files: [predecessor, successor],
+      conversationId: "conversation_orchestrator",
+      seatPath: predecessor.path,
+      currentPath: successorPath,
+    })).toBe(successor);
+  });
+
+  test("a board row update cannot bind an archived activation path before the incumbent supplies its replacement", () => {
+    const archived = file({
+      path: "/transcripts/orchestrator.archived.jsonl",
+      migratedTo: successorPath,
+    } as Partial<FileEntry>);
+    expect(resolveSeatFile({
+      files: [archived],
+      conversationId: "conversation_orchestrator",
+      seatPath: archived.path,
+      currentPath: archived.path,
+    })).toBeNull();
+
+    const successor = file({ path: successorPath, name: "orchestrator.successor.jsonl" });
+    expect(resolveSeatFile({
+      files: [archived, successor],
+      conversationId: "conversation_orchestrator",
+      seatPath: archived.path,
+      currentPath: successor.path,
+    })).toBe(successor);
+  });
+
   test("the recorded path is a hint: it binds when nothing better answers, and never outranks the id", () => {
     const recorded = file();
     const successor = file({ path: successorPath, name: "orchestrator.successor.jsonl" });
@@ -659,9 +697,24 @@ describe("the dock binds the seat by its durable conversation id (#1182)", () =>
     /* The recorded path is an archived predecessor of the live generation, so
        the id's current entry wins over the entry the path names. */
     const archived = file({ migratedTo: successorPath } as Partial<FileEntry>);
+    expect(resolveSeatFile({ files: [archived], conversationId: "conversation_orchestrator", seatPath: archived.path, currentPath: null }))
+      .toBeNull();
     expect(resolveSeatFile({ files: [archived, successor], conversationId: "conversation_orchestrator", seatPath: archived.path, currentPath: null })).toBe(successor);
     /* No seat at all binds nothing, whatever the catalog holds. */
     expect(resolveSeatFile({ files: [successor], conversationId: null, seatPath: successorPath, currentPath: successorPath })).toBeNull();
+  });
+
+  test("a missing incumbent path recovers the current transcript by conversation id", () => {
+    const successor = file({ path: successorPath, name: "orchestrator.successor.jsonl" });
+    expect(resolveSeatFile({
+      files: [successor], conversationId: "conversation_orchestrator", seatPath: "/transcripts/activation.jsonl",
+      currentPath: "/transcripts/activation.jsonl",
+    })).toBe(successor);
+    const archived = file({ migratedTo: successorPath, path: "/transcripts/archived.jsonl" } as Partial<FileEntry>);
+    expect(resolveSeatFile({ files: [archived, successor], conversationId: "conversation_orchestrator", seatPath: archived.path,
+      currentPath: "/transcripts/activation.jsonl" })).toBe(successor);
+    expect(resolveSeatFile({ files: [archived, successor], conversationId: "conversation_orchestrator", seatPath: archived.path,
+      currentPath: archived.path })).toBe(successor);
   });
 });
 
@@ -688,6 +741,15 @@ describe("«opening» is bounded once the status read says the host is alive (#1
     expect(deriveOrchestratorPanelState({ ...stuck, file: file(), surface: "live-root", unboundForMs: 10 * SEAT_BIND_TIMEOUT_MS }))
       .toMatchObject({ liveness: "live", bindFailure: null });
   });
+});
+
+test("a missing activation path remains resolving while lookup is pending, then becomes terminal", () => {
+  const statusWithMissingActivation = status({ seat: seat(), exists: false });
+  expect(deriveOrchestratorPanelState({ ...base, status: statusWithMissingActivation, transcriptPending: true }))
+    .toMatchObject({ kind: "live", conversationId: seat().conversationId, bindFailure: null });
+  expect(deriveOrchestratorPanelState({ ...base, status: statusWithMissingActivation, transcriptMissing: true }))
+    .toMatchObject({ kind: "live", conversationId: seat().conversationId, liveness: "missing", bindFailure: "catalog" });
+  expect(deriveOrchestratorPanelState({ ...base, status: status() })).toMatchObject({ kind: "draft", vacated: false });
 });
 
 describe("a decision the operator owes outranks every word for «it is running» (#1167)", () => {

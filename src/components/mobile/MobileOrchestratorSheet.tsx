@@ -1174,8 +1174,9 @@ function LiveView({
       {previousRow}
       {state.bindFailure ? (
         <div role="status" data-orchestrator-bind-failure={state.bindFailure} className="rounded-control border border-warning/30 bg-warning/10 px-3 py-2 text-ui text-primary">
-          <p className="font-semibold">{t("orchPanel.bindStalled")}</p>
-          <p>{t(state.bindFailure === "catalog" ? "orchPanel.bindStalledCatalog" : "orchPanel.bindStalledSurface")}</p>
+          <p className="font-semibold">{t(state.bindFailure === "catalog" ? "orchPanel.transcriptNotFound" : "orchPanel.bindStalled")}</p>
+          {state.bindFailure === "surface" ? <p>{t("orchPanel.bindStalledSurface")}</p> : null}
+          {state.bindFailure === "catalog" && state.seat.path ? <p className="break-all font-mono">{state.seat.path}</p> : null}
         </div>
       ) : null}
       {state.transition ? <TransitionCard transition={state.transition} /> : null}
@@ -1197,14 +1198,17 @@ function LiveView({
       </button>
       <p className="shrink-0 text-caption leading-4 text-muted">{t("mobile2.seat.successorNote")}</p>
       {file ? null : (
-        /* Seated, but its transcript has not reached this device: say so, and
-           keep the board deep link rather than a control that cannot act. */
         <Centered>
-          <LoaderCircle className="h-5 w-5 animate-spin text-muted" aria-hidden />
-          <p className="text-body font-semibold text-primary" role="status">{t("orchPanel.resolving")}</p>
-          <p className="text-ui leading-4 text-muted">{t("orchPanel.resolvingHint")}</p>
+          {state.bindFailure ? null : (
+            <>
+              <LoaderCircle className="h-5 w-5 animate-spin text-muted" aria-hidden />
+              <p className="text-body font-semibold text-primary" role="status">{t("orchPanel.resolving")}</p>
+              <p className="text-ui leading-4 text-muted">{t("orchPanel.resolvingHint")}</p>
+            </>
+          )}
           <a
             href={"#c=" + encodeURIComponent(state.conversationId)}
+            data-orchestrator-open-board
             className="inline-flex min-h-11 items-center text-ui font-semibold text-accent underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           >
             {t("orchPanel.openOnBoard")}

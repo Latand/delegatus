@@ -127,7 +127,8 @@ for (const reason of ["catalog", "surface", null] as const) {
     expect(html).toContain("data-orchestrator-rotate");
     if (reason) {
       expect(html).toContain(`role="status" data-orchestrator-bind-failure="${reason}"`);
-      expect(decodeHTML(html)).toContain(translate("en", reason === "catalog" ? "orchPanel.bindStalledCatalog" : "orchPanel.bindStalledSurface"));
+      expect(decodeHTML(html)).toContain(translate("en", reason === "catalog" ? "orchPanel.transcriptNotFound" : "orchPanel.bindStalledSurface"));
+      if (reason === "catalog") expect(html).toContain(seat.path!);
       expect(html).toContain('min-h-11 w-full');
     }
   });

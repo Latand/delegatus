@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
 
 import { emptyStore } from "@/components/runtime/runtimeModel";
+import { resetMobileNavForTests } from "./mobileNav";
 import { translate } from "@/lib/i18n";
 import { ORCHESTRATOR_PROMPT_VERSION } from "@/lib/orchestrator/prompt";
 import type { FileEntry } from "@/lib/types";
@@ -51,6 +52,8 @@ mock.module("@/hooks/useConversationCatalog", () => ({
 }));
 
 const { ProjectDashboard } = await import("@/components/ProjectDashboard");
+const { resetOrchestratorSeatCacheForTests } = await import("../orchestrator/useOrchestratorSeat");
+const { resetOrchestratorIncumbentCacheForTests } = await import("../orchestrator/useOrchestratorIncumbent");
 
 const dom = new Window({ url: "http://localhost/", width: 390, height: 844 });
 const G = globalThis as Record<string, unknown>;
@@ -63,6 +66,9 @@ const G = globalThis as Record<string, unknown>;
 let boardRevision = 1;
 let boardPrefs: Record<string, unknown> = {};
 let seatAnswer: unknown = { seat: null, pending: null, exists: true, viewerMcpRegistered: false };
+let incumbentAnswer: unknown = {};
+let seatTranscript: FileEntry | null = null;
+let transcriptReads = 0;
 const seatPosts: Record<string, unknown>[] = [];
 const emptyPrefs = () => ({
   manual: [], hidden: [], expanded: [], favorites: [], foldedEngineChildIds: [],
@@ -73,7 +79,7 @@ const boardState = () => ({
   pathAliases: {}, explicitManual: [], prefs: { ...emptyPrefs(), ...boardPrefs },
 });
 const jsonResponse = (body: unknown) => ({
-  ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body),
+  ok: true, status: 200, headers: new Headers(), json: async () => body, text: async () => JSON.stringify(body),
 });
 
 const OVERRIDES: Record<string, unknown> = {
@@ -103,6 +109,11 @@ const OVERRIDES: Record<string, unknown> = {
       }
       return jsonResponse({ board: boardState() });
     }
+    if (url.startsWith("/api/orchestrator/seat/transcript?")) {
+      transcriptReads += 1;
+      return jsonResponse({ conversationId: seatTranscript?.conversationId, file: seatTranscript });
+    }
+    if (url.startsWith("/api/orchestrator/seat/status")) return jsonResponse(incumbentAnswer);
     if (url.startsWith("/api/orchestrator/seat")) {
       if ((init?.method ?? "GET") === "POST") {
         seatPosts.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
@@ -160,11 +171,17 @@ const dashboardProps = (over: Partial<DashboardProps> = {}): DashboardProps => (
 
 let roots: Root[] = [];
 beforeEach(() => {
+  resetMobileNavForTests("/");
+  resetOrchestratorSeatCacheForTests();
+  resetOrchestratorIncumbentCacheForTests();
   roots = [];
   boardRevision += 1;
   boardPrefs = {};
   catalogRows = [];
   seatAnswer = { seat: null, pending: null, exists: true, viewerMcpRegistered: false };
+  incumbentAnswer = {};
+  seatTranscript = null;
+  transcriptReads = 0;
   seatPosts.length = 0;
   dom.document.body.replaceChildren();
   dom.sessionStorage.clear();
@@ -240,6 +257,69 @@ test("searching the list cannot filter the pin away", async () => {
   const leaf = listLeaf(host)!;
   expect(leaf.textContent).toContain(translate("en", "common.nothingFound"));
   expectPinnedBefore(host, leaf);
+});
+
+test("the phone opens an old designated transcript from outside the board window", async () => {
+  const old = conversation({
+    path: "/repo/atlas/old-seat.jsonl", conversationId: "conversation_old_seat", project: "atlas-former",
+    title: "The old seat", mtime: 1,
+  });
+  seatTranscript = old;
+  seatAnswer = {
+    seat: { ...old, project: PROJECT, state: "active", seatEpoch: 4, mandate: "Run the board",
+      intent: { clientRequestId: "old-seat", mode: "existing", error: null }, designatedAt: "2026-01-01T00:00:00Z" },
+    pending: null,
+    exists: true,
+  };
+  const recent = conversation({ activity: "live", proc: "running", pid: 41 });
+  boardPrefs = { viewMode: "scheme" };
+  const host = mount({ files: [recent], catalogKnown: true, catalogConversationCount: 2 });
+  expect(await waitFor(() => row(host)?.getAttribute("data-mobile2-seat-state") === "resolving")).toBe(true);
+
+  flushSync(() => openButton(host).click());
+  const open = () => host.querySelector<HTMLButtonElement>("[data-orchestrator-confirm]");
+  expect(await waitFor(() => open()?.textContent?.includes("Open conversation") === true, 1_500)).toBe(true);
+  expect(transcriptReads).toBe(1);
+  flushSync(() => open()!.click());
+  const focusedPath = () => host.querySelector('[data-testid="mobile-focused-pane"] [data-link-path]')?.getAttribute("data-link-path");
+  expect(await waitFor(() => focusedPath() === old.path, 1_500)).toBe(true);
+});
+
+test("recovered seat actions follow the current transcript after the activation path disappears", async () => {
+  const current = conversation({
+    path: "/repo/atlas/current-seat-generation.jsonl",
+    conversationId: "conversation_old_seat",
+    project: PROJECT,
+    title: "Recovered seat",
+  });
+  seatAnswer = {
+    seat: {
+      project: PROJECT, seatEpoch: 4, conversationId: "conversation_old_seat",
+      path: "/repo/atlas/deleted-activation.jsonl", mandate: "Run the board",
+      state: "active", designatedAt: "2026-01-01T00:00:00Z",
+      intent: { clientRequestId: "recovered-seat", mode: "existing", error: null },
+    },
+    pending: null,
+    exists: false,
+  };
+  incumbentAnswer = { project: PROJECT, designated: true, conversationId: "conversation_old_seat",
+    transcriptPath: "/repo/atlas/deleted-activation.jsonl", engine: "claude", model: "opus",
+    liveness: { hostState: "alive", lifecycle: "running" } };
+  const host = mount({
+    files: [current], catalogKnown: true, catalogConversationCount: 1,
+    focusRequest: { path: current.path, nonce: 1, catalog: true },
+  });
+  const focusedPath = () => host.querySelector('[data-testid="mobile-focused-pane"] [data-link-path]')?.getAttribute("data-link-path");
+  expect(await waitFor(() => focusedPath() === current.path)).toBe(true);
+
+  const menuButton = host.querySelector<HTMLButtonElement>("[data-mobile2-open='menu']");
+  expect(menuButton).not.toBeNull();
+  flushSync(() => menuButton!.click());
+  expect(await waitFor(() => host.querySelector('[data-mobile2-sheet="menu"] [data-mobile2-menu-row="reports"]') !== null)).toBe(true);
+  expect(host.querySelector('[data-mobile2-sheet="menu"] [data-mobile2-menu-row="seat"]')).not.toBeNull();
+  flushSync(() => (host.querySelector('[data-mobile2-sheet="menu"] [data-mobile2-menu-row="seat"]') as HTMLButtonElement).click());
+  expect(await waitFor(() => host.querySelector('[data-mobile2-sheet="seat"] [data-orchestrator-confirm]') !== null)).toBe(true);
+  expect(host.querySelector('[data-mobile2-sheet="seat"] [data-orchestrator-confirm]')?.textContent).toContain(translate("en", "mobile2.seat.open"));
 });
 
 test("a project with nothing in it still offers the invitation — the leaf where an orchestrator is most wanted", async () => {

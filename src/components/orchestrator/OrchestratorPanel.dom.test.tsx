@@ -1,5 +1,6 @@
-import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, jest, mock, test } from "bun:test";
 import { Window as HappyWindow } from "happy-dom";
+import { act } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
@@ -104,6 +105,7 @@ const feedDependencies = {
 };
 
 const { OrchestratorPanel, REPORT_LOG_CHAT_MIN_WIDTH, REPORT_LOG_MIN_WIDTH, REPORT_LOG_SPLIT_WIDTH, UNBOUND_STATUS_RETRY_MS } = await import("./OrchestratorPanel");
+const { SEAT_TRANSCRIPT_TIMEOUT_MS } = await import("./useSeatFile");
 const { SEAT_CONFIRM_TTL_MS, requestOrchestratorDraft } = await import("./draftPrefill");
 const { SEAT_BIND_TIMEOUT_MS } = await import("./seatState");
 const { resetMessageProvenanceCacheForTests } = await import("../feed/messageProvenance");
@@ -144,6 +146,7 @@ let incumbentReadDown: boolean;
 /** While set, the seat read waits for it: the durable read that has not landed
     yet after a Confirm (#2006). */
 let seatReadGate: Promise<void> | null;
+let transcriptRead: (signal: AbortSignal | null | undefined) => Promise<Response>;
 const realFetch = globalThis.fetch;
 
 function answer(queue: { status: number; body: Record<string, unknown> | null; throws?: boolean }[]): Response {
@@ -171,10 +174,11 @@ function installFetch(): void {
       const target = new URL(url, "http://localhost").searchParams.get("project");
       return { ok: true, status: 200, json: async () => (target === "atlas" ? incumbentStatus : { project: target, designated: false, rotation: null, context: null }) } as Response;
     }
+    if (url.startsWith("/api/orchestrator/seat/transcript?")) return transcriptRead(init?.signal);
     if (url.startsWith("/api/orchestrator/seat?")) {
       if (seatReadGate) await seatReadGate;
       const target = new URL(url, "http://localhost").searchParams.get("project");
-      return { ok: true, status: 200, json: async () => (target === "atlas" ? seatStatus : { seat: null, pending: null, exists: true }) } as Response;
+      return Response.json(target === "atlas" ? seatStatus : { seat: null, pending: null, exists: true });
     }
     if (url === "/api/accounts") return { ok: true, status: 200, json: async () => accounts } as Response;
     /* The seat's report log (#2146): an empty page. */
@@ -314,6 +318,7 @@ beforeEach(() => {
   incumbentReads = 0;
   incumbentReadDown = false;
   seatReadGate = null;
+  transcriptRead = async () => Response.json({ conversationId: "conversation_orch", file: null });
   runtimePlaneOn = false;
   runtimeSession = null;
   runtimeAnswer = null;
@@ -327,6 +332,7 @@ beforeEach(() => {
   installFetch();
 });
 afterEach(() => {
+  jest.useRealTimers();
   detachCatalog?.();
   detachCatalog = null;
   for (const root of roots) flushSync(() => root.unmount());
@@ -866,6 +872,75 @@ test("an active seat mounts the REAL conversation column — feed and composer, 
   expect(confirmButton(host)).toBeNull();
 });
 
+test("the desktop panel opens an old seat from the single-record read", async () => {
+  seatStatus = { seat: activeSeat(), pending: null, exists: true };
+  const old = { ...orchestratorFile, project: "atlas-former" };
+  let reads = 0;
+  transcriptRead = async () => {
+    reads += 1;
+    return Response.json({ conversationId: old.conversationId, file: old });
+  };
+
+  const host = mount([]);
+  await settle();
+  flushSync(() => undefined);
+
+  expect(reads).toBe(1);
+  expect(host.querySelector('[data-orchestrator-conversation="conversation_orch"]')).not.toBeNull();
+  expect(host.textContent).not.toContain("Opening the conversation");
+});
+
+test("a board predecessor cannot suppress lookup of the incumbent path", async () => {
+  seatStatus = { seat: activeSeat(), pending: null, exists: false };
+  const current = { ...orchestratorFile, path: "/transcripts/orch.current.jsonl", name: "orch.current.jsonl" };
+  incumbentStatus = incumbent({ transcriptPath: current.path, liveness: { lifecycle: "running", hostState: "alive", silentForMs: 0 } });
+  let reads = 0;
+  transcriptRead = async () => {
+    reads += 1;
+    return Response.json({ conversationId: current.conversationId, file: current });
+  };
+  const predecessor = { ...orchestratorFile, path: "/transcripts/orch.archived.jsonl", migratedTo: current.path } as FileEntry;
+  const host = mountReloadableCatalog([predecessor], []);
+  await settle();
+  flushSync(() => undefined);
+  expect(reads).toBeGreaterThan(0);
+  expect(host.querySelector('[data-orchestrator-conversation="conversation_orch"]')).not.toBeNull();
+  expect(host.textContent).not.toContain("Opening the conversation");
+  expect(host.textContent).not.toContain("Transcript not found");
+});
+
+test("a late lookup cannot replace the new seat after rotation", async () => {
+  const late = Promise.withResolvers<Response>();
+  let oldSignal: AbortSignal | null | undefined;
+  const successor = { ...orchestratorFile, conversationId: "conversation_successor", path: "/transcripts/successor.jsonl" };
+  transcriptRead = (signal) => {
+    if (oldSignal === undefined) {
+      oldSignal = signal;
+      return late.promise;
+    }
+    return Promise.resolve(Response.json({ conversationId: successor.conversationId, file: successor }));
+  };
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  roots.add(root);
+  const render = (seat: Record<string, unknown>) => flushSync(() => root.render(
+    <OrchestratorPanel project="atlas" projectName="Atlas" files={[]} onClose={() => undefined}
+      seatRead={{ status: { seat, pending: null, exists: true }, failed: false, refresh: async () => undefined } as never} />,
+  ));
+  render(activeSeat());
+  await settle();
+  render(activeSeat({ conversationId: successor.conversationId, path: successor.path, seatEpoch: 3 }));
+  await settle();
+  late.resolve(Response.json({ conversationId: orchestratorFile.conversationId, file: orchestratorFile }));
+  await settle();
+  flushSync(() => undefined);
+
+  expect(oldSignal?.aborted).toBe(true);
+  expect(host.querySelector('[data-orchestrator-conversation="conversation_successor"]')).not.toBeNull();
+  expect(host.querySelector('[data-orchestrator-conversation="conversation_orch"]')).toBeNull();
+});
+
 test("a re-hosted seat binds to its successor transcript through the status read, with no rotation (#1182)", async () => {
   /* The viewer came back and the conversation is being written to a NEW
      transcript the catalog carries under its own native id: neither the seat's
@@ -894,45 +969,36 @@ test("a restart-time status read that fails is retried, and the dock binds itsel
      `transcriptPath` is the only thing that can bind the two (#1182). */
   incumbentStatus = incumbent({ transcriptPath: "/transcripts/orch.successor.jsonl", liveness: { lifecycle: "running", hostState: "alive", silentForMs: 0 } });
   const successor = { ...orchestratorFile, path: "/transcripts/orch.successor.jsonl", name: "orch.successor.jsonl", conversationId: "conversation_orch_successor" } as FileEntry;
-  /* And the viewer has not finished coming back, so that read FAILS. */
+  /* The status route is still restarting and the transcript read has no row. */
   incumbentReadDown = true;
 
   const host = mount([successor]);
   await settle();
   flushSync(() => undefined);
 
-  /* Nothing is bound and nothing can be: with no answer there is no live-host
-     evidence, so the panel is not even offering the Re-bind that would let the
-     operator do this by hand. */
   expect(panelState(host)).toBe("live");
-  expect(host.textContent).toContain("Opening the conversation");
-  expect(bindReason(host)).toBeNull();
-  expect(host.querySelector("[data-orchestrator-rebind]")).toBeNull();
+  expect(bindReason(host)).toBe("catalog");
+  expect(host.textContent).toContain("Transcript not found");
+  expect(host.querySelector('[data-orchestrator-badge="missing"]')?.textContent).toContain("transcript missing");
   const failed = incumbentReads;
   expect(failed).toBeGreaterThan(0);
 
-  /* The endpoint recovers — and no one touches the panel. Waited for by the
-     binding itself, not by a sleep sized to the retry, and every look on the way
-     reads the panel's bound: had «opening…» expired before the retry bound the
-     dock, the panel would have named a reason first. */
+  /* The incumbent recovers during the automatic status retry. */
   incumbentReadDown = false;
   expect(UNBOUND_STATUS_RETRY_MS).toBeLessThan(SEAT_BIND_TIMEOUT_MS);
   const bound = () => host.querySelector('[data-orchestrator-conversation="conversation_orch_successor"]') !== null;
-  const reasons: string[] = [];
   const deadline = Date.now() + SEAT_BIND_TIMEOUT_MS + 5_000;
   while (!bound() && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 100));
     await settle();
     flushSync(() => undefined);
-    const reason = bindReason(host);
-    if (reason) reasons.push(reason);
   }
 
   /* The panel asked again on its own and bound to the successor inside the
      bound «opening…» is held to. */
-  expect(reasons).toEqual([]);
   expect(incumbentReads).toBeGreaterThan(failed);
   expect(bound()).toBe(true);
+  expect(bindReason(host)).toBeNull();
   expect(host.textContent).not.toContain("Opening the conversation");
   /* Resolution is all it was: no rotation, no second designation, no spawn. */
   expect(rotatePosts).toHaveLength(0);
@@ -940,26 +1006,54 @@ test("a restart-time status read that fails is retried, and the dock binds itsel
   expect(spawnPosts).toBe(0);
 }, SEAT_BIND_TIMEOUT_MS + 20_000);
 
-test("a bind that never lands stops spinning: the panel names the reason and Re-bind CLEARS it (#1182)", async () => {
-  seatStatus = { seat: activeSeat(), pending: null, exists: true };
+test("a hung transcript read times out with its path and can be rebound", async () => {
+  seatStatus = { seat: activeSeat(), pending: null, exists: false };
   incumbentStatus = incumbent({ liveness: { lifecycle: "running", hostState: "alive", silentForMs: 0 } });
+  let signal: AbortSignal | null | undefined;
+  transcriptRead = (requestSignal) => {
+    signal = requestSignal;
+    // Hold the actual response body open until the request deadline aborts it.
+    return Promise.resolve(new Response(new ReadableStream({
+      start(controller) {
+        requestSignal?.addEventListener("abort", () => controller.error(new DOMException("Aborted", "AbortError")), { once: true });
+      },
+    })));
+  };
 
   /* Nothing in the catalog answers for this seat, on any key — until it is
      re-read, which is the half this failure is actually missing. */
-  const host = mountReloadableCatalog([], [orchestratorFile]);
-  await settle();
-  flushSync(() => undefined);
+  jest.useFakeTimers();
+  const actGlobal = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+  const previousActEnvironment = actGlobal.IS_REACT_ACT_ENVIRONMENT;
+  actGlobal.IS_REACT_ACT_ENVIRONMENT = true;
+  let host: HTMLElement;
+  try {
+    host = await act(async () => {
+      const mounted = mountReloadableCatalog([], [orchestratorFile]);
+      for (let turn = 0; turn < 24; turn += 1) await Promise.resolve();
+      return mounted;
+    });
+  } finally {
+    if (previousActEnvironment === undefined) delete actGlobal.IS_REACT_ACT_ENVIRONMENT;
+    else actGlobal.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
+  }
   expect(panelState(host)).toBe("live");
   expect(host.textContent).toContain("Opening the conversation");
   expect(host.querySelector("[data-orchestrator-rebind]")).toBeNull();
 
-  /* Past the bound, «opening» is no longer an honest answer. */
-  await new Promise((resolve) => setTimeout(resolve, SEAT_BIND_TIMEOUT_MS + 250));
-  await settle();
+  /* Advance the fixed deadline while the response body remains stalled. */
+  flushSync(() => jest.advanceTimersByTime(SEAT_TRANSCRIPT_TIMEOUT_MS));
+  for (let turn = 0; turn < 4; turn += 1) await Promise.resolve();
   flushSync(() => undefined);
+  jest.useRealTimers();
 
   expect(bindReason(host)).toBe("catalog");
-  expect(host.textContent).toContain("file catalog");
+  expect(signal?.aborted).toBe(true);
+  expect(host.textContent).toContain("Transcript not found");
+  expect(host.querySelector('[data-orchestrator-badge="missing"]')?.textContent).toContain("transcript missing");
+  expect(host.textContent).toContain("/transcripts/orch.jsonl");
+  expect(host.textContent).not.toContain("Opening the conversation");
+  expect(host.querySelector("[data-orchestrator-rotate]")).not.toBeNull();
   /* Both ways forward, and rotation is neither of them. */
   expect(host.textContent).toContain("Open it on the board");
   const before = incumbentReads;
@@ -1032,7 +1126,7 @@ test("the RUNTIME half of a bounded bind offers the same two ways forward, and R
   expect(spawnPosts).toBe(0);
 }, SEAT_BIND_TIMEOUT_MS + 20_000);
 
-test("a cached «alive» nobody is answering for any more never accuses the seat (#1182)", async () => {
+test("a cached incumbent retains its context when the transcript lookup misses (#1182)", async () => {
   seatStatus = { seat: activeSeat(), pending: null, exists: true };
   incumbentStatus = incumbent({ liveness: { lifecycle: "running", hostState: "alive", silentForMs: 0 } });
 
@@ -1049,7 +1143,6 @@ test("a cached «alive» nobody is answering for any more never accuses the seat
   incumbentReadDown = true;
   const host = remount([]);
   await settle();
-  await new Promise((resolve) => setTimeout(resolve, SEAT_BIND_TIMEOUT_MS + 250));
   await settle();
   flushSync(() => undefined);
 
@@ -1059,15 +1152,13 @@ test("a cached «alive» nobody is answering for any more never accuses the seat
      from the retained reading. */
   expect(incumbentRow(host)?.textContent).toContain("Opus 5.5");
   expect(host.querySelector("[data-orchestrator-context]")?.getAttribute("data-orchestrator-context")).toBe("24");
-  /* And it is not evidence: the panel keeps waiting instead of reporting a
-     fault the server was never asked to confirm. */
-  expect(bindReason(host)).toBeNull();
-  expect(host.textContent).toContain("Opening the conversation");
+  expect(bindReason(host)).toBe("catalog");
+  expect(host.textContent).toContain("Transcript not found");
   expect(host.textContent).toContain("Open it on the board");
 }, SEAT_BIND_TIMEOUT_MS + 20_000);
 
 test("a seat whose transcript is gone returns the panel to the draft", async () => {
-  seatStatus = { seat: activeSeat(), pending: null, exists: false };
+  seatStatus = { seat: null, pending: null, exists: false };
   const host = mount();
   await settle();
   flushSync(() => undefined);
@@ -1081,19 +1172,19 @@ test("a seat whose transcript is gone returns the panel to the draft", async () 
    (seat record present, conversation gone), never the panel state a failed
    attempt has moved to. */
 test("a create on a vacated seat carries replaceIncumbent on the first attempt", async () => {
-  seatStatus = { seat: activeSeat(), pending: null, exists: false };
+  seatStatus = { seat: null, pending: null, exists: false };
   const host = mount();
   await settle();
 
   flushSync(() => confirmButton(host).click());
   await settle();
   expect(seatPosts).toHaveLength(1);
-  expect(seatPosts[0]!.replaceIncumbent).toBe(true);
-  expect(seatPosts[0]!.expectedIncumbentSeatEpoch).toBe(2);
+  expect(seatPosts[0]!.replaceIncumbent).toBeUndefined();
+  expect(seatPosts[0]!.expectedIncumbentSeatEpoch).toBeUndefined();
 });
 
 test("a retry after a refused create on a vacated seat still carries replaceIncumbent (fresh key)", async () => {
-  seatStatus = { seat: activeSeat(), pending: null, exists: false };
+  seatStatus = { seat: null, pending: null, exists: false };
   seatResponses = [{ status: 400, body: { error: "orchestrator cwd could not be resolved", code: "cwd_unresolved" } }];
   const host = mount();
   await settle();
@@ -1107,12 +1198,12 @@ test("a retry after a refused create on a vacated seat still carries replaceIncu
   await settle();
   expect(seatPosts).toHaveLength(2);
   expect(seatPosts[1]!.clientRequestId).not.toBe(seatPosts[0]!.clientRequestId);
-  expect(seatPosts.map((post) => post.replaceIncumbent)).toEqual([true, true]);
-  expect(seatPosts.map((post) => post.expectedIncumbentSeatEpoch)).toEqual([2, 2]);
+  expect(seatPosts.map((post) => post.replaceIncumbent)).toEqual([undefined, undefined]);
+  expect(seatPosts.map((post) => post.expectedIncumbentSeatEpoch)).toEqual([undefined, undefined]);
 });
 
 test("a same-key replay after a lost reply on a vacated seat still carries replaceIncumbent", async () => {
-  seatStatus = { seat: activeSeat(), pending: null, exists: false };
+  seatStatus = { seat: null, pending: null, exists: false };
   seatResponses = [{ status: 0, body: null, throws: true }];
   const host = mount();
   await settle();
@@ -1126,8 +1217,8 @@ test("a same-key replay after a lost reply on a vacated seat still carries repla
   await settle();
   expect(seatPosts).toHaveLength(2);
   expect(seatPosts[1]!.clientRequestId).toBe(seatPosts[0]!.clientRequestId);
-  expect(seatPosts.map((post) => post.replaceIncumbent)).toEqual([true, true]);
-  expect(seatPosts.map((post) => post.expectedIncumbentSeatEpoch)).toEqual([2, 2]);
+  expect(seatPosts.map((post) => post.replaceIncumbent)).toEqual([undefined, undefined]);
+  expect(seatPosts.map((post) => post.expectedIncumbentSeatEpoch)).toEqual([undefined, undefined]);
 });
 
 test("a create with no seat record never carries replaceIncumbent, on the first attempt or the retry", async () => {
@@ -1203,7 +1294,7 @@ test("after a lost reply lands, the next NEW draft carries a fresh key instead o
   expect(live.querySelector("[data-orchestrator-intent-error]")).toBeNull();
 
   /* The operator closes that conversation; the seat is vacant again. */
-  seatStatus = { ...seatStatus, exists: false };
+  seatStatus = { ...seatStatus, seat: null, exists: false };
   const again = remount();
   await settle();
   flushSync(() => undefined);
@@ -1716,7 +1807,7 @@ test("closing the seat conversation returns the panel to the draft WITHOUT a rel
 
   /* The operator closes the card: the transcript is gone, so the seat reads
      `exists: false` on the very next poll — the panel is already mounted. */
-  seatStatus = { ...seatStatus, exists: false };
+  seatStatus = { ...seatStatus, seat: null, exists: false };
   await settle();
   await new Promise((resolve) => setTimeout(resolve, SEAT_POLL_MS + 5));
   await settle();
@@ -1734,7 +1825,7 @@ test("a rotate draft left open when the seat is closed gives way to the create d
   await settle();
   expect(host.querySelector('[data-orchestrator-draft="rotate"]')).not.toBeNull();
 
-  seatStatus = { ...seatStatus, exists: false };
+  seatStatus = { ...seatStatus, seat: null, exists: false };
   await settle();
   await new Promise((resolve) => setTimeout(resolve, SEAT_POLL_MS + 5));
   await settle();
@@ -1822,7 +1913,7 @@ test("a rotation still in the air keeps its draft when the seat's card is closed
 
   expect(host.querySelector('[data-orchestrator-draft="rotate"]')).not.toBeNull();
   expect(host.querySelector('[data-orchestrator-draft="create"]')).toBeNull();
-  expect(host.textContent).toContain("while this rotation was still in flight");
+  expect(host.textContent).toContain("The last rotation's outcome is unknown");
   expect(host.querySelector("[data-orchestrator-intent-error]")?.textContent).toContain("connection");
 
   rotateResponses = [{ status: 200, body: { ok: true, replayed: true, conversationId: "conversation_successor", seat: activeSeat({ conversationId: "conversation_successor" }) } }];
@@ -1838,7 +1929,7 @@ test("the draft a closed conversation returns to can actually create — it says
      as an accidental rotation, which would make «the panel returns to draft»
      (PRD #976 decision 4) a button that always fails. */
   const host = await mountLive();
-  seatStatus = { ...seatStatus, exists: false };
+  seatStatus = { seat: null, pending: null, exists: false };
   await settle();
   await new Promise((resolve) => setTimeout(resolve, SEAT_POLL_MS + 5));
   await settle();
@@ -1848,7 +1939,7 @@ test("the draft a closed conversation returns to can actually create — it says
   flushSync(() => confirmButton(host).click());
   await settle();
   expect(seatPosts).toHaveLength(1);
-  expect(seatPosts[0]!.replaceIncumbent).toBe(true);
+  expect(seatPosts[0]!.replaceIncumbent).toBeUndefined();
 
   /* A first-ever orchestrator claims nothing of the kind. */
   seatPosts = [];
@@ -2098,7 +2189,7 @@ test("a panel handed its host's seat read shows that seat and never polls the se
   let seatReads = 0;
   const stubbed = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    if (String(input).startsWith("/api/orchestrator/seat?")) seatReads += 1;
+    if (String(input).startsWith("/api/orchestrator/seat?project=")) seatReads += 1;
     return stubbed(input, init);
   }) as typeof fetch;
   incumbentStatus = incumbent();

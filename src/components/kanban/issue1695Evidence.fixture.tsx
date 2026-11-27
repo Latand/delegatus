@@ -4559,6 +4559,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (SCENARIO === "account-row" && /^\/api\/(?:accounts|transfer\/accounts|account-project-bindings|limits\/history)/.test(url.pathname)) return serverFetch(input, init);
   if (DECISIONS === "secrets" && url.pathname.startsWith("/api/secret-requests/")) return serverFetch(input, init);
   const method = (init?.method ?? "GET").toUpperCase();
+  // #4273's rendered driver owns the seat and transcript responses so its
+  // loading/opened/missing states are driven by the configured response map.
+  if (SCENARIO === "seat-head" && params.get("seat-driver") === "1"
+    && url.pathname.startsWith("/api/orchestrator/seat")) return serverFetch(url.pathname + url.search, init);
   if (FIRST_RUN) {
     const answered = firstRunAnswer(url, method, init);
     if (answered) return answered;

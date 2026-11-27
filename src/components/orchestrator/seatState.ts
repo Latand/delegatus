@@ -1,7 +1,7 @@
 import { ROTATION_THRESHOLD_FRACTION } from "@/lib/orchestrator/contextPolicy";
 
 import { isAccountMutationContention } from "@/lib/accounts/contentionMessage";
-import { currentConversationFile } from "@/lib/accounts/identity";
+import { currentConversationFile, isArchivedPredecessor } from "@/lib/accounts/identity";
 import type { Locale, MessageKey, TFunction } from "@/lib/i18n";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateStale } from "@/lib/orchestrator/prompt";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
@@ -487,7 +487,7 @@ export function rotateMandateLine(t: TFunction, view: RotateMandateView): string
  *  - `dead` — the host is gone, retired or unresumable; recovery is the
  *    banner's, and rotation is the way forward.
  */
-export type SeatLiveness = "resolving" | "live" | "waiting" | "stalled" | "resumable" | "dead";
+export type SeatLiveness = "resolving" | "live" | "waiting" | "stalled" | "resumable" | "dead" | "missing";
 
 /** What the dock's badge says from shared task motion, while retaining stronger
     lifecycle words for stalled, resumable, dead and unresolved seats. */
@@ -573,12 +573,25 @@ export function resolveSeatFile(input: {
   currentPath: string | null;
 }): FileEntry | null {
   if (!input.conversationId) return null;
+  // Once status supplies an incumbent generation, a conversation-id hit may
+  // still be an archived stand-in. Bind only that generation and let the
+  // targeted transcript endpoint fill a board-window miss.
+  if (input.currentPath) {
+    const current = input.files.find((file) => file.path === input.currentPath);
+    if (current && !isArchivedPredecessor(current)) return current;
+    // The incumbent can still name a deleted or archived activation generation
+    // while the board already holds its replacement under the same durable id.
+    const recovered = currentConversationFile(input.files, input.conversationId);
+    return recovered && !isArchivedPredecessor(recovered) ? recovered : null;
+  }
   const byId = currentConversationFile(input.files, input.conversationId);
-  if (byId) return byId;
+  if (byId && !isArchivedPredecessor(byId)) return byId;
+  if (byId && isArchivedPredecessor(byId)) return null;
   for (const path of [input.currentPath, input.seatPath]) {
     if (!path) continue;
     const entry = input.files.find((file) => file.path === path);
     if (!entry) continue;
+    if (isArchivedPredecessor(entry)) continue;
     /* The entry a path names may itself be a retired generation; its own id
        resolves forward to the one the operator is watching. */
     return (entry.conversationId ? currentConversationFile(input.files, entry.conversationId) : null) ?? entry;
@@ -647,12 +660,15 @@ export function deriveOrchestratorPanelState(input: {
   /** How long the dock has been unable to bind this seat's conversation, or
       null while it is bound (issue #1182). */
   unboundForMs?: number | null;
+  /** The direct seat transcript read reached a terminal outcome without a file. */
+  transcriptMissing?: boolean;
+  transcriptPending?: boolean;
   /** Epoch SECONDS, for the one reading that ages: the attention queue's
       stalled tier. Defaults to the wall clock, exactly as `attentionId` does. */
   now?: number;
 }): OrchestratorPanelState {
   const { status } = input;
-  const active = status?.seat && status.exists ? status.seat : null;
+  const active = status?.seat && (status.exists || input.file !== null || input.transcriptPending || input.transcriptMissing) ? status.seat : null;
   const pending = status?.pending ?? null;
   const clientError = unsettledClientError(status, input.submitFailure);
   const failure = currentSeatFailure(status?.lastFailure ?? null, active, status?.hostObservation ?? null);
@@ -661,7 +677,7 @@ export function deriveOrchestratorPanelState(input: {
   const failureTime = pending?.intent.error ? undefined : failure?.terminalizedAt;
 
   if (active?.conversationId) {
-    const liveness = seatLivenessOf({
+    const liveness = input.transcriptMissing ? "missing" : seatLivenessOf({
       file: input.file,
       surface: input.surface,
       incumbent: input.incumbent ?? null,
@@ -673,7 +689,7 @@ export function deriveOrchestratorPanelState(input: {
       conversationId: active.conversationId,
       liveness,
       attention: input.file ? attentionId(input.file, input.now) : null,
-      bindFailure: bindFailureOf({
+      bindFailure: !input.file && input.transcriptMissing ? "catalog" : bindFailureOf({
         liveness,
         hostLive: input.hostLive === true,
         file: input.file,

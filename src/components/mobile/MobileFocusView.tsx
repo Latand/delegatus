@@ -424,7 +424,9 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
   const projectCwd = useMemo(() => draftWorkingDirectory(files, project), [files, project]);
   const seatRead = useOrchestratorSeat(project, projectCwd || undefined);
   const seatStatus = seatRead.status;
-  const seatConversationId = seatStatus?.exists ? seatStatus.seat?.conversationId ?? null : null;
+  // A missing activation path may already have recovered to a catalogued
+  // generation. Keep seat actions attached to that durable conversation id.
+  const seatConversationId = seatStatus?.seat?.conversationId ?? null;
   const seatKey = useMemo(() => {
     if (!seatConversationId) return null;
     const seated = layout.nodes.find((node) => node.file.conversationId === seatConversationId);

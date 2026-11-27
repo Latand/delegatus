@@ -143,6 +143,37 @@ test("REGRESSION (#1757): the seat read carries the last FAILED attempt, so its 
   });
 });
 
+test("a deleted activation transcript remains a designated seat in the real status response", async () => {
+  const missingPath = path.join(sandbox, "transcripts", "deleted-seat.jsonl");
+  beginOrchestratorSeatIntent({
+    project: "proj-missing-transcript",
+    mandate: "keep the seat visible",
+    clientRequestId: "req_missing_transcript",
+    mode: "existing",
+    now: "2026-11-22T10:00:00.000Z",
+  });
+  completeOrchestratorSeatIntent({
+    project: "proj-missing-transcript",
+    clientRequestId: "req_missing_transcript",
+    conversationId: "conversation_missing_transcript",
+    path: missingPath,
+    engine: "claude",
+    now: "2026-11-22T10:00:01.000Z",
+  });
+
+  const deleted = await seatGet(new NextRequest("http://127.0.0.1/api/orchestrator/seat?project=proj-missing-transcript"));
+  expect(deleted.status).toBe(200);
+  expect(await deleted.json()).toMatchObject({
+    seat: { conversationId: "conversation_missing_transcript", path: missingPath },
+    pending: null,
+    exists: false,
+  });
+
+  const closed = await seatGet(new NextRequest("http://127.0.0.1/api/orchestrator/seat?project=proj-closed"));
+  expect(closed.status).toBe(200);
+  expect(await closed.json()).toMatchObject({ seat: null, pending: null, exists: false });
+});
+
 test("the seat read reports the Viewer MCP definition resolved for the project cwd", async () => {
   const project = path.join(sandbox, "project");
   fs.mkdirSync(path.join(project, ".git"), { recursive: true });

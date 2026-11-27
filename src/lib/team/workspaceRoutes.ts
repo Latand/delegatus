@@ -116,6 +116,7 @@ export const WORKSPACE_ROUTES = {
   "/api/orchestrator/rotate": "project",
   "/api/orchestrator/seat": "project",
   "/api/orchestrator/seat/status": "project",
+  "/api/orchestrator/seat/transcript": "project",
   "/api/peer": "peer",
   "/api/peer/[...path]": "peer",
   "/api/peer/v1/[...path]": "peer",

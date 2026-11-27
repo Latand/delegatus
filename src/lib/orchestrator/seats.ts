@@ -321,6 +321,19 @@ export function orchestratorSeatFor(project: string): {
   };
 }
 
+/** The transcript endpoint needs only the active slot, and its final race
+    check needs that slot again. Keep terminalized history out of both reads. */
+export function orchestratorSeatSlotFor(project: string): {
+  active: OrchestratorSeat | null;
+  pending: OrchestratorSeat | null;
+} {
+  const { active, pending } = orchestratorSeatIn(readSeatParts(["slots"]), project);
+  return {
+    active: active ? cloneOrchestratorSeat(active) : null,
+    pending: pending ? cloneOrchestratorSeat(pending) : null,
+  };
+}
+
 /**
  * The same answer, from a record the caller has ALREADY read.
  *

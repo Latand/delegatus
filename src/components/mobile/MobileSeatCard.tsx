@@ -22,7 +22,6 @@ import { useOpenDecisionCount } from "@/components/decisions/DecisionColumn";
 import {
   classifySeatFailure,
   deriveOrchestratorPanelState,
-  resolveSeatFile,
   newSeatRequestId,
   seatBindPending,
   seatRequestSettled,
@@ -35,6 +34,7 @@ import { useOrchestratorSeat, type OrchestratorSeatRead } from "../orchestrator/
 import { seatMandateDelivery, useSeatConfirm } from "../orchestrator/useSeatConfirm";
 import { incumbentHostLive } from "../orchestrator/incumbent";
 import { useSeatBindingFeedback } from "../orchestrator/useSeatBindingFeedback";
+import { useSeatFile } from "../orchestrator/useSeatFile";
 import { useSeatSurface } from "../orchestrator/useSeatSurface";
 import { MobileMeter } from "./MobileMeter";
 import { MobileOrchestratorSheet, SeatBadge, seatBadgeReading, type SeatConfirmPayload, type SeatRotateFlow, type SeatTickFlow } from "./MobileOrchestratorSheet";
@@ -209,7 +209,7 @@ export function MobileSeatCard({
   }, [sheetOpen, arm]);
 
   const seatConversationId = status?.seat?.conversationId ?? null;
-  const seated = Boolean(seatConversationId && status?.exists);
+  const seated = Boolean(seatConversationId && status?.seat);
   /* The incumbent's wear and parameters are a question only while the sheet
      is showing them or a rotate draft is about to prefill from them: the card
      itself carries the board's own reading, so a phone that never opens the
@@ -222,10 +222,14 @@ export function MobileSeatCard({
   const incumbent = read && read.project === project && read.conversationId === seatConversationId ? read : null;
   const currentPath = incumbent?.transcriptPath ?? null;
   const seatPath = status?.seat?.path ?? null;
-  const file = useMemo(
-    () => resolveSeatFile({ files, conversationId: seatConversationId, currentPath, seatPath }),
-    [files, seatConversationId, currentPath, seatPath],
-  );
+  const { file, transcriptMissing, transcriptPending, retryTranscript } = useSeatFile({
+    project, files, conversationId: seatConversationId, seatPath, currentPath, enabled: seated && sheetOpen,
+  });
+  /* `exists: false` may mean the activation path vanished while the current
+     generation still exists. Keep the seat row in its reading state so a tap
+     opens the seat sheet and starts the bounded lookup instead of opening a
+     create draft before that lookup can run. */
+  const awaitingTranscriptResolution = seated && status?.exists === false && file === null && !transcriptMissing;
   const surface = useSeatSurface(file);
   const unboundForMs = useSeatBindingFeedback({
     project,
@@ -255,6 +259,8 @@ export function MobileSeatCard({
     incumbent,
     hostLive: !readStale && incumbentHostLive(incumbent),
     unboundForMs,
+    transcriptMissing,
+    transcriptPending: transcriptPending || awaitingTranscriptResolution,
   });
   const view = seatCardView(state, { conversationReady: Boolean(file) });
 
@@ -528,6 +534,7 @@ export function MobileSeatCard({
       onRecheck={() => {
         void refresh();
         void refreshIncumbent();
+        retryTranscript();
         requestFilesRefresh();
         void refreshRuntime();
       }}

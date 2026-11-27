@@ -47,7 +47,7 @@ export function requestWorkspaceScope(request: Request): Scope | null {
 }
 
 /** Resolve authority from persisted ownership before accepting a caller's hint. */
-export async function workspaceConversationResolver(): Promise<(identity: string) => string | null> {
+export async function workspaceConversationResolver(options?: { skipColdKeyInitialization?: boolean }): Promise<(identity: string) => string | null> {
   const [{ agentRegistry }, { conversationProjectKey }, { conversationCatalogEntry }] = await Promise.all([
     import("@/lib/agent/registry"), import("@/lib/accounts/conversationProject"), import("@/lib/scanner/conversationCatalog"),
   ]);
@@ -55,13 +55,13 @@ export async function workspaceConversationResolver(): Promise<(identity: string
     const registry = agentRegistry();
     if (identity.startsWith("spawn:")) {
       const receipt = registry.spawnReceipt(identity.slice(6));
-      const owner = receipt ? registry.conversation(receipt.conversationId) : null;
+      const owner = receipt ? registry.conversation(receipt.conversationId, options) : null;
       return receipt ? conversationProjectKey(owner?.projectOwnership, receipt.launchProfile) : null;
     }
     const conversation = identity.startsWith("conversation_")
-      ? registry.conversation(identity as `conversation_${string}`)
-      : registry.conversationForPath(identity);
-    const profile = conversation?.generations.at(-1)?.launchProfile ?? registry.launchProfileForPath(identity);
+      ? registry.conversation(identity as `conversation_${string}`, options)
+      : registry.conversationForPath(identity, options);
+    const profile = conversation?.generations.at(-1)?.launchProfile ?? registry.launchProfileForPath(identity, options);
     const entry = conversationCatalogEntry(identity);
     return conversationProjectKey(conversation?.projectOwnership, profile, entry ? { project: entry.project } : {});
   };

@@ -902,6 +902,7 @@ export async function openFixture(
      an operator's screen draws it; everything else is measured at 1. */
   deviceScaleFactor = 1,
   now?: Date,
+  frozenAt?: Date,
 ) {
   const context = await browser.newContext({
     viewport, deviceScaleFactor, colorScheme: scheme, reducedMotion: motion,
@@ -911,6 +912,10 @@ export async function openFixture(
   if (lang) await context.addInitScript(`try { localStorage.setItem("llv_lang", ${JSON.stringify(lang)}); } catch {}`);
   const page = await context.newPage();
   if (now) await page.clock.setFixedTime(now);
+  if (frozenAt) {
+    await page.clock.install({ time: frozenAt });
+    await page.clock.pauseAt(frozenAt);
+  }
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.goto(url);

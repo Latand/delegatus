@@ -1,11 +1,12 @@
-import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, jest, mock, test } from "bun:test";
 import { Window as HappyWindow } from "happy-dom";
-import { useState } from "react";
+import { act, useState } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
 import { emptyStore } from "@/components/runtime/runtimeModel";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
+import { translate } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 
 /*
@@ -69,6 +70,7 @@ const { fakeHistory } = await import("./mobileNavTestHistory");
 const { resetOrchestratorSeatCacheForTests } = await import("../orchestrator/useOrchestratorSeat");
 
 const { resetOrchestratorIncumbentCacheForTests } = await import("../orchestrator/useOrchestratorIncumbent");
+const { SEAT_TRANSCRIPT_TIMEOUT_MS } = await import("../orchestrator/useSeatFile");
 const { FILES_CHANGED_EVENT } = await import("@/lib/filesEvents");
 
 interface SeatAnswer { seat: unknown; pending: unknown; exists: boolean; deputies?: unknown[] }
@@ -81,6 +83,7 @@ const requests: Recorded[] = [];
 const realFetch = globalThis.fetch;
 let incumbentAnswer: Record<string, unknown> | null = null;
 let runtimeRefreshes = 0;
+let transcriptAnswer: (signal?: AbortSignal | null) => Promise<Response> = async () => Response.json({ conversationId: null, file: null });
 
 /* The launch module's account catalog; empty unless a test names one. */
 let claudeAccounts: { active: string; accounts: Array<Record<string, unknown>> } = { active: "", accounts: [] };
@@ -89,6 +92,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const method = init?.method ?? "GET";
   const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
   requests.push({ url, method, body });
+  if (url.startsWith("/api/orchestrator/seat/transcript?")) return transcriptAnswer(init?.signal);
   if (url.startsWith("/api/orchestrator/seat/status")) return Response.json(incumbentAnswer);
   if (url.startsWith("/api/orchestrator/seat") && method === "POST") return postSeat(body);
   if (url.startsWith("/api/orchestrator/seat")) {
@@ -114,6 +118,7 @@ beforeEach(() => {
   resetOrchestratorSeatCacheForTests();
   resetOrchestratorIncumbentCacheForTests();
   incumbentAnswer = null;
+  transcriptAnswer = async () => Response.json({ conversationId: null, file: null });
   runtimeRefreshes = 0;
   nav = createMobileNav(navHost());
   requests.length = 0;
@@ -121,6 +126,7 @@ beforeEach(() => {
   postSeat = async () => new Response(JSON.stringify({ ok: true, state: "starting" }), { status: 200, headers: { "content-type": "application/json" } });
 });
 afterEach(() => {
+  jest.useRealTimers();
   for (const root of roots) flushSync(() => root.unmount());
   roots.clear();
   setLogFeedDependenciesForTests(null);
@@ -885,8 +891,8 @@ test("an unreadable seat offers a re-read that recovers the row without a page r
 });
 
 
-test("missing-catalog board card offers Re-bind after 10s and clears only when the catalog read delivers its file", async () => {
-  seatAnswer = { seat: seat(), pending: null, exists: true };
+test("a missing seat transcript keeps the path, board link, rotation and Re-bind in the sheet", async () => {
+  seatAnswer = { seat: seat(), pending: null, exists: false };
   incumbentAnswer = { project: "atlas", designated: true, conversationId: "conv_orchestrator", engine: "claude", model: "opus", liveness: { hostState: "alive", lifecycle: "running" } };
   // The board-card host, without mounting a conversation screen behind it.
   const cardView = (files: FileEntry[]) => <MobileNavContext.Provider value={nav}>
@@ -897,19 +903,36 @@ test("missing-catalog board card offers Re-bind after 10s and clears only when t
   const root = createRoot(host);
   roots.add(root);
   flushSync(() => root.render(cardView([])));
-  await settle(root, cardView([]));
-  const rerender = async (files: FileEntry[]) => {
-    flushSync(() => root.render(cardView(files)));
-    await settle(root, cardView(files));
-  };
-  flushSync(() => openButton(host).click());
-  await settle(root, cardView([]));
+  await settle(root, cardView([]), 12);
+  jest.useFakeTimers();
+  const actGlobal = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+  const previousActEnvironment = actGlobal.IS_REACT_ACT_ENVIRONMENT;
+  actGlobal.IS_REACT_ACT_ENVIRONMENT = true;
+  try {
+    await act(async () => {
+      openButton(host).click();
+      for (let turn = 0; turn < 64; turn += 1) await Promise.resolve();
+      root.render(cardView([]));
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(SEAT_TRANSCRIPT_TIMEOUT_MS);
+      for (let turn = 0; turn < 64; turn += 1) await Promise.resolve();
+      root.render(cardView([]));
+    });
+  } finally {
+    jest.useRealTimers();
+    if (previousActEnvironment === undefined) delete actGlobal.IS_REACT_ACT_ENVIRONMENT;
+    else actGlobal.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
+  }
   const rebind = () => host.querySelector<HTMLButtonElement>("[data-orchestrator-rebind]");
   expect(sheet(host)).not.toBeNull();
-  expect(rebind()).toBeNull();
-  await new Promise((resolve) => setTimeout(resolve, 10_050));
-  await settle(root, cardView([]));
   expect(host.querySelector('[data-orchestrator-bind-failure="catalog"]')).not.toBeNull();
+  expect(sheet(host)!.textContent).toContain("Transcript not found");
+  expect(host.querySelector('[data-mobile2-seat-badge="danger"]')?.textContent).toBe(translate("en", "orchPanel.badgeTranscriptMissing"));
+  expect(sheet(host)!.textContent).toContain(orchestrator.path);
+  expect(sheet(host)!.textContent).not.toContain("Opening the conversation");
+  expect(host.querySelector("[data-orchestrator-open-board]")?.getAttribute("href")).toBe("#c=conv_orchestrator");
+  expect(host.querySelector("[data-orchestrator-rotate]")).not.toBeNull();
   expect(rebind()!.className).toContain("min-h-11");
   const storageBefore = dom.localStorage.length;
   const before = requests.length;
@@ -917,7 +940,7 @@ test("missing-catalog board card offers Re-bind after 10s and clears only when t
   let deliver = false;
   const refreshCatalog = () => {
     catalogReads += 1;
-    if (deliver) void rerender([orchestrator]);
+    if (deliver) root.render(cardView([orchestrator]));
   };
   dom.addEventListener(FILES_CHANGED_EVENT, refreshCatalog);
   try {
@@ -935,6 +958,7 @@ test("missing-catalog board card offers Re-bind after 10s and clears only when t
     const reads = requests.slice(before);
     expect(reads.filter((r) => r.url.startsWith("/api/orchestrator/seat/status")).length).toBeGreaterThanOrEqual(2);
     expect(reads.filter((r) => r.url.startsWith("/api/orchestrator/seat?")).length).toBeGreaterThanOrEqual(2);
+    expect(reads.some((r) => r.url.startsWith("/api/orchestrator/seat/transcript?"))).toBe(true);
     expect(reads.every((r) => r.method === "GET")).toBe(true);
     expect(dom.localStorage.length).toBe(storageBefore);
   } finally {
@@ -959,18 +983,87 @@ async function createFromDraft(files: FileEntry[]) {
 }
 
 test("a create on a vacated seat carries replaceIncumbent on the first attempt", async () => {
-  seatAnswer = { seat: seat(), pending: null, exists: false };
+  seatAnswer = { seat: null, pending: null, exists: false };
   const { confirm } = await createFromDraft([conversation({})]);
   await confirm();
 
   const posts = seatPosts();
   expect(posts).toHaveLength(1);
-  expect(posts[0]!.body.replaceIncumbent).toBe(true);
-  expect(posts[0]!.body.expectedIncumbentSeatEpoch).toBe(4);
+  expect(posts[0]!.body.replaceIncumbent).toBeUndefined();
+  expect(posts[0]!.body.expectedIncumbentSeatEpoch).toBeUndefined();
+});
+
+test("a predecessor row cannot stand in for the mobile incumbent path", async () => {
+  seatAnswer = { seat: seat(), pending: null, exists: false };
+  const current = { ...orchestrator, path: "/orchestrator-current.jsonl", name: "orchestrator-current.jsonl" };
+  incumbentAnswer = { project: "atlas", designated: true, conversationId: "conv_orchestrator", transcriptPath: current.path,
+    engine: "claude", model: "opus", liveness: { hostState: "alive", lifecycle: "running" } };
+  transcriptAnswer = async () => Response.json({ conversationId: "conv_orchestrator", file: current });
+  const predecessor = { ...orchestrator, path: "/orchestrator-archived.jsonl", migratedTo: current.path } as FileEntry;
+  const { host, root } = await mount([predecessor]);
+  const actGlobal = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+  const previousActEnvironment = actGlobal.IS_REACT_ACT_ENVIRONMENT;
+  actGlobal.IS_REACT_ACT_ENVIRONMENT = true;
+  try {
+    await act(async () => {
+      openButton(host).click();
+      for (let turn = 0; turn < 24; turn += 1) await Promise.resolve();
+      root.render(view([predecessor]));
+    });
+  } finally {
+    if (previousActEnvironment === undefined) delete actGlobal.IS_REACT_ACT_ENVIRONMENT;
+    else actGlobal.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
+  }
+  expect(requests.filter((request) => request.url.startsWith("/api/orchestrator/seat/transcript?")).length).toBeGreaterThan(0);
+  expect(host.querySelector('[data-mobile2-seat-state="live"]')).not.toBeNull();
+  expect(sheet(host)?.textContent).not.toContain("Transcript not found");
+});
+
+test("a stalled mobile transcript body aborts at the deadline and exposes recovery actions", async () => {
+  seatAnswer = { seat: seat(), pending: null, exists: false };
+  incumbentAnswer = { project: "atlas", designated: true, conversationId: "conv_orchestrator", engine: "claude", model: "opus",
+    liveness: { hostState: "alive", lifecycle: "running" } };
+  let signal: AbortSignal | null | undefined;
+  transcriptAnswer = async (requestSignal) => {
+    signal = requestSignal;
+    return new Response(new ReadableStream({
+      start(controller) {
+        requestSignal?.addEventListener("abort", () => controller.error(new DOMException("Aborted", "AbortError")), { once: true });
+      },
+    }));
+  };
+  const { host, root } = await mount([]);
+  jest.useFakeTimers();
+  const actGlobal = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+  const previousActEnvironment = actGlobal.IS_REACT_ACT_ENVIRONMENT;
+  actGlobal.IS_REACT_ACT_ENVIRONMENT = true;
+  try {
+    await act(async () => {
+      openButton(host).click();
+      for (let turn = 0; turn < 16; turn += 1) await Promise.resolve();
+      root.render(view([]));
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(SEAT_TRANSCRIPT_TIMEOUT_MS);
+      for (let turn = 0; turn < 64; turn += 1) await Promise.resolve();
+      root.render(view([]));
+    });
+  } finally {
+    jest.useRealTimers();
+    if (previousActEnvironment === undefined) delete actGlobal.IS_REACT_ACT_ENVIRONMENT;
+    else actGlobal.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
+  }
+  expect(signal?.aborted).toBe(true);
+  expect(sheet(host)?.textContent).toContain("Transcript not found");
+  expect(host.querySelector('[data-mobile2-seat-badge="danger"]')?.textContent).toBe(translate("en", "orchPanel.badgeTranscriptMissing"));
+  expect(sheet(host)?.textContent).toContain("/orchestrator.jsonl");
+  expect(host.querySelector("[data-orchestrator-open-board]")).not.toBeNull();
+  expect(host.querySelector("[data-orchestrator-rotate]")).not.toBeNull();
+  expect(host.textContent).not.toContain("Opening the conversation");
 });
 
 test("a retry after a refused create on a vacated seat still carries replaceIncumbent (fresh key)", async () => {
-  seatAnswer = { seat: seat(), pending: null, exists: false };
+  seatAnswer = { seat: null, pending: null, exists: false };
   postSeat = async () => new Response(JSON.stringify({ error: "orchestrator cwd could not be resolved" }), { status: 400, headers: { "content-type": "application/json" } });
   const { host, confirm } = await createFromDraft([conversation({})]);
   await confirm();
@@ -981,12 +1074,12 @@ test("a retry after a refused create on a vacated seat still carries replaceIncu
   const posts = seatPosts();
   expect(posts).toHaveLength(2);
   expect(posts[1]!.body.clientRequestId).not.toBe(posts[0]!.body.clientRequestId);
-  expect(posts.map((post) => post.body.replaceIncumbent)).toEqual([true, true]);
-  expect(posts.map((post) => post.body.expectedIncumbentSeatEpoch)).toEqual([4, 4]);
+  expect(posts.map((post) => post.body.replaceIncumbent)).toEqual([undefined, undefined]);
+  expect(posts.map((post) => post.body.expectedIncumbentSeatEpoch)).toEqual([undefined, undefined]);
 });
 
 test("a same-key replay after a lost reply on a vacated seat still carries replaceIncumbent", async () => {
-  seatAnswer = { seat: seat(), pending: null, exists: false };
+  seatAnswer = { seat: null, pending: null, exists: false };
   postSeat = async () => { throw new TypeError("network dropped"); };
   const { host, confirm } = await createFromDraft([conversation({})]);
   await confirm();
@@ -997,8 +1090,8 @@ test("a same-key replay after a lost reply on a vacated seat still carries repla
   const posts = seatPosts();
   expect(posts).toHaveLength(2);
   expect(posts[1]!.body.clientRequestId).toBe(posts[0]!.body.clientRequestId);
-  expect(posts.map((post) => post.body.replaceIncumbent)).toEqual([true, true]);
-  expect(posts.map((post) => post.body.expectedIncumbentSeatEpoch)).toEqual([4, 4]);
+  expect(posts.map((post) => post.body.replaceIncumbent)).toEqual([undefined, undefined]);
+  expect(posts.map((post) => post.body.expectedIncumbentSeatEpoch)).toEqual([undefined, undefined]);
 });
 
 test("a create with no seat record never carries replaceIncumbent, on the first attempt or the retry", async () => {
