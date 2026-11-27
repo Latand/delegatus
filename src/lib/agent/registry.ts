@@ -419,7 +419,7 @@ export interface SpawnReceipt {
   preHostWriterRefusal?: true;
   /** Pre-session custody. `preparing` proves no engine exec was admitted;
       `executing` without process evidence remains an uncertain launch. */
-  hostSetup?: { phase: "preparing" | "executing"; processes: ProcessIdentity[]; cleanupConfirmed?: true; execPermitGranted?: true; adoptionClaimEpoch?: number };
+  hostSetup?: { phase: "preparing" | "executing"; processes: ProcessIdentity[]; cleanupConfirmed?: true; execPermitGranted?: true; execProcessRecorded?: true; adoptionClaimEpoch?: number };
   /** Revocation tombstone observed by the admission writer. Legacy means none. */
   memberRevocationId?: string | null;
   state: "starting" | "pane-bound" | "host-verified" | "prompt-delivered" | "path-pending" | "completed" | "failed" | "conflicted";
@@ -2348,7 +2348,8 @@ function unconfirmedLaunchSetup(receipt: LaunchSetupReceipt) {
 }
 
 function missingSetupProcess(setup: NonNullable<SpawnReceipt["hostSetup"]>): boolean {
-  return (setup.phase === "executing" || setup.execPermitGranted === true) && setup.processes.length === 0;
+  return (setup.phase === "executing" || setup.execPermitGranted === true)
+    && (setup.processes.length === 0 || setup.execPermitGranted === true && setup.execProcessRecorded !== true);
 }
 
 export function launchSetupIdentities(receipt: LaunchSetupReceipt): ProcessIdentity[] {
@@ -2369,6 +2370,7 @@ function failedLaunchSetupCanBeConfirmed(receipt: SpawnReceipt) {
     && !receipt.pane && !receipt.verifiedHost && !receipt.artifactPath && !receipt.completionMode
     && receipt.artifactLifecycle !== "materialized"
     && setup.adoptionClaimEpoch === undefined && setup.processes.length > 0
+    && (setup.execPermitGranted !== true || setup.execProcessRecorded === true)
     && setup.processes.every(identity => processIdentityStatus(identity) === "dead");
 }
 
@@ -4979,6 +4981,7 @@ function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnRe
   if (value.hostSetup && (!["preparing", "executing"].includes(value.hostSetup.phase)
     || !Array.isArray(value.hostSetup.processes)
     || value.hostSetup.execPermitGranted !== undefined && value.hostSetup.execPermitGranted !== true
+    || value.hostSetup.execProcessRecorded !== undefined && value.hostSetup.execProcessRecorded !== true
     || value.hostSetup.adoptionClaimEpoch !== undefined && (!Number.isSafeInteger(value.hostSetup.adoptionClaimEpoch)
       || value.hostSetup.adoptionClaimEpoch < 1))) throw new Error("structured setup custody is malformed");
   if (value.proactiveTaskIds !== undefined && (!Array.isArray(value.proactiveTaskIds)
@@ -4998,6 +5001,7 @@ function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnRe
       processes: normalizeStructuredTerminationSurvivors(value.hostSetup.processes)!,
       ...(value.hostSetup.adoptionClaimEpoch === undefined ? {} : { adoptionClaimEpoch: value.hostSetup.adoptionClaimEpoch }),
       ...(value.hostSetup.execPermitGranted === true ? { execPermitGranted: true } : {}),
+      ...(value.hostSetup.execProcessRecorded === true ? { execProcessRecorded: true } : {}),
       ...(value.hostSetup.cleanupConfirmed === true ? { cleanupConfirmed: true } : {}) } : undefined,
     memoryCap: memoryCap ?? undefined,
     clientAttemptId: typeof value.clientAttemptId === "string" ? value.clientAttemptId : null,
@@ -7742,8 +7746,14 @@ export class AgentRegistry {
   launchSetupBlocker(): string | null {
     return this.readKeyed(file => {
       const keys = (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
-        ? this.sqliteStore!.launchSetupKeys() : Object.keys(file.receipts);
-      for (const key of keys) {
+        ? this.sqliteStore!.launchSetupKeys({ after: "", limit: LAUNCH_SETUP_CLEANUP_BATCH + 1 })
+        : Object.keys(file.receipts).filter(key => {
+          const receipt = file.receipts[key]!;
+          return (CLAIMABLE_RECEIPT_STATES.has(receipt.state) && !!receipt.admissionOwner)
+            || (!receipt.key && !!receipt.hostSetup && !receipt.hostSetup.cleanupConfirmed);
+        }).sort().slice(0, LAUNCH_SETUP_CLEANUP_BATCH + 1);
+      const hasMore = keys.length > LAUNCH_SETUP_CLEANUP_BATCH;
+      for (const key of keys.slice(0, LAUNCH_SETUP_CLEANUP_BATCH)) {
         const receipt = file.receipts[key];
         if (!receipt) continue;
         const setup = unconfirmedLaunchSetup(receipt);
@@ -7751,6 +7761,7 @@ export class AgentRegistry {
           return receipt.launchId;
         }
       }
+      if (hasMore) return file.receipts[keys[LAUNCH_SETUP_CLEANUP_BATCH]!]?.launchId ?? keys[LAUNCH_SETUP_CLEANUP_BATCH]!;
       return null;
     }, { skipColdKeyInitialization: true });
   }
@@ -7758,8 +7769,10 @@ export class AgentRegistry {
   /** Advance even past live and unverifiable receipts so a later dead setup
       gets a turn. The cursor only schedules work; the receipt grants custody. */
   async reconcileFailedLaunchSetup(waitDeadlineAt: number): Promise<void> {
+    if (Date.now() >= waitDeadlineAt) return;
     const after = this.launchSetupCleanupAfter;
     const candidates = this.readKeyed(file => {
+      if (Date.now() >= waitDeadlineAt) return [];
       const keys = (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
         ? this.sqliteStore!.launchSetupKeys({ after, limit: LAUNCH_SETUP_CLEANUP_BATCH })
         : Object.keys(file.receipts).filter(key => key > after && file.receipts[key]!.state === "failed"
@@ -8870,6 +8883,7 @@ export class AgentRegistry {
       if (native && !receipt.hostSetup.processes.some(process => sameRecordedProcessIdentity(process, native))) {
         receipt.hostSetup.processes.push(clone(native));
       }
+      if (native) receipt.hostSetup.execProcessRecorded = true;
     }));
     if (!written.acquired) throw new RegistryWriterBusyError("spawn.setup-custody");
   }

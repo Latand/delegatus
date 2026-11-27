@@ -40,6 +40,8 @@ test("a PID namespace change on the same Linux boot keeps a live process unverif
   const current = "linux:boot-a:pidns:pid:[4026532999]";
   expect(bootEpochProvesExit(previous, current)).toBeFalse();
   expect(processIdentityStatus({ pid: 42, startIdentity: "42:start", bootEpoch: previous }, probe({ bootEpoch: () => current }))).toBe("unverified");
+  expect(processIdentityStatus({ pid: 42, startIdentity: "42:start", bootEpoch: previous },
+    probe({ bootEpoch: () => current, pidAlive: () => false }))).toBe("unverified");
   expect(bootEpochProvesExit(previous, "linux:boot-b:pidns:pid:[4026531836]")).toBeTrue();
 });
 

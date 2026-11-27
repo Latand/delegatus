@@ -741,18 +741,20 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     await wait(() => existsSync(readLauncherRecord(h.recordFile)!.requestFile));
   }
 
-  test.each(["settles", "times out"] as const)("a checkout update holds fresh stage reservations while the original setup %s", async outcome => {
-    const h = harness({ relaunch: true, holdBuild: true });
+  test.each(["settles", "times out", "appears at final dispatch"] as const)("a checkout update holds fresh stage reservations while the original setup %s", async outcome => {
+    const h = harness({ relaunch: outcome !== "appears at final dispatch", holdBuild: true });
     const sawSetup = Promise.withResolvers<void>();
-    let pending = true;
+    let pending = outcome !== "appears at final dispatch";
+    let blockerReads = 0;
     const clock = spyOn(performance, "now");
     const drainFile = join(h.deps.dir, "auto-drain.json");
     h.deps.quiet = { runtimeSnapshot: async () => ({ sessions: [] }), pipelines: () => [], presence: () => [],
       launchSetupBlocker: () => {
         if (!existsSync(drainFile)) return null;
+        blockerReads++;
         if (pending && outcome === "times out") clock.mockReturnValueOnce(performance.now() + 60_001);
         sawSetup.resolve();
-        return pending ? "stage-launch" : null;
+        return outcome === "appears at final dispatch" ? blockerReads >= 3 ? "stage-launch" : null : pending ? "stage-launch" : null;
       } };
     setSelfUpdateServiceForTests(h.service);
     const record = readLauncherRecord(h.recordFile)!;
@@ -764,7 +766,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
       h.releaseBuild!(); h.releaseBuild = null;
       await sawSetup.promise;
       expect(existsSync(record.requestFile)).toBe(false);
-      if (outcome === "times out") {
+      if (outcome === "times out" || outcome === "appears at final dispatch") {
         const applyFile = join(h.deps.dir, "apply.json");
         await until(() => JSON.parse(readFileSync(applyFile, "utf8")).state === "failed");
         expect(JSON.parse(readFileSync(applyFile, "utf8")).detail).toContain("launch stage-launch");

@@ -208,6 +208,7 @@ class Changes {
 }
 
 class StaleApplyDispatch extends Error {}
+class LaunchSetupApplyRefusal extends StaleApplyDispatch {}
 
 export class SelfUpdateService {
   readonly changes = new Changes();
@@ -1665,6 +1666,11 @@ export class SelfUpdateService {
   }
 
   private failApply(error: unknown): void {
+    if (error instanceof LaunchSetupApplyRefusal) {
+      if (this.apply.current?.state === "ready") this.apply.patch({ state: "failed", detail: error.message });
+      this.changes.emit();
+      return;
+    }
     if (error instanceof StaleApplyDispatch) { this.changes.emit(); return; }
     if (this.apply.current?.state !== "switching") this.apply.restoreUntaken();
     if (this.apply.current) releaseDrain(this.drainFile, this.apply.current.requestId);
@@ -1723,8 +1729,10 @@ export class SelfUpdateService {
       || record.launcher.pid !== this.apply.current?.launcherPid || record.launcher.startIdentity !== this.apply.current?.launcherIdentity
       || !record.launcher.startIdentity || !this.deps.processAlive(record.launcher.pid, record.launcher.startIdentity)
       || existsSync(record.requestFile) || this.deps.quiet && activity === null
-      || activity !== quietDispatchVersion(this.deps.quiet, this.deps.now()) || blockingLaunch)
-      throw new StaleApplyDispatch(blockingLaunch ? launchSetupRefusal(blockingLaunch) : "Stale apply dispatch was refused; accepted custody is retained");
+      || activity !== quietDispatchVersion(this.deps.quiet, this.deps.now()) || blockingLaunch) {
+      if (blockingLaunch) throw new LaunchSetupApplyRefusal(launchSetupRefusal(blockingLaunch));
+      throw new StaleApplyDispatch("Stale apply dispatch was refused; accepted custody is retained");
+    }
     if (current.record.launcher.relaunch === 1) {
       const occupied = this.reserve(current.record, () => this.apply.send(current.record!), this.apply.current!.requestId);
       if (occupied) throw new StaleApplyDispatch(occupied.ok ? "Apply reservation failed" : occupied.error);
@@ -1747,8 +1755,10 @@ export class SelfUpdateService {
       if (!finalRecord || finalRecord.launcher.pid !== intent.launcherPid || finalRecord.launcher.startIdentity !== intent.launcherIdentity
         || JSON.stringify(finalIntent) !== binding || JSON.stringify(this.apply.current) !== binding
         || this.deps.quiet && activity === null || activity !== quietDispatchVersion(this.deps.quiet, this.deps.now())
-        || lateBlockingLaunch || existsSync(current.record.requestFile))
-        throw new StaleApplyDispatch(lateBlockingLaunch ? launchSetupRefusal(lateBlockingLaunch) : "Stale credential preflight was refused; accepted custody is retained");
+        || lateBlockingLaunch || existsSync(current.record.requestFile)) {
+        if (lateBlockingLaunch) throw new LaunchSetupApplyRefusal(launchSetupRefusal(lateBlockingLaunch));
+        throw new StaleApplyDispatch("Stale credential preflight was refused; accepted custody is retained");
+      }
       writeAtomic(launcherControlFile(current.record.requestFile, "trial"), {
         requestId: intent.requestId, target: intent.target, rollbackPointer: intent.rollbackPointer, previousEntry, state: "starting", at: intent.startedAt,
       });

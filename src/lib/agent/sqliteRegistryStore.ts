@@ -486,7 +486,7 @@ const launchSetupRows = `collection='receipts' AND (
     AND json_extract(value_json,'$.hostSetup.cleanupConfirmed') IS NOT 1)
 )`;
 const registryLaunchSetupIndexes = declaredIndexes([
-  `CREATE INDEX IF NOT EXISTS registry_launch_setup ON registry_rows(${receiptState},row_key) WHERE ${launchSetupRows}`,
+  `CREATE INDEX IF NOT EXISTS registry_launch_setup_by_key ON registry_rows(row_key) WHERE ${launchSetupRows}`,
 ]);
 const registryRowIndexes = declaredIndexes([
   `CREATE INDEX IF NOT EXISTS registry_busy_carriers ON registry_rows(collection,${carrierTurn},row_order,row_key,${Object.values(carrierColumns).join(",")}) WHERE ${busyCarrierRows}`,
@@ -5284,14 +5284,14 @@ export class SqliteAgentRegistryStore {
     return this.db.query<{ row_key: string }, string[]>(sql).all(...values).map(row => row.row_key);
   }
 
-  /** Current hot and archived receipts share this index. The cleanup sweep
-      seeks only failed receipts and limits the keys before loading bodies. */
-  launchSetupKeys(cleanup?: { after: string; limit: number }): string[] {
-    const index = this.options.readOnly || this.options.allowArchiveMigration === false ? "" : " INDEXED BY registry_launch_setup";
+  /** Current hot and archived receipts share this index. Callers limit keys
+      before loading bodies, and cursor seeks remain ordered by receipt key. */
+  launchSetupKeys(selection: { after: string; limit: number }): string[] {
+    const index = this.options.readOnly || this.options.allowArchiveMigration === false ? "" : " INDEXED BY registry_launch_setup_by_key";
     return this.db.query<{ row_key: string }, (string | number)[]>(`SELECT row_key
       FROM registry_rows${index} WHERE ${launchSetupRows}
-      ${cleanup ? `AND ${receiptState}='failed' AND row_key>? ORDER BY row_key LIMIT ?` : ""}`)
-      .all(...(cleanup ? [cleanup.after, cleanup.limit] : [])).map(row => row.row_key);
+      AND row_key>? ORDER BY row_key LIMIT ?`)
+      .all(selection.after, selection.limit).map(row => row.row_key);
   }
 
   /** Diagnostic attribution needs one client id, including a conserving

@@ -117,11 +117,19 @@ export function processIdentityStatus(
   probe: ProcessIdentityProbe = defaultProbe,
 ): ProcessIdentityStatus {
   if (!Number.isSafeInteger(identity.pid) || identity.pid <= 0) return "dead";
+  const currentBootEpoch = probe.bootEpoch();
+  const previousLinux = typeof identity.bootEpoch === "string"
+    ? /^linux:([^:]+):pidns:(.+)$/.exec(identity.bootEpoch) : null;
+  const currentLinux = typeof currentBootEpoch === "string"
+    ? /^linux:([^:]+):pidns:(.+)$/.exec(currentBootEpoch) : null;
+  if (previousLinux && currentLinux && previousLinux[1] === currentLinux[1]
+    && previousLinux[2] !== currentLinux[2]) return "unverified";
+  if (identity.bootEpoch && currentBootEpoch && bootEpochProvesExit(identity.bootEpoch, currentBootEpoch)) return "dead";
+  if (previousLinux && !currentLinux && !bootEpochProvesExit(identity.bootEpoch, currentBootEpoch)) return "unverified";
   if (!probe.pidAlive(identity.pid)) return "dead";
   const currentStartIdentity = probe.processIdentity(identity.pid);
   if (identity.startIdentity === null || currentStartIdentity === null) return "unverified";
   if (currentStartIdentity !== identity.startIdentity) return "dead";
-  const currentBootEpoch = probe.bootEpoch();
   if (typeof identity.bootEpoch !== "string" || !identity.bootEpoch || currentBootEpoch === null) {
     return "unverified";
   }

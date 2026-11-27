@@ -143,6 +143,71 @@ test("preparing without recorded process evidence leaves terminal setup cleanup 
   expect(f.registry.spawnReceipt(launchId)!.hostSetup!.cleanupConfirmed).toBeUndefined();
 });
 
+test("a dead detached waiter cannot confirm cleanup while exec evidence is missing", async () => {
+  const at = Date.parse("2026-01-01T00:00:00Z");
+  const registry = new AgentRegistry(join(f.dir, "waiter-only-registry.json"), undefined, undefined,
+    { sqliteMode: "sqlite", now: () => at });
+  setAgentRegistryForTests(registry);
+  const waiter = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"]);
+  const engine = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"]);
+  try {
+    const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: f.dir, transport: "structured" });
+    const { launchId, admissionOwner } = begun.receipt;
+    registry.beginStructuredHostSetup(launchId, admissionOwner!, at);
+    registry.recordStructuredHostSetup(launchId, admissionOwner!);
+    registry.recordStructuredHostSetupWaiter(launchId, admissionOwner!, captureProcessIdentity(waiter.pid));
+    registry.failStructuredSpawn(launchId, "setup custody stopped after exec admission", { announce: false });
+    waiter.kill("SIGKILL");
+    await waiter.exited;
+
+    const p = ports(f.journal);
+    await p.reconcileLaunchSetup!(Date.now() + 1_000);
+    expect(engine.exitCode).toBeNull();
+    expect(p.launchSetupBlocker!()).toBe(launchId);
+    expect(registry.spawnReceipt(launchId)!.hostSetup!.cleanupConfirmed).toBeUndefined();
+
+    engine.kill("SIGKILL");
+    await engine.exited;
+    await p.reconcileLaunchSetup!(Date.now() + 1_000);
+    expect(p.launchSetupBlocker!()).toBe(launchId);
+    expect(registry.spawnReceipt(launchId)!.hostSetup!.cleanupConfirmed).toBeUndefined();
+  } finally {
+    if (waiter.exitCode === null && waiter.signalCode === null) waiter.kill("SIGKILL");
+    if (engine.exitCode === null && engine.signalCode === null) engine.kill("SIGKILL");
+    await Promise.all([waiter.exited, engine.exited]);
+    setAgentRegistryForTests(null);
+    registry.close();
+  }
+});
+
+test("the deploy census bounds receipt payloads and an expired cleanup reads none", async () => {
+  const registry = new AgentRegistry(join(f.dir, "bounded-launch-registry.json"), undefined, undefined,
+    { sqliteMode: "sqlite" });
+  try {
+    const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: f.dir, transport: "structured" });
+    const dead = { pid: 2_000_000_000, startIdentity: "gone", bootEpoch: captureProcessIdentity(process.pid)!.bootEpoch };
+    const source = JSON.parse(JSON.stringify(begun.receipt)) as typeof begun.receipt;
+    registry.agentStateWrite(file => {
+      for (let index = 0; index < 40; index++) {
+        const launchId = `bounded-launch-${String(index).padStart(3, "0")}`;
+        file.receipts[launchId] = { ...structuredClone(source), launchId, conversationId: `conversation_bounded_${index}`,
+          state: "failed", key: null, pane: null, verifiedHost: null, artifactPath: null, completionMode: null,
+          artifactLifecycle: "pending", hostSetup: { phase: "executing", execPermitGranted: true,
+            execProcessRecorded: true, processes: [dead] } };
+      }
+    });
+    const store = (registry as unknown as { sqliteStore: { onRowPayloadRead?: (collection: string, count: number) => void } }).sqliteStore;
+    let receiptPayloads = 0;
+    store.onRowPayloadRead = (collection, count) => { if (collection === "receipts") receiptPayloads += count; };
+    expect(registry.launchSetupBlocker()).toBeTruthy();
+    expect(receiptPayloads).toBeLessThanOrEqual(33);
+
+    receiptPayloads = 0;
+    await registry.reconcileFailedLaunchSetup(Date.now() - 1);
+    expect(receiptPayloads).toBe(0);
+  } finally { registry.close(); }
+});
+
 test.each(["unchanged", "new-process", "published"] as const)("a failed standalone launch with dead setup processes (%s)", async (change) => {
   const at = Date.parse("2026-01-01T00:00:00Z");
   const filename = join(f.dir, "launch-registry.json");
