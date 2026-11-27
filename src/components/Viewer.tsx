@@ -73,7 +73,7 @@ import { ConnectionPill } from "./ConnectionPill";
 import { resolveFavoriteRows, type FavoriteRow } from "./favorites/favoriteRows";
 import { KeepAwakeProvider } from "./KeepAwakeControl";
 import { useClosingPipelines } from "./mobile/MobilePipelineScreen";
-import { getMobileNav, readMobileNavEntry, screenKey, standsOnOwnUrl, topScreen, useMobileNavStore, type MobileNavConfig, type MobileScreen } from "./mobile/mobileNav";
+import { getMobileNav, readMobileNavEntry, screenFromFragment, screenKey, standsOnOwnUrl, topScreen, useMobileNavStore, type MobileNavConfig, type MobileScreen } from "./mobile/mobileNav";
 import { MobileProjectSheet } from "./mobile/MobileProjectSheet";
 import { overviewLiftProject, overviewScreenProject, overviewStackKey, overviewStackScreens } from "./mobile/overviewPhone";
 import type { MobileShellHost } from "./mobile/MobileShell";
@@ -138,13 +138,16 @@ export function catalogHoldsWithoutPin(file: FileEntry, unpinnedPaths: ReadonlyS
 /** Every fragment key this app speaks, each with a payload: conversation
     (`#c=`), transcript path (`#f=`), project (`#p=`), artifact preview
     (`#a=`, issue #884 — handled by ArtifactPreviewHost) — plus the empty
-    hash, and while the phone layout is up a phone screen (`#task=`,
-    `#pipeline=`, `#pipelines`, `#accounts`, #2105), which only the phone
-    opens. A pasted URL outside this set means nothing here; quietly landing
-    on the default view read as a broken deployment, so the shell says so. */
+    hash and a task card (`#task=`). Pipeline and account screens are specific
+    to the phone layout (#2105). The shell identifies unrecognized links. */
 export function recognizedFragment(hash: string, { phone = false }: { phone?: boolean } = {}): boolean {
-  if (hash === "" || /^#(?:c|f|p|a)=./.test(hash)) return true;
-  return phone && /^#(?:(?:task|pipeline)=.|(?:pipelines|accounts)$)/.test(hash);
+  if (hash === "" || /^#(?:c|f|p|a|task)=./.test(hash)) return true;
+  return phone && /^#(?:pipeline=.|(?:pipelines|accounts)$)/.test(hash);
+}
+
+function taskLinkId(hash: string): string | null {
+  const screen = screenFromFragment(hash);
+  return screen?.kind === "task" ? screen.id : null;
 }
 
 /** `requested`: the catalog request names this path. False while the plain
@@ -279,6 +282,7 @@ function ViewerApp() {
     const initial = readHash();
     return initial.filePath || initial.conversationId ? initial : null;
   });
+  const [pendingTaskLink, setPendingTaskLink] = useState(() => taskLinkId(location.hash));
   const [catalogPin, dispatchCatalogPin] = useReducer(reduceCatalogPin, null);
   /* The link whose target the plain catalog could not resolve, and which
      therefore asks for the exact transcript. Held by identity: a new link is a
@@ -584,6 +588,7 @@ function ViewerApp() {
          focus entry with its full stored identity; deriving a second, weaker
          intent from the bare hash would drop the project and path support. */
       if (traversalFenceRef.current.swallows(location.hash)) return;
+      setPendingTaskLink(taskLinkId(location.hash));
       /* A traversal onto an entry the phone wrote (#2105): its popstate half
          already restored the place and the project the entry names, and a
          screen's own URL never opens anything else. A conversation link on an
@@ -706,6 +711,7 @@ function ViewerApp() {
      project) and routes that record a plain project navigation. */
   const applyProject = useCallback((nextProject: string) => {
     setProject(nextProject);
+    setPendingTaskLink(null);
     /* Explicit project navigation replaces the hash without a hashchange
        event, so any unresolved conversation intent is cancelled here — and a
        deliberate navigation retires the durable not-found notice. */
@@ -725,6 +731,15 @@ function ViewerApp() {
     applyProject(nextProject);
     recordProjectNavigation(projectUrl(nextProject));
   }, [applyProject]);
+  useEffect(() => {
+    if (isMobile || !pendingTaskLink) return;
+    const task = tasks.find(row => row.id === pendingTaskLink);
+    if (!task) return;
+    // Use the dashboard's existing cross-project task focus after its data arrives.
+    sessionStorage.setItem("llvTaskFocus", task.id);
+    /* eslint-disable-next-line react-hooks/set-state-in-effect -- follow a task link after the catalog arrives */
+    applyProject(task.project);
+  }, [isMobile, pendingTaskLink, tasks, applyProject]);
   /* A project row's menu (the rail, the phone's project sheet): the board's own
      archive and restore, and the display name, through the project settings. */
   const projectRowActions = useMemo<ProjectRowActions>(() => ({
