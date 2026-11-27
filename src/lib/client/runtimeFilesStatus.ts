@@ -135,10 +135,13 @@ export function createRuntimeFilesStatusProjection() {
     }
     lastSessions = current;
     if (!dirty.conversations.size && live) return false;
-    changes = incremental ? dirty : undefined;
+    /* A reader can project before the bus delivers its frame. Compared against
+       the sessions this projection last read, the changed identities are exact
+       with or without one. Coming back to live reads the whole catalog. */
+    changes = live ? dirty : undefined;
     live = true;
     revision++;
-    if (incremental && activeFiles) {
+    if (changes && activeFiles) {
       const layout = catalogPositions(activeFiles);
       for (const id of dirty.conversations) if (layout.byConversation.has(id)) return true;
       for (const path of dirty.paths) if (layout.byPath.has(path)) return true;

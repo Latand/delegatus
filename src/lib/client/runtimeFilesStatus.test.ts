@@ -507,5 +507,13 @@ test("another project's settlement reads no row of the open project, and a neigh
     expect(next[2]).toBe(admitted[2]!);
     /* The array on screen keeps its own row. */
     expect(admitted[1]!.authoritativeTurn).toBeUndefined();
+
+    /* A catalog publication can project the newest sessions before the bus
+       delivers their frame. It reads no more than the frame would. */
+    read.clear();
+    const unannounced = sessions({ offboard: "idle" });
+    unannounced.store.sessions = { ...state.store.sessions, ...unannounced.store.sessions };
+    expect(open(current(project(raw, unannounced).files))).toBe(next);
+    expect([...read]).toEqual([]);
   } finally { cache.dispose(); }
 });
