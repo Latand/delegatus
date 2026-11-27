@@ -2875,7 +2875,10 @@ test("startup adoption replaces an incumbent owner whose boot epoch is dead", as
   const current = captureProcessIdentity(process.pid);
   expect(current.startIdentity).not.toBeNull();
   expect(current.bootEpoch).not.toBeNull();
-  const incumbent = { ...current, bootEpoch: `${current.bootEpoch}:earlier` };
+  const earlierBoot = current.bootEpoch!.startsWith("linux:")
+    ? current.bootEpoch!.replace(/^linux:[^:]+:/, "linux:earlier-boot:")
+    : `${current.bootEpoch}:earlier`;
+  const incumbent = { ...current, bootEpoch: earlierBoot };
   registry.upsert({
     key,
     artifactPath: stored.artifactPath,

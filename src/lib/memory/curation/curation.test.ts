@@ -728,7 +728,7 @@ test.skipIf(process.platform !== "linux")("curation fixture cleanup stops its re
   await f.sources.diskPressure!();
   const records = fs.readdirSync(path.join(dir, "helpers")).filter(file => file.endsWith(".json"))
     .map(file => JSON.parse(fs.readFileSync(path.join(dir, "helpers", file), "utf8")))
-    .filter(record => record.name === "worktree-sweep" && record.ownerPid === process.pid);
+    .filter(record => record.name === "disk-pressure" && record.ownerPid === process.pid);
   expect(records).toHaveLength(1);
   const [record] = records;
   expect(record.ownerIdentity).toBe(captureProcessIdentity(process.pid).startIdentity);
