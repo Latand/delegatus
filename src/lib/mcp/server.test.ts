@@ -2217,7 +2217,6 @@ import {
   type McpRecoverableTool,
   type McpRecoveryEvidence,
   type McpRecoveryReceiptStore,
-  type McpRequestBinding,
   type McpRequestCaller,
   type McpToolCallContext,
 } from "./server";

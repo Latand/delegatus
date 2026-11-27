@@ -31,7 +31,7 @@ import { POST as rotatePOST } from "@/app/api/orchestrator/rotate/route";
 import { POST as messagePOST } from "@/app/api/orchestrator/message/route";
 import { POST as seatPOST } from "@/app/api/orchestrator/seat/route";
 
-import { AgentRegistry, agentRegistry, setAgentRegistryForTests, type AgentRegistryEntry } from "@/lib/agent/registry";
+import { AgentRegistry, agentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { executeSpawnRequest, productionSpawnCommandDependencies } from "@/lib/agent/spawnCommand";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
@@ -79,6 +79,7 @@ afterEach(() => {
 
 const AT = "2026-07-29T00:00:00.000Z";
 const SEATED_ID = "conversation_66666666-6666-4666-8666-666666666666";
+type StagedRegistryEntry = Parameters<AgentRegistry["stageStructuredSpawn"]>[1];
 
 function seatActive(project: string, conversationId: string, transcriptPath: string | null, promptVersion: number | null = null): void {
   beginOrchestratorSeatIntent({ project, mandate: "own the board", clientRequestId: "seed_0000001", mode: "spawn", promptVersion, now: AT });
@@ -275,7 +276,7 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
       service = openService(receipts);
       const sent: string[] = [];
       let beforeWrite = 0;
-      let recipient: { conversationId: string; project: string; entry: AgentRegistryEntry } | undefined = existing;
+      let recipient: { conversationId: string; project: string; entry: StagedRegistryEntry } | undefined = existing;
       const runtime = (): RuntimeHostClient => ({
         readSession: async () => ({
           conversationId: recipient!.conversationId, sessionKey: recipient!.entry.key, hostKind: recipient!.entry.structuredHost!.kind,
@@ -285,13 +286,15 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
           capabilities: { steer: true, structuredAttention: true }, activeTurnId: null,
         }),
         command: async (command, authorizeBeforeWrite) => {
+          const { operationId } = command;
+          if (!operationId) throw new Error("project start fixture expected a keyed runtime command");
           beforeWrite += 1;
           if (mode === "recipient-replaced") testRegistry.upsert({ ...existing!.entry, claimOwner: "recipient-replacement" });
           if (team) placeProject(team, owner, existing!.project, null);
           authorizeBeforeWrite?.();
-          sent.push(command.operationId);
-          return { operationId: command.operationId, replayed: false, receipt: {
-            operationId: command.operationId, idempotencyKey: command.idempotencyKey,
+          sent.push(operationId);
+          return { operationId, replayed: false, receipt: {
+            operationId, idempotencyKey: command.idempotencyKey,
             conversationId: command.conversationId, kind: command.kind, status: "delivered",
             at: AT,
           } };
@@ -379,7 +382,7 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
       } else {
         if (!launch || !mandate) throw new Error("seat command did not reserve the fixture launch and mandate");
         expect(launchCount).toBe(1);
-        expect(launch.launchId).toBe(replay.launchId);
+        expect(replay.launchId).toBe(launch.launchId);
         expect(fs.existsSync(path.join(targetRoot, ".git"))).toBe(true);
         expect(sent).toEqual([]);
         const sessionId = crypto.randomUUID();
@@ -387,7 +390,7 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
         fs.writeFileSync(artifactPath, JSON.stringify(launch.engine === "codex"
           ? { type: "session_meta", payload: { id: sessionId, cwd: targetRoot } }
           : { type: "user", sessionId, cwd: targetRoot, message: { role: "user", content: mandate } }) + "\n");
-        const entry: AgentRegistryEntry = { ...source.entry, key: { engine: launch.engine, sessionId }, artifactPath,
+        const entry: StagedRegistryEntry = { ...source.entry, key: { engine: launch.engine, sessionId }, artifactPath,
           cwd: targetRoot, launchProfile: launch.launchProfile, accountId: launch.accountId,
           structuredHost: { ...source.entry.structuredHost, kind: launch.engine === "codex" ? "codex-app-server" : "claude-broker" } };
         recipient = { conversationId: launch.conversationId, project: String(replay.project), entry };

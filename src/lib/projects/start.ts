@@ -153,7 +153,7 @@ async function planStart(input: ProjectStartCheckpoint["input"], source: Project
   } else {
     const clean = cleanWorkspaceName(target.name);
     const nameKey = clean ? workspaceNameKey(clean) : "";
-    if (!nameKey) throw new ProjectStartRefusal("INVALID_NAME", 400, "target.name");
+    if (!clean || !nameKey) throw new ProjectStartRefusal("INVALID_NAME", 400, "target.name");
     if (workspaceCatalog().projects.some(row => {
       if (source.workspace && !workspacePrincipalAllows(source.workspace, row.project)) return false;
       const name = cleanWorkspaceName(row.displayName);

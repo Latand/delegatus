@@ -504,15 +504,18 @@ test("packaged stdio reconnects to the same Viewer project start receipt", async
     target: { kind: "existing_project", project }, task: { text: "Prepare the first plan", dueAt: "2030-01-15T12:00:00Z" },
   };
   const first = await startMcp(forwarded, "project-start-first");
-  let accepted: Awaited<ReturnType<Client["callTool"]>>;
+  let accepted: object;
   try {
-    accepted = await first.client.callTool({ name: "start_project", arguments: args });
-    expect(accepted.structuredContent).toMatchObject({ ok: true, accepted: true, state: "accepted", operationId: expect.any(String) });
+    const { structuredContent } = await first.client.callTool({ name: "start_project", arguments: args });
+    if (!structuredContent || typeof structuredContent !== "object" || Array.isArray(structuredContent))
+      throw new Error("project start fixture expected a structured receipt");
+    accepted = structuredContent;
+    expect(accepted).toMatchObject({ ok: true, accepted: true, state: "accepted", operationId: expect.any(String) });
   } finally { await first.close(); }
   const second = await startMcp(forwarded, "project-start-reconnected");
   try {
     const replay = await second.client.callTool({ name: "start_project", arguments: { ...args, recoveryOnly: true } });
-    expect(replay.structuredContent).toEqual({ ...accepted.structuredContent, replayed: true });
+    expect(replay.structuredContent).toEqual({ ...accepted, replayed: true });
     const changed = await second.client.callTool({ name: "start_project", arguments: { ...args, task: { ...args.task, text: "Different task" } } });
     expect(changed.structuredContent).toMatchObject({ ok: false, code: "idempotency_conflict" });
     const db = new Database(path.join(environment.LLV_STATE_DIR!, "mcp-receipts.sqlite"), { readonly: true });
