@@ -22,7 +22,6 @@ import {
 } from "./verify-viewer-runtime";
 import { isOperatorOwnedDirectory, setStateOwnershipPathsForTests } from "../src/lib/stateOwnership";
 import { recordProvisionFixtureEvent, waitForProvisionFixtureReply } from "../src/lib/pipelines/provisionFixtureSupervisor";
-import { verifyFixtureLane } from "./verify-provisioning-release.mjs";
 
 /* What this file is defending is the shape of the check rather than its
    verdict: the verdict is produced by CI, under the pinned interpreter, on a
@@ -174,7 +173,7 @@ test("provisioning release tracing runs only for a completed App Router build", 
   expect(hasBuiltPipelineRoute(root)).toBe(true);
 });
 
-test.each(["delayed", "missing", "duplicate", "parked"] as const)("the release fixture checks a %s first-stage attempt separately from provisioning", async scenario => {
+test.each(["delayed", "missing", "late", "stalled", "duplicate", "parked"] as const)("the release fixture checks a %s first-stage attempt separately from provisioning", async scenario => {
   const root = fixtureRoot([]);
   const worktreeDir = path.join(root, "worktree");
   const common = path.join(root, ".git");
@@ -194,8 +193,14 @@ test.each(["delayed", "missing", "duplicate", "parked"] as const)("the release f
     runs: [{ stageId: "build", attempts: [] as { n: number }[] }],
   };
   let reads = 0;
-  let now = 0;
-  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const nearDeadline = scenario === "missing" || scenario === "late" || scenario === "stalled";
+  const clock = path.join(root, "clock");
+  // The peer advances the verifier's clock at request boundaries.
+  const setClock = (now: number) => {
+    fs.writeFileSync(`${clock}.next`, String(now));
+    fs.renameSync(`${clock}.next`, clock);
+  };
+  setClock(0);
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -206,37 +211,68 @@ test.each(["delayed", "missing", "duplicate", "parked"] as const)("the release f
       if (request.method === "POST") return Response.json({ pipeline: { id: "fixture" } }, { status: 201 });
       if (request.method === "PATCH") return Response.json({ pipeline: { state: "provisioning" } });
       reads += 1;
-      if (scenario === "missing" || reads >= 3) now = 60_000;
+      if (reads === 1 && nearDeadline) setClock(58_000);
+      if (reads > 2 || (reads === 2 && scenario === "missing")) setClock(60_000);
+      if (reads === 2 && scenario === "late") setClock(60_001);
+      if (reads === 2 && scenario === "stalled") {
+        return new Response(new ReadableStream({
+          start(controller) { controller.enqueue(new TextEncoder().encode('{"pipeline":')); },
+        }), { headers: { "content-type": "application/json" } });
+      }
       if (scenario === "duplicate") lane.runs[0].attempts = [{ n: 1 }, { n: 2 }];
       if (scenario === "parked") lane.state = "needs_decision";
-      if (scenario === "delayed" && reads === 2) lane.runs[0].attempts = [{ n: 1 }];
+      if ((scenario === "delayed" || scenario === "late") && reads === 2) lane.runs[0].attempts = [{ n: 1 }];
       return Response.json({ pipeline: lane });
     },
   });
-  const git = async (_cwd: string, ...args: string[]) => {
-    if (args.at(-1) === "HEAD") return planned;
-    if (args.at(-1) === "--git-common-dir") return common;
-    return "";
-  };
+  const verifier = Bun.spawn([process.execPath, "--no-env-file", "-e", `
+    import { readFileSync } from "node:fs";
+    import { verifyFixtureLane } from "./verify-provisioning-release.mjs";
+    const [origin, root, clock, planned, common] = process.argv.slice(-5);
+    Date.now = () => Number(readFileSync(clock, "utf8"));
+    const timeouts = [];
+    const timeout = AbortSignal.timeout.bind(AbortSignal);
+    AbortSignal.timeout = milliseconds => {
+      timeouts.push(milliseconds);
+      return timeout(milliseconds);
+    };
+    const git = async (_cwd, ...args) => {
+      if (args.at(-1) === "HEAD") return planned;
+      if (args.at(-1) === "--git-common-dir") return common;
+      return "";
+    };
+    try {
+      const result = await verifyFixtureLane(origin, root, "unused", git, {}, undefined);
+      console.log(JSON.stringify({ result, timeouts }));
+    } catch (error) {
+      console.log(JSON.stringify({ error: error.message, timeouts }));
+    }
+  `, server.url.origin, root, clock, planned, common], { cwd: import.meta.dir, stdout: "pipe" });
   try {
-    const result = verifyFixtureLane(server.url.origin, root, "unused", git, {}, undefined);
+    const [code, output] = await Promise.all([verifier.exited, new Response(verifier.stdout).text()]);
+    expect(code).toBe(0);
+    const { result, error, timeouts } = JSON.parse(output);
     if (scenario === "delayed") {
-      expect(await result).toMatchObject({ lane: "fixture", planned, graph: key });
+      expect(result).toMatchObject({ lane: "fixture", planned, graph: key });
       expect(reads).toBe(2);
     } else {
       const reason = {
         missing: "no first-stage attempt appeared within 60 s",
+        late: "no first-stage attempt appeared within 60 s",
+        stalled: "no first-stage attempt appeared within 60 s",
         duplicate: "observed 2 first-stage attempts",
         parked: "fixture stage admission refused",
       }[scenario];
-      await expect(result).rejects.toThrow(reason);
-      expect(reads).toBe(1);
+      expect({ error, result }).toMatchObject({ error: expect.stringContaining(reason) });
+      expect(reads).toBe(nearDeadline ? 2 : 1);
+      if (nearDeadline) expect(timeouts.slice(-2)).toEqual([5_000, 2_000]);
     }
   } finally {
-    clock.mockRestore();
+    if (verifier.exitCode === null) verifier.kill("SIGKILL");
+    await verifier.exited;
     await server.stop(true);
   }
-});
+}, 15_000);
 
 test.each(["check-ignore", "cache-permit"] as const)("private release fixture supervisor holds the %s reply", async reply => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provision-supervisor-test-"));

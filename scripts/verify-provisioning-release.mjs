@@ -171,9 +171,19 @@ export async function verifyFixtureLane(origin, checkout, remote, git, env, hold
   let waitingForFirstAttempt = false;
   const fixture = holdReply ?? "release";
   const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    const response = await fetch(`${origin}/api/pipelines/${encodeURIComponent(laneId)}`, { headers, signal: AbortSignal.timeout(5_000) });
-    const lane = (await response.json()).pipeline;
+  while (true) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    const signal = AbortSignal.timeout(Math.min(5_000, remaining));
+    let lane;
+    try {
+      const response = await fetch(`${origin}/api/pipelines/${encodeURIComponent(laneId)}`, { headers, signal });
+      lane = (await response.json()).pipeline;
+    } catch (error) {
+      if (Date.now() >= deadline || (signal.aborted && remaining <= 5_000)) break;
+      throw error;
+    }
+    if (Date.now() >= deadline) break;
     if (holdReply && !interrupted && await lstat(gateEntry).then(() => true, error => {
       if (error.code === "ENOENT") return false;
       throw error;
@@ -248,7 +258,8 @@ export async function verifyFixtureLane(origin, checkout, remote, git, env, hold
       if (receipt.key !== key) throw new Error("release fixture graph has no matching receipt");
       return { lane: laneId, planned, graph: key, workerEntry: workerPath, ...(holdReply ? { heldReply: holdReply } : {}) };
     }
-    await new Promise(resolve => setTimeout(resolve, 150));
+    const pollDelay = Math.min(150, deadline - Date.now());
+    if (pollDelay > 0) await new Promise(resolve => setTimeout(resolve, pollDelay));
   }
   if (waitingForFirstAttempt) {
     throw new Error(`${fixture} fixture consumed its provisioning receipt but no first-stage attempt appeared within 60 s`);
