@@ -714,7 +714,7 @@ test.skipIf(!!localGitWatchdogMode)("local commits from a finished lane wake und
     let timedOut = false;
     // The child keeps its own two-second check budget; allow interpreter
     // startup and fixture imports before that check starts.
-    const watchdog = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, 15_000);
+    const watchdog = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, 60_000);
     try {
       const result = await new Promise<{ code: number | null; signal: string | null }>((resolve, reject) => {
         child.once("error", reject);
