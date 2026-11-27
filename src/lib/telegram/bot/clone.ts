@@ -3,7 +3,7 @@ import { cloneClientKey, clonePayloadSupported, sendAsClone, type CloneSendInput
 import type { TelegramChatBot } from "./contracts";
 import { TelegramBotError } from "./errors";
 import type { BotTransport } from "./transport";
-import { cloneMethodPayload, cloneMultipart } from "@/lib/externalRelay/cloneMethods";
+import { cloneHasFileMethod, cloneMethodAdmission, cloneMethodPayload, cloneMultipart } from "@/lib/externalRelay/cloneMethods";
 
 export interface ClonePostingPort {
   discoverChats?(): Promise<DiscoveredCloneChat[]>;
@@ -39,10 +39,14 @@ export function cloneInput(route: CloneRoute, caller: string, key: string, param
     ...(reply ? { reply_to_message_id: reply } : {}), ...(params.message_thread_id ? { message_thread_id: Number(params.message_thread_id) } : {}) };
 }
 export { clonePayloadSupported };
-export function cloneSupports(route: CloneRoute, caller: string, key: string, method: string, params: Record<string, unknown>, part: number): boolean {
+export function cloneSupportRefusal(route: CloneRoute, caller: string, key: string, method: string, params: Record<string, unknown>, part: number): string | null {
   const input = cloneInput(route, caller, key, params, part);
-  return route.methodsFeature ? !!route.send && !!cloneMethodPayload(method, params, input, route.send.limits, route.send.rights)
-    : method === "sendMessage" && clonePayloadSupported(input);
+  if (!route.methodsFeature && method === "sendMessage" && clonePayloadSupported(input)) return null;
+  if (!route.methodsFeature || !route.send) return route.relay.features?.includes("clone_send_methods")
+    ? "has no verified current relay file capabilities" : "covers this chat but cannot send files yet";
+  const admission = cloneMethodAdmission(method, params, input, route.send.limits, route.send.rights);
+  if (!("reason" in admission)) return null;
+  return cloneHasFileMethod(route.send.limits) ? admission.reason : "covers this chat but cannot send files yet";
 }
 export function cloneTransport(port: ClonePostingPort, route: CloneRoute, caller: string, key: string, authorize: () => Promise<void>,
   persistKey?: (input: CloneSendInput, part: number) => Promise<void>): BotTransport {
@@ -54,7 +58,8 @@ export function cloneTransport(port: ClonePostingPort, route: CloneRoute, caller
       if (!payload) throw new TelegramBotError("bad_request", "clone method, limits or rights changed");
       const upload = payload.files.length ? cloneMultipart(payload) : null;
       if (upload && upload.byteLength > route.send!.limits.max_body_bytes) return {
-        ok: false, kind: "http", status: null, description: null, migrateToChatId: null, retryAfterSeconds: null,
+        ok: false, kind: "http", status: null, description: "The multipart upload exceeds the clone relay's request size limit.",
+        migrateToChatId: null, retryAfterSeconds: null,
         classified: { code: "document_too_large", fallback: true } };
       for (const file of payload.files) {
         const maxPixels = route.send!.limits.files[file.kind]?.max_pixels;
@@ -62,7 +67,8 @@ export function cloneTransport(port: ClonePostingPort, route: CloneRoute, caller
           const sharp = (await import("sharp")).default;
           let pixels = Infinity;
           try { const metadata = await sharp(Buffer.from(await file.blob.arrayBuffer())).metadata(); pixels = (metadata.width ?? Infinity) * (metadata.height ?? Infinity); } catch { /* Refuse unreadable dimensions. */ }
-          if (pixels > maxPixels) return { ok: false, kind: "http", status: null, description: null, migrateToChatId: null, retryAfterSeconds: null,
+          if (pixels > maxPixels) return { ok: false, kind: "http", status: null,
+            description: "The photo exceeds the clone relay's pixel limit or its dimensions could not be read.", migrateToChatId: null, retryAfterSeconds: null,
             classified: { code: "photo_invalid", fallback: true } };
         }
       }

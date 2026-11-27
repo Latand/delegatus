@@ -7,7 +7,7 @@ import { TelegramBotError, sendFailure } from "./errors";
 import { outboundState, releaseUnsentClaim, type PublicationTarget } from "./outbound";
 import type { ChatRow, TelegramBotStore } from "./store";
 import type { BotCallResult, BotTransport } from "./transport";
-import { cloneChatView, cloneSupports, cloneTransport, type ClonePostingPort } from "./clone";
+import { cloneChatView, cloneSupportRefusal, cloneTransport, type ClonePostingPort } from "./clone";
 import type { CloneRoute } from "@/lib/externalRelay/cloneDirectory";
 
 export type PostingBot = TelegramPostingBot & { id: string; transport: BotTransport; clone?: CloneRoute };
@@ -325,7 +325,7 @@ export class BotSelector {
       if (!assigned && chat.type !== "private" && this.clones) {
         const route = await this.clones.route(chat.chatId);
         if (route && !await assignedBot() && this.clones.valid(route, chat.chatId)
-          && cloneSupports(route, caller, key, method, params, options?.partIndex ?? 0)) {
+          && cloneSupportRefusal(route, caller, key, method, params, options?.partIndex ?? 0) === null) {
           candidates.unshift({ bot: { id: route.id, name: route.name, username: null, receiving: false, tokenState: "ok", clone: route,
             transport: cloneTransport(this.clones, route, caller, key, authorizeClone, async (input, part) => {
               await outboundState(this.store.filename, true, db => {
@@ -398,8 +398,7 @@ export class BotSelector {
         if (!bot.clone) await refreshRefusal(bot, result, error);
       }
       let first: BotAttempt | undefined = attempts[0];
-      // Explain the clone's capability gap only after local file senders are
-      // exhausted. It never becomes a file candidate on the text transport.
+      // Surface the clone's file refusal after local file senders are exhausted.
       if (capability !== "canPost" && chat.type !== "private" && this.clones && !await assignedBot()) {
         const route = await this.clones.route(chat.chatId);
         if (route && !await assignedBot() && this.clones.valid(route, chat.chatId)) {
@@ -423,9 +422,14 @@ export class BotSelector {
             }
             throw new TelegramBotError(error.code, error.message, { ...error.extra, refusals: publicRefusals(attempts) });
           }
-          await record({ id: route.id, name: route.name, username: null }, new TelegramBotError("clone_files_unsupported",
-            `The paired clone "${route.name.slice(0, 128)}" covers this chat but cannot send files yet.`), "check");
-          first = attempts.at(-1);
+          const previous = attempts.find(attempt => attempt.botId === route.id);
+          if (!previous) {
+            const reason = cloneSupportRefusal(route, caller, key, method, params, options?.partIndex ?? 0)
+              ?? "became eligible after sender selection";
+            await record({ id: route.id, name: route.name, username: null }, new TelegramBotError("clone_files_unsupported",
+              `The paired clone "${route.name.slice(0, 128)}" ${reason}.`), "check");
+          }
+          first = previous ?? attempts.at(-1);
         }
       }
       await delivery("refused");
