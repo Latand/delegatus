@@ -292,7 +292,7 @@ async function main() {
     report.globalBin = publicFixtureText(shell("bun pm bin -g", env), home);
     report.binEntries = readdirSync(path.join(home, ".bun/bin"));
     const entries = [["neither-cli", env, {
-      message: "Claude Code CLI and Codex CLI were not found", presence: { claude: "missing", codex: "missing" },
+      message: "Claude Code CLI and Codex CLI were not found", presence: { claude: "missing", codex: "missing", antigravity: "missing" },
       installer: "curl -fsSL https://claude.ai/install.sh | bash",
     }]];
     const audit = path.join(fixture, "stub-calls.txt");
@@ -305,13 +305,13 @@ async function main() {
       shell(promptCommand(variant, `${agent} mcp add viewer`), withStub);
       entries.push([`path-${agent}`, withStub, {
         message: `Agent CLI: ${agent}. Sign in`, available: true,
-        presence: { claude: agent === "claude" ? "found" : "missing", codex: agent === "codex" ? "found" : "missing" },
+        presence: { claude: agent === "claude" ? "found" : "missing", codex: agent === "codex" ? "found" : "missing", antigravity: "missing" },
       }]);
     }
     const caseFailures = await runCases(cases, entries);
     stub("codex", path.join(home, "Applications/Codex.app/Contents/Resources"), audit);
     const desktopFailures = await runCases(cases, [["desktop-bundle", env, {
-      message: "Agent CLI: codex. Sign in", available: true, presence: { claude: "missing", codex: "found" },
+      message: "Agent CLI: codex. Sign in", available: true, presence: { claude: "missing", codex: "found", antigravity: "missing" },
     }]]);
     finalizeCases(report, audit, home, [...caseFailures, ...desktopFailures]);
   } catch (error) {
