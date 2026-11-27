@@ -481,7 +481,7 @@ test.each(["pairing", "descriptor", "limits"] as const)("feature absent in %s re
   expect(await document()).toMatchObject({ sentBy: { name: sender } });
   expect(await media()).toMatchObject({ sentBy: { name: sender } });
   const text = await service.send({ ...common("text"), text: "Legacy text", format: "html" });
-  expect(text.sentBy.name).toBe("Report clone");
+  expect(text).toMatchObject({ sentBy: { name: "Report clone" } });
   expect(sends.at(-1)!.raw).toBeNull();
   expect(descriptors).toBe(1); expect(rightsReads).toBe(source === "pairing" ? 1 : 0);
 });
