@@ -24,7 +24,13 @@ process.stdin.on("end", async () => {
   const response = request.operation === "checkpoint" ? await (async () => {
     const { checkpointHotStateRollbackMirrorsForDemotion } = await import("./state/checkpointRollbackMirrors");
     const { withStateMutationActivation } = await import("./state/stateMutationBarrier");
-    return { outcomes: [], checkpoint: await withStateMutationActivation(checkpointHotStateRollbackMirrorsForDemotion) };
+    try {
+      return { outcomes: [], checkpoint: await withStateMutationActivation(checkpointHotStateRollbackMirrorsForDemotion) };
+    } catch (error) {
+      // The caller's record has to name the refusal; stderr only holds the trace.
+      console.error(error);
+      return { outcomes: [], checkpointFailure: error instanceof Error ? error.message : String(error) };
+    }
   })() : answerBackupWorkerRequest(request, (done, total) => {
     process.stdout.write(`${JSON.stringify({ activationProgress: [done, total] })}\n`);
   });
