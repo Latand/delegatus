@@ -67,6 +67,40 @@ test("unchanged zero-byte passes back off across restarts and wake on a retained
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }, 30_000);
 
+test("a contended slice resumes the same cleaner pass and selection on the short retry", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "disk-cleaner-resume-"));
+  const env = isolatedEnvironment(root, process.env);
+  env.LLV_STATE_DIR = path.join(env.TMPDIR!, "state"); delete env.PORT;
+  const child = Bun.spawn([process.execPath, "-e", `
+    import { reconcileAutomaticDiskCleaner } from "./src/lib/cleaner/diskController";
+    import { readDiskCleanerPass } from "./src/lib/cleaner/diskState";
+    import { SweepWalkDeferred } from "./src/lib/pipelines/sweepWalkAdmission";
+    let at = 100000, evidence = 0, scratch = 0;
+    const pressure = { at: new Date(at).toISOString(), episode: "fixture", volumes: [
+      { volume: "fixture", roles: ["temp"], freeBytes: 1, level: "warning" }], consumers: [], warningBytes: 10, criticalBytes: 1 };
+    const ports = { now: () => at, active: () => true, project: async () => "fixture", card: async () => true,
+      env: { LLV_CLEANER: "dry-run" }, measure: () => [{ volume: "fixture", roles: ["temp"], freeBytes: 1 }],
+      releases: async () => ({ kept: [], errors: 0 }), sweep: async request => {
+        if (request.class === "evidence" && evidence++ === 0) throw new SweepWalkDeferred("busy");
+        if (request.class === "attempt-temp") scratch++;
+        return { kept: [], errors: 0, next: null, more: false };
+      } };
+    await reconcileAutomaticDiskCleaner(pressure, ports);
+    const interrupted = readDiskCleanerPass();
+    at += 30001; pressure.at = new Date(at).toISOString();
+    await reconcileAutomaticDiskCleaner(pressure, ports);
+    console.log(JSON.stringify({ interrupted, final: readDiskCleanerPass(), evidence, scratch }));
+  `], { env, stdout: "pipe", stderr: "pipe" });
+  try {
+    const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect(code, err).toBe(0);
+    const result = JSON.parse(out.trim().split("\n").at(-1)!);
+    expect(result.interrupted).toMatchObject({ id: expect.any(String), deferredAt: expect.any(Number), evidenceSlices: 0 });
+    expect(result.final).toMatchObject({ id: result.interrupted.id, finished: { incomplete: false } });
+    expect(result).toMatchObject({ evidence: 2, scratch: 1 });
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}, 30_000);
+
 test("pressure admission, cooldown, journal and seat report survive Viewer restarts", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "disk-cleaner-controller-"));
   const env = isolatedEnvironment(root, process.env);
@@ -74,7 +108,7 @@ test("pressure admission, cooldown, journal and seat report survive Viewer resta
   delete env.LLV_CLEANER;
   delete env.LLV_CLEANER_FREE_GB;
   delete env.PORT;
-  const run = async (at: number, free: number, level: string) => {
+  const run = async (at: number, free: number, level: string, volume = "pressure-mount") => {
     const child = Bun.spawn([process.execPath, "-e", `
       import { reconcileAutomaticDiskCleaner } from "./src/lib/cleaner/diskController";
       import { cleanerJournal } from "./src/lib/cleaner/diskJournal";
@@ -84,7 +118,7 @@ test("pressure admission, cooldown, journal and seat report survive Viewer resta
       import { loadTasksForList } from "./src/lib/tasks/store";
       const at = ${at}, free = ${free}, project = ${JSON.stringify(PROJECT)};
       const pressure = { at: new Date(at).toISOString(), episode: null,
-        volumes: [{ volume: "pressure-mount", roles: ["worktrees"], freeBytes: free, level: ${JSON.stringify(level)} }],
+        volumes: [{ volume: ${JSON.stringify(volume)}, roles: ["worktrees"], freeBytes: free, level: ${JSON.stringify(level)} }],
         consumers: [], warningBytes: 0, criticalBytes: 0 };
       let releases = 0, cards = 0;
       const ports = {
@@ -133,11 +167,15 @@ test("pressure admission, cooldown, journal and seat report survive Viewer resta
     expect(first.signals[0].label).toContain("worktrees 139.70 GiB → 139.70 GiB");
     expect(first.tasks[0].text).toContain("Прибирання диска завершено");
     const duringCooldown = await run(NOW + DISK_CLEANER_COOLDOWN_MS, 1e9, "critical");
-    expect(duringCooldown).toMatchObject({ releases: 0, cards: 0, pass: { id: first.pass.id } });
-    const later = await run(NOW + 1 + DISK_CLEANER_COOLDOWN_MS, 170e9, "warning");
-    expect(later.releases).toBe(1);
-    expect(later.pass.id).not.toBe(first.pass.id);
-    expect(later.signals).toHaveLength(2);
+    expect(duringCooldown.releases).toBe(1);
+    expect(duringCooldown.pass.id).not.toBe(first.pass.id);
+    const newlyCritical = await run(NOW + DISK_CLEANER_COOLDOWN_MS + 1, 1e9, "critical", "new-critical-volume");
+    expect(newlyCritical.releases).toBe(1);
+    expect(newlyCritical.pass.id).not.toBe(duringCooldown.pass.id);
+    const later = await run(NOW + 1 + DISK_CLEANER_COOLDOWN_MS, 170e9, "warning", "new-critical-volume");
+    expect(later.releases).toBe(0);
+    expect(later.pass.id).toBe(newlyCritical.pass.id);
+    expect(later.signals).toHaveLength(3);
     const rows = fs.readFileSync(path.join(env.LLV_STATE_DIR!, "disk-cleaner", `${first.pass.id}.ndjson`), "utf8").trim().split("\n").map(line => JSON.parse(line));
     expect(rows).toEqual(["intent", "removed"].map(phase => expect.objectContaining({
       phase, class: "release", path: "/fixture/release", bytes: 4096, proof: "verified release",

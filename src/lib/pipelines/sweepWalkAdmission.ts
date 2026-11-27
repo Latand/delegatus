@@ -10,6 +10,8 @@ export class SweepWalkDeferred extends Error {
   }
 }
 
+export const WORKTREE_SWEEP_RSS_HIGH_WATER_BYTES = 224 * 1024 ** 2;
+
 export function sweepMemoryPressured(read = (file: string) => fs.readFileSync(file, "utf8")): boolean {
   if (process.platform !== "linux") return false;
   try {
@@ -27,13 +29,11 @@ export function sweepMemoryPressured(read = (file: string) => fs.readFileSync(fi
 
 /** Within one admitted job, leave at the next safe checkpoint after pressure
  * starts. An already dispatched mutation keeps its own cleanup deadline. */
-export function sweepPressureCheckpoint() {
-  let next = sweepMonotonicNow() + 500;
+export function sweepPressureCheckpoint(checkRss = false, read?: (file: string) => string) {
   let pressured = false;
-  return (now: number) => {
-    if (!pressured && now >= next) {
-      pressured = sweepMemoryPressured();
-      next = now + 500;
+  return (_now: number) => {
+    if (!pressured) {
+      pressured = sweepMemoryPressured(read) || checkRss && process.memoryUsage.rss() >= WORKTREE_SWEEP_RSS_HIGH_WATER_BYTES;
     }
     return pressured;
   };

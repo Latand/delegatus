@@ -7,7 +7,7 @@ import { WorktreeSweepWorker, stopWorktreeSweepWorker } from "./worktreeSweepWor
 import { SWEEP_CACHE_TREES } from "./worktreeSweepCache";
 import { runWorktreeSweep } from "./worktreeSweep";
 import { readWorktreePage } from "./worktreeDrilldown";
-import { sweepMemoryPressured } from "./sweepWalkAdmission";
+import { sweepMemoryPressured, sweepPressureCheckpoint, WORKTREE_SWEEP_RSS_HIGH_WATER_BYTES } from "./sweepWalkAdmission";
 
 const roots: string[] = [];
 const workers: WorktreeSweepWorker[] = [];
@@ -105,6 +105,17 @@ test.skipIf(process.platform !== "linux")("MemAvailable and both PSI thresholds 
   expect(pressured(7_000_000, 0, 0)).toBeTrue();
   expect(pressured(11_000_000, 10, 0)).toBeTrue();
   expect(pressured(11_000_000, 5, 5)).toBeTrue();
+});
+
+test("an admitted worktree checks its RSS high-water mark at the next traversal checkpoint", () => {
+  const rss = spyOn(process.memoryUsage, "rss").mockReturnValue(WORKTREE_SWEEP_RSS_HIGH_WATER_BYTES);
+  try {
+    const checkpoint = sweepPressureCheckpoint(true, file => file.endsWith("meminfo")
+      ? "MemTotal: 32768000 kB\nMemAvailable: 12000000 kB\n"
+      : "some avg10=0\nfull avg10=0\n");
+    expect(checkpoint(0)).toBeTrue();
+    expect(rss).toHaveBeenCalledTimes(1);
+  } finally { rss.mockRestore(); }
 });
 
 test.skipIf(process.platform !== "linux")("production helper serializes walks across processes while volume reads stay available", async () => {

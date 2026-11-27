@@ -11,6 +11,9 @@ export type DiskCleanerPass = {
   startedAt: number;
   before: CleanerSpace[];
   scratchCursor?: string;
+  deferredAt?: number;
+  evidenceSlices?: number;
+  pressureLevels?: Record<string, "ok" | "warning" | "critical">;
   finished?: {
     at: number;
     after: CleanerSpace[];
@@ -20,6 +23,7 @@ export type DiskCleanerPass = {
     errors: number;
     incomplete: boolean;
     retained?: { fingerprint: string; stamp: string; retryAt: number };
+    pressureLevels?: Record<string, "ok" | "warning" | "critical">;
   };
   card?: boolean;
 };

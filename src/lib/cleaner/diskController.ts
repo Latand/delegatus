@@ -24,6 +24,7 @@ export const DISK_CLEANER_COOLDOWN_MS = 15 * 60_000;
 const UNCHANGED_RETRY_MS = 60 * 60_000;
 const PASS_BUDGET_MS = 20 * 60_000;
 const EVIDENCE_SLICES = 16;
+const DEFERRED_RETRY_MS = 30_000;
 
 export function diskCleanerThreshold(env: Readonly<Record<string, string | undefined>> = process.env) {
   const raw = env.LLV_CLEANER_FREE_GB?.trim();
@@ -34,6 +35,18 @@ export function diskCleanerThreshold(env: Readonly<Record<string, string | undef
 function needsCleaning(pressure: DiskPressure, threshold: number, readings: CleanerSpace[]) {
   return pressure.volumes.some(row => row.level === "warning" || row.level === "critical")
     || [...pressure.volumes, ...readings].some(row => row.freeBytes !== null && row.freeBytes < threshold);
+}
+
+function pressureWorsened(pressure: DiskPressure, levels: Record<string, "ok" | "warning" | "critical"> | undefined,
+  previousSpace: readonly CleanerSpace[]) {
+  const previousByVolume = new Map(previousSpace.map(row => [row.volume, row.freeBytes]));
+  const rank = { ok: 0, warning: 1, critical: 2 };
+  return pressure.volumes.some(row => {
+    const key = row.volume ?? `unknown:${row.roles.join("/")}`;
+    return rank[row.level] > rank[levels?.[key] ?? "ok"]
+      || row.freeBytes !== null && (previousByVolume.get(key) === undefined || previousByVolume.get(key) === null
+        || (previousByVolume.get(key) as number) - row.freeBytes >= 1024 ** 3);
+  });
 }
 
 /** A bounded hint for scheduling only. Descendant-only changes that cannot
@@ -142,9 +155,10 @@ export async function reconcileAutomaticDiskCleaner(pressure: DiskPressure, port
   const cooling = (pass: DiskCleanerPass | null) => {
     if (!pass?.finished) return false;
     const { finished } = pass;
-    if (now() < finished.at + DISK_CLEANER_COOLDOWN_MS) return true;
+    const worsened = pressureWorsened(pressure, finished.pressureLevels, finished.after);
+    if (now() < finished.at + DISK_CLEANER_COOLDOWN_MS) return !worsened;
     const retained = finished.retained;
-    return pass.mode === mode && pass.episode === pressure.episode && retained && now() < retained.retryAt
+    return !worsened && pass.mode === mode && pass.episode === pressure.episode && retained && now() < retained.retryAt
       && retained.retryAt <= finished.at + UNCHANGED_RETRY_MS && retained.stamp === retainedStamp(finished.kept)
       && !pressure.volumes.some(row => row.freeBytes !== null && finished.after.some(prior => prior.volume === row.volume
         && prior.freeBytes !== null && prior.freeBytes - row.freeBytes! >= 1024 ** 3));
@@ -165,11 +179,16 @@ export async function reconcileAutomaticDiskCleaner(pressure: DiskPressure, port
         const retained = fingerprint && !incomplete && journal.uncertain === 0 && Object.values(journal.removed).every(bytes => bytes === 0)
           ? { fingerprint, stamp: retainedStamp(kept), retryAt: at + (unchanged ? UNCHANGED_RETRY_MS : DISK_CLEANER_COOLDOWN_MS) }
           : undefined;
-        const result = { ...run, finished: { ...journal, errors: errors + journal.errors, incomplete, kept, at, after: readSpace(true), retained } };
+        const result = { ...run, finished: { ...journal, errors: errors + journal.errors, incomplete, kept, at, after: readSpace(true), retained,
+          pressureLevels: Object.fromEntries(pressure.volumes.map(row => [row.volume ?? `unknown:${row.roles.join("/")}`, row.level])) } };
         writeJsonDurably(file, result);
         return result;
       };
-      if (pass && !pass.finished) pass = await finish(pass, [], 0, true);
+      if (pass && !pass.finished) {
+        if (pass.deferredAt !== undefined && now() < pass.deferredAt + DEFERRED_RETRY_MS
+          && !pressureWorsened(pressure, pass.pressureLevels, pass.before)) return;
+        if (pass.deferredAt === undefined) pass = await finish(pass, [], 0, true);
+      }
       if (pass?.finished && !pass.card && active()) {
         pass = await recordDiskCleanerReport(pass);
         if (await ports.card(pass)) {
@@ -182,9 +201,12 @@ export async function reconcileAutomaticDiskCleaner(pressure: DiskPressure, port
       if (!needsCleaning(pressure, threshold, before)) return;
       const project = await ports.project();
       if (!active() || !project) return;
-      const run: DiskCleanerPass = { id: randomUUID(), project, mode: mode!, episode: pressure.episode, startedAt: now(),
-        before, scratchCursor: pass?.scratchCursor ?? "" };
-      createCleanerJournal(run.id);
+      const run: DiskCleanerPass = pass && !pass.finished
+        ? { ...pass, deferredAt: undefined, before, pressureLevels: Object.fromEntries(pressure.volumes.map(row => [row.volume ?? `unknown:${row.roles.join("/")}`, row.level])) }
+        : { id: randomUUID(), project, mode: mode!, episode: pressure.episode, startedAt: now(), before,
+          scratchCursor: "", evidenceSlices: 0,
+          pressureLevels: Object.fromEntries(pressure.volumes.map(row => [row.volume ?? `unknown:${row.roles.join("/")}`, row.level])) };
+      if (!pass || pass.finished) createCleanerJournal(run.id);
       writeJsonDurably(file, run);
       let kept: CleanerHold[] = [];
       let errors = 0, incomplete = false;
@@ -208,8 +230,9 @@ export async function reconcileAutomaticDiskCleaner(pressure: DiskPressure, port
       const mayContinue = () => !deferred && active() && performance.now() - started < PASS_BUDGET_MS;
       if (mayContinue()) await attempt(() => ports.releases(run.id));
       let evidenceMore = true;
-      for (let page = 0; page < EVIDENCE_SLICES && evidenceMore && mayContinue(); page++) {
+      for (let page = run.evidenceSlices ?? 0; page < EVIDENCE_SLICES && evidenceMore && mayContinue(); page++) {
         const slice = await attempt(() => ports.sweep({ id: run.id, class: "evidence" }));
+        if (slice) { run.evidenceSlices = page + 1; writeJsonDurably(file, run); }
         evidenceMore = !!slice?.more;
       }
       while (mayContinue()) {
@@ -220,6 +243,11 @@ export async function reconcileAutomaticDiskCleaner(pressure: DiskPressure, port
         run.scratchCursor = slice.next ?? "";
         if (!slice.more) break;
         writeJsonDurably(file, run);
+      }
+      if (deferred) {
+        run.deferredAt = now();
+        writeJsonDurably(file, run);
+        return;
       }
       pass = await finish(run, kept, errors, incomplete || evidenceMore || !mayContinue() || !!run.scratchCursor, retained.digest("hex"));
       if (active()) {

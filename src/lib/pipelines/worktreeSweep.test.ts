@@ -247,6 +247,38 @@ test("a completed squash-merged lane releases its checkout and retains its local
   expect(map[dir]?.repo).toBe(fs.realpathSync(root));
 });
 
+test("memory pressure after registration Git yields discovery and the retry builds fresh removal proofs", async () => {
+  const root = repository(), { dir, tip } = lane(root, path.join(caseDir, "widgets-pressure-yield"), "pressure/yield");
+  let pressured = false, gitReads = 0;
+  const base = ports({ pipelines: [pipeline({ repoDir: root, worktreeDir: dir, branch: "pressure/yield" })],
+    prs: [merged(71, "pressure/yield", tip)] });
+  await expect(sweepMergedWorktrees({ ...base, git: async (args, cwd) => {
+    gitReads++;
+    const result = await base.git(args, cwd);
+    pressured = true;
+    return result;
+  }, pause: () => pressured })).rejects.toMatchObject({ reason: "memory" });
+  expect(gitReads).toBe(1);
+  expect(fs.existsSync(dir)).toBe(true);
+  const resumed = await sweepMergedWorktrees(ports({ pipelines: [pipeline({ repoDir: root, worktreeDir: dir, branch: "pressure/yield" })],
+    prs: [merged(71, "pressure/yield", tip)] }));
+  expect(resumed.removed).toEqual([expect.objectContaining({ path: dir, pr: expect.objectContaining({ number: 71 }) })]);
+  expect(fs.existsSync(dir)).toBe(false);
+});
+
+test("memory pressure inside the recursive candidate audit interrupts it and retries with fresh proofs", async () => {
+  const root = repository(), { dir, tip } = lane(root, path.join(caseDir, "widgets-pressure-inspect"), "pressure/inspect");
+  let pressured = false;
+  await expect(sweepMergedWorktrees(ports({ pipelines: [pipeline({ repoDir: root, worktreeDir: dir, branch: "pressure/inspect" })],
+    prs: [merged(72, "pressure/inspect", tip)], pause: () => pressured,
+    phase: phase => { if (phase === "candidate") pressured = true; } }))).rejects.toMatchObject({ reason: "memory" });
+  expect(fs.existsSync(dir)).toBe(true);
+  const resumed = await sweepMergedWorktrees(ports({ pipelines: [pipeline({ repoDir: root, worktreeDir: dir, branch: "pressure/inspect" })],
+    prs: [merged(72, "pressure/inspect", tip)] }));
+  expect(resumed.removed).toEqual([expect.objectContaining({ path: dir, pr: expect.objectContaining({ number: 72 }) })]);
+  expect(fs.existsSync(dir)).toBe(false);
+});
+
 test("the lane's PR is found by the delivered number when its head branch differs from the lane branch", async () => {
   const root = repository();
   const { dir, tip } = lane(root, path.join(caseDir, "widgets-pipeline-bbbb"), "pipeline/bbbb");

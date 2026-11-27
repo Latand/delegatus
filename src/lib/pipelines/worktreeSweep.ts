@@ -1063,13 +1063,15 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
   const inspect = (directory: string, git = false, afterQuarantine = false, quietMs = QUIET_FLOOR_MS): WorktreeKeptReason | null => {
     try {
       const result = (ports.inspect ?? inspectTree)(accessible(directory), { git, threshold: now() - quietMs,
-        mounts: (ports.mountPoints ? ports.mountPoints(directory) : mountPointsUnder(accessible(directory))), ignoreRootCtime: afterQuarantine });
+        mounts: (ports.mountPoints ? ports.mountPoints(directory) : mountPointsUnder(accessible(directory))), ignoreRootCtime: afterQuarantine,
+        checkpoint: ports.pause });
+      if (result.interrupted) throw new SweepWalkDeferred("memory");
       recentWritesDue = result.newestMs + quietMs;
       // This walk asks for no socket hold; one would mean a possible listener.
       const hold = result.hold === "git-checkout" || result.hold === "evidence" ? "ignored-files"
         : result.hold === "socket" ? "in-use" : result.hold;
       return hold ?? (now() - result.newestMs < quietMs ? "recent-writes" : null);
-    } catch { return "unreadable-tree"; }
+    } catch (error) { if (error instanceof SweepWalkDeferred) throw error; return "unreadable-tree"; }
   };
   const intentsDir = statePath("worktree-sweep-removals");
   fs.mkdirSync(intentsDir, { recursive: true });
@@ -1214,14 +1216,18 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
   const discover = async (observe?: (roots: readonly string[]) => void): Promise<SweepInventory> => {
     const roots = new Set<string>();
     for (const candidate of inputs) {
+      if (ports.pause?.()) throw new SweepWalkDeferred("memory");
       if (!fs.existsSync(candidate)) continue;
       const root = await mainRoot(ports.git, candidate);
+      if (ports.pause?.()) throw new SweepWalkDeferred("memory");
       if (root) roots.add(root);
     }
     observe?.([...roots].sort());
     const inventory: SweepInventory = [];
     for (const root of [...roots].sort()) {
+      if (ports.pause?.()) throw new SweepWalkDeferred("memory");
       const listing = await ports.git(["worktree", "list", "--porcelain", "-z"], root);
+      if (ports.pause?.()) throw new SweepWalkDeferred("memory");
       if (listing.code !== 0) {
         report.errors.push(`${root}: git worktree list: ${(listing.stderr || listing.stdout).trim()}`);
         inventory.push({ root, listed: [], failed: true });
@@ -1231,7 +1237,9 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
     }
     return inventory;
   };
-  const inventory = ports.discovery ? await ports.discovery.read(inputs, priorProgress?.complete === false, discover) : await discover();
+  const inventory = ports.discovery
+    ? await ports.discovery.read(inputs, priorProgress?.complete === false, discover, () => !!ports.pause?.())
+    : await discover();
   const sliceDiscoveryMs = budgetClock() - discoveryStart;
   const roots = new Map(inventory.map(row => [row.root, row.root]));
   report.repositories = [...roots.keys()];
@@ -1882,7 +1890,8 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
       }
       const stamp = ports.cache ? stamps.get(kept.path) ?? allocationStamp(kept.path) : null;
       kept.bytes = rootBytes + await measureDirectory(accessible(kept.path), nested.map(row => accessible(row.path)), seenKept, false,
-        ports.accountingEntryLimit ?? 4096);
+        ports.accountingEntryLimit ?? 4096, Number.POSITIVE_INFINITY,
+        { entries: Number.POSITIVE_INFINITY, check: () => { if (ports.pause?.()) throw new SweepWalkDeferred("memory"); } });
       if (stamp && stamp === allocationStamp(kept.path)) kept.allocation = { at: accountingAt, stamp };
     } else {
       kept.bytes = previouslyKept.get(kept.path)?.bytes ?? 0;

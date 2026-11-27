@@ -40,7 +40,7 @@ for await (const line of lines) {
     }
     if (!Number.isFinite(request.deadline)) throw new Error("invalid sweep request deadline");
     const report = await withSweepWalk(request.deadline, () => {
-      const pause = sweepPressureCheckpoint();
+      const pause = sweepPressureCheckpoint(request.kind === "worktrees");
       return withAttemptTempDeadline(request.deadline, () => runSweep(request, () => pause(sweepMonotonicNow())), pause);
     });
     reply(report);
