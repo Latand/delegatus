@@ -257,13 +257,13 @@ test.each(["codex", "claude"] as const)("a replacement %s boot host can cite the
     const adopted = await adoptStructuredHostsAtStartup({
       registry, client: runtimeJournalClient(journal), orchestratorSeats: () => [], refreshTranscriptState: async () => {},
       resolveCodexOwner: () => ({ home: directory, kind: "managed" }),
-      resolveClaudeOwner: () => ({ home: directory, kind: "managed", transcriptRoot: directory, env: { HOME: directory } }),
+      resolveClaudeOwner: () => ({ home: directory, kind: "managed", transcriptRoot: directory, env: { NODE_ENV: "test", HOME: directory } }),
       adopt: engine === "codex" ? (store, options, env, filter, processed, hooks) =>
-        adoptCodexRegistryHosts(store, options, { ...env, LLV_STRUCTURED_HOSTS: "1" }, filter, processed, {
+        adoptCodexRegistryHosts(store, options, { ...env, NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" }, filter, processed, {
           ...hooks, adoptHost: (_id, opts) => open(opts.developerInstructions),
         }) : async () => [],
       adoptClaude: engine === "claude" ? (store, options, env, filter, processed, hooks) =>
-        adoptClaudeRegistryHosts(store, options, { ...env, LLV_STRUCTURED_HOSTS: "1" }, filter, processed, {
+        adoptClaudeRegistryHosts(store, options, { ...env, NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" }, filter, processed, {
           ...hooks, adoptHost: (_id, opts) => open(opts.appendSystemPrompt),
         }) : async () => [],
     });
