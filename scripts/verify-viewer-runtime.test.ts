@@ -22,6 +22,7 @@ import {
 } from "./verify-viewer-runtime";
 import { isOperatorOwnedDirectory, setStateOwnershipPathsForTests } from "../src/lib/stateOwnership";
 import { recordProvisionFixtureEvent, waitForProvisionFixtureReply } from "../src/lib/pipelines/provisionFixtureSupervisor";
+import { verifyFixtureLane } from "./verify-provisioning-release.mjs";
 
 /* What this file is defending is the shape of the check rather than its
    verdict: the verdict is produced by CI, under the pinned interpreter, on a
@@ -171,6 +172,70 @@ test("provisioning release tracing runs only for a completed App Router build", 
   expect(hasBuiltPipelineRoute(root)).toBe(false);
   fs.writeFileSync(path.join(root, ".next/BUILD_ID"), "fixture-build\n");
   expect(hasBuiltPipelineRoute(root)).toBe(true);
+});
+
+test.each(["delayed", "missing", "duplicate", "parked"] as const)("the release fixture checks a %s first-stage attempt separately from provisioning", async scenario => {
+  const root = fixtureRoot([]);
+  const worktreeDir = path.join(root, "worktree");
+  const common = path.join(root, ".git");
+  const key = "a".repeat(64);
+  const graph = path.join(common, "delegatus-dependencies", "v4", key, "node_modules");
+  fs.mkdirSync(graph, { recursive: true });
+  fs.writeFileSync(path.join(graph, "..", "installed.json"), JSON.stringify({ key }));
+  fs.mkdirSync(worktreeDir);
+  fs.symlinkSync(graph, path.join(worktreeDir, "node_modules"), "junction");
+  const planned = "b".repeat(40);
+  const lane = {
+    state: "running",
+    cursor: { stageId: "build", state: "pending" },
+    lastPassedCommit: planned,
+    worktreeDir,
+    stateDetail: scenario === "parked" ? "fixture stage admission refused" : null,
+    runs: [{ stageId: "build", attempts: [] as { n: number }[] }],
+  };
+  let reads = 0;
+  let now = 0;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      if (new URL(request.url).pathname === "/") {
+        return new Response(null, { headers: { "set-cookie": "llv_operator=fixture" } });
+      }
+      if (request.method === "POST") return Response.json({ pipeline: { id: "fixture" } }, { status: 201 });
+      if (request.method === "PATCH") return Response.json({ pipeline: { state: "provisioning" } });
+      reads += 1;
+      if (scenario === "missing" || reads >= 3) now = 60_000;
+      if (scenario === "duplicate") lane.runs[0].attempts = [{ n: 1 }, { n: 2 }];
+      if (scenario === "parked") lane.state = "needs_decision";
+      if (scenario === "delayed" && reads === 2) lane.runs[0].attempts = [{ n: 1 }];
+      return Response.json({ pipeline: lane });
+    },
+  });
+  const git = async (_cwd: string, ...args: string[]) => {
+    if (args.at(-1) === "HEAD") return planned;
+    if (args.at(-1) === "--git-common-dir") return common;
+    return "";
+  };
+  try {
+    const result = verifyFixtureLane(server.url.origin, root, "unused", git, {}, undefined);
+    if (scenario === "delayed") {
+      expect(await result).toMatchObject({ lane: "fixture", planned, graph: key });
+      expect(reads).toBe(2);
+    } else {
+      const reason = {
+        missing: "no first-stage attempt appeared within 60 s",
+        duplicate: "observed 2 first-stage attempts",
+        parked: "fixture stage admission refused",
+      }[scenario];
+      await expect(result).rejects.toThrow(reason);
+      expect(reads).toBe(1);
+    }
+  } finally {
+    clock.mockRestore();
+    await server.stop(true);
+  }
 });
 
 test.each(["check-ignore", "cache-permit"] as const)("private release fixture supervisor holds the %s reply", async reply => {
