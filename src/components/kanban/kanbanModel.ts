@@ -484,9 +484,11 @@ export function cardMatches(card: KanbanCard, query: string): boolean {
 }
 
 /** The Overview and filters use the board's motion, including provisioning
-    and declared operator holds. Paused historical stage chips are not work. */
+    and declared operator holds. Paused historical stage chips are not work.
+    A card whose reason is a fault (a message stuck in delivery, a failed
+    launch) stays in view though it waits on nobody: its state line names it. */
 export function cardHasLiveWork(card: KanbanCard): boolean {
-  return card.motion.key === "working" || card.motion.key === "needs-you";
+  return card.motion.key === "working" || card.motion.key === "needs-you" || card.reasons.length > 0;
 }
 
 interface CachedCard {

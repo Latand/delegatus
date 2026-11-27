@@ -190,6 +190,8 @@ test("member clock reuse preserves attention and activity boundaries in both tim
   const stuck = build({ ...view, now: NOW + 1800 }).columns.assigned.cards.find(card => card.id === "task:t733");
   expect(stuck?.reasons.map(reason => reason.kind)).toEqual(["delivery"]);
   expect(stuck?.needsYou).toBe(false);
+  /* The Overview keeps it in view, named by its fault. */
+  expect(cardHasLiveWork(stuck!)).toBe(true);
   expect(build({ ...view, now: NOW + 7201 }).columns.assigned.cards.find(card => card.id === "task:t731")?.needsYou).toBe(false);
 });
 

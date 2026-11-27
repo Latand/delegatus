@@ -8536,6 +8536,7 @@ describe("«Needs you» on the phone counts the forms that wait", () => {
                 subject: stuck.querySelector("[data-card-state]")?.getAttribute("data-card-state-subject") ?? null,
                 line: stuck.querySelector("[data-card-state]")?.textContent ?? null,
                 answer: Boolean(holder?.querySelector("[data-phone-card-answer]")),
+                badge: stuck.querySelector("[data-phone-card-badge]")?.textContent ?? null,
                 index: stuckIndex,
                 lastWait,
               } : null,
@@ -8548,6 +8549,7 @@ describe("«Needs you» on the phone counts the forms that wait", () => {
             const stuck = overview.stuck;
             check(stuck.subject === "fault" && (stuck.line ?? "").startsWith(t("cardState.fault.delivery")) && !(stuck.line ?? "").includes(t("cardState.you.plain")), `the stuck delivery's card reads «${stuck.line}» (${stuck.subject})`);
             check(!stuck.answer, "the stuck delivery's card offers «Answer»");
+            check(stuck.badge === null, `the stuck delivery's card repeats its fault in a badge «${stuck.badge}»`);
             check(stuck.index > stuck.lastWait, `the stuck delivery's card stands at ${stuck.index}, before a waiting card at ${stuck.lastWait}`);
           } else if (overview.active === "assigned") check(false, "tg-bot's «Мердж #88» is not on the In progress tab");
           await page.screenshot({ path: path.join(out, `${frame}-overview.png`) });

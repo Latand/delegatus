@@ -400,7 +400,9 @@ test("a questionnaire waiting row asks for an answer", async () => {
   const host = document.createElement("div"); document.body.appendChild(host);
   await act(async () => { root = createRoot(host); root.render(<AttentionPanel queue={[{ kind: "prototype", id: notice.id, notice }]} current={ALPHA} projectNames={{ [ALPHA]: "alpha" }} pipelines={[]} placement="docked" canDock onPlacement={() => {}} onClose={() => {}} onOpen={() => {}} />); });
   expect(host.textContent).toContain("Questions for you");
-  expect(host.querySelector("[data-attention-decision]")?.textContent).toBe("Answer the questions in the form; the project orchestrator receives your answers and carries them on.");
+  /* The kind's word says what to do, so the row repeats no instruction under its title. */
+  expect(host.querySelector("[data-attention-decision]")).toBeNull();
+  expect(host.textContent).toContain("Before work");
   expect(host.querySelector("[data-attention-prototype]")?.getAttribute("aria-label")).toBe("Answer the questions for «Before work»");
 });
 
