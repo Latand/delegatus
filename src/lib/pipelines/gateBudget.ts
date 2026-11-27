@@ -13,9 +13,17 @@ export const PUBLICATION_TRANSPORT_HOOK_MS = 180_000;
 export function publicationPushBudgetMs(changed: readonly string[] | null, retryAfterDeadline = false): number {
   if (retryAfterDeadline) return DEADLINE_RETRY_PUBLICATION_PUSH_MS;
   if (changed === null) return RUNTIME_PUBLICATION_PUSH_MS;
-  // Allow the observed multi-minute compilation and type checking under load,
-  // with room for the remaining runtime verifiers and pack, under a finite cap.
-  if (changed.some(file => file === "Dockerfile" || file.startsWith("bin/") || file.startsWith("src/runtime-host/"))) return RUNTIME_PUBLICATION_PUSH_MS;
+  // Long-lived cleanup workers and their shared admission paths are runtime
+  // inputs too. Their isolated touched-test sets can exceed the ordinary hook
+  // window even though they do not change the host runtime executable.
+  const runtimeInput = (file: string) => file === "Dockerfile" || file.startsWith("bin/") || file.startsWith("src/runtime-host/")
+    || file.startsWith("src/lib/runtime/") || file.startsWith("src/lib/cleaner/")
+    || file.startsWith("src/lib/state/diskPressure") || file === "src/lib/tempSweep.ts"
+    || file === "src/lib/worktreeSweep.worker.ts" || file.startsWith("src/lib/pipelines/worktreeSweep")
+    || file === "src/lib/pipelines/sweepWalkAdmission.ts";
+  // Allow observed multi-minute compilation and type checking under load, with
+  // room for the remaining runtime verifiers and pack, under a finite cap.
+  if (changed.some(runtimeInput)) return RUNTIME_PUBLICATION_PUSH_MS;
   return changed.some(file => /^src\/lib\/pipelines\/(?:engine(?:\.[^/]+)?\.ts|git\.ts|parkedPublication\.test\.ts)$/.test(file))
     ? PIPELINE_PUBLICATION_PUSH_MS : DEFAULT_PUBLICATION_PUSH_MS;
 }
