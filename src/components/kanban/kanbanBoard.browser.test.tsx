@@ -4,7 +4,7 @@ import type { BoardTask } from "@/lib/tasks/types";
 import { staleWorkingFixture, staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
 import { BoardEncoder } from "@/lib/boardEncoding";
 import { NATIVE_ASSOCIATION_AUTHORIZATION_ERROR } from "@/lib/attention/nativeAssociationForm";
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -3252,6 +3252,18 @@ describe("ProjectDashboard derivation", () => {
       }
     } finally { await browser.close(); server.stop(); }
   }, 180000);
+
+  browserTest("measures composer isolation on a routed 1710-conversation board", async () => {
+    const { measureComposerIsolation } = await import("./composerIsolation.browser.fixture");
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const listener = spyOn(Bun, "serve").mockImplementation(() => { throw Error("the isolation fixture must use page.route"); });
+    /* Chrome's singleton socket path is bounded, and an isolated TMPDIR is long. */
+    const sockets = ownedBrowserSocketEnvironment();
+    try {
+      const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+      try { await measureComposerIsolation(browser, derivationHostSample); } finally { await browser.close(); }
+    } finally { sockets.close(); listener.mockRestore(); }
+  }, 10_800_000);
 
   browserTest("keeps derivation below 50 ms while 357 cards stream and the open conversation scrolls", async () => {
     const out = path.resolve(process.env.PD_OUT ?? ".artifacts/project-dashboard-derivation");

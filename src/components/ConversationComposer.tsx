@@ -1,5 +1,6 @@
 "use client";
 
+import { GLOBAL_RUNTIME_GATES } from "@/hooks/runtimeSubscriptions";
 import { composerFilePayload, isComposerUploadRef } from "@/lib/filePolicy";
 
 import { messageTextAttachmentFromText, type MessageTextAttachment } from "@/lib/messageTextAttachment";
@@ -2343,7 +2344,7 @@ export const ConversationComposerCore = memo(function ConversationComposerCore({
   /* The runtime's own connection, for the phone's Queue slot (§4.2): while the
      bus is off this reads inert, so nothing changes on the landing-disabled
      path. */
-  const runtimeOffline = useRuntimeSelector(state => state.enabled && state.connection === "offline", false, Object.is, viewActive);
+  const runtimeOffline = useRuntimeSelector(state => state.enabled && state.connection === "offline", false, Object.is, viewActive, GLOBAL_RUNTIME_GATES);
   /* Context has no outbox to wait in: an insertion is either answered now or
      left unconfirmed, so with the runtime offline it is refused before
      anything is filed and the draft stays in the field. */
