@@ -98,7 +98,7 @@ import { emptyLaunchProfile, type ViewerConversationId } from "@/lib/accounts/mi
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { effectiveRemaining } from "@/lib/accounts/migration/quotaPolicy";
 import { freshSpecFor } from "@/lib/agent/cli";
-import { agentRegistry, deliveryMayHaveArrived, identityMaterializationFence, resolveConversationAlias, RegistryWriterBusyError, REGISTRY_WRITER_BUSY, type AgentRegistryEntry, type DurableMembershipInput, type RegistryFile, type StructuredTerminationCapture } from "@/lib/agent/registry";
+import { agentRegistry, conversationIdsResolvingTo, deliveryMayHaveArrived, identityMaterializationFence, resolveConversationAlias, RegistryWriterBusyError, REGISTRY_WRITER_BUSY, type AgentRegistryEntry, type DurableMembershipInput, type RegistryFile, type StructuredTerminationCapture } from "@/lib/agent/registry";
 import { registryRowProjection, registryRowsMatching, type RegistryRowProjector } from "@/lib/agent/sqliteRegistryStore";
 import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
 import { transcriptAllowed } from "@/lib/agent/spawnParent";
@@ -197,7 +197,9 @@ import { matchesShortId, resolveShortId, shortId } from "@/lib/shortIds";
 import { pipelineStageRuntimeProfile, type PipelineStageRuntimeProfile } from "./stageSandbox";
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
 import { firstRunsElsewhere, TASK_RUNS_ELSEWHERE } from "@/lib/links/linked";
-import { parkedProviderError, pipelineAttemptMayBeWorking, pipelineAttemptReleased, pipelineHostHasLiveWork, pipelinePublicationHoldsHost, providerRecoveryTurnMatches } from "./hostRetirement";
+import { parkedProviderError, pipelineAttemptMayBeWorking, pipelineAttemptReleased, pipelineHostHasLiveWork, pipelinePublicationHoldsHost, providerRecoveryAttempt, providerRecoveryTurnMatches, readProviderRecoveryTurnProof } from "./hostRetirement";
+import { pipelineRetirementReader } from "./retirementEvidence";
+import { handoffQueue } from "@/lib/runtime/handoffQueueStore";
 import { recordedAttemptReceipts, recordedHostHeld } from "@/lib/recordedChecks/store";
 import { recordedReportReceipts } from "@/lib/recordedChecks/reportGate";
 import { pipelineRecordRevalidator } from "./revalidation";
@@ -1591,10 +1593,12 @@ export async function retirePipelineStageAgent(
       return { outcome: "deferred" };
     }
     const reconcile = () => previous ? stopPipelineStageAgent(target, probes) : { outcome: "deferred" as const };
-    /* A missing stream cannot prove the host is idle. Automatic retirement
-       leaves it retryable; callers without this fence may use its recorded identity. */
     if (probe.orphaned()) {
-      if (previous || probes.requireIdleEvidence) return await reconcile();
+      if (previous) return await reconcile();
+      if (ownerKey && probes.providerRecovery) {
+        return await stopRefusedStageOrphan(target, probe, probes, ownerKey, probes.providerRecovery);
+      }
+      if (probes.requireIdleEvidence) return { outcome: "deferred" };
       return await stopStageHostByRecordedIdentity(target, probe, probes.termination ?? {}, () => {
         if (signal?.aborted || !probe.orphaned()) return { status: 409, error: "recorded orphan authority changed" };
         return probes.observationGuard?.() ?? null;
@@ -1618,6 +1622,63 @@ export async function retirePipelineStageAgent(
   } catch {
     return { outcome: "deferred" };
   }
+}
+
+/** A refused Codex turn can leave an engine behind without a command stream.
+ * Validate the same durable recovery claim before using the recorded PID. */
+async function stopRefusedStageOrphan(
+  target: PipelineStageHostRef, probe: StageHostProbe, probes: StageStopProbes, ownerKey: string,
+  recovery: NonNullable<StageStopProbes["providerRecovery"]>,
+): Promise<PipelineStageStopResult> {
+  if (probe.key.engine !== "codex" || target.stageId !== recovery.stageId || target.attempt !== recovery.attempt) {
+    return { outcome: "deferred" };
+  }
+  const registry = agentRegistry();
+  const recoveryTarget = { ...probe.key, conversationId: probe.conversationId, agentPath: probe.transcriptPath };
+  const entryKey = sessionKeyId(probe.key);
+  const owner = registry.readOnlySnapshot().entries[entryKey];
+  if (!owner) return { outcome: "deferred" };
+  const currentAttempt = () => {
+    const lane = findPipelineRecord(recovery.pipelineId);
+    const attempt = providerRecoveryAttempt(lane ? [lane] : [], recovery, recoveryTarget,
+      id => registry.canonicalConversationId(id as ViewerConversationId));
+    return lane?.state === "running" && attempt?.state === "running" && attempt.launchId === target.launchId
+      && !attempt.providerWait!.actionAt && codexCybersecurityRefusal(attempt.providerWait!.condition)
+      ? attempt : null;
+  };
+  const attempt = currentAttempt();
+  if (!attempt) return { outcome: "deferred" };
+  const cutCurrent = await readProviderRecoveryTurnProof(attempt, recovery);
+  if (!cutCurrent) return { outcome: "deferred" };
+  const signal = stageStopSignal(probes);
+  const changed = { status: 409 as const, error: "recorded refusal orphan authority changed" };
+  let reader: Awaited<ReturnType<typeof pipelineRetirementReader>> | undefined;
+  const guard = () => {
+    if (signal?.aborted || !cutCurrent() || currentAttempt()?.startedAt !== attempt.startedAt) return changed;
+    const snapshot = registry.readOnlySnapshot();
+    const generation = snapshot.conversations[probe.conversationId]?.generations.at(-1);
+    const row = snapshot.entries[entryKey];
+    if (generation?.id !== probe.key.sessionId || generation.path !== probe.transcriptPath
+      || !row || row.claimEpoch !== owner.claimEpoch || row.claimOwner !== owner.claimOwner
+      || row.structuredHost?.writerClaimEpoch !== owner.structuredHost?.writerClaimEpoch
+      || probe.resident() && !probe.orphaned()) return changed;
+    const conversations = conversationIdsResolvingTo(snapshot, probe.conversationId);
+    if (conversations.some(id => outstandingDeliverySince(snapshot, id) !== null)
+      || handoffQueue().rows().some(row => (conversations.some(id => id === row.conversationId)
+        || row.engine === probe.key.engine && row.engineSessionId === probe.key.sessionId)
+        && row.pendingDeliveries.some(delivery => !row.replayedDeliveryIds.includes(delivery.deliveryId)))
+      || !reader || reader({ ...recoveryTarget, conversations, launchId: target.launchId }, recovery)) return changed;
+    return probes.observationGuard?.() ?? null;
+  };
+  const refresh = async () => {
+    if (signal?.aborted || await readIdleStop(ownerKey)) return changed;
+    reader = await pipelineRetirementReader();
+    return guard();
+  };
+  if (await refresh()) return { outcome: "deferred" };
+  return await stopStageHostByRecordedIdentity(target, probe, {
+    ...probes.termination, authorizeAsync: refresh, terminateOwnedHost: async () => false,
+  }, guard);
 }
 
 /** Whether the registry row shows a stage host at work: its engine can still
@@ -2584,7 +2645,8 @@ export function defaultPipelinePorts(
           : { outcome: "failed", error: "stage launch wrote native turn evidence while its host stopped" };
       })
       : options?.onlyIfIdle
-      ? retirePipelineStageAgent(target, { operationId: options.operationId, providerRecovery: options.providerRecovery, requireIdleEvidence: options.requireIdleEvidence })
+      ? retirePipelineStageAgent(target, { operationId: options.operationId, providerRecovery: options.providerRecovery,
+        requireIdleEvidence: options.requireIdleEvidence, signal: dependencies.runtimeObservation?.signal })
       : stopPipelineStageAgent(target, { operationId: options?.operationId, automatic: options?.automatic,
         ...(options?.recordedSurvivors ? { recordedSurvivors: options.recordedSurvivors } : {}) }),
     stopInterruptedStageAgent: async (target, options) => {
@@ -4587,10 +4649,12 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
     return false;
   };
   if (!await confirmProviderCut()) return true;
-  // The retirement callback validates the durable attempt independently.
-  if (providerLimit) await persist();
   const host = { stageId: stage.id, attempt: attempt.n, launchId: attempt.launchId,
     conversationId: attempt.conversationId, agentPath: attempt.agentPath, paneId: attempt.paneId };
+  if (codexRefusal && attempt.controllerWait?.providerStopRetry === "held"
+    && (await ports.stageHostResident(host) || host.paneId && await ports.paneAgentAlive(host.paneId))) return true;
+  // The retirement callback validates the durable attempt independently.
+  if (providerLimit) await persist();
   const stopped = await stopStageForRecovery(host, ports, providerLimit ? {
       onlyIfIdle: true, providerRecovery: { pipelineId: pipeline.id, stageId: stage.id, attempt: attempt.n,
         turnTs: attempt.providerWait?.turnTs ?? 0, controlGeneration: pipeline.controlGeneration ?? null },
@@ -4609,9 +4673,18 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
     if (waiting) {
       pipeline.stateDetail = `waiting for the cut stage host to terminate after ${condition.label}; ${stopReason}`;
     } else if (codexRefusal && stopped.outcome !== "unresolved") {
-      delete attempt.controllerWait;
-      bookControllerWaitRound(attempt, now, now, ports, budget);
-      pipeline.stateDetail = `stage host termination deadline elapsed after ${condition.label}. ${stopReason}. Retrying automatically at ${attempt.controllerWait!.retryAfter}`;
+      const wait = attempt.controllerWait!;
+      const owned = stopped.outcome === "unconfirmed" && stopped.operationId !== null;
+      const retry = owned || wait.providerStopRetry === undefined;
+      if (!owned) wait.providerStopRetry = retry ? "scheduled" : "held";
+      else delete wait.providerStopRetry;
+      if (retry) {
+        wait.retryAfter = new Date(unixMs(now) + budget.retryMaxMs).toISOString();
+        ports.scheduleTick?.(budget.retryMaxMs);
+      }
+      pipeline.stateDetail = `stage host termination deadline elapsed after ${condition.label}. ${stopReason}. ${retry
+        ? `Retrying automatically at ${wait.retryAfter}`
+        : "Waiting for recorded host exit or retry-stage"}`;
     } else {
       recordProviderRecovery(attempt, "park", condition, reason, now);
       attempt.completedAt = now;
@@ -18469,6 +18542,11 @@ async function applyPipelinePatch(
           && codexCybersecurityRefusal(wait.condition)) {
           // Keep the same attempt and stop custody. Its scheduled confirmation
           // can continue with the recorded host still resident.
+          if (attempt.controllerWait?.providerStopRetry === "held") {
+            attempt.controllerWait.providerStopRetry = "scheduled";
+            attempt.controllerWait.retryAfter = ports.now();
+            await persist();
+          }
           requestPipelineTick();
           return { pipeline };
         }

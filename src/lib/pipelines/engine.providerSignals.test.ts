@@ -1,5 +1,8 @@
-import { expect, test, tickPipelines, loadPipelines, savePipelines, LIMITED_ACCOUNT, SPARE_ACCOUNT, stageTranscript, readFixtures, stampPipelinePrompt, providerRecoveryHarness, cutChainKit, CHAIN_RESET, otherKindCut, largeToolResult, engineModule, patchPipeline, ProjectAccountRefusedError } from "./engine.fixture";
+import { expect, test, tickPipelines, loadPipelines, savePipelines, LIMITED_ACCOUNT, SPARE_ACCOUNT, stageTranscript, readFixtures, stampPipelinePrompt, providerRecoveryHarness, cutChainKit, CHAIN_RESET, otherKindCut, largeToolResult, engineModule, patchPipeline, ProjectAccountRefusedError, AgentRegistry, fs, path, setAgentRegistryForTests, spyOn } from "./engine.fixture";
 import { pipelineStageRead } from "@/lib/mcp/compactAnswers";
+import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
+import { captureProcessIdentity } from "@/lib/processIdentity";
+import { procBackend } from "@/lib/proc";
 import { providerRecoveryAttempt, providerRecoveryTurnMatches } from "./hostRetirement";
 
 type RefusalHarness = Awaited<ReturnType<typeof providerRecoveryHarness>>;
@@ -96,6 +99,149 @@ function refusalHosts(f: RefusalHarness) {
 }
 
 const latest = () => loadPipelines()[0]!.runs[0]!.attempts.at(-1)!;
+
+test.each(["current", "changed during capture"] as const)(
+  "the real orphan stop checks the refused turn before relaunching on Opus (%s)", async proof => {
+    const f = await providerRecoveryHarness("codex", "other", REFUSAL_NOTICE);
+    const hosts = refusalHosts(f);
+    const id = loadPipelines()[0]!.id;
+    hosts.refuse(latest(), "other", REFUSAL_NOTICE);
+    await hosts.settle(id);
+
+    const root = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "refusal-orphan-"));
+    const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+    const launch = beginLegacySpawnFixture(registry, { engine: "codex", cwd: root, transport: "structured", accountId: LIMITED_ACCOUNT });
+    if (launch.kind !== "created") throw new Error("orphan fixture launch was unavailable");
+    const pid = 2_000_000_124;
+    let alive = true;
+    const originalIdentity = procBackend.processIdentity.bind(procBackend), originalAlive = procBackend.pidAlive.bind(procBackend);
+    const identity = (candidate: number) => candidate === pid ? alive ? "fixture-refusal-orphan" : null : originalIdentity(candidate);
+    const living = (candidate: number) => candidate === pid ? alive : originalAlive(candidate);
+    const identitySpy = spyOn(procBackend, "processIdentity").mockImplementation(identity);
+    const aliveSpy = spyOn(procBackend, "pidAlive").mockImplementation(living);
+    const signals: number[] = [];
+    let captured = false;
+    try {
+      const ref = captureProcessIdentity(pid);
+      const [lane] = loadPipelines();
+      const refused = lane!.runs[0]!.attempts[1]!;
+      const key = { engine: "codex" as const, sessionId: ["00000000", "0000", "4000", "8000", "000000000002"].join("-") };
+      const agentPath = path.join(root, `${key.sessionId}.jsonl`);
+      expect(registry.settleSpawn(launch.receipt.launchId, {
+        key, artifactPath: agentPath, cwd: root, accountId: LIMITED_ACCOUNT, status: "dead", host: null,
+        structuredHost: { kind: "codex-app-server", endpoint: "fixture:stdio", process: ref, eventCursor: 1,
+          protocolVersion: "fixture-v1", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+        claimEpoch: 1, claimOwner: "structured-host:fixture", pendingAction: null,
+      }).kind).toBe("settled");
+      setAgentRegistryForTests(registry);
+      Object.assign(refused, { agentPath, sessionId: key.sessionId,
+        launchId: launch.receipt.launchId, conversationId: launch.receipt.conversationId });
+      savePipelines([lane!]);
+      const allowPath = f.h.ports.sourcePathAllowed;
+      f.h.ports.sourcePathAllowed = file => file === agentPath || allowPath(file);
+      const real = engineModule.defaultPipelinePorts();
+      f.h.ports.stageHostResident = real.stageHostResident;
+      f.h.ports.stopStageAgent = async (target, options) => {
+        expect(await real.stageHostResident(target)).toBe(true);
+        const result = await engineModule.retirePipelineStageAgent(target, {
+          ...options, client: null, action: async () => { throw new Error("orphan must use recorded identity"); },
+          termination: { processIdentity: identity, bootEpoch: () => ref.bootEpoch ?? null, pidAlive: living,
+            ppidMap: () => new Map(), processGroupId: () => null,
+            signal: candidate => { signals.push(candidate); alive = false; },
+            ...(proof === "changed during capture" ? { persistCapturedTree: async () => {
+              captured = true;
+              fs.appendFileSync(agentPath, "\n");
+              return true;
+            } } : {}),
+          },
+        });
+        expect(result.outcome).toBe(proof === "current" ? "stopped" : "failed");
+        if (proof === "changed during capture") {
+          expect("error" in result ? result.error : "").toContain("recorded refusal orphan authority changed");
+        }
+        return result;
+      };
+      hosts.refuse(refused, "other", REFUSAL_NOTICE);
+      fs.copyFileSync(path.join(process.env.LLV_STATE_DIR!, "codex-refusal-2.jsonl"), agentPath);
+      readFixtures(f.h, { [agentPath]: agentPath });
+      await engineModule.recoverPipelineProviderTurn(id, f.h.ports);
+      if (proof === "changed during capture") {
+        expect(captured).toBe(true);
+        expect(signals).toEqual([]);
+        expect(latest()).toMatchObject({ n: 2, state: "running" });
+        expect(f.h.spawnInputs).toHaveLength(2);
+      } else {
+        for (let tick = 0; tick < 4; tick++) await tickPipelines([], f.h.ports);
+        expect(signals).toEqual([pid]);
+        expect(loadPipelines()[0]!.state).toBe("running");
+        expect(latest()).toMatchObject({ n: 3, state: "running", effectiveRole: { engine: "claude", model: "opus" } });
+        expect(f.h.spawnInputs).toHaveLength(3);
+      }
+    } finally {
+      setAgentRegistryForTests(null);
+      identitySpy.mockRestore();
+      aliveSpy.mockRestore();
+    }
+  });
+
+test.each(["authority returns on retry", "host exits while held", "retry-stage while held"] as const)(
+  "a deferred refusal stop reaches its deadline without admitting repeated stops (%s)", async recovery => {
+    const f = await providerRecoveryHarness("codex", "other", REFUSAL_NOTICE);
+    const hosts = refusalHosts(f);
+    const id = loadPipelines()[0]!.id;
+    hosts.refuse(latest(), "other", REFUSAL_NOTICE);
+    await hosts.settle(id);
+    const refused = latest();
+    const stop = f.h.ports.stopStageAgent;
+    let admitted = false;
+    let calls = 0;
+    f.h.ports.stopStageAgent = async (target, options) => {
+      calls += 1;
+      if (!hosts.resident.has(refused.conversationId!)) return { outcome: "not-running" };
+      return admitted ? stop(target, options) : { outcome: "deferred" };
+    };
+    hosts.refuse(refused, "other", REFUSAL_NOTICE);
+    await engineModule.recoverPipelineProviderTurn(id, f.h.ports);
+    const wait = latest().controllerWait!;
+    expect(wait.rounds).toBe(1);
+    f.advance(Date.parse(wait.startedAt) + wait.budgetMs! - f.now());
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]!.stateDetail).toContain("termination deadline elapsed");
+    expect(loadPipelines()[0]!.stateDetail).toContain("idle stop authority was deferred");
+    expect(latest().controllerWait).toMatchObject({ startedAt: wait.startedAt, providerStopRetry: "scheduled" });
+    expect(calls).toBe(2);
+    expect(f.h.spawnInputs).toHaveLength(2);
+
+    admitted = recovery === "authority returns on retry";
+    f.advance(Date.parse(latest().controllerWait!.retryAfter) - f.now());
+    await tickPipelines([], f.h.ports);
+    expect(calls).toBe(3);
+    if (!admitted) {
+      const held = loadPipelines()[0]!;
+      expect(held.stateDetail).toContain("Waiting for recorded host exit or retry-stage");
+      expect(latest().controllerWait).toMatchObject({ startedAt: wait.startedAt, providerStopRetry: "held" });
+      for (let pass = 0; pass < 4; pass++) {
+        f.advance(30 * 60_000);
+        await tickPipelines([], f.h.ports);
+        expect(loadPipelines()[0]!.stateDetail).toBe(held.stateDetail);
+      }
+      expect(calls).toBe(3);
+      expect(f.h.spawnInputs).toHaveLength(2);
+      if (recovery === "host exits while held") hosts.resident.delete(refused.conversationId!);
+      else {
+        admitted = true;
+        const retry = await patchPipeline(id, { action: "retry-stage", expectedStageId: held.cursor!.stageId,
+          expectedAttempt: refused.n }, f.h.ports);
+        expect(retry).toMatchObject({ pipeline: { state: "running" } });
+        expect(latest().controllerWait?.providerStopRetry).toBe("scheduled");
+      }
+    }
+    for (let tick = 0; tick < 4; tick++) await tickPipelines([], f.h.ports);
+    expect(calls).toBe(recovery === "authority returns on retry" ? 3 : 4);
+    expect(hosts.resident.has(refused.conversationId!)).toBe(false);
+    expect(latest()).toMatchObject({ n: 3, state: "running", effectiveRole: { engine: "claude", model: "opus" } });
+    expect(f.h.spawnInputs).toHaveLength(3);
+  });
 
 test.each(["slow exit", "confirmation deadline", "retry-stage during confirmation"] as const)(
   "the second Codex refusal keeps automatic custody until the host is gone (%s)", async timing => {

@@ -214,10 +214,13 @@ recovery automatic. Operator stop, pause, close and delivered operator messages
 retain their cancellation fences. Unknown message authorship stays external.
 
 A stage attempt Codex ends with its cybersecurity refusal is relaunched by the
-controller once its host is idle. The controller confirms the identity-fenced
-stop, keeps the checkout, and starts a fresh attempt. If the stop remains
-unconfirmed at the deadline, the lane records the reason and schedules another
-confirmation pass. Refusals are counted per refused turn
+controller once its host is idle. For an orphan with a verified refusal, the
+controller can use the recorded process identity. After confirming the stop,
+it keeps the checkout and starts a fresh attempt. At the termination deadline,
+the lane records the reason and continues confirming an owned stop. If stop
+authority is still deferred, the controller makes one further automatic
+attempt, then waits for proof of exit or a `retry-stage` request on the same
+attempt. Refusals are counted per refused turn
 across the stage's attempts in the lane, so a refusal of a turn the agent
 continued after an earlier refusal counts too. The first refusal relaunches on
 Codex. The second moves the stage to the role's Claude equivalent at Opus,
