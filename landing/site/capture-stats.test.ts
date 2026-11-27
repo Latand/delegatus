@@ -15,7 +15,7 @@ describe("landing capture stats binding", () => {
 
     expect((await worker.fetch(request, env)).status).toBe(204);
     expect(points).toEqual([{ event: "copy_prompt", agent: "claude", lang: "en", country: "UA" }]);
-    await expect(env.STATS.get(env.STATS.idFromName("stats")).recordPing({} as never, "UA")).rejects.toThrow(
+    await expect(env.STATS.get(env.STATS.idFromName("stats")).recordPing({} as never, "UA", 0)).rejects.toThrow(
       "Install pings do not belong in landing captures",
     );
   });

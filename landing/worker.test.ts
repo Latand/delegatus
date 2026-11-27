@@ -595,7 +595,7 @@ describe("stats Worker and store", () => {
     expect(response.status).toBe(200);
     const html = await response.text();
     expect(html.match(/This device · Added 2026-10-11 12:30 UTC/g)).toHaveLength(1);
-    const visibleRows = [...html.matchAll(/<li>(.*?)<\/li>/gs)].map(([row]) =>
+    const visibleRows = [...html.matchAll(/<li>([\s\S]*?)<\/li>/g)].map(([row]) =>
       row.replace(/<form[^>]*>[\s\S]*?<\/form>/g, "").replace(/\s+/g, " ").trim());
     expect(visibleRows).toHaveLength(2);
     expect(new Set(visibleRows).size).toBe(2);
