@@ -4094,7 +4094,7 @@ export function createMcpToolService(
         () => callTool(tool, logicalArgs, context));
     }
     const curatorResponse = context.curatorResponse ?? (tool === "curate_rules" ? {} : undefined);
-    const authority = context.responseAuthority ?? (board || tool === "pipeline_action" && args.action === "set-src" ? { checks: [] } : undefined);
+    const authority = context.responseAuthority ?? (board || tool === "start_project" || tool === "pipeline_action" && args.action === "set-src" ? { checks: [] } : undefined);
     context = { ...context, responseAuthority: authority, curatorResponse };
     try {
       if (board) {
@@ -5602,7 +5602,8 @@ export function createViewerMcpServer(service: McpToolService, tools: readonly M
       });
       const finishClaim = trackMcpClaim(`${toolName}:${clientRequestId(args as McpToolArgs) ?? "unkeyed"}`);
       try {
-        const authority: McpResponseAuthority | undefined = BOARD_READ_TOOLS.has(toolName) || toolName === "pipeline_action" && args.action === "set-src" ? { checks: [] } : undefined;
+        const authority: McpResponseAuthority | undefined = BOARD_READ_TOOLS.has(toolName) || toolName === "start_project"
+          || toolName === "pipeline_action" && args.action === "set-src" ? { checks: [] } : undefined;
         const curatorResponse: McpToolCallContext["curatorResponse"] = toolName === "curate_rules" ? {} : undefined;
         const call = () => service.callTool(toolName, args as McpToolArgs, {
           responseAuthority: authority,

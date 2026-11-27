@@ -9567,13 +9567,19 @@ export function viewerMcpBindings(
       };
       if (!context?.projectStartReceipts) throw new McpToolRefusal("project start receipts are unavailable", { code: "receipts_not_ready", retryable: true });
       assertCaller();
+      const refuse = (error: unknown): never => {
+        if (error instanceof ProjectStartRefusal) throw new McpToolRefusal(error.code, { code: error.code, status: error.status, retryable: error.retryable });
+        throw error;
+      };
       try {
         const source = projectStartAuthority(id);
         return await startProject(startProjectInput.parse(args), source, assertCaller, context.projectStartReceipts,
-          check => retainResponseAuthority(context, check));
+          check => retainResponseAuthority(context, () => {
+            try { check(); }
+            catch (error) { refuse(error); }
+          }));
       } catch (error) {
-        if (error instanceof ProjectStartRefusal) throw new McpToolRefusal(error.code, { code: error.code, status: error.status, retryable: error.retryable });
-        throw error;
+        return refuse(error);
       }
     },
     send_message_to_orchestrator: async (args, context) => {

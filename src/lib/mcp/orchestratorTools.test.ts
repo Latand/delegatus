@@ -15,6 +15,8 @@ import { defaultStartHost } from "@/lib/runtime/structuredSpawn";
 import { projectForCwd } from "@/lib/scanner/describe";
 import { loadTasksByIds } from "@/lib/tasks/store";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
@@ -43,7 +45,7 @@ import { setDeputyRootResolverForTests } from "@/lib/orchestrator/deputyAsker";
 
 import { viewerMcpBindings, viewerMcpRecoverableTools, productionDomainDependencies, productionViewerControlDependencies, type ViewerControlDependencies, type ViewerMcpDomainDependencies } from "./bindings";
 
-import { createMcpToolService, McpDispatchUncertainError, MemoryMcpReceiptStore, receiptKey, SqliteMcpReceiptStore } from "./server";
+import { createMcpToolService, createViewerMcpServer, McpDispatchUncertainError, MemoryMcpReceiptStore, receiptKey, SqliteMcpReceiptStore } from "./server";
 import { projectStartFixtureSeat } from "./projectStart.fixture";
 
 /*
@@ -80,7 +82,7 @@ function seatActive(project: string, conversationId: string, transcriptPath: str
   completeOrchestratorSeatIntent({ project, clientRequestId: "seed_0000001", conversationId, path: transcriptPath, now: AT });
 }
 
-for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "hostile", "recipient-replaced", "recipient-replaced-after-claim", "codex-pre-exec", "claude-pre-exec"] as const) {
+for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "hostile", "recipient-replaced", "recipient-replaced-after-claim", "recipient-replaced-before-response", "codex-pre-exec", "claude-pre-exec"] as const) {
   test(`project start keeps original-key custody through the real Viewer's ${mode} path`, async () => {
     const oldHome = process.env.HOME;
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "project-start-home-"));
@@ -139,7 +141,7 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
       });
       let existing: ReturnType<typeof projectStartFixtureSeat> | undefined;
       let gitHead: string | undefined;
-      if (mode === "existing" || mode === "recipient-replaced" || mode === "recipient-replaced-after-claim") {
+      if (mode === "existing" || mode === "recipient-replaced" || mode === "recipient-replaced-after-claim" || mode === "recipient-replaced-before-response") {
         fs.mkdirSync(targetRoot);
         fs.writeFileSync(path.join(targetRoot, "readme.txt"), "Existing fixture\n");
         const prepared = await preparePipelineRepository(targetRoot);
@@ -195,6 +197,42 @@ for (const mode of ["new", "existing", "changed-caller", "ambiguous-folder", "ho
       const key = receiptKey("start_project", args.clientRequestId, source.conversationId);
       const recorded = receipts.lookup(key);
       if (!recorded?.binding?.projectStart) throw new Error("missing project start claim");
+      if (mode === "recipient-replaced-before-response") {
+        if (!existing) throw new Error("fixture recipient was unavailable");
+        const recipient = existing.entry;
+        let replace = false;
+        let acceptedLookups = 0;
+        const server = createViewerMcpServer({
+          callTool: async (tool, input, context) => {
+            const result = await service.callTool(tool, input, context);
+            if (result.ok && result.replayed) {
+              acceptedLookups += 1;
+              if (replace) testRegistry.upsert({ ...recipient, claimOwner: "replacement-before-response" });
+            }
+            return result;
+          },
+        }, ["start_project"]);
+        const client = new Client({ name: "viewer-test", version: "1.0.0" });
+        const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+        try {
+          await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+          const request = { name: "start_project", arguments: { ...args, recoveryOnly: true } };
+          const current = await client.callTool(request);
+          expect(current.structuredContent).toMatchObject({ ok: true, operationId: accepted.operationId, replayed: true });
+          replace = true;
+          const refused = await client.callTool(request);
+          expect(refused.structuredContent).toMatchObject({ ok: false, code: "target_changed" });
+          expect(refused.structuredContent).not.toHaveProperty("operationId");
+          expect(refused.structuredContent).not.toHaveProperty("seat");
+          expect(acceptedLookups).toBe(2);
+          expect(receipts.lookup(key)).toEqual(recorded);
+          expect(launchCount).toBe(0);
+        } finally {
+          await client.close();
+          await server.close();
+        }
+        return;
+      }
       if (mode === "ambiguous-folder") {
         const previous = recorded.binding;
         const checkpoint = previous.projectStart!;

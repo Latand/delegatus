@@ -725,7 +725,9 @@ describe("MCP tool service", () => {
     ])) as unknown as McpToolBindings;
     const service = createMcpToolService(bindings, new MemoryMcpReceiptStore());
 
-    for (const toolName of MCP_TOOL_NAMES.filter(name => !RECEIPT_FREE_READ_TOOLS.has(name))) {
+    // The project-start binding owns its receipt transitions. Its original-key
+    // replay is exercised through the real binding and the packaged transport.
+    for (const toolName of MCP_TOOL_NAMES.filter(name => name !== "start_project" && !RECEIPT_FREE_READ_TOOLS.has(name))) {
       const args = { clientRequestId: `request-${toolName}`, value: toolName, ...(toolName === "backfill_worktree_projects" ? { dryRun: false } : {}) };
       const first = await service.callTool(toolName, args);
       const replay = await service.callTool(toolName, args);
@@ -1993,6 +1995,7 @@ describe("MCP tool service", () => {
     try {
       const listed = await client.listTools();
       expect(listed.tools.map((tool) => tool.name)).toEqual([
+        "start_project",
         "grant_agent_browser_access",
         "voice_tools",
         "spawn_agent",
