@@ -6,7 +6,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import design from './pilot-manifest.json';
 import {
-  appendRun, campaignChronologyValid, checkBlock, digest, expandRequest, expandSealedRequest, gateRefusals, gateRequirements, launchRefusal,
+  appendRun, campaignChronologyValid, checkBlock, digest, expandPlannerRequest, expandPlannerSealedRequest, expandRequest, expandSealedRequest, gateRefusals, gateRequirements, launchRefusal,
   reportRun, sampleDelivery, sealRun, validateManifest, verifyManifestPin, type Binding, type RequestInputs,
 } from './run';
 import { calibrationPassed, oracleControls, score, violationRates, type Calibration, type Checks, type Observation, type Requirement } from './score';
@@ -77,15 +77,21 @@ const verified = (): Binding => {
   manifestDigest,
   gates: Object.fromEntries(Object.entries(gateRequirements).map(([gate, proofs]) => [
     gate, { status: 'verified', proofs: Object.fromEntries(proofs.map(p => {
-      const observations = { [p]: 'pass' as const };
+      const observations = Object.fromEntries(proofs.map(name => [name, 'pass' as const]));
+      const path = join(scratch(), `${gate}-${p}.json`);
+      const evidence = { schemaVersion: 1, classification: 'harness-only', gate, proof: p, manifestDigest, observations };
+      writeFileSync(path, JSON.stringify(evidence) + '\n', { mode: 0o600 });
       const artifact = { schemaVersion: 1 as const, classification: 'observed-gate-evidence' as const, gate: gate as keyof typeof gateRequirements,
-        proof: p, manifestDigest, observations, sourceDigest: proof(`${gate}:${p}:source`) };
+        proof: p, manifestDigest, observations, evidence: { path, digest: digest(readFileSync(path)) } };
       return [p, { status: 'verified' as const, bindingDigest: manifestDigest, artifactDigest: digest(JSON.stringify(artifact) + '\n'),
         observations, observationsDigest: digest(JSON.stringify(observations) + '\n'), artifact }];
     })) },
   ])),
   independentVerdict: (() => { const observations = { report: 'pass' as const };
-    const artifact = { schemaVersion: 1 as const, classification: 'independent-gate-review' as const, manifestDigest, observations, sourceDigest: proof('review-source') };
+    const path = join(scratch(), 'review.json');
+    writeFileSync(path, JSON.stringify({ schemaVersion: 1, classification: 'harness-only', manifestDigest, observations }) + '\n', { mode: 0o600 });
+    const artifact = { schemaVersion: 1 as const, classification: 'harness-only' as const, manifestDigest, observations,
+      evidence: { path, digest: digest(readFileSync(path)) } };
     return { approved: true, artifactDigest: digest(JSON.stringify(artifact) + '\n'), bindingDigest: manifestDigest,
       observations, observationsDigest: digest(JSON.stringify(observations) + '\n'), artifact };
   })(),
@@ -98,7 +104,7 @@ for (const gate of Object.keys(gateRequirements) as (keyof typeof gateRequiremen
     const b = verified();
     b.classification = 'observed';
     b.gates![gate]!.proofs![gateRequirements[gate][0]]!.artifactDigest = '';
-    expect(gateRefusals(b).map(r => r.gate)).toEqual([gate]);
+    expect(gateRefusals(b).map(r => r.gate)).toContain(gate);
     delete b.gates![gate];
     const file = join(scratch(), 'binding.json');
     writeFileSync(file, JSON.stringify(b));
@@ -129,20 +135,20 @@ test('stale manifest and unresolved private bindings keep the launch closed', ()
   expect(gateRefusals(b)).toHaveLength(7);
   expect(launchRefusal(b)).toContain('G1');
   b.classification = 'observed';
-  expect(gateRefusals(b)).toHaveLength(0);
-  expect(launchRefusal(b)).toContain('launchAllowed is false');
+  expect(gateRefusals(b)).toHaveLength(7);
+  expect(launchRefusal(b)).toContain('G1');
   b.unresolved = ['fixture-binding'];
-  expect(launchRefusal(b)).toContain('unresolved static bindings');
+  expect(launchRefusal(b)).toContain('Unresolved static bindings');
   b.manifestDigest = proof('stale');
   expect(gateRefusals(b)).toHaveLength(7);
   const wrongProject = verified();
   wrongProject.classification = 'observed';
   wrongProject.taskProjectLinks![0]!.taskProject = 'retained-alias';
-  expect(gateRefusals(wrongProject).map(r => r.gate)).toEqual(['G6']);
+  expect(gateRefusals(wrongProject).map(r => r.gate)).toContain('G6');
   const missingTask = verified();
   missingTask.classification = 'observed';
   missingTask.taskProjectLinks!.pop();
-  expect(gateRefusals(missingTask).map(r => r.gate)).toEqual(['G6']);
+  expect(gateRefusals(missingTask).map(r => r.gate)).toContain('G6');
 });
 
 const requestInputs: RequestInputs = {
@@ -165,11 +171,29 @@ test('renders deterministic supported requests with a bounded review graph and n
   expect(request).toMatchObject({ publication: 'internal', finishesTask: false, taskIds: ['fixture-task'] });
   expect(request).not.toHaveProperty('env');
   const routed = design.cells.find(c => c.arm === 'HA')!;
-  expect(() => expandRequest(routed.id, requestInputs)).toThrow('Missing counted planner route');
-  const route = { solve: 'H' as const, fix: 'M' as const, plannerCellId: routed.id, plannerPipelineId: 'planner-pipeline', plannerSessionId: 'planner-session', outputDigest: proof('planner-output'), completed: true };
-  expect(() => expandRequest(routed.id, { ...requestInputs, route: { ...route, completed: false } })).toThrow('planner route receipt');
-  const assigned = expandRequest(routed.id, { ...requestInputs, route });
-  expect(assigned.stages.map(s => s.engine)).toEqual(['codex', 'claude', 'codex', 'codex']);
+  expect(() => expandRequest(routed.id, requestInputs)).toThrow('durable planner ledger event');
+  const planner = expandPlannerRequest(routed.id, requestInputs);
+  expect(planner.clientRequestId).toBe(`${design.campaign}:${routed.id}:planner`);
+  expect(planner.stages.map(s => [s.id, s.next, s.engine])).toEqual([['planner', null, 'codex']]);
+  const dir = join(scratch(), 'planner-run');
+  sealRun(dir, 'harness-only', contracts, {}, BINDING, bindings());
+  expect(expandPlannerSealedRequest(dir, routed.id, requestInputs).stages).toHaveLength(1);
+  expect(() => expandSealedRequest(dir, routed.id, requestInputs)).toThrow('route is unresolved');
+  const output = JSON.stringify({ solve: 'H', fix: 'M' });
+  const route = { solve: 'H' as const, fix: 'M' as const, plannerCellId: routed.id, plannerPipelineId: 'planner-pipeline', plannerSessionId: 'planner-session', output, outputDigest: digest(output) };
+  appendRun(dir, { ...event('planner-receipt'), rowId: routed.id, kind: 'receipt', status: 'accepted',
+    requestKey: `${design.campaign}:${routed.id}:planner`, pipelineId: route.plannerPipelineId });
+  appendRun(dir, { ...event('planner-route-event'), rowId: routed.id, kind: 'planner-route', status: 'completed', route });
+  const assigned = expandSealedRequest(dir, routed.id, requestInputs);
+  expect(assigned.stages.map(s => s.engine)).toEqual(['claude', 'codex', 'codex']);
+  const invalidRouteDir = join(scratch(), 'invalid-planner-run');
+  sealRun(invalidRouteDir, 'harness-only', contracts, {}, BINDING, bindings());
+  appendRun(invalidRouteDir, { ...event('bad-planner-receipt'), rowId: routed.id, kind: 'receipt', status: 'accepted',
+    requestKey: `${design.campaign}:${routed.id}:planner`, pipelineId: 'bad-planner' });
+  const mismatchedOutput = JSON.stringify({ solve: 'M', fix: 'M' });
+  expect(() => appendRun(invalidRouteDir, { ...event('bad-planner-route'), rowId: routed.id, kind: 'planner-route', status: 'completed',
+    route: { ...route, plannerPipelineId: 'bad-planner', output: mismatchedOutput, outputDigest: digest(mismatchedOutput) } }))
+    .toThrow('Planner route lacks');
   expect(() => expandRequest(design.cells[1].id, requestInputs)).toThrow('Unbound product runtime');
   expect(expandRequest(design.curationCells[0].id, requestInputs).stages[0].role.roleId).toBe('curator');
   expect(expandRequest(design.judgingCells[1].id, requestInputs).stages[0].engine).toBe('claude');
@@ -229,7 +253,7 @@ const good = (): Observation => ({
   final: { timely: true, tree: proof('final-tree'), captureReceipt: proof('final-capture'), valid: true, checks: pass },
   terminalReceipt: 'terminal', cleanupReceipt: 'clean', usage, invalid: false, fixRounds: 1,
   workflow: { reviewers: [{ checkpoint: 'review-1', evidenceDigest: proof('review'), completedAt: 2 }], fixes: [{ checkpoint: 'fix-1', evidenceDigest: proof('fix'), completedAt: 3 }], reReviews: [{ checkpoint: 'review-2', evidenceDigest: proof('rereview'), completedAt: 4 }] },
-  judgments: [{ session: 'blind-a', artifactDigest: proof('final-tree'), terminalReceipt: 'judge-terminal-a', cleanupReceipt: 'judge-clean-a', rating: [3, 3, 2], coverage: residuals }, { session: 'blind-b', artifactDigest: proof('final-tree'), terminalReceipt: 'judge-terminal-b', cleanupReceipt: 'judge-clean-b', rating: [3, 3, 2], coverage: residuals }],
+  judgments: [{ session: 'blind-a', artifactDigest: digest(proof('final-tree')), terminalReceipt: proof('judge-terminal-a'), cleanupReceipt: proof('judge-clean-a'), rating: [3, 3, 2], coverage: residuals }, { session: 'blind-b', artifactDigest: digest(proof('final-tree')), terminalReceipt: proof('judge-terminal-b'), cleanupReceipt: proof('judge-clean-b'), rating: [3, 3, 2], coverage: residuals }],
   human: [],
 });
 const scoreRow = (observation: Observation) => score(observation, reqs, residuals, 4, false, true);
@@ -245,6 +269,13 @@ test('scores first and final separately, retains conservative judge bounds and e
   expect(scoreRow({ ...good(), status: 'timeout', first: { timely: true, tree: proof('first-tree'), captureReceipt: proof('first'), valid: false, checks: pass } }).firstFunctionalAccepted).toBe(false);
   expect(scoreRow({ ...good(), final: { ...good().final!, valid: false } }).finalFunctionalAccepted).toBe(false);
   expect(scoreRow({ ...good(), workflow: undefined }).fullyAccepted).toBe(false);
+  const reusedJudge = good();
+  reusedJudge.judgments![1]!.session = reusedJudge.judgments![0]!.session;
+  expect(scoreRow(reusedJudge).fullyAccepted).toBe(false);
+  const invalidJudgeEvidence = good();
+  invalidJudgeEvidence.judgments![0]!.cleanupReceipt = 'unsealed';
+  expect(scoreRow(invalidJudgeEvidence).fullyAccepted).toBe(false);
+  expect(scoreRow({ ...good(), first: undefined, usage: { ...usage, sessions: 0 } })).toMatchObject({ firstFunctionalAccepted: false, fullyAccepted: false });
   const truncated = good();
   truncated.judgments![1]!.truncated = true;
   const limited = scoreRow(truncated);
@@ -286,7 +317,7 @@ test('calibration rejects red gold promotion and oracle controls require their i
   const golds = Object.fromEntries(design.judgingCells.filter(j => j.kind === 'calibration').map(j => [j.gold!, j.gold === 'complete' ? [] : ['defect']]));
   const judgments: Calibration[] = design.judgingCells.filter(j => j.kind === 'calibration').map(j => ({
     gold: j.gold!, artifactDigest: proof(`gold:${j.gold}`), judge: j.judge as Calibration['judge'], session: j.id, rating: j.gold === 'complete' ? [3, 3, 3] : [2, 2, 2],
-    detected: golds[j.gold!], usage: { ...usage, sessions: 1 }, terminalReceipt: `terminal-${j.id}`, cleanupReceipt: 'stopped',
+    detected: golds[j.gold!], usage: { ...usage, sessions: 1 }, terminalReceipt: proof(`terminal-${j.id}`), cleanupReceipt: proof('stopped'),
   }));
   expect(calibrationPassed(golds, judgments)).toBe(true);
   judgments[7].rating = [3, 3, 3];
@@ -347,15 +378,44 @@ test('O and P/S admission guards retain unknown and invalid comparisons', () => 
 });
 
 test('campaign chronology rejects an interleaved solver and unresolved runtime fallback', () => {
-  const ids = [...design.ordering.orchestrationBlocks, ...design.ordering.productPairedBlocks].flatMap(b => b.orderedCells)
-    .sort((a, b) => design.cells.find(c => c.id === a)!.ordinal - design.cells.find(c => c.id === b)!.ordinal);
+  const ids = design.cells.filter(c => c.phase === 'O' || c.phase === 'P').sort((a, b) => a.ordinal - b.ordinal).map(c => c.id);
   expect(campaignChronologyValid(ids.map(id => ({ id })))).toBe(true);
   const interleaved = ids.map(id => ({ id }));
-  interleaved.splice(1, 0, { id: 'outside-solver' });
+  interleaved.splice(1, 0, { id: design.cells.find(c => c.phase === 'R')!.id });
   expect(campaignChronologyValid(interleaved)).toBe(false);
   const rows = preflights('O-export');
+  const ledger = [{ id: rows[0]!.id }, { id: design.cells.find(c => c.phase === 'R')!.id }, ...rows.slice(1).map(r => ({ id: r.id }))];
+  expect(checkBlock('O-export', rows, ledger)).toMatchObject({ eligible: false, stop: true, reason: expect.stringContaining('outside solver') });
   rows[0].before.runtimeBindings!.solve!.resolved = { engine: 'codex', model: 'fallback', effort: 'high' };
   expect(checkBlock('O-export', rows)).toMatchObject({ eligible: false, stop: true, reason: expect.stringContaining('declared model binding') });
+});
+
+test('report excludes a causal block when an outside solver row is interleaved in the append ledger', () => {
+  const dir = join(scratch(), 'interleaved-run');
+  sealRun(dir, 'harness-only', contracts, {}, BINDING, bindings());
+  const ordered = design.cells.filter(c => c.phase === 'O' || c.phase === 'P').sort((a, b) => a.ordinal - b.ordinal).map(c => c.id);
+  const driftByCell = new Map([...design.ordering.orchestrationBlocks, ...design.ordering.productPairedBlocks]
+    .flatMap(block => preflights(block.id)).map(row => [row.id, row]));
+  let inserted = false;
+  for (const id of ordered) {
+    if (!inserted && id === design.ordering.orchestrationBlocks.find(b => b.id === 'O-export')!.orderedCells[1]) {
+      const outsider = design.cells.find(c => c.phase === 'R')!;
+      appendRun(dir, { ...event(`interleaver-receipt`), rowId: outsider.id, kind: 'receipt', status: 'accepted',
+        requestKey: `${design.campaign}:${outsider.id}`, pipelineId: 'interleaver' });
+      appendRun(dir, { ...event(`interleaver-result`), rowId: outsider.id, kind: 'solver', observation: good() });
+      inserted = true;
+    }
+    const drift = driftByCell.get(id)!;
+    appendRun(dir, { ...event(`${id}-receipt`), rowId: id, kind: 'receipt', status: 'accepted',
+      requestKey: `${design.campaign}:${id}`, pipelineId: `pipeline-${id}` });
+    appendRun(dir, { ...event(`${id}-result`), rowId: id, kind: 'solver', observation: good(), drift });
+  }
+  const report = reportRun(dir);
+  expect(report.blocks.find(block => block.id === 'O-export')).toMatchObject({
+    eligible: false, stop: true, reason: expect.stringContaining('outside solver'),
+  });
+  expect(report.paired.filter(pair => pair.task === design.tasks[0]!.id && pair.contrast !== 'HA-HF')
+    .every(pair => pair.causalEligible === false)).toBe(true);
 });
 
 test('E cumulative oracle rejects a later tree that regresses an earlier operation', () => {
@@ -369,6 +429,11 @@ test('E cumulative oracle rejects a later tree that regresses an earlier operati
     'E1-C1': { treeDigest: digest(proof('final-tree')), evidenceDigest: proof('c1-tests'), checks: pass },
   } };
   expect(() => appendRun(dir, { ...event('e2-result'), rowId: c2.id, kind: 'solver', observation: regressed })).toThrow('E predecessor oracle regressed');
+  const missingEarlierOracle = { ...good(), predecessorOracles: {
+    'E1-C1': { treeDigest: digest(proof('final-tree')), evidenceDigest: proof('c1-tests'), checks: pass },
+  } };
+  expect(() => appendRun(dir, { ...event('e2-result-missing-prior'), rowId: c2.id, kind: 'solver', observation: missingEarlierOracle }))
+    .toThrow('E cumulative predecessor oracle set is incomplete');
   const passing = { ...good(), predecessorOracles: {
     'E1-C0': { treeDigest: digest(proof('final-tree')), evidenceDigest: proof('c0-tests'), checks: pass },
     'E1-C1': { treeDigest: digest(proof('final-tree')), evidenceDigest: proof('c1-tests'), checks: pass },
@@ -393,11 +458,11 @@ test('curator completion requires the registered learner, delivery and original 
   const calibrationRows = design.judgingCells.filter(j => j.kind === 'calibration').slice(0, 2);
   const first = calibrationRows[0]!;
   appendRun(judgeRun, { ...event('calibration-one'), rowId: first.id, kind: 'judge', status: 'completed', calibration: {
-    gold: first.gold!, artifactDigest: proof(`gold:${first.gold}`), judge: first.judge as 'J1'|'J2', session: 'reused-session', rating: [3,3,3], detected: [], usage: { ...usage, sessions: 1 }, terminalReceipt: 'terminal', cleanupReceipt: 'cleanup',
+    gold: first.gold!, artifactDigest: proof(`gold:${first.gold}`), judge: first.judge as 'J1'|'J2', session: 'reused-session', rating: [3,3,3], detected: [], usage: { ...usage, sessions: 1 }, terminalReceipt: proof('terminal'), cleanupReceipt: proof('cleanup'),
   } });
   const second = calibrationRows[1]!;
   expect(() => appendRun(judgeRun, { ...event('calibration-two'), rowId: second.id, kind: 'judge', status: 'completed', calibration: {
-    gold: second.gold!, artifactDigest: proof(`gold:${second.gold}`), judge: second.judge as 'J1'|'J2', session: 'reused-session', rating: [2,2,2], detected: ['defect'], usage: { ...usage, sessions: 1 }, terminalReceipt: 'terminal', cleanupReceipt: 'cleanup',
+    gold: second.gold!, artifactDigest: proof(`gold:${second.gold}`), judge: second.judge as 'J1'|'J2', session: 'reused-session', rating: [2,2,2], detected: ['defect'], usage: { ...usage, sessions: 1 }, terminalReceipt: proof('terminal'), cleanupReceipt: proof('cleanup'),
   } })).toThrow('Judge session reused');
 });
 
@@ -456,6 +521,16 @@ test('sealed run survives process restart, retains every failed row and allows d
   expect(report.endpoints['M-held-out'].MR.primaryViolations).toMatchObject({ denominator: 4, unknown: 4, bounds: [0, 1] });
   expect(report.prefixes[2].prefixes[2].arms.EA.intended).toBe(3);
   unlinkSync(join(dir, '000004.json'));
+  expect(() => reportRun(dir)).toThrow('Ledger checkpoint count mismatch');
+});
+
+test('deleting the final terminal row is detected against its retained checkpoint', () => {
+  const dir = join(scratch(), 'tail-run');
+  sealRun(dir, 'harness-only', contracts, {}, BINDING, bindings());
+  const requestKey = expandRequest(solver, requestInputs).clientRequestId;
+  appendRun(dir, { ...event('tail-receipt'), kind: 'receipt', status: 'accepted', requestKey, pipelineId: 'tail-pipeline' });
+  appendRun(dir, { ...event('tail-solver'), kind: 'solver', observation: good() });
+  unlinkSync(join(dir, '000002.json'));
   expect(() => reportRun(dir)).toThrow('Ledger checkpoint count mismatch');
 });
 

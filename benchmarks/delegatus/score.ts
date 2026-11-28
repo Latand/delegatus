@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import design from './pilot-manifest.json';
 
 const groups = design.scoring.behaviorGroupWeights;
@@ -32,7 +33,7 @@ export type Observation = {
   terminalReceipt?: string;
   cleanupReceipt?: string;
   usage?: Resources;
-  curatorUsage?: Omit<Resources, 'queueSeconds'>;
+  curatorUsage?: Resources;
   invalid?: boolean;
   judgments?: (Judgment | null)[];
   human?: HumanEvent[];
@@ -52,6 +53,7 @@ export function assert(condition: unknown, reason: string): asserts condition {
 
 const count = (n: unknown) => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0;
 const sha256 = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+const artifactDigest = (value: string) => createHash('sha256').update(value).digest('hex');
 const rating = (value: unknown): value is Rating =>
   Array.isArray(value) && value.length === 3 && value.every(n => count(n) && n <= 3);
 
@@ -101,12 +103,15 @@ export function calibrationPassed(golds: Record<string, string[]>, rows: Calibra
   return (['J1', 'J2'] as const).every(judge => {
     const own = rows.filter(x => x.judge === judge);
     const complete = own.find(x => x.gold === 'complete');
-    if (!complete || !rating(complete.rating) || complete.rating[0] !== 3 || complete.rating[1] !== 3) return false;
+    if (!complete || !rating(complete.rating) || complete.rating[0] !== 3 || complete.rating[1] !== 3
+      || !sha256(complete.artifactDigest) || !complete.session || !sha256(complete.terminalReceipt)
+      || !sha256(complete.cleanupReceipt) || !judgeUsageCovered(complete.usage)) return false;
     return [...new Set(expected)].every(gold => {
       const matches = own.filter(x => x.gold === gold);
       if (matches.length !== 1) return false;
       const row = matches[0];
-      if (!rating(row.rating) || !row.session || !sha256(row.artifactDigest) || !row.terminalReceipt || !row.cleanupReceipt || !judgeUsageCovered(row.usage)) return false;
+      if (!rating(row.rating) || !row.session || !sha256(row.artifactDigest) || !sha256(row.terminalReceipt)
+        || !sha256(row.cleanupReceipt) || !judgeUsageCovered(row.usage)) return false;
       if (gold === 'complete') return true;
       const defects = golds[gold];
       return !!defects && defects.every(id => row.detected.includes(id))
@@ -151,19 +156,22 @@ export function score(row: Observation, requirements: Requirement[], residuals: 
   const delivered = row.status === 'delivered' && finalValid && row.invalid === false;
   const usage = row.usage;
   const curator = row.curatorUsage;
-  const knownUsage = validUsage(usage) && (!learn || (!!curator && [curator.units, curator.activeSeconds, curator.sessions].every(count)));
+  const knownUsage = validUsage(usage) && usage.sessions >= 1 && (!learn || validUsage(curator));
   const cap = design.budgets.B;
   const reserve = design.budgets['B-learn'];
   const withinBudget = knownUsage && usage.units <= cap.maxChargedUnits && usage.activeSeconds <= cap.maxAggregateActiveSeconds
     && usage.queueSeconds <= cap.maxQueueSeconds && usage.sessions <= maxSessions + Number(learn)
     && (!learn || (!!curator && curator.sessions === 1 && usage.sessions >= 2 && curator.units <= reserve.curatorUnits
       && curator.activeSeconds <= reserve.curatorActiveSeconds
+      && curator.queueSeconds <= cap.maxQueueSeconds
       && usage.units >= curator.units && usage.units - curator.units <= reserve.solverUnits
       && usage.activeSeconds >= curator.activeSeconds && usage.activeSeconds - curator.activeSeconds <= reserve.solverActiveSeconds));
   const judges = (row.judgments ?? []).slice(0, 2);
   const ratings = [0, 1].map(i => {
     const j = judges[i];
-    return j?.session && j.session !== judges[1 - i]?.session && sha256(j.artifactDigest) && j.terminalReceipt && j.cleanupReceipt
+    return j?.session && j.session !== judges[1 - i]?.session && sha256(j.artifactDigest)
+      && row.final?.tree && j.artifactDigest === artifactDigest(row.final.tree)
+      && sha256(j.terminalReceipt) && sha256(j.cleanupReceipt)
       && !j.truncated && rating(j.rating) && Array.isArray(j.coverage)
       && residuals.every(id => j.coverage.includes(id)) ? j.rating : null;
   });
@@ -174,7 +182,7 @@ export function score(row: Observation, requirements: Requirement[], residuals: 
   const jLower = dispute ? Math.min(jBounds[0][0], jBounds[1][0]) : (jBounds[0][0] + jBounds[1][0]) / 2;
   const jUpper = dispute ? Math.max(jBounds[0][1], jBounds[1][1]) : (jBounds[0][1] + jBounds[1][1]) / 2;
   const quality = (j: number) => delivered && withinBudget && !final.critical.length ? 100 * (0.8 * final.B + 0.2 * j) : 0;
-  const accepted = fullyAccepted({
+  const accepted = firstValid && fullyAccepted({
     allBehavioralRequirementsExecutedAndPassed: final.allPassed,
     artifactDelivered: delivered,
     terminalAndCleanupReceiptsComplete: Boolean(row.terminalReceipt && row.cleanupReceipt),
