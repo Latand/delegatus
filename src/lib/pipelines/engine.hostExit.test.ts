@@ -1,7 +1,11 @@
-import { expect, test, fs, path, spawn, stopFixtureProcess, providerRecoveryHarness, tickPipelines, loadPipelines, savePipelines, patchPipeline, AgentRegistry, setAgentRegistryForTests, defaultPipelinePorts, LIMITED_ACCOUNT, PASS_TEXT, recoveryReport } from "./engine.fixture";
+import { expect, test, fs, path, spawn, stopFixtureProcess, pipelineIdentity, providerRecoveryHarness, tickPipelines, loadPipelines, savePipelines, patchPipeline, AgentRegistry, setAgentRegistryForTests, defaultPipelinePorts, LIMITED_ACCOUNT, PASS_TEXT, recoveryReport } from "./engine.fixture";
 import { stopPipelineStageAgent } from "./engine";
+import { tickPipelinesController } from "./controllerPass";
+import { recordPipelineControllerSelection, selectPipelineControllerWork } from "./store";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { observeHostExit, readHostExit } from "@/lib/runtime/hostExit";
+import { initializeRecipientInterruptionIndex, interruptionObligationDirectory, interruptionObligationStore, recipientInterruptionEvidence } from "@/lib/runtime/interruptionObligations";
+import { journalTickets, startJournalPeer, until } from "@/lib/runtime/startup.interruptionAdmission.fixture";
 import { seatTickDecision, DEFAULT_SEAT_TICK_POLICY, SEAT_TICK_WAKE_INTERVAL_MS } from "@/lib/monitor/seatTick";
 import { defaultSeatTickSettings, effectiveSeatTickSettings } from "@/lib/monitor/seatTickSettings";
 import { emptySeatTickState, type SeatTickCheckInput } from "@/lib/monitor/types";
@@ -334,6 +338,59 @@ test("cancelled host-exit settlement waits for a deploy continuation", async () 
   } finally { await f.close(); }
 });
 
+
+for (const pause of [false, true]) test(`controller settlement waits for the production journal (pause while waiting=${pause})`, async () => {
+  const f = await cancelledHostDeath();
+  const directory = interruptionObligationDirectory(f.registry.filename);
+  let peer: ReturnType<typeof startJournalPeer> | undefined;
+  let recovery: Promise<unknown> | undefined;
+  try {
+    const attempt = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+    const seed = path.join(path.dirname(directory), "cut-seed");
+    const cut = interruptionObligationStore(seed).record({
+      conversationId: f.conversationId, engine: "codex", hostKey: "codex:stage-fixture",
+      path: attempt.agentPath!, owner: null, claimEpoch: 1, turnRef: "stage-turn",
+      boundary: "fixture-release", reason: "viewer-release", recordedAt: attempt.startedAt!,
+      checkpoint: { lastEventKind: null, lastEventAt: null }, seat: null,
+    }).obligation;
+    await initializeRecipientInterruptionIndex(directory);
+    peer = startJournalPeer(directory, path.join(path.dirname(directory), "cut-owner"), {
+      append: JSON.stringify(cut) + "\n", maxHoldMs: 2_000,
+    });
+    await peer.ready();
+    f.h.ports.conversationInterruption = defaultPipelinePorts().conversationInterruption;
+    f.h.ports.durableTurnEvidence = async () => ({ turn: "busy", message: null });
+    let completed = false;
+    recovery = tickPipelines([], f.h.ports).finally(() => { completed = true; });
+    void recovery.catch(() => {});
+    await until(() => journalTickets(directory) === 2 || completed);
+    expect(peer.held()).toBe(true);
+    expect(completed).toBe(false);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("running");
+    if (pause) {
+      const [concurrent] = loadPipelines();
+      concurrent!.state = "paused";
+      savePipelines([concurrent!]);
+    }
+    expect(await peer.stop()).toBe(0);
+    await recovery;
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("running");
+    expect(recipientInterruptionEvidence(directory, [f.conversationId]).records).toEqual([cut]);
+    if (pause) {
+      expect(loadPipelines()[0]!.state).toBe("paused");
+      return;
+    }
+
+    interruptionObligationStore(directory).update(cut.id, { state: "delivered", resolvedAt: f.h.ports.now() });
+    f.h.ports.conversationInterruption = defaultPipelinePorts().conversationInterruption;
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("failed");
+  } finally {
+    await Promise.allSettled([peer?.stop(), recovery]);
+    await f.close();
+  }
+}, 20_000);
+
 for (const recovered of [false, true]) test(`failed settlement preserves a live successor with restartRecovery=${recovered}`, async () => {
   const f = await cancelledHostDeath();
   let successor: ReturnType<typeof spawn> | null = null;
@@ -493,3 +550,181 @@ test("retry of an exited recovery launches once without stopping the conversatio
     expect(f.h.spawnInputs).toHaveLength(2);
   } finally { await f.close(); }
 });
+
+for (const readNumber of [1, 2]) test(`manual retry preserves a cut that arrives during transcript read ${readNumber}`, async () => {
+  const f = await cancelledHostDeath();
+  try {
+    const attempt = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+    const directory = interruptionObligationDirectory(f.registry.filename);
+    await initializeRecipientInterruptionIndex(directory);
+    const store = interruptionObligationStore(directory);
+    const production = defaultPipelinePorts();
+    const ports = { ...production, ...f.h.ports, conversationInterruption: production.conversationInterruption };
+    let reads = 0;
+    let cutId: string | undefined;
+    ports.durableTurnEvidence = async () => {
+      if (++reads === readNumber) {
+        cutId = store.record({
+          conversationId: f.conversationId, engine: "codex", hostKey: "codex:stage-fixture",
+          path: attempt.agentPath!, owner: null, claimEpoch: 1, turnRef: "stage-turn",
+          boundary: "fixture-release", reason: "viewer-release", recordedAt: attempt.startedAt!,
+          checkpoint: { lastEventKind: null, lastEventAt: null }, seat: null,
+        }).obligation.id;
+      }
+      return { turn: "busy", message: null, lastRecordAt: f.now() };
+    };
+    const request = { action: "retry-stage" as const, expectedStageId: "plan", expectedAttempt: 1 };
+    const refused = await patchPipeline(f.lane.id, request, ports);
+    expect(cutId).toBeDefined();
+    expect(refused.status).toBe(409);
+    expect(loadPipelines()[0]!.cursor?.state).toBe("running");
+    expect(loadPipelines()[0]!.runs[0]!.attempts).toMatchObject([{ n: 1, state: "running" }]);
+    expect(recipientInterruptionEvidence(directory, [f.conversationId]).records).toMatchObject([{ id: cutId, state: "owed" }]);
+
+    store.update(cutId!, { state: "delivered", resolvedAt: ports.now() });
+    const accepted = await patchPipeline(f.lane.id, request, ports);
+    expect(accepted.error).toBeUndefined();
+    expect(loadPipelines()[0]!.cursor?.state).toBe("pending");
+  } finally { await f.close(); }
+});
+
+
+test("manual retry refuses a cut recorded at its final host inspection", async () => {
+  const f = await cancelledHostDeath();
+  try {
+    const original = loadPipelines()[0]!;
+    const attempt = original.runs[0]!.attempts[0]!;
+    const directory = interruptionObligationDirectory(f.registry.filename);
+    await initializeRecipientInterruptionIndex(directory);
+    const store = interruptionObligationStore(directory);
+    const production = defaultPipelinePorts();
+    const ports = { ...production, ...f.h.ports };
+    let reads = 0;
+    let cutId: string | undefined;
+    ports.conversationInterruption = (...args) => { reads++; return production.conversationInterruption!(...args); };
+    const inspect = f.h.ports.conversationHostProcess!;
+    ports.conversationHostProcess = async id => {
+      const host = await inspect(id);
+      if (reads >= 2 && !cutId) {
+        cutId = store.record({ conversationId: f.conversationId, engine: "codex", hostKey: "codex:stage-fixture",
+          path: attempt.agentPath!, owner: null, claimEpoch: 1, turnRef: "stage-final-check",
+          boundary: "fixture-release", reason: "viewer-release", recordedAt: attempt.startedAt!,
+          checkpoint: { lastEventKind: null, lastEventAt: null }, seat: null }).obligation.id;
+      }
+      return host;
+    };
+    const request = { action: "retry-stage" as const, expectedStageId: "plan", expectedAttempt: 1 };
+    const refused = await patchPipeline(f.lane.id, request, ports);
+    expect(cutId).toBeDefined();
+    expect(refused.status).toBe(409);
+    const retained = loadPipelines()[0]!;
+    expect(retained.cursor).toEqual(original.cursor);
+    expect(retained.runs[0]!.attempts).toEqual(original.runs[0]!.attempts);
+    expect(recipientInterruptionEvidence(directory, [f.conversationId]).records).toMatchObject([{ id: cutId, state: "owed" }]);
+    store.update(cutId!, { state: "delivered", resolvedAt: ports.now() });
+    expect((await patchPipeline(f.lane.id, request, ports)).error).toBeUndefined();
+    expect(loadPipelines()[0]!.cursor?.state).toBe("pending");
+  } finally { await f.close(); }
+});
+
+for (const decision of ["paused", "closed", "available"] as const) test(`journal timeout defers one scheduled lane and recovers when the journal is ${decision}`, async () => {
+  const f = await cancelledHostDeath();
+  const directory = interruptionObligationDirectory(f.registry.filename);
+  let peer: ReturnType<typeof startJournalPeer> | undefined;
+  let pass: ReturnType<typeof tickPipelinesController> | undefined;
+  try {
+    const affected = loadPipelines()[0]!;
+    const attempt = affected.runs[0]!.attempts[0]!;
+    affected.id = `journal-${decision}-a`;
+    Object.assign(affected, pipelineIdentity(affected.id, affected.task, affected.repoDir));
+    affected.delivery = undefined;
+    affected.publication = "internal";
+    const next = structuredClone(affected!);
+    next.id = `journal-${decision}-b`;
+    Object.assign(next, pipelineIdentity(next.id, next.task, next.repoDir));
+    next.state = "paused";
+    next.cursor = null;
+    next.creationRequest = undefined;
+    next.runs = next.runs.map(run => ({ ...run, attempts: [] }));
+    const now = f.h.ports.now();
+    f.h.ports.now = () => now;
+    next.unconfirmedHosts = [{ stageId: "plan", attempt: 1, conversationId: null, agentPath: null, paneId: "peer-fixture",
+      operationId: null, detail: "host disappearance is pending", at: now }];
+    const visited: string[] = [];
+    f.h.ports.stageHostResident = async ({ paneId }) => { if (paneId) visited.push(paneId); return false; };
+    f.h.ports.paneAgentAlive = async () => false;
+    f.h.ports.durableTurnEvidence = async () => ({ turn: "busy", message: null });
+    savePipelines([affected, next]);
+    const time = Date.parse(now);
+    // Start this scenario at the beginning of the persisted fair walk.
+    await recordPipelineControllerSelection({ row_key: "", row_order: -1, generation: 0,
+      attempt_cursor: 0, dirty: 1, due_at: 0 }, time);
+    expect((await selectPipelineControllerWork(time, [])).map(row => row.row_key)).toEqual([affected.id, next.id]);
+
+    const cut = interruptionObligationStore(path.join(path.dirname(directory), "cut-seed")).record({
+      conversationId: f.conversationId, engine: "codex", hostKey: "codex:stage-fixture",
+      path: attempt.agentPath!, owner: null, claimEpoch: 1, turnRef: "stage-turn",
+      boundary: "fixture-release", reason: "viewer-release", recordedAt: attempt.startedAt!,
+      checkpoint: { lastEventKind: null, lastEventAt: null }, seat: null,
+    }).obligation;
+    await initializeRecipientInterruptionIndex(directory);
+    peer = startJournalPeer(directory, path.join(path.dirname(directory), "timed-writer"), { append: JSON.stringify(cut) + "\n" });
+    await peer.ready();
+    const read = defaultPipelinePorts().conversationInterruption!;
+    f.h.ports.conversationInterruption = async (...args) => {
+      try { return await read(...args); }
+      catch (error) {
+        if (decision === "available") await peer!.stop();
+        throw error;
+      }
+    };
+    if (decision === "available") {
+      f.h.ports.stageHostResident = async ({ paneId }) => {
+        expect((await read(f.conversationId))?.state).toBe("owed");
+        if (paneId) visited.push(paneId);
+        return false;
+      };
+    }
+    pass = tickPipelinesController([], f.h.ports);
+    void pass.catch(() => {});
+    await until(() => journalTickets(directory) === 2);
+    await pass;
+    if (decision !== "available") expect(peer.held()).toBe(true);
+    expect(visited).toEqual(["peer-fixture"]);
+    const afterTimeout = loadPipelines();
+    expect(afterTimeout.find(row => row.id === affected.id)?.cursor?.state).toBe("running");
+    expect(afterTimeout.find(row => row.id === next.id)?.unconfirmedHosts ?? []).toEqual([]);
+    expect((await selectPipelineControllerWork(time, [])).some(row => row.row_key === affected.id)).toBe(true);
+    expect(await peer.stop()).toBe(0);
+    if (decision === "available") {
+      expect(recipientInterruptionEvidence(directory, [f.conversationId]).records).toEqual([cut]);
+      return;
+    }
+
+    const readCut = defaultPipelinePorts().conversationInterruption!;
+    const states: string[] = [];
+    f.h.ports.conversationInterruption = async (...args) => {
+      const result = await readCut(...args);
+      if (!states.length) {
+        states.push(result?.state ?? "missing");
+        const rows = loadPipelines();
+        const concurrent = rows.find(row => row.id === affected.id)!;
+        concurrent.state = decision;
+        if (decision === "closed") {
+          concurrent.closedAt = now;
+          concurrent.cursor = null;
+        }
+        savePipelines(rows);
+      }
+      return result;
+    };
+    pass = tickPipelinesController([], f.h.ports);
+    await pass;
+    expect(states).toEqual(["owed"]);
+    expect(loadPipelines().find(row => row.id === affected.id)?.state).toBe(decision);
+    expect(recipientInterruptionEvidence(directory, [f.conversationId]).records).toEqual([cut]);
+  } finally {
+    await Promise.allSettled([peer?.stop(), pass]);
+    await f.close();
+  }
+}, 20_000);

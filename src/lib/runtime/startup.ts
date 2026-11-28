@@ -16,6 +16,7 @@ import { verifiedCodexSocketOwner } from "./codexSocketTransport";
 import { orphanedHostNoticeContext, unreachableOrphanedHost } from "./orphanedHost";
 import { ORPHAN_FOLLOW_UP_DELAYS_MS, surfaceOrphanedHosts, orphanedHostAlarmKeys } from "./orphanedHostAlarm";
 import { waitForStateLock } from "@/lib/state/lockWait";
+import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
 import { learnedRulesForLaunchProfile, memoryStartIdentity, roleMemoryProfileForIdentity } from "@/lib/memory/roleLaunch";
@@ -105,6 +106,9 @@ import {
   interruptionContinuationText,
   interruptionObligationDirectory,
   interruptionObligationStore,
+  InterruptionJournalBusyError,
+  readInterruptionObligations,
+  withInterruptionObligationAdmission,
   initializeRecipientInterruptionIndex,
   recipientInterruptionEvidence,
   recipientInterruptionObligationStore,
@@ -1046,13 +1050,15 @@ async function restartCutTargets(
   return recognition;
 }
 
-async function checkoutMergersForStartup(registry: AgentRegistry, store: InterruptionObligationStore,
-  scope: ReadonlySet<string> | null, client: RuntimeHostClient | null) {
+type StartupInterruptionAdmission = <T>(operation: (store: InterruptionObligationStore) => T) => Promise<T>;
+
+async function checkoutMergersForStartup(registry: AgentRegistry, read: () => Promise<InterruptionObligation[]>,
+  admit: StartupInterruptionAdmission, scope: ReadonlySet<string> | null, client: RuntimeHostClient | null) {
   const cuts = readCheckoutMergerCuts(path.dirname(registry.filename));
   const captured = new Map<string, CheckoutMergerCut>();
   const waiting = new Set<string>();
   if (!cuts.length) return { captured, waiting };
-  const records = store.list();
+  const records = await read();
   const existing = new Map(records.filter(row => row.boundary.startsWith(CHECKOUT_MERGER_BOUNDARY))
     .map(row => [`${row.conversationId}:\0${row.boundary}`, row]));
   const releaseCuts = new Map<string, InterruptionObligation[]>();
@@ -1066,13 +1072,14 @@ async function checkoutMergersForStartup(registry: AgentRegistry, store: Interru
     const key = checkoutMergerHostKey(cut);
     if (scope && !scope.has(key)) return;
     const current = () => registry.livenessConversationSnapshot(cut.conversationId);
-    const resolveReleaseCuts = () => {
+    const resolveReleaseCuts = (store: InterruptionObligationStore) => {
       for (const row of releaseCuts.get(key) ?? []) {
         if (row.conversationId === cut.conversationId && row.claimEpoch === cut.claimEpoch
           && row.owner && sameRecordedProcessIdentity(cut.process, row.owner)
           && (registry.deliveryAdmissionForKey(cut.conversationId, row.id).outcome === "not-executed"
             || row.state === "owed" && row.attempts === 0)) {
-          store.update(row.id, { state: "discharged", resolvedAt: new Date().toISOString(), resolution: "the checkout cut accounts for this predecessor" });
+          store.update(row.id, { state: "discharged", resolvedAt: new Date().toISOString(), resolution: "the checkout cut accounts for this predecessor" },
+            current => current.state === row.state && current.attempts === row.attempts);
         }
       }
     };
@@ -1085,11 +1092,15 @@ async function checkoutMergersForStartup(registry: AgentRegistry, store: Interru
     if (uncertainRelease) { waiting.add(key); return; }
     const prior = existing.get(`${cut.conversationId}:\0${cut.boundary}`);
     if (prior) {
-      const entry = currentCheckoutMerger(current(), cut);
-      if (entry?.claimEpoch === cut.claimEpoch || entry?.claimEpoch === cut.claimEpoch + 1 && interruptionObligationUnresolved(prior)) {
-        captured.set(key, cut);
-        resolveReleaseCuts();
-      }
+      await admit(store => {
+        const entry = currentCheckoutMerger(current(), cut);
+        const latest = store.list().find(row => row.id === prior.id);
+        if (latest && (entry?.claimEpoch === cut.claimEpoch
+          || entry?.claimEpoch === cut.claimEpoch + 1 && interruptionObligationUnresolved(latest))) {
+          captured.set(key, cut);
+          resolveReleaseCuts(store);
+        }
+      });
       return;
     }
     const custody = checkoutMergerCustody(current(), cut);
@@ -1122,26 +1133,28 @@ async function checkoutMergersForStartup(registry: AgentRegistry, store: Interru
       }
       assertStartupReadActive();
     }
-    // Read again at the record write, including explicit stop and a successor
-    // claim acquired while the transcript was being read.
-    const latest = checkoutMergerCustody(current(), cut);
-    if (latest === "changed") {
-      captured.delete(key);
-      return;
-    }
-    if (latest === "wait" || latest === "ended" && !explicitlyStopped && (turn === null || turn === "wait")) {
-      waiting.add(key);
-      return;
-    }
-    const answeredBy = latest === "stopped" || explicitlyStopped ? "the merger was explicitly stopped"
-      : turn === "finished" ? "the captured merger turn settled" : undefined;
-    const { obligation } = store.record({
-      conversationId: cut.conversationId, engine: cut.engine, hostKey: key, path: cut.path,
-      owner: cut.process, claimEpoch: cut.claimEpoch, turnRef: null, boundary: cut.boundary,
-      reason: "viewer-restart", recordedAt: cut.capturedAt, checkpoint: { lastEventKind: null, lastEventAt: null },
-      seat: null, ...(answeredBy ? { answeredBy } : {}),
+    await admit(store => {
+      // Read again at the record write, including explicit stop and a successor
+      // claim acquired while the transcript was being read.
+      const latest = checkoutMergerCustody(current(), cut);
+      if (latest === "changed") {
+        captured.delete(key);
+        return;
+      }
+      if (latest === "wait" || latest === "ended" && !explicitlyStopped && (turn === null || turn === "wait")) {
+        waiting.add(key);
+        return;
+      }
+      const answeredBy = latest === "stopped" || explicitlyStopped ? "the merger was explicitly stopped"
+        : turn === "finished" ? "the captured merger turn settled" : undefined;
+      const { obligation } = store.record({
+        conversationId: cut.conversationId, engine: cut.engine, hostKey: key, path: cut.path,
+        owner: cut.process, claimEpoch: cut.claimEpoch, turnRef: null, boundary: cut.boundary,
+        reason: "viewer-restart", recordedAt: cut.capturedAt, checkpoint: { lastEventKind: null, lastEventAt: null },
+        seat: null, ...(answeredBy ? { answeredBy } : {}),
+      });
+      if (obligation.boundary === cut.boundary) resolveReleaseCuts(store);
     });
-    if (obligation.boundary === cut.boundary) resolveReleaseCuts();
   }, assertStartupReadActive);
   return { captured, waiting };
 }
@@ -1399,13 +1412,14 @@ function dischargeInterruptionObligations(
 async function deliverInterruptionContinuations(
   registry: AgentRegistry,
   client: RuntimeHostClient,
-  store: InterruptionObligationStore,
+  admit: StartupInterruptionAdmission,
   obligations: readonly InterruptionObligation[],
   publishedHostKeys: ReadonlySet<string>,
   checkoutMergers: ReadonlyMap<string, CheckoutMergerCut>,
   assertActive: () => void,
 ): Promise<string[]> {
   const failures: string[] = [];
+  let journalBusy: InterruptionJournalBusyError | undefined;
   /* Each conversation's continuations are admitted one after another, every
      conversation at once (B2): one host's unanswered admission delays no
      other's, and each is bounded by its own calls' deadlines. */
@@ -1415,6 +1429,9 @@ async function deliverInterruptionContinuations(
     byConversation.set(conversationId, [...byConversation.get(conversationId) ?? [], obligation]);
   }
   const deliverOne = async (obligation: InterruptionObligation): Promise<void> => {
+    const update = (patch: Parameters<InterruptionObligationStore["update"]>[1]) => admit(store => {
+      store.update(obligation.id, patch, current => current.state === obligation.state && current.attempts === obligation.attempts);
+    });
     if (obligation.reason === "account-guard") return;
     const checkout = checkoutMergers.get(obligation.hostKey);
     const merger = obligation.boundary.startsWith(CHECKOUT_MERGER_BOUNDARY);
@@ -1450,7 +1467,7 @@ async function deliverInterruptionContinuations(
       const stopped = await hasRuntimeSwitchKill(client, checkout.conversationId, checkout.capturedAt, [], true, true);
       assertActive();
       if (stopped) {
-        store.update(obligation.id, { state: "discharged", resolvedAt: new Date().toISOString(), resolution: "the merger was explicitly stopped" });
+        await update({ state: "discharged", resolvedAt: new Date().toISOString(), resolution: "the merger was explicitly stopped" });
         return;
       }
       checkoutAuthority?.();
@@ -1482,7 +1499,7 @@ async function deliverInterruptionContinuations(
       authorizeDispatch: checkoutAuthority,
     });
     if (result?.ok) {
-      store.update(obligation.id, {
+      await update({
         state: result.outcome === "delivered" ? "delivered" : "submitted",
         operationId: result.operationId,
         attempts: obligation.attempts + 1,
@@ -1499,12 +1516,12 @@ async function deliverInterruptionContinuations(
        else — an unavailable host, an outcome nobody saw — keeps the obligation
        owed under the same key for the next pass. */
     if (status === 409 && !result?.transportUncertain) {
-      store.update(obligation.id, {
+      await update({
         state: "failed", attempts: obligation.attempts + 1, resolvedAt: new Date().toISOString(), resolution: error,
       });
       return;
     }
-    store.update(obligation.id, { attempts: obligation.attempts + 1 });
+    await update({ attempts: obligation.attempts + 1 });
     failures.push(`${obligation.conversationId}: ${error}`);
   };
   await Promise.all([...byConversation.values()].map(async (group) => {
@@ -1512,12 +1529,17 @@ async function deliverInterruptionContinuations(
       try {
         await deliverOne(obligation);
       } catch (error) {
+        if (error instanceof InterruptionJournalBusyError) {
+          journalBusy ??= error;
+          break;
+        }
         const failure = `${obligation.conversationId}: ${error instanceof Error ? error.message : String(error)}`;
         if (obligation.boundary.startsWith(CHECKOUT_MERGER_BOUNDARY)) console.error("[structured hosts] merger continuation deferred", failure);
         else failures.push(failure);
       }
     }
   }));
+  if (journalBusy) throw journalBusy;
   return failures;
 }
 
@@ -3331,6 +3353,11 @@ class StartupRowRetryJob {
     } catch (error) {
       try {
         releaseActive();
+        if (error instanceof InterruptionJournalBusyError) {
+          console.error("[structured hosts] row retry deferred", { category: "registry-contention", message: error.message });
+          rowRetries.schedule(this.key, this.schedule, this.run);
+          return;
+        }
         const failed = await rowRetries.failed(this.key, startupRowReason(error), Date.now(), releaseActive);
         if (failed.quarantined && !failed.resolved && failed.noticePending !== false) {
           try {
@@ -3385,37 +3412,64 @@ async function adoptStructuredHostsPass(
   assertDarwinStructuredRuntime();
   const registry = dependencies.registry ?? agentRegistry();
   const client = dependencies.client === undefined ? runtimeHostClient() : dependencies.client;
+  const interruptionDirectory = interruptionObligationDirectory(registry.filename);
+  const journalAdmission = { signal: dependencies.signal, deadline: passDeadline };
   const reportCensusPhase = (phase: StructuredHostStartupPhase) => {
     if (!resumeDeferred) markStructuredHostStartupProgress({ phase, completedHosts: 0, totalHosts: null });
   };
   reportCensusPhase("reading structured startup registry");
   const rowRetries = startupRowRetries(registry);
   if (!rowRetry && !dependencies.interruptions) {
-    try { await initializeRecipientInterruptionIndex(interruptionObligationDirectory(registry.filename), {
-      signal: dependencies.signal, assertActive,
-    }); }
-    catch (error) { console.error("[structured hosts] recipient interruption index is unavailable", error); }
+    try { await initializeRecipientInterruptionIndex(interruptionDirectory, { ...journalAdmission, assertActive, recoverDamaged: true }); }
+    catch (error) {
+      if (error instanceof FileTransactionBusyError) throw new InterruptionJournalBusyError();
+      console.error("[structured hosts] recipient interruption index is unavailable", error);
+    }
     assertActive();
   }
   const initialSnapshot = await preparedStartupSnapshot(registry);
   const orchestratorSeats = dependencies.orchestratorSeats ?? activeOrchestratorSeats;
   /* Capture hosted seat ownership before any awaited startup work can refresh
      a terminal transcript or reconcile away the predecessor host wrapper. */
-  const allInterruptions = dependencies.interruptions
-    ?? interruptionObligationStore(interruptionObligationDirectory(registry.filename));
-  const interruptions = !rowRetry ? allInterruptions : new Proxy(allInterruptions, {
+  // A predecessor can still hold the interruption journal at appointment.
+  // Let the startup retry handle contention so the serving loop stays available.
+  const scopeRows = (rows: InterruptionObligation[]) => rowRetry
+    ? rows.filter(item => startupHostInScope(registry, item.hostKey)) : rows;
+  const scopedStore = (store: InterruptionObligationStore): InterruptionObligationStore => !rowRetry ? store : new Proxy(store, {
     get(target, property) {
-      if (property === "list") return () => target.list().filter(item => startupHostInScope(registry, item.hostKey));
+      if (property === "list") return () => scopeRows(target.list());
       const value = Reflect.get(target, property);
       return typeof value === "function" ? value.bind(target) : value;
     },
   });
+  const interruptions = scopedStore(dependencies.interruptions
+    ?? interruptionObligationStore(interruptionDirectory, { tryAdmission: true }));
+  const readInterruptions = async () => {
+    assertActive();
+    const rows = dependencies.interruptions ? dependencies.interruptions.list()
+      : await readInterruptionObligations(interruptionDirectory, journalAdmission);
+    assertActive();
+    return scopeRows(rows);
+  };
+  const admitInterruptions: StartupInterruptionAdmission = async operation => {
+    assertActive();
+    if (dependencies.interruptions) return operation(interruptions);
+    return withInterruptionObligationAdmission(interruptionDirectory, store => {
+      assertActive();
+      return operation(scopedStore(store));
+    }, journalAdmission);
+  };
+  const settleInterruptions = async (include: (row: InterruptionObligation) => boolean = interruptionObligationUnresolved) => {
+    const rows = (await readInterruptions()).filter(include);
+    if (!rows.some(row => row.state === "submitted")) return rows;
+    return admitInterruptions(store => settleSubmittedInterruptionObligations(registry, store, store.list().filter(include)));
+  };
   const addConversationWork = (snapshot: RegistryFile, id: string) => {
     const conversation = snapshot.conversations[resolveConversationAlias(snapshot, id as ViewerConversationId)];
     const generation = conversation?.generations.at(-1);
     if (conversation && generation) work.add(sessionKeyId({ engine: conversation.engine, sessionId: generation.id }));
   };
-  for (const obligation of interruptions.list()) {
+  for (const obligation of await readInterruptions()) {
     if (interruptionObligationUnresolved(obligation)) work.add(obligation.hostKey);
   }
   for (const seat of orchestratorSeats()) {
@@ -3453,23 +3507,30 @@ async function adoptStructuredHostsPass(
   const recoveryBoundarySnapshot = capturedOrchestratorRecoveries.length || startupPasses.get(registry)?.recoveries?.length
     ? await preparedStartupSnapshot(registry) : initialSnapshot;
   const recoveryBoundarySeats = orchestratorSeats();
-  const orchestratorRecoveries = mergeOrchestratorRestartRecoveries(
+  let orchestratorRecoveries = mergeOrchestratorRestartRecoveries(
     startupPasses.get(registry)?.recoveries ?? [],
     capturedOrchestratorRecoveries,
   ).filter((target) => !startupHostInScope(registry, target.hostKey) || orchestratorRestartRecoveryCaptureIsCurrent(
     registry, target, recoveryBoundarySeats, recoveryBoundarySnapshot,
   ));
+  if (orchestratorRecoveries.some(target => startupHostInScope(registry, target.hostKey))) {
+    orchestratorRecoveries = await admitInterruptions(store => {
+      const seats = orchestratorSeats();
+      const current = orchestratorRecoveries.filter(target => !startupHostInScope(registry, target.hostKey)
+        || orchestratorRestartRecoveryCaptureIsCurrent(registry, target, seats, registry.livenessConversationSnapshot(target.conversationId)));
+      recordOrchestratorRestartObligations(store, current.filter(target => startupHostInScope(registry, target.hostKey)));
+      return current;
+    });
+  }
   const orchestratorRecoveriesByHostKey = orchestratorRestartRecoveriesByHostKey(orchestratorRecoveries);
   for (const key of orchestratorRecoveriesByHostKey.keys()) work.add(key);
-  recordOrchestratorRestartObligations(interruptions, orchestratorRecoveries.filter(target => startupHostInScope(registry, target.hostKey)));
   /* Every pass asks the rows in its scope before it adopts, demotes or nudges
      any of them; a decision belongs to the pass that made it. A continuation
      that already arrived covers nothing any more: settle it first, so a turn
      the agent resumed and the restart cut again is seen. */
-  settleSubmittedInterruptionObligations(registry, interruptions,
-    interruptions.list().filter(interruptionObligationUnresolved));
+  await settleInterruptions();
   reportCensusPhase("recognizing interrupted hosts");
-  const checkout = await checkoutMergersForStartup(registry, interruptions, resumeDeferred, client);
+  const checkout = await checkoutMergersForStartup(registry, readInterruptions, admitInterruptions, resumeDeferred, client);
   assertActive();
   const checkoutKeys = new Set([...checkout.captured.keys(), ...checkout.waiting]);
   for (const key of checkoutKeys) {
@@ -3479,7 +3540,7 @@ async function adoptStructuredHostsPass(
   const recognition = await restartCutTargets(
     registry,
     orchestratorSeats(),
-    interruptions.list(),
+    await readInterruptions(),
     resumeDeferred,
     dependencies.readHostTurnRecord ?? readHostTurnRecord,
     recoveryBoundarySnapshot,
@@ -3492,11 +3553,29 @@ async function adoptStructuredHostsPass(
   assertActive();
   const passState = startupPasses.get(registry);
   const cutHostKeys = passState ? passState.cutHostKeys ??= new Set<string>() : new Set<string>();
-  recordRestartCuts(interruptions, recognition.cuts, cutHostKeys);
   /* A cut is a proposal until its row is taken: one the turn's own evidence
      has since disproved is withdrawn before anything answers it. */
-  const unwithdrawn = withdrawRestartCutProposals(interruptions, recognition.disproved, cutHostKeys,
-    "the turn's own evidence shows it ended by itself");
+  const unwithdrawn = recognition.cuts.length || recognition.disproved.length ? await admitInterruptions(store => {
+    const moved = new Set<string>();
+    const current = ({ hostKey, conversationId }: { hostKey: string; conversationId: ViewerConversationId }) => {
+      const stamp = recognition.stamps.get(hostKey);
+      const entry = registry.livenessConversationSnapshot(conversationId).entries[hostKey];
+      if (entry && (!stamp || currentRestartCutStamp(stamp, entry) === stamp.value)) return true;
+      moved.add(hostKey);
+      return false;
+    };
+    const liveProposals = new Map(store.list().map(row => [row.id, row]));
+    const disproved = recognition.disproved.filter(row => {
+      const live = liveProposals.get(row.id);
+      if (!live || !current(row)) return false;
+      if (JSON.stringify(live) === JSON.stringify(row)) return true;
+      moved.add(row.hostKey);
+      return false;
+    });
+    recordRestartCuts(store, recognition.cuts.filter(current), cutHostKeys);
+    return new Set([...withdrawRestartCutProposals(store, disproved, cutHostKeys,
+      "the turn's own evidence shows it ended by itself"), ...moved]);
+  }) : new Set<string>();
   /* Rows whose evidence is undecided, or moved after it was decided, or whose
      disproved proposal is still on file: left exactly as they were, and asked
      again by the deferral re-probe. */
@@ -3637,11 +3716,7 @@ async function adoptStructuredHostsPass(
     /* Every unresolved obligation keeps its row out of the generic Codex nudge
        and out of dead-wrapper cleanup, including one this pass discharges: a
        turn somebody else already resumed is owed nothing more by anyone. */
-    const unresolvedInterruptions = settleSubmittedInterruptionObligations(
-      registry,
-      interruptions,
-      interruptions.list().filter(interruptionObligationUnresolved),
-    );
+    const unresolvedInterruptions = await settleInterruptions();
     const interruptionHostKeys = new Set(unresolvedInterruptions.map((obligation) => obligation.hostKey));
     let interruptedHostKeys: ReadonlySet<string> = interruptionHostKeys;
     const retainedRecoveryHostKeys = () => new Set([...orchestratorHostKeys, ...interruptedHostKeys]);
@@ -3731,14 +3806,11 @@ async function adoptStructuredHostsPass(
     /* Only a continuation not yet admitted forces its row's adoption. One the
        queue holds is pending work of its own, which makes the row eligible for
        as long as it stays unsettled. */
-    interruptedHostKeys = new Set(dischargeInterruptionObligations(
-      registry,
-      interruptions,
-      unresolvedInterruptions,
-      orchestratorSeats(),
-      signals.admittedMessages,
-      pipelineEvidence.settled,
-    ).filter((obligation) => obligation.state === "owed").map((obligation) => obligation.hostKey));
+    const currentInterruptions = unresolvedInterruptions.length === 0 ? [] : await admitInterruptions(store => dischargeInterruptionObligations(
+      registry, store, store.list().filter(row => interruptionObligationUnresolved(row) && interruptionHostKeys.has(row.hostKey)),
+      orchestratorSeats(), signals.admittedMessages, pipelineEvidence.settled,
+    ));
+    interruptedHostKeys = new Set(currentInterruptions.filter(obligation => obligation.state === "owed").map(obligation => obligation.hostKey));
     // Select eligibility and candidates from one view. Per-host claims still
     // re-read current state before adopting.
     const adoptionSnapshot = await preparedStartupSnapshot(registry);
@@ -4264,27 +4336,25 @@ async function adoptStructuredHostsPass(
          runtime's receipts are read again too — adoption can take tens of
          seconds, and a send it admitted in that time is not in `signals`. A
          pass with nothing owed skips that snapshot. */
-      const unresolvedAfterAdoption = interruptions.list().filter((obligation) =>
+      const eligibleInterruption = (obligation: InterruptionObligation) =>
         interruptionObligationUnresolved(obligation)
           && interruptedHostKeys.has(obligation.hostKey)
           && !deferredHostKeys.has(obligation.hostKey)
           /* A held row's proposal waits for its evidence, even where pending
              work took the row after the re-probe's cap. */
-          && !heldHostKeys.has(obligation.hostKey));
+          && !heldHostKeys.has(obligation.hostKey);
+      const unresolvedAfterAdoption = (await readInterruptions()).filter(eligibleInterruption);
       if (checkpoint && unresolvedAfterAdoption.length > 0) checkpoint.continuationSessions ??= { sessions: new Map() };
       const latestMessages = unresolvedAfterAdoption.length === 0 ? new Map()
         : await readStartupContinuationMessages(registry, client,
           [...new Set(unresolvedAfterAdoption.map(item => item.conversationId))],
           checkpoint?.continuationSessions ?? { sessions: new Map() },
         );
-      const owedInterruptions = unresolvedAfterAdoption.length === 0 ? [] : dischargeInterruptionObligations(
-        registry,
-        interruptions,
-        unresolvedAfterAdoption,
-        orchestratorSeats(),
-        latestMessages,
-        pipelineEvidence.settled,
-      );
+      const readIds = new Set(unresolvedAfterAdoption.map(row => row.id));
+      const owedInterruptions = unresolvedAfterAdoption.length === 0 ? [] : await admitInterruptions(store => dischargeInterruptionObligations(
+        registry, store, store.list().filter(row => readIds.has(row.id) && eligibleInterruption(row)),
+        orchestratorSeats(), latestMessages, pipelineEvidence.settled,
+      ));
       const continuationSnapshot = owedInterruptions.some(obligation => obligation.state === "owed")
         ? await preparedStartupSnapshot(registry) : undefined;
       const readyInterruptions = owedInterruptions.filter(obligation => {
@@ -4293,7 +4363,7 @@ async function adoptStructuredHostsPass(
         return false;
       });
       const continuationFailures = await deliverInterruptionContinuations(
-        registry, client, interruptions, readyInterruptions, finalHostKeys, checkout.captured, assertActive,
+        registry, client, admitInterruptions, readyInterruptions, finalHostKeys, checkout.captured, assertActive,
       );
       await reportProgress("recovering interrupted deliveries");
       const codexContinuationFailures = await enqueueInterruptedCodexContinuations(
@@ -4307,8 +4377,7 @@ async function adoptStructuredHostsPass(
       await reportProgress("kicking recovered deliveries");
       await kickStructuredDeliveryQueue();
       if (checkoutKeys.size) {
-        const unresolved = settleSubmittedInterruptionObligations(registry, interruptions,
-          interruptions.list().filter(row => checkoutKeys.has(row.hostKey) && interruptionObligationUnresolved(row)));
+        const unresolved = await settleInterruptions(row => checkoutKeys.has(row.hostKey) && interruptionObligationUnresolved(row));
         for (const row of unresolved) waitingContinuationHostKeys.add(row.hostKey);
       }
       /* The pass retries until every owed continuation is admitted; each retry
@@ -4642,12 +4711,14 @@ async function probeHeldRestartCutRows(
   for (const id of Object.keys(snapshot.conversations)) {
     for (const delivery of registry.pendingDeliveries(id as ViewerConversationId)) snapshot.heldDeliveries[delivery.id] = delivery;
   }
-  const interruptions = dependencies.interruptions
-    ?? interruptionObligationStore(interruptionObligationDirectory(registry.filename));
+  const interruptions = dependencies.interruptions ? dependencies.interruptions.list()
+    : await readInterruptionObligations(interruptionObligationDirectory(registry.filename), { signal: dependencies.signal });
+  dependencies.signal?.throwIfAborted();
+  dependencies.assertActive?.();
   const recognition = await restartCutTargets(
     registry,
     (dependencies.orchestratorSeats ?? activeOrchestratorSeats)(),
-    interruptions.list(),
+    interruptions,
     new Set(state.held.keys()),
     dependencies.readHostTurnRecord ?? readHostTurnRecord,
     snapshot,

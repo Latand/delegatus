@@ -1,3 +1,4 @@
+import { InterruptionJournalBusyError } from "@/lib/runtime/interruptionObligations";
 import { CPU_STAGE_POLL_MS } from "@/lib/runtime/cpuAdmission";
 import { isCpuPressureDetail } from "@/lib/runtime/cpuPressure";
 import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
@@ -100,7 +101,9 @@ export function tickPipelinesController(entries: FileEntry[], suppliedPorts?: Pi
           }
           await awaitLeasedOperation("acknowledgePipelineControllerWork", () => acknowledgePipelineControllerWork(item, window.at(-1)?.position ?? -1, due));
         } catch (error) {
-          if (!(error instanceof StateSnapshotChangedError)) {
+          if (error instanceof InterruptionJournalBusyError) {
+            console.warn("[pipelines] deferring lane; interruption journal is busy");
+          } else if (!(error instanceof StateSnapshotChangedError)) {
             if (!(error instanceof PipelineStoreError)) throw error;
             console.error("[pipelines] deferring lane; registry unreadable", error);
           }
