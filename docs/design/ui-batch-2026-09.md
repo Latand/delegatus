@@ -426,6 +426,10 @@ Codex rows get the same chart from their `weekly` series; a Codex plan that repo
 
 **Viewports.** The panel is `min(400px, 100vw − 16px)` on every desktop width, so 1440 and 1280 are one layout. On the phone (390) the same component sits behind the active account's card (`MobileAccountCard`, 358 px) and behind each other account's row; the card's corner figure and meters sit above it. Light and dark differ only in the two area opacities above.
 
+### As built (#1072)
+
+The first slice draws the week from the history route the popover already reads (`GET /api/limits/history?engine=&account=`, once per row on mount), with no new data source, so the batched `accounts` map, tier lines and the label swatches above are deferred. Rendered evidence showed that the fill opacities above cannot hold: the muted ink of the limit lines is 5.1:1 on the card in both themes, and a fill of 8% or more in the engine tint, amber or red takes it under 4.5:1; the default row's own 7% tint already leaves it near 4.6:1. The area is therefore 7% in both themes (`SPARKLINE_AREA_OPACITY`), the default row draws the line and the guide without the area, and the line is 1.5 px at 0.5 opacity. The row is `isolate` and the chart sits at `-z-10`, so no row content needed a `relative` wrapper. The cases are `captureAccountSparklineFrames` in `src/components/accountRowFrames.ts`, run from the dialog and phone account-row drivers (`LLV_ACCOUNT_ROW_CASE=sparkline`).
+
 ### Deliberately left out
 
 - The 5 h window: it would add a second, faster sawtooth behind the same text.

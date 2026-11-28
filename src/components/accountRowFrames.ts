@@ -102,6 +102,10 @@ export function accountRowRoutes() {
     set: "core" as RowSet,
     next: null as string | null,
     refuse: { spend: false, remove: false },
+    /** Whether `GET /api/limits/history` answers with a week for every account that reports one; off, the read fails and a row draws nothing behind it. */
+    history: false,
+    /** Accounts whose history read fails even with `history` on: a row with a reading and no series. */
+    noHistory: new Set<string>(["reserve"]),
     calls: [] as Call[],
     model: accountRowModel("core"),
     reset(set: RowSet, next: string | null = null) {
@@ -119,6 +123,24 @@ export function accountRowRoutes() {
   const routes: Record<string, Handler> = {
     "/api/accounts": () => Response.json(control.model),
     "/api/transfer/accounts": () => Response.json({ ok: true, result: [] }),
+    /* The week behind each row: the account's own weekly reading, walked back from 100 % at the window's start to what is left now. */
+    "/api/limits/history": (request) => {
+      const url = new URL(request.url);
+      const engine: RowEngine = url.searchParams.get("engine") === "codex" ? "codex" : "claude";
+      const id = url.searchParams.get("account") ?? "";
+      const weekly = (find(engine, id)?.limits as { weekly?: { usedPercent: number; resetsAt: number } | null } | null | undefined)?.weekly;
+      if (!control.history || control.noHistory.has(id) || !weekly) return new Response("{}", { status: 500 });
+      const now = clock();
+      const windowStart = weekly.resetsAt - 7 * DAY;
+      const left = 100 - weekly.usedPercent;
+      const samples = Array.from({ length: 24 }, (_, i) => ({ t: Math.round(windowStart + ((now - windowStart) * i) / 23), remaining: 100 - ((100 - left) * i) / 23 }));
+      const week = { windowStart, resetsAt: weekly.resetsAt, windowSeconds: 7 * DAY, samples };
+      const series = { session: { windowStart: null, resetsAt: null, windowSeconds: 5 * HOUR, samples: [] }, weekly: week };
+      return Response.json({
+        claude: engine === "claude" ? series : null, codex: engine === "codex" ? series : null,
+        claudeAccountId: engine === "claude" ? id : null, codexAccountId: engine === "codex" ? id : null, historySince: null,
+      });
+    },
     "/api/account-project-bindings": () => Response.json({ engines: {
       claude: { nextChosenAccountId: control.next },
       codex: { nextChosenAccountId: control.next },
@@ -675,4 +697,184 @@ export async function captureAccountRowReveal(options: Pick<FrameOptions, "brows
     } finally { await context.close(); }
   }
   return failures;
+}
+
+
+/* ---------- the week behind each row ---------- */
+
+/** The default account of each engine in the core set: its row draws the line and the guide, without the area. */
+const isDefault = new Set(["claude:opus-main", "codex:night-shift"]);
+
+/** Rows whose week ends below the even-pace guide at "now" (burning ahead of pace), and rows above it, in the core set. */
+const OVER_PACE = new Set(["night-shift", "team-seat"]);
+const UNDER_PACE = new Set(["studio", "backup", "opus-main"]);
+
+type SparkRow = {
+  id: string;
+  /** The engine whose list holds the row: the phone's screen lists both. */
+  engine: string | null;
+  height: number;
+  spark: null | {
+    box: { dx: number; dy: number; dw: number; dh: number };
+    pointerEvents: string;
+    ariaHidden: string | null;
+    areaOpacity: number;
+    lineOpacity: number;
+    hasGuide: boolean;
+    guideDash: string | null;
+    last: { x: number; y: number };
+    guideAtLast: number;
+    hit: boolean;
+    primary: { fg: string; backgrounds: string[]; wash: string; washOpacity: number };
+    muted: { fg: string };
+  };
+};
+
+/** One reading of every row of the open panel: its height, and what sits behind it. */
+function readSparklines(): SparkRow[] {
+  return [...document.querySelectorAll<HTMLElement>("[data-account-row]")].map((row) => {
+    const box = row.getBoundingClientRect();
+    const svg = row.querySelector<SVGElement>("svg[data-account-sparkline]");
+    const engine = row.closest("[data-mobile2-accounts-engine]")?.getAttribute("data-mobile2-accounts-engine") ?? null;
+    if (!svg) return { id: row.getAttribute("data-account-row")!, engine, height: box.height, spark: null };
+    const sb = svg.getBoundingClientRect();
+    const area = svg.querySelector<SVGElement>("[data-sparkline-area]");
+    const line = svg.querySelector<SVGElement>("[data-sparkline-line]")!;
+    const guide = svg.querySelector<SVGElement>("[data-sparkline-guide]");
+    const points = (line.getAttribute("d") ?? "").match(/-?\d+(\.\d+)?,-?\d+(\.\d+)?/g)!.map((pair) => pair.split(",").map(Number) as [number, number]);
+    const guidePoints = (guide?.getAttribute("d") ?? "").match(/-?\d+(\.\d+)?,-?\d+(\.\d+)?/g)?.map((pair) => pair.split(",").map(Number) as [number, number]) ?? [];
+    const last = points[points.length - 1]!;
+    const guideAtLast = guidePoints.length === 2 ? guidePoints[0]![1] + ((guidePoints[1]![1] - guidePoints[0]![1]) * last[0]) / 100 : NaN;
+    const centre = document.elementFromPoint(box.left + box.width / 2, Math.min(Math.max(box.top + box.height / 2, 1), innerHeight - 1));
+    const name = row.querySelector<HTMLElement>("[data-account-name]")!;
+    const mutedLine = row.querySelector<HTMLElement>("[data-limit-row]") ?? name;
+    const backgrounds: string[] = [];
+    for (let node: Element | null = row; node; node = node.parentElement) backgrounds.push(getComputedStyle(node).backgroundColor);
+    return {
+      id: row.getAttribute("data-account-row")!,
+      engine,
+      height: box.height,
+      spark: {
+        /* The chart is laid on the row's padding box: the divider above a row is its border, outside it. */
+        box: { dx: sb.left - box.left - row.clientLeft, dy: sb.top - box.top - row.clientTop, dw: sb.width - row.clientWidth, dh: sb.height - row.clientHeight },
+        pointerEvents: getComputedStyle(svg).pointerEvents,
+        ariaHidden: svg.getAttribute("aria-hidden"),
+        areaOpacity: area ? Number(getComputedStyle(area).fillOpacity) : 0,
+        lineOpacity: Number(getComputedStyle(line).opacity),
+        hasGuide: guide !== null,
+        guideDash: guide?.getAttribute("stroke-dasharray") ?? null,
+        last: { x: last[0], y: last[1] },
+        guideAtLast,
+        hit: centre !== null && !svg.contains(centre),
+        primary: { fg: getComputedStyle(name).color, backgrounds, wash: area ? getComputedStyle(area).fill : "", washOpacity: area ? Number(getComputedStyle(area).fillOpacity) : 0 },
+        muted: { fg: getComputedStyle(mutedLine).color },
+      },
+    };
+  });
+}
+
+/** Colour strings as Chrome serialises them, `rgb()` or `color(srgb …)`, as 0–255 channels with alpha. */
+function channels(value: string): { r: number; g: number; b: number; a: number } | null {
+  const rgb = value.match(/^rgba?\(([^)]+)\)/);
+  if (rgb) {
+    const [r, g, b, a] = rgb[1]!.split(/[ ,/]+/).filter(Boolean).map(Number);
+    return { r: r!, g: g!, b: b!, a: a ?? 1 };
+  }
+  const srgb = value.match(/^color\(srgb ([^)]+)\)/);
+  if (srgb) {
+    const [r, g, b, a] = srgb[1]!.split(/[ /]+/).filter(Boolean).map(Number);
+    return { r: r! * 255, g: g! * 255, b: b! * 255, a: a ?? 1 };
+  }
+  return null;
+}
+const luminance = (c: { r: number; g: number; b: number }) => {
+  const f = (v: number) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; };
+  return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b);
+};
+const ratio = (a: { r: number; g: number; b: number }, b: { r: number; g: number; b: number }) => {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi! + 0.05) / (lo! + 0.05);
+};
+
+/**
+ * The week behind every account row (#1072): the dimmed area, line and even-pace guide the row draws from the series
+ * the burndown popover reads. For each engine, width, language and scheme the panel is read twice, once with the
+ * history route answering and once with it failing. It fails when a row with a series lacks the chart or a row
+ * without one has it; when the chart is not inert, aria-hidden and exactly the row's box; when its fill opacity
+ * leaves the one 7% the muted ink's contrast allows (none on the default row); when an over-pace row's line ends above its guide (or an under-pace row's below); when any row's
+ * height differs from the no-chart baseline; or when the name or the muted limit text falls under 4.5:1 over the painted
+ * stack (the row's own tint included).
+ */
+export async function captureAccountSparklineFrames(options: Pick<FrameOptions, "browser" | "base" | "out" | "routes" | "surface" | "widths" | "height">): Promise<{ frames: number; failures: string[] }> {
+  const { browser, base, out, routes, surface, widths, height } = options;
+  const phone = surface === "phone";
+  fs.mkdirSync(out, { recursive: true });
+  const failures: string[] = [];
+  let frames = 0;
+  const read = async (key: string, engine: RowEngine, width: number, locale: "en" | "uk", theme: "light" | "dark", history: boolean) => {
+    routes.control.reset("core");
+    routes.control.history = history;
+    // The phone's accounts screen lists both engines under one scroll; the dialog lists one.
+    const expected = (phone ? ["claude", "codex"] as const : [engine] as const).flatMap((name) => routes.control.model[name].accounts
+      .filter((account) => account.authPresent === true && (account.limits as { weekly?: unknown } | null)?.weekly && !routes.control.noHistory.has(account.id))
+      .map((account) => `${name}:${account.id}`));
+    const { page, context, pageErrors } = await openFixture(browser, `${base}?scenario=account-row&surface=${surface}&engine=${engine}`, { width, height }, theme, locale, "no-preference", phone);
+    try {
+      await page.locator("[data-account-row]").first().waitFor({ timeout: 15_000 });
+      if (history) {
+        await page.waitForFunction((count) => document.querySelectorAll("svg[data-account-sparkline]").length >= count, expected.length, { timeout: 15_000 }).catch(() => {});
+      } else await page.waitForTimeout(600);
+      await page.waitForTimeout(150);
+      const rows = await page.evaluate(readSparklines);
+      if (history) {
+        await page.locator("[data-account-row]").first().scrollIntoViewIfNeeded();
+        await page.screenshot({ path: path.join(out, `sparkline-${key}.png`) });
+        frames += 1;
+      }
+      if (pageErrors.length) failures.push(`${key}: page errors ${pageErrors.join(" | ")}`);
+      return { rows, expected };
+    } finally { await context.close(); }
+  };
+  for (const width of widths) for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const engine of (phone ? ["claude"] : ["claude", "codex"]) as RowEngine[]) {
+    const key = `${surface}-${width}-${locale}-${theme}-${phone ? "both" : engine}`;
+    const base0 = await read(key, engine, width, locale, theme, false);
+    const withChart = await read(key, engine, width, locale, theme, true);
+    routes.control.history = false;
+    for (const row of base0.rows) if (row.spark) failures.push(`${key}: ${row.id} draws a chart with the history failing`);
+    const drawn = withChart.rows.filter((row) => row.spark).map((row) => `${row.engine ?? engine}:${row.id}`).sort();
+    if (drawn.join(",") !== [...withChart.expected].sort().join(",")) failures.push(`${key}: charts on [${drawn}], the series are for [${[...withChart.expected].sort()}]`);
+    if (withChart.rows.length < 2 || !withChart.rows.some((row) => !row.spark)) failures.push(`${key}: the scene has no row without a series`);
+    for (const row of withChart.rows) {
+      const before = base0.rows.find((candidate) => candidate.id === row.id);
+      if (!before) { failures.push(`${key}: ${row.id} is missing from the baseline`); continue; }
+      if (Math.abs(before.height - row.height) > 0.5) failures.push(`${key}: ${row.id} is ${row.height} px high with the chart and ${before.height} without`);
+      const spark = row.spark;
+      if (!spark) continue;
+      if (spark.pointerEvents !== "none") failures.push(`${key}: ${row.id}'s chart has pointer-events ${spark.pointerEvents}`);
+      if (spark.ariaHidden !== "true") failures.push(`${key}: ${row.id}'s chart is not aria-hidden`);
+      if (!spark.hit) failures.push(`${key}: ${row.id}'s centre hits the chart`);
+      if (Math.abs(spark.box.dx) > 0.5 || Math.abs(spark.box.dy) > 0.5 || Math.abs(spark.box.dw) > 0.5 || Math.abs(spark.box.dh) > 0.5) failures.push(`${key}: ${row.id}'s chart is not the row's box ${JSON.stringify(spark.box)}`);
+      // The default account's row draws no area (its own tint is already behind its text); every other row draws it at the one low opacity.
+      if (isDefault.has(`${row.engine ?? engine}:${row.id}`) ? spark.areaOpacity !== 0 : Math.abs(spark.areaOpacity - 0.07) > 0.001) failures.push(`${key}: ${row.id}'s area opacity is ${spark.areaOpacity}`);
+      if (!spark.hasGuide || spark.guideDash !== "3 3") failures.push(`${key}: ${row.id} has no dashed even-pace guide`);
+      if (!(spark.last.x > 0 && spark.last.x < 100)) failures.push(`${key}: ${row.id}'s line ends at x=${spark.last.x}, not at "now"`);
+      if (OVER_PACE.has(row.id) && !(spark.last.y > spark.guideAtLast)) failures.push(`${key}: ${row.id} is over pace but its line ends above the guide (${spark.last.y} vs ${spark.guideAtLast})`);
+      if (UNDER_PACE.has(row.id) && !(spark.last.y < spark.guideAtLast)) failures.push(`${key}: ${row.id} is under pace but its line ends below the guide (${spark.last.y} vs ${spark.guideAtLast})`);
+      // The surface under the text: the first opaque background above the row, with the row's own translucent tints laid over it,
+      // then the chart's area over those.
+      const stack = spark.primary.backgrounds.map(channels);
+      const opaque = stack.findIndex((color) => (color?.a ?? 0) >= 0.99);
+      const fg = channels(spark.primary.fg), mutedFg = channels(spark.muted.fg), wash = spark.primary.wash ? channels(spark.primary.wash) : null;
+      if (opaque < 0 || !fg || !mutedFg || (spark.areaOpacity > 0 && !wash)) { failures.push(`${key}: ${row.id}'s colours are unreadable (${spark.primary.fg} | ${spark.primary.backgrounds.join(" / ")} | ${spark.primary.wash} | ${spark.muted.fg})`); continue; }
+      const over = (below: { r: number; g: number; b: number }, layer: { r: number; g: number; b: number; a: number }) => ({ r: below.r * (1 - layer.a) + layer.r * layer.a, g: below.g * (1 - layer.a) + layer.g * layer.a, b: below.b * (1 - layer.a) + layer.b * layer.a });
+      let today: { r: number; g: number; b: number } = stack[opaque]!;
+      for (let i = opaque - 1; i >= 0; i -= 1) if (stack[i] && stack[i]!.a > 0) today = over(today, stack[i]!);
+      const painted = wash ? over(today, { ...wash, a: spark.areaOpacity }) : today;
+      for (const [what, ink] of [["name", fg], ["muted text", mutedFg]] as const) {
+        if (ratio(ink, painted) < 4.5) failures.push(`${key}: ${row.id}'s ${what} is ${ratio(ink, painted).toFixed(2)}:1 over the chart, ${ratio(ink, today).toFixed(2)}:1 without it`);
+      }
+    }
+  }
+  fs.writeFileSync(path.join(out, "sparkline.json"), JSON.stringify({ at: new Date().toISOString(), surface, frames, failures }, null, 1));
+  return { frames, failures };
 }

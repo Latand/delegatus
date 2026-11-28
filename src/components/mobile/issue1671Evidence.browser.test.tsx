@@ -15389,7 +15389,7 @@ describe("account row on the phone", () => {
      in both languages and both schemes, then the keyboard and reduced motion. `LLV_ACCOUNT_ROW_OUT=<dir>` keeps the
      frames and `readings.json`; `LLV_ACCOUNT_ROW_ONLY=<substring,…>` and `LLV_ACCOUNT_ROW_WIDTHS=<px,…>` rerun a subset. */
   browserTest("390 px: every state of the row on the accounts screen, in both languages and schemes, with the keyboard and reduced motion", async () => {
-    const { accountRowRoutes, captureAccountRowFrames, captureAccountRowKeyboard, captureAccountRowReveal } = await import("@/components/accountRowFrames");
+    const { accountRowRoutes, captureAccountRowFrames, captureAccountRowKeyboard, captureAccountRowReveal, captureAccountSparklineFrames } = await import("@/components/accountRowFrames");
     const out = path.resolve(process.env.LLV_ACCOUNT_ROW_OUT ?? ".artifacts/account-row", "phone"); fs.mkdirSync(out, { recursive: true });
     const rows = accountRowRoutes();
     const server = await serveEvidenceFixture(out, undefined, rows.routes);
@@ -15400,6 +15400,13 @@ describe("account row on the phone", () => {
         expect(await captureAccountRowReveal({ browser, base: server.base, out, routes: rows, surface: "phone", width: 390, height: 844 })).toEqual([]);
         return;
       }
+      // `LLV_ACCOUNT_ROW_CASE=sparkline` runs only the week behind each row (#1072).
+      if (process.env.LLV_ACCOUNT_ROW_CASE === "sparkline") {
+        const only = await captureAccountSparklineFrames({ browser, base: server.base, out, routes: rows, surface: "phone", widths: process.env.LLV_ACCOUNT_ROW_WIDTHS?.split(",").map(Number) ?? [390], height: 844 });
+        expect(only.failures).toEqual([]);
+        expect(only.frames).toBeGreaterThan(0);
+        return;
+      }
       const only = process.env.LLV_ACCOUNT_ROW_ONLY?.split(",");
       const { frames, failures } = await captureAccountRowFrames({ browser, base: server.base, out, routes: rows, surface: "phone", widths: process.env.LLV_ACCOUNT_ROW_WIDTHS?.split(",").map(Number) ?? [360, 390, 430], height: 844, only });
       expect(failures).toEqual([]);
@@ -15408,6 +15415,10 @@ describe("account row on the phone", () => {
         expect(await captureAccountRowKeyboard({ browser, base: server.base, out, routes: rows, surface: "phone", width: 390, height: 844 })).toEqual([]);
         expect(await captureAccountRowReveal({ browser, base: server.base, out, routes: rows, surface: "phone", width: 390, height: 844 })).toEqual([]);
       }
+      // The week behind each row (#1072), on the phone's rows: dimmed, inert, and no taller than the row without it.
+      const sparks = await captureAccountSparklineFrames({ browser, base: server.base, out, routes: rows, surface: "phone", widths: process.env.LLV_ACCOUNT_ROW_WIDTHS?.split(",").map(Number) ?? [390], height: 844 });
+      expect(sparks.failures).toEqual([]);
+      expect(sparks.frames).toBeGreaterThan(0);
     } finally { await browser.close(); server.stop(); }
   }, 7_200_000);
 });
@@ -15917,6 +15928,8 @@ describe("account burndown chart on the phone", () => {
             await page.locator(press(scene.id)).scrollIntoViewIfNeeded();
             const target = await page.locator(press(scene.id)).boundingBox();
             if (!target || target.height < 43.5) failures.push(`${key}: the chart press is ${target?.height ?? "missing"} px high, under 44`);
+            // Every row read its own week for the sparkline behind it at mount; the press is judged by what it asks for.
+            asked.length = 0;
             await page.locator(press(scene.id)).tap();
             await page.locator("[data-burndown-dialog] svg[role=img]").waitFor({ timeout: 10_000 });
             await page.waitForFunction(() => !document.body.textContent?.includes("…"), undefined, { timeout: 5_000 }).catch(() => {});
