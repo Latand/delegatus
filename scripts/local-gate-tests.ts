@@ -579,7 +579,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
       }
       const fileTimedOut = exitCode === 124 && output.includes("owned runner: deadline expired");
       if (fileTimedOut) {
-        if (filtered) throw new Error(`${label}: ${file}: runner did not finish (124); file budget exhausted`);
+        if (filtered) throw new Error("runner did not finish (124)");
         failures.push({ file, suite: "", name: `${RUNNER_ERROR}runner did not finish (124)`, kind: "error", selection });
         if (survivors) appendOwnershipFailure(failures, file, survivors, selection);
         options.onFailure?.();
