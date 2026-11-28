@@ -228,6 +228,10 @@ choice in its report. If a check modifies installed files, use
 `UV_LINK_MODE=copy` for that environment only. A restricted stage with unset
 cache variables that needs to install can use a cache under TMPDIR.
 
+Reuse one scratch copy of large state across probes. Use a Git worktree for
+repository probes, or hardlink files that each probe only reads. Delete each
+probe directory as soon as its run and subprocesses finish.
+
 ## This repository is public — publication surfaces carry no identities
 
 Docs, issues, PR bodies, commit messages, fixtures, and test data are public the

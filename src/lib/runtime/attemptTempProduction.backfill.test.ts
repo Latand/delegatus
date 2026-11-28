@@ -40,7 +40,7 @@ test.each(["closed", "completed"] as const)("release immediately records the %s 
   } finally { f.store.close(); }
 });
 
-test("one production allocation page measures growth beyond the first forty roots", async () => {
+test("one production allocation page measures nested probe copies beyond the first forty roots", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "allocation-page-")); roots.push(root);
   const previous = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = path.join(root, "state");
@@ -58,8 +58,17 @@ test("one production allocation page measures growth beyond the first forty root
       store.measure(directory, 4096, NOW - (index === 40 ? 0 : 1000));
     }
     const live = directories.at(-1)!;
-    const bytes = 64 * 1024 ** 2;
-    fs.writeFileSync(path.join(live, "payload"), Buffer.alloc(bytes, 1));
+    const MiB = 1024 ** 2;
+    const copies = [
+      { file: path.join(live, "probe-a", "state", "registry.sqlite"), bytes: 24 * MiB },
+      { file: path.join(live, "probe-b", "state", "registry.sqlite"), bytes: 24 * MiB },
+      { file: path.join(live, "probe-b", "checkout", "objects"), bytes: 16 * MiB },
+    ];
+    for (const { file, bytes } of copies) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, Buffer.alloc(bytes, 1));
+    }
+    const bytes = copies.reduce((total, copy) => total + copy.bytes, 0);
     const report = await runAttemptTempSweep({
       scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true, availableBytes: () => 412e9,
     }, { NODE_ENV: "test", LLV_TEMP_SWEEP: "on", LLV_ATTEMPT_TEMP_CAP_BYTES: String(bytes / 2) });
@@ -67,7 +76,7 @@ test("one production allocation page measures growth beyond the first forty root
     expect(store.bytes()).toBeGreaterThanOrEqual(bytes);
     expect(store.owner(live)).toMatchObject({ measuredAt: NOW + 61_000 });
     expect(store.owner(live)?.bytes).toBeGreaterThanOrEqual(bytes);
-    expect(fs.statSync(path.join(live, "payload")).size).toBe(bytes);
+    for (const { file, bytes } of copies) expect(fs.statSync(file).size).toBe(bytes);
   } finally {
     clock.mockRestore();
     store.close();
