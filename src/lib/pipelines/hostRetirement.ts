@@ -2,7 +2,7 @@ import type { RuntimeEngine, RuntimeProviderRecoveryRef } from "@/lib/runtime/co
 import { redactBounded } from "@/lib/monitor/redact";
 import { durableStageTurnEvidence, stageTurnEvidenceCurrent, type StageTurnEvidence } from "./durableEvidence";
 import { liveBackgroundTasks } from "./backgroundTasks";
-import { classifyProviderCondition, CODEX_CYBERSECURITY_REFUSAL, CODEX_WORKSPACE_REQUIREMENTS_FAILURE } from "./providerConditions";
+import { classifyProviderCondition, codexCybersecurityRefusal, CODEX_CYBERSECURITY_REFUSAL, CODEX_WORKSPACE_REQUIREMENTS_FAILURE } from "./providerConditions";
 import { pipelineAttemptMayBeWorking } from "./attemptWorking";
 import type { Pipeline, PipelineStageAttempt, PipelineStageHostRef } from "./types";
 import { recordedHostHeld } from "@/lib/recordedChecks/store";
@@ -129,7 +129,8 @@ export function providerRecoveryAttempt(
     || attempt.sessionId !== target.sessionId || !target.agentPath || attempt.agentPath !== target.agentPath
     || attempt.paneId) return null;
   const accountRecovery = ["usage_limit", "auth_required", "transient"].includes(wait.condition.kind);
-  const running = accountRecovery && pipeline.state === "running" && attempt.state === "running";
+  const codexRefusal = target.engine === "codex" && !wait.actionAt && codexCybersecurityRefusal(wait.condition);
+  const running = (accountRecovery || codexRefusal) && pipeline.state === "running" && attempt.state === "running";
   const retry = wait.stageRetry;
   const parked = accountRecovery && pipeline.state === "needs_decision" && attempt.state === "needs_decision" && retry
     && retry.controlGeneration === ref.controlGeneration
@@ -144,6 +145,7 @@ export function providerRecoveryTurnMatches(attempt: PipelineStageAttempt, evide
   const notice = evidence?.terminalProviderMessage;
   if (evidence?.turn !== "terminal" || evidence.promptHistoryComplete !== true || !cut || !notice || notice.ts !== cut.turnTs) return false;
   const condition = classifyProviderCondition(attempt.effectiveRole.engine, notice.errorClass, notice.text);
+  if (codexCybersecurityRefusal(cut.condition) && !codexCybersecurityRefusal(condition)) return false;
   // Older releases parked this exact Codex failure as a generic provider error.
   const retainedWorkspaceFailure = cut.condition.kind === "other" && cut.condition.label === "provider error"
     && condition.label === CODEX_WORKSPACE_REQUIREMENTS_FAILURE && cut.text === redactBounded(notice.text, 300);

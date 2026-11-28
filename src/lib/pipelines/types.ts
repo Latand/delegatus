@@ -611,6 +611,9 @@ export type PipelineStageAttempt = {
     /** Cut whose chain owns an incomplete-history confirmation wait, before
         providerWait can open. The reader must prove closure before clearing it. */
     providerCutAt?: number;
+    /** The refusal stop deadline allows one last admission check. Once held,
+        only exit evidence or retry-stage can reopen the same attempt. */
+    providerStopRetry?: "scheduled" | "held";
   };
   /** Active spawn time and observed contention, excluding CPU/update holds.
       Kept on the attempt across activation replacement and controller restart. */

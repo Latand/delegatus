@@ -1,4 +1,5 @@
 import "./engineEnvironment.fixture";
+import { spawn as spawnScenario, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import path from "node:path";
@@ -18,6 +19,7 @@ import { runtimeHostKindForEngine, type RuntimeSendCommand } from "@/lib/runtime
 import { resolveSendReceipt } from "@/lib/runtime/sendSettlement";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { claudeTranscriptPath } from "@/lib/agent/transcript";
+import { ownFixtureTree, stopFixtureTree } from "@/lib/testing/fixtureProcess";
 import type { PipelineStageAttempt } from "./types";
 
 
@@ -62,15 +64,35 @@ export function registerRolePrivacyEffects(part: 0 | 1 | 2, testFile: string): v
     // Registry and membership caches are process-wide. Each production launch
     // scenario starts with its own handles, including when run by itself.
     const directory = fs.mkdtempSync(path.join(process.env.TMPDIR!, "privacy-launch-case-"));
+    let child: ChildProcess | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const child = Bun.spawn([process.execPath, "test", "--timeout=60000", testFile,
+      const processTree = ownFixtureTree(spawnScenario(process.execPath, ["test", "--timeout=60000", testFile,
         "-t", `^an immutable stale first-message effect preserves execution evidence: ${scenario}$`], {
         env: { ...process.env, LLV_STATE_DIR: directory, LLV_PRIVACY_TEST_CASE: scenario },
-        stdin: "ignore", stdout: "pipe", stderr: "pipe",
-      });
-      const [code, output, errors] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-      expect(code, output + errors).toBe(0);
-    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+        stdio: ["ignore", "pipe", "pipe"],
+      }));
+      child = processTree;
+      let output = "";
+      processTree.stdout.on("data", chunk => { output += chunk; });
+      processTree.stderr.on("data", chunk => { output += chunk; });
+      const code = await Promise.race([
+        new Promise<number | null>((resolve, reject) => {
+          processTree.once("close", resolve);
+          processTree.once("error", reject);
+        }),
+        // Leave time to stop the captured tree before Bun's case timeout can
+        // advance to another scenario and leave this one running.
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`scenario process did not finish\n${output}`)), 25_000);
+        }),
+      ]);
+      expect(code, output).toBe(0);
+    } finally {
+      clearTimeout(timer);
+      if (child) await stopFixtureTree(child);
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
     return;
   }
   setSystemTime(new Date("2026-10-29T00:00:00Z"));
