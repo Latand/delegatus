@@ -138,18 +138,22 @@ test.each(["timeout", "permission-denied"] as const)("real parent retains pressu
     process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = "20000"; process.env.LLV_PRESSURE_FIXTURE = config;
     for (let pass = 0; pass < 2; pass++) {
       const report = await realParentPass();
-      expect(report).toMatchObject({ removed: 0, bytes: 24576, overCapBytes: 4576, errors: 0 });
+      expect(report).toMatchObject({ removed: 0, errors: 0 });
       expect(JSON.parse(fs.readFileSync(statePath("attempt-temp-report.json"), "utf8")).condition.overCap).toBeTrue();
       let physical = 0;
       for (const directory of directories) {
         physical += await allocatedAttemptBytes(directory);
         expect(fs.readFileSync(path.join(directory, "data")).length).toBe(4096);
       }
+      expect(report.bytes).toBe(physical);
+      expect(report.overCapBytes).toBe(physical - 20_000);
       expect(physical).toBeGreaterThan(20000);
     }
     removeKeepMarkers();
     fs.writeFileSync(config, JSON.stringify({ pressureInventory: true, now: NOW, freeBytes: 1e12 }));
     const recovered = await realParentPass();
-    expect(recovered).toMatchObject({ removed: 1, bytes: 12288, overCapBytes: 0, errors: 0 });
+    expect(recovered).toMatchObject({ removed: 1, errors: 0 });
+    expect(recovered.bytes).toBe(store.bytes());
+    expect(recovered.overCapBytes).toBe(0);
   } finally { store.close(); f.store.close(); restoreEnvironment(originalEnv); }
 }, 120_000);
