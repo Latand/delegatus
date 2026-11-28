@@ -1,5 +1,5 @@
 import { appendOwnershipFailure, compareTests, execFileSync, expect, fixture, gateTemporaryRoot, mkdirSync, parseReport, path, readFileSync, root, roots, source, spawnSync, spyOn, symlinkSync, test, type TestRun, type TestSite, writeFileSync } from "./local-gate-tests.fixture";
-import { existsSync } from "node:fs";
+import { chmodSync, existsSync, rmSync } from "node:fs";
 import { GATE_TASKS_MAX } from "./gate-tasks";
 import { BudgetExhausted, comparatorEnding, comparisonFileWorkers, comparisonPhaseBudgetMs, confirmedFileCleanup } from "./local-gate-tests";
 
@@ -62,6 +62,42 @@ test("a new failure blocks by file and full test identity", async () => {
   const cli = spawnSync(process.execPath, [path.join(root, "scripts/local-gate-tests.ts"), "--base", f.base, "./example.test.ts"], { cwd: f.dir, env: f.env, encoding: "utf8" });
   expect(cli.status).toBe(1); expect(cli.stdout).toContain("NEW example.test.ts");
 });
+
+test.skipIf(process.platform !== "linux" || process.getuid?.() === 0)(
+  "the comparator judges a file that leaves a sealed dependency cache", async () => {
+    const f = fixture(source(true));
+    const marker = path.join(f.dir, "sealed-cache");
+    writeFileSync(path.join(f.dir, "example.test.ts"), `
+import { test } from "bun:test";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+test("leaves sealed directories", () => {
+  const modules = join(process.env.TMPDIR, "node_modules");
+  const pkg = join(modules, "fixture");
+  mkdirSync(pkg, { recursive: true });
+  writeFileSync(${JSON.stringify(marker)}, modules);
+  writeFileSync(join(pkg, "index.js"), "export {};");
+  chmodSync(pkg, 0o555);
+  chmodSync(modules, 0o555);
+});
+`);
+    try {
+      const result = await f.run();
+      expect(result.introduced).toEqual([]);
+      expect(f.logs.join("\n")).toContain("0 failures; complete");
+      expect(f.logs.at(-1)).toContain("green head");
+    } finally {
+      // Let the deliberately broken control retire its own sandbox too.
+      if (existsSync(marker)) {
+        const modules = readFileSync(marker, "utf8");
+        for (const directory of [modules, path.join(modules, "fixture")]) {
+          if (existsSync(directory)) chmodSync(directory, 0o700);
+        }
+        rmSync(modules, { recursive: true, force: true });
+      }
+    }
+  });
+
 test("a failure on both first samples is PRE-EXISTING and its first observation cannot be reused", async () => {
   const marker = path.join(gateTemporaryRoot(), `gate-marker-${process.pid}-${Math.random()}`); roots.push(marker);
   const f = fixture(`import { test, expect } from "bun:test"; import { appendFileSync } from "node:fs"; appendFileSync(${JSON.stringify(marker)}, ${JSON.stringify("run\n")}); test("old red", () => expect(false).toBe(true));`);
@@ -374,9 +410,17 @@ test("between-test errors match across private roots without hiding a changed pa
 test("gate harness selections limit nested workers while ordinary head and baseline files retain their parallelism", () => {
   const regular = Array.from({ length: 12 }, (_, n) => "src/example" + n + ".test.ts");
   const nested = ["scripts/local-gate-tests.baseline.test.ts", "scripts/local-gate.binding.test.ts", "scripts/privacy-commit-input.test.ts"];
+  const publication = [
+    "scripts/merge-batch.refresh.test.ts", "scripts/merge-batch.sampling.test.ts", "scripts/merge-batch.landing.test.ts",
+    "src/lib/pipelines/stageAttemptPush.rehost.test.ts", "src/lib/pipelines/publicationRecovery.producer.test.ts",
+    "src/lib/pipelines/git.test.ts", "src/lib/pipelines/parkedPublication.test.ts", "src/lib/git/agentHistoryGuard.test.ts",
+    "src/lib/pipelines/stageCommitRepair.git.test.ts", "src/lib/pipelines/stagePublicationRepair.custody.test.ts",
+  ];
   expect(comparisonFileWorkers(regular, 8)).toBe(8);
   expect(comparisonFileWorkers(regular, 3)).toBe(3);
   expect(comparisonFileWorkers(nested, 8)).toBe(2);
+  expect(comparisonFileWorkers(publication, 8)).toBe(2);
+  expect(comparisonFileWorkers([...publication, regular[0]!], 8)).toBe(3);
   expect(comparisonFileWorkers([...nested, regular[0]!], 8)).toBe(3);
   expect(comparisonFileWorkers([...nested, ...regular], 8)).toBe(8);
   expect(comparisonFileWorkers([...nested, ...regular], 3)).toBe(3);

@@ -39,15 +39,22 @@ export interface OperatorTimeZoneSetting {
   changedAt: string;
 }
 
+export interface CommitAttributionSetting {
+  value: boolean;
+  changedAt: string;
+}
+
 export interface OperatorSettings {
   locale: OperatorLocaleSetting | null;
   timeZone: OperatorTimeZoneSetting | null;
+  commitAttribution: CommitAttributionSetting | null;
 }
 
 interface OperatorSettingsFile {
   schemaVersion: 1;
   locale?: OperatorLocaleSetting;
   timeZone?: OperatorTimeZoneSetting;
+  commitAttribution?: CommitAttributionSetting;
 }
 
 const cache = cachedJsonFile(decodeSettings, "operator/settings");
@@ -86,13 +93,20 @@ function timeZoneOf(value: unknown): OperatorTimeZoneSetting | null {
   return { value: record.value, changedAt: record.changedAt };
 }
 
+function commitAttributionOf(value: unknown): CommitAttributionSetting | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.value !== "boolean" || typeof record.changedAt !== "string") return null;
+  return { value: record.value, changedAt: record.changedAt };
+}
+
 function decodeSettings(raw: string | null): OperatorSettings {
-  let settings: OperatorSettings = { locale: null, timeZone: null };
+  let settings: OperatorSettings = { locale: null, timeZone: null, commitAttribution: null };
   try {
     const parsed = JSON.parse(raw ?? "") as Partial<OperatorSettingsFile>;
-    if (parsed.schemaVersion === 1) settings = { locale: localeOf(parsed.locale), timeZone: timeZoneOf(parsed.timeZone) };
+    if (parsed.schemaVersion === 1) settings = { locale: localeOf(parsed.locale), timeZone: timeZoneOf(parsed.timeZone), commitAttribution: commitAttributionOf(parsed.commitAttribution) };
   } catch {
-    settings = { locale: null, timeZone: null };
+    settings = { locale: null, timeZone: null, commitAttribution: null };
   }
   return settings;
 }
@@ -125,6 +139,7 @@ function write(settings: OperatorSettings): boolean {
     schemaVersion: 1,
     ...(settings.locale ? { locale: settings.locale } : {}),
     ...(settings.timeZone ? { timeZone: settings.timeZone } : {}),
+    ...(settings.commitAttribution ? { commitAttribution: settings.commitAttribution } : {}),
   };
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -140,6 +155,7 @@ export interface OperatorSettingsUpdate {
   locale?: OperatorLocale;
   source?: OperatorLocaleSource;
   timeZone?: string;
+  commitAttribution?: boolean;
 }
 
 /**
@@ -170,6 +186,10 @@ function updateLocked(update: OperatorSettingsUpdate, now: string): OperatorSett
   }
   if (update.timeZone && current.timeZone?.value !== update.timeZone) {
     next.timeZone = { value: update.timeZone, changedAt: now };
+    changed = true;
+  }
+  if (typeof update.commitAttribution === "boolean" && current.commitAttribution?.value !== update.commitAttribution) {
+    next.commitAttribution = { value: update.commitAttribution, changedAt: now };
     changed = true;
   }
   if (!changed) return current;

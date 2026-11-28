@@ -62,7 +62,8 @@ test.skipIf(process.platform !== "linux")("a bridged agent's routed launcher run
   chdir(installedRelease("dist/gate"));
   const { bun, PATH } = pathWithBunCopy();
   const routed = installedGateAdmissionEnv({ PATH });
-  expect(routed.LLV_GATE_BUN?.startsWith(path.join(os.homedir(), ".cache/delegatus/gate-admission") + path.sep)).toBe(true);
+  const home = process.env.HOME || os.homedir();
+  expect(routed.LLV_GATE_BUN?.startsWith(path.join(home, ".cache/delegatus/gate-admission") + path.sep)).toBe(true);
   // The image's Viewer runs under a container-only interpreter.
   expect(fs.readFileSync(routed.LLV_GATE_BUN!, "utf8")).not.toContain(process.execPath);
   expect(gateAdmissionInterpreter(routed.LLV_GATE_BUN)).toBeNull();
