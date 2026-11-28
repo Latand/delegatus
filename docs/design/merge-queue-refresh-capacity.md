@@ -7,6 +7,10 @@ do not wait in single file». It builds on
 `docs/design/merge-policy-and-task-finishing.md` §4.4 and #3439
 (d291ebc3).
 
+This design records the original machine authorship policy. Mechanical base
+updates now use the installation owner's GitHub noreply address and the same
+attribution setting as other lane commits. See [Repository authorship](pipeline-package-installs.md#repository-authorship).
+
 ## 0. Originating requirement
 
 The operator, task text, 2026-10-27, verbatim:

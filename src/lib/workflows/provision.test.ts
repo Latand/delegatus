@@ -1,3 +1,4 @@
+import { seedForgeCommitAccount, fixtureNoreply, fixtureForgeAccount } from "@/test-helpers/forgeCommitAccount";
 import { afterAll, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -7,6 +8,7 @@ import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIden
 import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-wf-prov-test-"));
+seedForgeCommitAccount();
 const { buildWorkflow, normalizeTemplate, setupStdoutPath, workflowArtifactsDir } = await import("./store");
 const { finishMerge, finishPr, provisionWorktree, prTitle, realExec, runFinish, setupStatus, startSetup } = await import("./provision");
 const { readWorktreeProvenance } = await import("@/lib/pipelines/worktreeProvenance");
@@ -107,12 +109,12 @@ async function makeIdentityIsolatedRepo() {
   (await run("init", "--initial-branch=main"));
   fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
   (await run("add", "base.txt"));
-  (await run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "base"));
+  (await run("-c", "user.name=Fixture", "-c", `user.email=${fixtureNoreply}`, "commit", "-m", "base"));
   const wf = makeWorkflow(repo, { baseBranch: "main" });
   (await run("switch", "-c", wf.branch));
   fs.writeFileSync(path.join(repo, "feature.txt"), "feature\n");
   (await run("add", "feature.txt"));
-  (await run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "feature"));
+  (await run("-c", "user.name=Fixture", "-c", `user.email=${fixtureNoreply}`, "commit", "-m", "feature"));
   (await run("switch", "main"));
   return { repo, env, exec, run, wf };
 }
@@ -173,6 +175,7 @@ test("workflow publication derives English text while its task stays local", asy
   const calls: string[][] = [];
   const exec: ExecPort = async (_command, args) => {
     calls.push(args);
+    if (args[0] === "rev-list") return ok();
     return { code: 0, stdout: "https://github.com/example/widgets/pull/1", stderr: "" };
   };
   expect((await finishPr(wf, "Виправлено публікацію", exec)).ok).toBe(true);
@@ -190,8 +193,8 @@ test("finishPr pushes the branch then opens the PR against the base branch", asy
   const res = (await finishPr(wf, "PR BODY", exec));
   if (!res.ok) throw new Error(res.error);
   expect(res.prUrl).toBe("https://github.com/o/r/pull/7");
-  expect(calls[0]).toEqual({ command: "git", args: ["push", "-u", "origin", wf.branch], cwd: wf.worktreeDir });
-  expect(calls[1]).toEqual({
+  expect(calls.find(call => call.args[0] === "push")).toEqual({ command: "git", args: ["push", "-u", "origin", wf.branch], cwd: wf.worktreeDir });
+  expect(calls.find(call => call.command === "gh" && call.args[1] === "create")).toEqual({
     command: "gh",
     args: ["pr", "create", "--title", prTitle(wf), "--body", "PR BODY", "--base", "main", "--head", wf.branch],
     cwd: wf.worktreeDir,
@@ -215,6 +218,41 @@ test("finishPr maps a rejected push to an error", async () => {
   const res = (await finishPr(wf, "body", exec));
   expect(res.ok).toBe(false);
   if (!res.ok) expect(res.error).toContain("rejected");
+});
+
+test.each(["safe", "personal identity", "missing account"] as const)("finishPr admits only current-owner commits before transport (%s)", async scenario => {
+  const f = await makeIdentityIsolatedRepo();
+  const calls: string[][] = [];
+  const exec: ExecPort = async (command, args, cwd, env, options) => {
+    calls.push([command, ...args]);
+    if (command === "gh") return ok("https://github.com/o/r/pull/7\n");
+    if (command === "git" && args[0] === "push") return ok();
+    return f.exec(command, args, cwd, env, options);
+  };
+  try {
+    if (scenario === "personal identity") {
+      const checkedOut = spawnSync("git", ["switch", f.wf.branch], { cwd: f.repo, env: f.env, encoding: "utf8" });
+      expect(checkedOut.status, checkedOut.stderr).toBe(0);
+      const result = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "user.name=Fixture", "-c", "user.email=private@example.invalid", "commit", "--amend", "--allow-empty", "--no-edit"], {
+        cwd: f.repo, env: { ...f.env, GIT_AUTHOR_EMAIL: undefined, GIT_COMMITTER_EMAIL: undefined }, encoding: "utf8",
+      });
+      expect(result.status, result.stderr).toBe(0);
+    }
+    if (scenario === "missing account") fs.rmSync(path.join(process.env.LLV_STATE_DIR!, "forge-commit-account.json"), { force: true });
+    const result = await finishPr({ ...f.wf, worktreeDir: f.repo }, "body", exec);
+    if (scenario === "safe") {
+      expect(result.ok).toBe(true);
+      expect(calls.some(call => call[0] === "git" && call[1] === "push")).toBe(true);
+      expect(calls.some(call => call.includes(fixtureNoreply))).toBe(false);
+    } else {
+      expect(result.ok).toBe(false);
+      expect(calls.some(call => call[0] === "git" && call[1] === "push")).toBe(false);
+      if (!result.ok) expect(result.error).toContain(scenario === "missing account" ? "GitHub commit identity is unavailable" : "noreply mailbox");
+    }
+  } finally {
+    seedForgeCommitAccount();
+    fs.rmSync(path.dirname(f.repo), { recursive: true, force: true });
+  }
 });
 
 test("runFinish refuses a dirty worktree before any push, gh or merge runs", async () => {
@@ -243,7 +281,7 @@ test("runFinish delegates to the finish action once the worktree is clean", asyn
   const res = (await runFinish(wf, "body", exec));
   expect(res.ok && res.prUrl).toBe("https://github.com/o/r/pull/7");
   expect(calls[0]?.args).toEqual(["status", "--porcelain"]);
-  expect(calls[1]?.args[0]).toBe("push");
+  expect(calls.find(call => call.args[0] === "push")?.args).toEqual(["push", "-u", "origin", wf.branch]);
 });
 
 test("finishMerge refuses when the repo checkout left the base branch", async () => {
@@ -310,15 +348,14 @@ test("finishMerge preserves staged operator changes made after merge failure", a
   if (!result.ok) expect(result.recoveryRequired).toBe(true);
 });
 
-test("finishMerge supplies a controller identity when Git has none", async () => {
+test("finishMerge uses the GitHub account when Git has no user config", async () => {
   const box = (await makeIdentityIsolatedRepo());
   expect((await box.exec("git", ["var", "GIT_AUTHOR_IDENT"], box.repo)).code).not.toBe(0);
   expect((await box.exec("git", ["var", "GIT_COMMITTER_IDENT"], box.repo)).code).not.toBe(0);
 
   expect((await finishMerge(box.wf, box.exec)).ok).toBe(true);
-  const fallbackEmail = ["noreply", "delegatus.invalid"].join("@");
   expect((await box.run("log", "-1", "--format=%an%n%ae%n%cn%n%ce"))).toBe(
-    ["Delegatus", fallbackEmail, "Delegatus", fallbackEmail].join("\n"),
+    [fixtureForgeAccount.login, fixtureNoreply, fixtureForgeAccount.login, fixtureNoreply].join("\n"),
   );
   expect((await box.exec("git", ["config", "--local", "--get", "user.name"], box.repo)).code).not.toBe(0);
   expect((await box.exec("git", ["config", "--local", "--get", "user.email"], box.repo)).code).not.toBe(0);
@@ -337,7 +374,7 @@ test("finishMerge uses repository user identity despite inherited identities", a
 
   expect((await finishMerge(box.wf, box.exec)).ok).toBe(true);
   expect((await box.run("log", "-1", "--format=%an%n%ae%n%cn%n%ce"))).toBe(
-    ["Configured Test", email, "Configured Test", email].join("\n"),
+    ["Configured Test", fixtureNoreply, "Configured Test", fixtureNoreply].join("\n"),
   );
   expect(await box.run("log", "-1", "--format=%B")).toContain("Co-Authored-By: Delegatus <" + ["noreply", "delegatus.invalid"].join("@") + ">");
   expect((await box.run("rev-parse", "HEAD^2"))).toBe(agentHead);
@@ -392,9 +429,8 @@ test("integration: provision + commit + local merge against a throwaway repo", a
   const merged = (await runFinish(wf, "body", realExec));
   if (!merged.ok) throw new Error(merged.error);
   expect(fs.existsSync(path.join(repoDir, "greeting.txt"))).toBe(true);
-  const configuredEmail = ["test", "example.com"].join("@");
   expect((await realExec("git", ["log", "-1", "--format=%an%n%ae%n%cn%n%ce"], repoDir)).stdout.trim()).toBe(
-    ["Test", configuredEmail, "Test", configuredEmail].join("\n"),
+    ["Test", fixtureNoreply, "Test", fixtureNoreply].join("\n"),
   );
 });
 
