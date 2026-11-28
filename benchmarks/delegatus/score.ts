@@ -29,10 +29,13 @@ export type Observation = {
   reason?: string;
   first?: { timely: boolean; tree: string; captureReceipt: string; valid: boolean; checks: Checks };
   final?: { timely: boolean; tree: string; commit?: string; captureReceipt: string; valid: boolean; checks: Checks };
-  predecessorOracles?: Record<string, { treeDigest: string; evidenceDigest: string; checks: Checks }>;
+  predecessorOracles?: Record<string, { treeDigest: string; commandDigest: string; exitCode: number; evidence: { path: string; digest: string };
+    evidenceDigest: string; checks: Checks }>;
   terminalReceipt?: string;
   cleanupReceipt?: string;
   usage?: Resources;
+  queueStartedAt?: number;
+  queueDeadlineAt?: number;
   curatorUsage?: Resources;
   invalid?: boolean;
   judgments?: (Judgment | null)[];
@@ -42,7 +45,7 @@ export type Observation = {
   escapes?: { critical: number; other: number };
   regressions?: number;
   fixRounds?: number;
-  workflow?: { reviewers: { checkpoint: string; evidenceDigest: string; completedAt: number }[]; fixes: { checkpoint: string; evidenceDigest: string; completedAt: number }[]; reReviews: { checkpoint: string; evidenceDigest: string; completedAt: number }[] };
+  workflow?: { reviewers: { checkpoint: string; evidenceDigest: string; artifactDigest: string; completedAt: number }[]; fixes: { checkpoint: string; evidenceDigest: string; artifactDigest: string; completedAt: number }[]; reReviews: { checkpoint: string; evidenceDigest: string; artifactDigest: string; completedAt: number }[] };
   correctiveMinutes?: number;
   actions?: Record<string, Action>;
 };
@@ -97,7 +100,7 @@ export type Calibration = {
   cleanupReceipt: string;
 };
 
-export function calibrationPassed(golds: Record<string, string[]>, rows: Calibration[]) {
+export function calibrationPassed(golds: Record<string, string[]>, rows: Calibration[], goldArtifactDigests: Record<string, string> = {}) {
   const expected = design.judgingCells.flatMap(j => 'gold' in j && j.gold ? [j.gold] : []);
   if (rows.length !== expected.length || new Set(rows.map(x => x.session)).size !== rows.length) return false;
   return (['J1', 'J2'] as const).every(judge => {
@@ -110,7 +113,7 @@ export function calibrationPassed(golds: Record<string, string[]>, rows: Calibra
       const matches = own.filter(x => x.gold === gold);
       if (matches.length !== 1) return false;
       const row = matches[0];
-      if (!rating(row.rating) || !row.session || !sha256(row.artifactDigest) || !sha256(row.terminalReceipt)
+      if (!rating(row.rating) || !row.session || !sha256(row.artifactDigest) || row.artifactDigest !== goldArtifactDigests[gold] || !sha256(row.terminalReceipt)
         || !sha256(row.cleanupReceipt) || !judgeUsageCovered(row.usage)) return false;
       if (gold === 'complete') return true;
       const defects = golds[gold];
@@ -182,21 +185,29 @@ export function score(row: Observation, requirements: Requirement[], residuals: 
   const jLower = dispute ? Math.min(jBounds[0][0], jBounds[1][0]) : (jBounds[0][0] + jBounds[1][0]) / 2;
   const jUpper = dispute ? Math.max(jBounds[0][1], jBounds[1][1]) : (jBounds[0][1] + jBounds[1][1]) / 2;
   const quality = (j: number) => delivered && withinBudget && !final.critical.length ? 100 * (0.8 * final.B + 0.2 * j) : 0;
+  const workflow = row.workflow;
+  const fixes = workflow?.fixes ?? [];
+  const workflowEvents = workflow ? [...workflow.reviewers, ...fixes, ...workflow.reReviews] : [];
+  const workflowArtifact = row.final?.tree ? artifactDigest(row.final.tree) : '';
+  const orderedWorkflow = !!workflow && fixes.length <= 1
+    && workflow.reviewers.length === 1 && workflow.reReviews.length === fixes.length
+    && workflowEvents.every(event => !!event.checkpoint && sha256(event.evidenceDigest)
+      && event.artifactDigest === workflowArtifact && count(event.completedAt))
+    && new Set(workflowEvents.map(event => event.checkpoint)).size === workflowEvents.length
+    && (!fixes.length || workflow.reviewers[0]!.completedAt < fixes[0]!.completedAt
+      && fixes[0]!.completedAt < workflow.reReviews[0]!.completedAt);
   const accepted = firstValid && fullyAccepted({
     allBehavioralRequirementsExecutedAndPassed: final.allPassed,
     artifactDelivered: delivered,
     terminalAndCleanupReceiptsComplete: Boolean(row.terminalReceipt && row.cleanupReceipt),
     usageKnown: knownUsage,
-    allResourceDeadlineSessionLimitsMet: withinBudget && (row.fixRounds ?? 0) <= 1,
+    allResourceDeadlineSessionLimitsMet: withinBudget && fixes.length <= 1
+      && (row.fixRounds === undefined || row.fixRounds === fixes.length),
     noCriticalFailure: final.critical.length === 0,
     noContaminationOrProtocolInvalidity: row.invalid === false,
     calibrationPassed: calibrated,
     bothJudgmentsIndependentParseableAndCompleteCoverage: independent,
-    observedReviewFixFloor: !!row.workflow && row.workflow.reviewers.length >= 1
-      && row.workflow.fixes.length >= (row.fixRounds ?? 0)
-      && row.workflow.reReviews.length >= (row.fixRounds ?? 0)
-      && [...row.workflow.reviewers, ...row.workflow.fixes, ...row.workflow.reReviews]
-        .every(event => !!event.checkpoint && sha256(event.evidenceDigest) && count(event.completedAt)),
+    observedReviewFixFloor: orderedWorkflow,
     noUnresolvedDispute: !dispute && !!a && !!b,
   }, ratings);
 
@@ -221,7 +232,7 @@ export function score(row: Observation, requirements: Requirement[], residuals: 
     resources: validUsage(usage) ? usage : null,
     curatorResources: curator ?? null,
     human: row.human ?? null, reviewer: reviewerMeasures(row), escapes: row.escapes ?? null,
-    fixRounds: row.fixRounds ?? null, regressions: row.regressions ?? null, correctiveMinutes: row.correctiveMinutes ?? null,
+    fixRounds: workflow ? fixes.length : null, regressions: row.regressions ?? null, correctiveMinutes: row.correctiveMinutes ?? null,
   };
 }
 

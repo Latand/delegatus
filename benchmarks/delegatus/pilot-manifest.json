@@ -2027,6 +2027,11 @@
         "independentSequenceClusters": 2,
         "acquisitionCellsPerArmExcludedFromHeldOutContrast": 4
       },
+    "M-acquisition": {
+      "cellsPerArm": 4,
+      "independentSequenceClusters": 2,
+      "includesFailuresAndNotRun": true
+    },
       "P": {
         "cellsPerArm": 2,
         "reuseControlFrom": "O-S-r1-reviewed",

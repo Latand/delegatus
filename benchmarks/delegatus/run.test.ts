@@ -1,12 +1,12 @@
 import { afterEach, expect, test } from 'bun:test';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import design from './pilot-manifest.json';
 import {
-  appendRun, campaignChronologyValid, checkBlock, digest, expandPlannerRequest, expandPlannerSealedRequest, expandRequest, expandSealedRequest, gateRefusals, gateRequirements, launchRefusal,
+  appendRun, campaignChronologyValid, checkBlock, digest, expandPlannerRequest, expandPlannerSealedRequest, expandRequest, expandSealedRequest, gateRefusals, gateRequirements, launchRefusal, sealedInputDigest,
   reportRun, sampleDelivery, sealRun, validateManifest, verifyManifestPin, type Binding, type RequestInputs,
 } from './run';
 import { calibrationPassed, oracleControls, score, violationRates, type Calibration, type Checks, type Observation, type Requirement } from './score';
@@ -17,6 +17,17 @@ const task = design.tasks[0].id;
 const solver = design.cells[0].id;
 const proof = (label: string) => digest(`harness-only:${label}`);
 const BINDING = proof('sealed-binding');
+const oracleCommand = (taskId: string) => proof(`oracle-command:${taskId}`);
+const oracleEvidence = (taskId: string, tree: string, checks: Checks) => {
+  const record = { schemaVersion: 1, classification: 'oracle-run-result', taskId, treeDigest: digest(tree),
+    commandDigest: oracleCommand(taskId), exitCode: 0, checks };
+  const bytes = JSON.stringify(record) + '\n';
+  const path = join(scratch(), `oracle-${taskId}-${digest(bytes).slice(0, 8)}.json`);
+  writeFileSync(path, bytes, { mode: 0o600 });
+  const evidenceDigest = digest(bytes);
+  return { treeDigest: digest(tree), commandDigest: oracleCommand(taskId), exitCode: 0,
+    evidence: { path, digest: evidenceDigest }, evidenceDigest, checks };
+};
 const roots = new Set<string>();
 afterEach(() => {
   for (const root of roots) rmSync(root, { recursive: true });
@@ -72,28 +83,41 @@ test('bundled manifest is checked against an independent reviewed digest in the 
 
 const verified = (): Binding => {
   const manifestDigest = digest(readFileSync(manifestFile));
-  return {
-  classification: 'harness-only',
-  manifestDigest,
-  gates: Object.fromEntries(Object.entries(gateRequirements).map(([gate, proofs]) => [
+  const gates = Object.fromEntries(Object.entries(gateRequirements).map(([gate, proofs]) => [
     gate, { status: 'verified', proofs: Object.fromEntries(proofs.map(p => {
       const observations = Object.fromEntries(proofs.map(name => [name, 'pass' as const]));
       const path = join(scratch(), `${gate}-${p}.json`);
-      const evidence = { schemaVersion: 1, classification: 'harness-only', gate, proof: p, manifestDigest, observations };
+      const checkedBindingDigest = proof(`checked:${gate}:${p}`);
+      const observationId = `synthetic-observation-${gate}-${p}`;
+      const sourceDigest = proof(`source:${gate}:${p}`);
+      const result = { gate, proof: p, manifestDigest, checkedBindingDigest, observationId, sourceDigest, outcome: 'pass' };
+      const evidence = { schemaVersion: 1, classification: 'observed-gate-evidence', gate, proof: p, manifestDigest,
+        checkedBindingDigest, observationId, sourceDigest, observations, result,
+        ...(gate === 'G6' && p === 'thirteen-package-and-worktree-links'
+          ? { taskProjectLinks: design.tasks.map(task => ({ task: task.id, taskProject: 'canonical', canonicalProject: 'canonical', packageProject: 'canonical', worktreeProject: 'canonical' })) }
+          : {}) };
       writeFileSync(path, JSON.stringify(evidence) + '\n', { mode: 0o600 });
       const artifact = { schemaVersion: 1 as const, classification: 'observed-gate-evidence' as const, gate: gate as keyof typeof gateRequirements,
-        proof: p, manifestDigest, observations, evidence: { path, digest: digest(readFileSync(path)) } };
-      return [p, { status: 'verified' as const, bindingDigest: manifestDigest, artifactDigest: digest(JSON.stringify(artifact) + '\n'),
-        observations, observationsDigest: digest(JSON.stringify(observations) + '\n'), artifact }];
+        proof: p, manifestDigest, checkedBindingDigest, observationId, sourceDigest, observations, evidence: { path, digest: digest(readFileSync(path)) } };
+      return [p, { status: 'verified' as const, bindingDigest: manifestDigest, checkedBindingDigest, observationId, sourceDigest,
+        artifactDigest: digest(JSON.stringify(artifact) + '\n'), observations,
+        observationsDigest: digest(JSON.stringify(observations) + '\n'), artifact }];
     })) },
-  ])),
-  independentVerdict: (() => { const observations = { report: 'pass' as const };
+  ])) as Binding['gates'];
+  const gateEvidenceDigests = Object.fromEntries(Object.entries(gates ?? {}).map(([gate, evidence]) => [gate,
+    digest(JSON.stringify(Object.fromEntries(Object.entries(evidence?.proofs ?? {}).map(([name, p]) => [name, p.artifactDigest]).sort(([a], [b]) => a.localeCompare(b)))) + '\n')]));
+  return {
+  classification: 'harness-only',
+  manifestDigest,
+  gates,
+  independentVerdict: (() => { const observations = Object.fromEntries(Object.keys(gateRequirements).map(g => [g, 'pass' as const]));
     const path = join(scratch(), 'review.json');
-    writeFileSync(path, JSON.stringify({ schemaVersion: 1, classification: 'harness-only', manifestDigest, observations }) + '\n', { mode: 0o600 });
-    const artifact = { schemaVersion: 1 as const, classification: 'harness-only' as const, manifestDigest, observations,
+    writeFileSync(path, JSON.stringify({ schemaVersion: 1, classification: 'independent-gate-review', manifestDigest, observations, gateEvidenceDigests,
+      result: { manifestDigest, gateEvidenceDigests, observations, approved: true } }) + '\n', { mode: 0o600 });
+    const artifact = { schemaVersion: 1 as const, classification: 'independent-gate-review' as const, manifestDigest, observations, gateEvidenceDigests,
       evidence: { path, digest: digest(readFileSync(path)) } };
     return { approved: true, artifactDigest: digest(JSON.stringify(artifact) + '\n'), bindingDigest: manifestDigest,
-      observations, observationsDigest: digest(JSON.stringify(observations) + '\n'), artifact };
+      observations, gateEvidenceDigests, observationsDigest: digest(JSON.stringify(observations) + '\n'), artifact };
   })(),
   taskProjectLinks: design.tasks.map(task => ({ task: task.id, taskProject: 'canonical', canonicalProject: 'canonical', packageProject: 'canonical', worktreeProject: 'canonical' })),
   };
@@ -135,8 +159,8 @@ test('stale manifest and unresolved private bindings keep the launch closed', ()
   expect(gateRefusals(b)).toHaveLength(7);
   expect(launchRefusal(b)).toContain('G1');
   b.classification = 'observed';
-  expect(gateRefusals(b)).toHaveLength(7);
-  expect(launchRefusal(b)).toContain('G1');
+  expect(gateRefusals(b)).toHaveLength(0);
+  expect(launchRefusal(b)).toContain('launchAllowed is false');
   b.unresolved = ['fixture-binding'];
   expect(launchRefusal(b)).toContain('Unresolved static bindings');
   b.manifestDigest = proof('stale');
@@ -151,17 +175,50 @@ test('stale manifest and unresolved private bindings keep the launch closed', ()
   expect(gateRefusals(missingTask).map(r => r.gate)).toContain('G6');
 });
 
+test('checklist-only evidence and malformed G6 artifacts refuse with a named gate', () => {
+  const checklist = verified();
+  checklist.classification = 'observed';
+  const g1 = checklist.gates!.G1!.proofs!['effective-roots']!;
+  const path = g1.artifact.evidence.path;
+  writeFileSync(path, JSON.stringify({ schemaVersion: 1, classification: 'harness-only', gate: 'G1', proof: 'effective-roots',
+    manifestDigest: checklist.manifestDigest, observations: g1.observations }) + '\n', { mode: 0o600 });
+  g1.artifact.evidence.digest = digest(readFileSync(path));
+  expect(gateRefusals(checklist).map(item => item.gate)).toContain('G1');
+  const mismatchedLink = verified();
+  mismatchedLink.classification = 'observed';
+  const linkProof = mismatchedLink.gates!.G6!.proofs!['thirteen-package-and-worktree-links']!;
+  const linkPath = linkProof.artifact.evidence.path;
+  const linkArtifact = JSON.parse(readFileSync(linkPath, 'utf8'));
+  linkArtifact.taskProjectLinks.pop();
+  writeFileSync(linkPath, JSON.stringify(linkArtifact) + '\n', { mode: 0o600 });
+  linkProof.artifact.evidence.digest = digest(readFileSync(linkPath));
+  linkProof.artifactDigest = digest(JSON.stringify(linkProof.artifact) + '\n');
+  expect(gateRefusals(mismatchedLink).map(item => item.gate)).toContain('G6');
+  const malformed = verified();
+  malformed.classification = 'observed';
+  const missingEvidence = malformed.gates!.G6!.proofs!['thirteen-package-and-worktree-links']!.artifact.evidence.path;
+  unlinkSync(missingEvidence);
+  const bindingFile = join(scratch(), 'missing-g6-evidence-binding.json');
+  writeFileSync(bindingFile, JSON.stringify(malformed));
+  const missingPreflight = Bun.spawnSync([process.execPath, entrypoint, 'preflight', bindingFile], { timeout: 3000 });
+  expect(missingPreflight.exitCode).toBe(2);
+  expect(JSON.parse(missingPreflight.stdout.toString())).toMatchObject({ allowed: false, modelLaunches: 0, refusal: expect.stringContaining('G6') });
+  (malformed.gates!.G6!.proofs!['thirteen-package-and-worktree-links'] as unknown as { artifact: null }).artifact = null;
+  expect(() => gateRefusals(malformed)).not.toThrow();
+  expect(gateRefusals(malformed).map(item => item.gate)).toContain('G6');
+});
+
 const requestInputs: RequestInputs = {
   repoDir: '/fixture/repo', baseRef: 'a'.repeat(40), src: '/fixture/source', taskIds: ['fixture-task'],
   brief: 'Visible requirements', planner: 'Plan the current task', review: 'Review the submitted tree', fix: 'Apply reviewed findings',
   fixtureDigest: proof('fixture'), promptDigest: proof('prompt'), taskDigest: proof('task'), runtimeDigest: proof('runtime'), dependencyDigest: proof('dependencies'), bindingDigest: BINDING,
 };
-const requestBinding = (inputs: RequestInputs) => digest(JSON.stringify(inputs) + '\n');
+const requestBinding = (id: string, inputs: RequestInputs) => sealedInputDigest(id, inputs);
 const bindings = (overrides: Record<string, RequestInputs> = {}) => Object.fromEntries([
   ...design.cells.map(c => [c.id, overrides[c.id] ?? requestInputs]),
   ...design.curationCells.map(c => [c.id, overrides[c.id] ?? requestInputs]),
   ...design.judgingCells.map(c => [c.id, overrides[c.id] ?? requestInputs]),
-].map(([id, inputs]) => [id, requestBinding(inputs as RequestInputs)]));
+].map(([id, inputs]) => [id, requestBinding(id as string, inputs as RequestInputs)]));
 
 test('renders deterministic supported requests with a bounded review graph and no model fallback', () => {
   const request = expandRequest(solver, requestInputs);
@@ -177,10 +234,22 @@ test('renders deterministic supported requests with a bounded review graph and n
   expect(planner.stages.map(s => [s.id, s.next, s.engine])).toEqual([['planner', null, 'codex']]);
   const dir = join(scratch(), 'planner-run');
   sealRun(dir, 'harness-only', contracts, {}, BINDING, bindings());
+  expect(() => expandSealedRequest(dir, routed.id, requestInputs)).toThrow('Admission stopped');
+  appendScheduledPrefix(dir, routed.id);
+  appendRun(dir, { ...event('planner-preflight'), rowId: routed.id, kind: 'preflight',
+    snapshot: preflights('O-export')[0]!.before });
   expect(expandPlannerSealedRequest(dir, routed.id, requestInputs).stages).toHaveLength(1);
   expect(() => expandSealedRequest(dir, routed.id, requestInputs)).toThrow('route is unresolved');
   const output = JSON.stringify({ solve: 'H', fix: 'M' });
-  const route = { solve: 'H' as const, fix: 'M' as const, plannerCellId: routed.id, plannerPipelineId: 'planner-pipeline', plannerSessionId: 'planner-session', output, outputDigest: digest(output) };
+  const plannerResult = { schemaVersion: 1, classification: 'planner-terminal-result', pipelineId: 'planner-pipeline', sessionId: 'planner-session',
+    stageId: 'planner', terminalReceipt: proof('planner-terminal'), cleanupReceipt: proof('planner-cleanup'),
+    usage: { ...usage, sessions: 1 }, output, outputDigest: digest(output) };
+  const plannerResultPath = join(scratch(), 'planner-result.json');
+  writeFileSync(plannerResultPath, JSON.stringify(plannerResult) + '\n', { mode: 0o600 });
+  const route = { solve: 'H' as const, fix: 'M' as const, plannerCellId: routed.id, plannerPipelineId: 'planner-pipeline',
+    plannerSessionId: 'planner-session', terminalStageId: 'planner' as const, terminalReceipt: proof('planner-terminal'),
+    cleanupReceipt: proof('planner-cleanup'), usage: { ...usage, sessions: 1 }, output, outputDigest: digest(output),
+    evidence: { path: plannerResultPath, digest: digest(readFileSync(plannerResultPath)) } };
   appendRun(dir, { ...event('planner-receipt'), rowId: routed.id, kind: 'receipt', status: 'accepted',
     requestKey: `${design.campaign}:${routed.id}:planner`, pipelineId: route.plannerPipelineId });
   appendRun(dir, { ...event('planner-route-event'), rowId: routed.id, kind: 'planner-route', status: 'completed', route });
@@ -188,6 +257,9 @@ test('renders deterministic supported requests with a bounded review graph and n
   expect(assigned.stages.map(s => s.engine)).toEqual(['claude', 'codex', 'codex']);
   const invalidRouteDir = join(scratch(), 'invalid-planner-run');
   sealRun(invalidRouteDir, 'harness-only', contracts, {}, BINDING, bindings());
+  appendScheduledPrefix(invalidRouteDir, routed.id);
+  appendRun(invalidRouteDir, { ...event('bad-planner-preflight'), rowId: routed.id, kind: 'preflight',
+    snapshot: preflights('O-export')[0]!.before });
   appendRun(invalidRouteDir, { ...event('bad-planner-receipt'), rowId: routed.id, kind: 'receipt', status: 'accepted',
     requestKey: `${design.campaign}:${routed.id}:planner`, pipelineId: 'bad-planner' });
   const mismatchedOutput = JSON.stringify({ solve: 'M', fix: 'M' });
@@ -251,8 +323,11 @@ const usage = { units: 400, activeSeconds: 20, queueSeconds: 1, sessions: 2 };
 const good = (): Observation => ({
   status: 'delivered', first: { timely: true, tree: proof('first-tree'), captureReceipt: proof('first-capture'), valid: true, checks: { ...pass, core: 'fail' } },
   final: { timely: true, tree: proof('final-tree'), captureReceipt: proof('final-capture'), valid: true, checks: pass },
-  terminalReceipt: 'terminal', cleanupReceipt: 'clean', usage, invalid: false, fixRounds: 1,
-  workflow: { reviewers: [{ checkpoint: 'review-1', evidenceDigest: proof('review'), completedAt: 2 }], fixes: [{ checkpoint: 'fix-1', evidenceDigest: proof('fix'), completedAt: 3 }], reReviews: [{ checkpoint: 'review-2', evidenceDigest: proof('rereview'), completedAt: 4 }] },
+  terminalReceipt: proof('terminal'), cleanupReceipt: proof('clean'), usage, invalid: false, fixRounds: 1,
+  queueStartedAt: 10, queueDeadlineAt: 100,
+  workflow: { reviewers: [{ checkpoint: 'review-1', evidenceDigest: proof('review'), artifactDigest: digest(proof('final-tree')), completedAt: 2 }],
+    fixes: [{ checkpoint: 'fix-1', evidenceDigest: proof('fix'), artifactDigest: digest(proof('final-tree')), completedAt: 3 }],
+    reReviews: [{ checkpoint: 'review-2', evidenceDigest: proof('rereview'), artifactDigest: digest(proof('final-tree')), completedAt: 4 }] },
   judgments: [{ session: 'blind-a', artifactDigest: digest(proof('final-tree')), terminalReceipt: proof('judge-terminal-a'), cleanupReceipt: proof('judge-clean-a'), rating: [3, 3, 2], coverage: residuals }, { session: 'blind-b', artifactDigest: digest(proof('final-tree')), terminalReceipt: proof('judge-terminal-b'), cleanupReceipt: proof('judge-clean-b'), rating: [3, 3, 2], coverage: residuals }],
   human: [],
 });
@@ -285,6 +360,18 @@ test('scores first and final separately, retains conservative judge bounds and e
   const dispute = good();
   dispute.judgments![1]!.rating = [2, 3, 2];
   expect(scoreRow(dispute)).toMatchObject({ dispute: true, fullyAccepted: false });
+  const twoFixes = good();
+  twoFixes.workflow!.fixes.push({ checkpoint: 'fix-2', evidenceDigest: proof('fix-2'), artifactDigest: digest(proof('final-tree')), completedAt: 5 });
+  expect(scoreRow(twoFixes).fullyAccepted).toBe(false);
+  const beforeReview = good();
+  beforeReview.workflow!.fixes[0]!.completedAt = 1;
+  expect(scoreRow(beforeReview).fullyAccepted).toBe(false);
+  const staleRereview = good();
+  staleRereview.workflow!.reReviews[0]!.artifactDigest = digest(proof('stale-tree'));
+  expect(scoreRow(staleRereview).fullyAccepted).toBe(false);
+  const missingRereview = good();
+  missingRereview.workflow!.reReviews = [];
+  expect(scoreRow(missingRereview).fullyAccepted).toBe(false);
 });
 
 test('necessary clarification preserves autonomy and deduplicated defects preserve unknown coverage', () => {
@@ -315,13 +402,19 @@ test('necessary clarification preserves autonomy and deduplicated defects preser
 
 test('calibration rejects red gold promotion and oracle controls require their intended failures', () => {
   const golds = Object.fromEntries(design.judgingCells.filter(j => j.kind === 'calibration').map(j => [j.gold!, j.gold === 'complete' ? [] : ['defect']]));
+  const goldArtifactDigests = Object.fromEntries(Object.keys(golds).map(gold => [gold, proof(`gold:${gold}`)]));
   const judgments: Calibration[] = design.judgingCells.filter(j => j.kind === 'calibration').map(j => ({
-    gold: j.gold!, artifactDigest: proof(`gold:${j.gold}`), judge: j.judge as Calibration['judge'], session: j.id, rating: j.gold === 'complete' ? [3, 3, 3] : [2, 2, 2],
+    gold: j.gold!, artifactDigest: goldArtifactDigests[j.gold!], judge: j.judge as Calibration['judge'], session: j.id, rating: j.gold === 'complete' ? [3, 3, 3] : [2, 2, 2],
     detected: golds[j.gold!], usage: { ...usage, sessions: 1 }, terminalReceipt: proof(`terminal-${j.id}`), cleanupReceipt: proof('stopped'),
   }));
-  expect(calibrationPassed(golds, judgments)).toBe(true);
+  expect(calibrationPassed(golds, judgments, goldArtifactDigests)).toBe(true);
+  const swapped = judgments.map(row => ({ ...row }));
+  [swapped[2]!.artifactDigest, swapped[4]!.artifactDigest] = [swapped[4]!.artifactDigest, swapped[2]!.artifactDigest];
+  expect(calibrationPassed(golds, swapped, goldArtifactDigests)).toBe(false);
+  const duplicatedGoldArtifact = { ...goldArtifactDigests, stub: goldArtifactDigests.complete! };
+  expect(calibrationPassed(golds, judgments, duplicatedGoldArtifact)).toBe(false);
   judgments[7].rating = [3, 3, 3];
-  expect(calibrationPassed(golds, judgments)).toBe(false);
+  expect(calibrationPassed(golds, judgments, goldArtifactDigests)).toBe(false);
   const refs: Record<string, Checks> = { correct: pass, unchanged: { core: 'fail' },
     partial: { ...pass, crossCallerRegression: 'fail' }, unsafe: { ...pass, securityPrivacy: 'fail' } };
   const expectedRed = { unchanged: ['core'], partial: ['crossCallerRegression'], unsafe: ['securityPrivacy'] };
@@ -335,9 +428,10 @@ function preflights(id: string) {
   type FixtureRuntime = { engine: 'codex' | 'claude'; model: string; effort: 'high' };
   const profile: FixtureRuntime = { engine: design.runtimePool.M.engine as FixtureRuntime['engine'],
     model: design.runtimePool.M.model, effort: 'high' };
-  const runtimeBindings = (roles: Record<string, string>) => Object.fromEntries(Object.keys(roles).map(role => [role,
-    { declared: 'M' as const, requested: profile, resolved: profile },
-  ])) as Record<string, { declared: 'M'; requested: FixtureRuntime; resolved: FixtureRuntime }>;
+  const runtimeBindings = (roles: Record<string, string>) => Object.fromEntries(Object.keys(roles).map(role => {
+    const binding = { declared: 'M' as const, requested: { ...profile }, resolved: { ...profile } };
+    return [role, { ...binding, bindingDigest: digest(JSON.stringify({ roleHash: roles[role], ...binding }) + '\n') }];
+  })) as Record<string, { declared: 'M'; requested: FixtureRuntime; resolved: FixtureRuntime; bindingDigest: string }>;
   return block.orderedCells.map((cellId, i) => {
     const snap = (at: number, capacityBudgets: number) => {
       const roles = {
@@ -354,6 +448,12 @@ function preflights(id: string) {
   });
 }
 
+const rebindRuntime = (snapshot: ReturnType<typeof preflights>[number]['before'], role: string) => {
+  const binding = snapshot.runtimeBindings![role]!;
+  binding.bindingDigest = digest(JSON.stringify({ roleHash: snapshot.roles[role], declared: binding.declared,
+    requested: binding.requested, resolved: binding.resolved }) + '\n');
+};
+
 test('O and P/S admission guards retain unknown and invalid comparisons', () => {
   const rows = preflights('O-export');
   expect(checkBlock('O-export', rows)).toMatchObject({ eligible: true, stop: false });
@@ -362,7 +462,7 @@ test('O and P/S admission guards retain unknown and invalid comparisons', () => 
     [r => { r[0].before.capacityBudgets = 3; }, 'capacity'],
     [r => { r[1].after.quotaEnd++; }, 'Quota'],
     [r => { r[1].before.providerRevision = ''; }, 'Provider'],
-    [r => { r[1].after.runtimeBindings!.review!.resolved.model = 'fallback-model'; }, 'runtime differs'],
+    [r => { r[1].after.runtimeBindings!.review!.resolved.model = 'fallback-model'; rebindRuntime(r[1].after, 'review'); }, 'runtime differs'],
     [r => { r[1].after.sharedInputs = proof('changed-inputs'); }, 'Shared inputs'],
     [r => { r[1].checkpoint = {}; }, 'instrumentation checkpoint'],
     [r => { [r[1], r[2]] = [r[2], r[1]]; }, 'Interleaved'],
@@ -377,6 +477,13 @@ test('O and P/S admission guards retain unknown and invalid comparisons', () => 
   pair[1].firstModelWork = 3701;
   pair[1].after.at = 3800;
   expect(checkBlock('PS-archive', pair)).toMatchObject({ eligible: false, stop: true, reason: 'Block exceeded first-model-work separation' });
+  const modelSwitch = preflights('PS-archive');
+  const selected = modelSwitch[0]!.after.runtimeBindings!.solve!;
+  selected.declared = 'H';
+  selected.requested = { engine: design.runtimePool.H.engine as 'claude', model: design.runtimePool.H.model, effort: 'high' };
+  selected.resolved = { ...selected.requested };
+  rebindRuntime(modelSwitch[0]!.after, 'solve');
+  expect(checkBlock('PS-archive', modelSwitch)).toMatchObject({ eligible: false, stop: true, reason: 'Role runtime changed within causal pair' });
 });
 
 test('campaign chronology rejects an interleaved solver and unresolved runtime fallback', () => {
@@ -389,6 +496,7 @@ test('campaign chronology rejects an interleaved solver and unresolved runtime f
   const ledger = [{ id: rows[0]!.id }, { id: design.cells.find(c => c.phase === 'R')!.id }, ...rows.slice(1).map(r => ({ id: r.id }))];
   expect(checkBlock('O-export', rows, ledger)).toMatchObject({ eligible: false, stop: true, reason: expect.stringContaining('outside solver') });
   rows[0].before.runtimeBindings!.solve!.resolved = { engine: 'codex', model: 'fallback', effort: 'high' };
+  rebindRuntime(rows[0].before, 'solve');
   expect(checkBlock('O-export', rows)).toMatchObject({ eligible: false, stop: true, reason: expect.stringContaining('declared model binding') });
 });
 
@@ -407,10 +515,7 @@ test('report excludes a causal block when an outside solver row is interleaved i
       appendRun(dir, { ...event(`interleaver-result`), rowId: outsider.id, kind: 'solver', observation: good() });
       inserted = true;
     }
-    const drift = driftByCell.get(id)!;
-    appendRun(dir, { ...event(`${id}-receipt`), rowId: id, kind: 'receipt', status: 'accepted',
-      requestKey: `${design.campaign}:${id}`, pipelineId: `pipeline-${id}` });
-    appendRun(dir, { ...event(`${id}-result`), rowId: id, kind: 'solver', observation: good(), drift });
+    appendCausalRow(dir, id, driftByCell.get(id)!);
   }
   const report = reportRun(dir);
   expect(report.blocks.find(block => block.id === 'O-export')).toMatchObject({
@@ -427,18 +532,18 @@ test('E cumulative oracle rejects a later tree that regresses an earlier operati
   const requestKey = `${design.campaign}:${c2.id}`;
   appendRun(dir, { ...event('e2-receipt'), rowId: c2.id, kind: 'receipt', status: 'accepted', requestKey, pipelineId: 'e2' });
   const regressed: Observation = { ...good(), predecessorOracles: {
-    'E1-C0': { treeDigest: digest(proof('final-tree')), evidenceDigest: proof('c0-tests'), checks: { core: 'fail' } as Checks },
-    'E1-C1': { treeDigest: digest(proof('final-tree')), evidenceDigest: proof('c1-tests'), checks: pass },
+    'E1-C0': oracleEvidence('E1-C0', proof('final-tree'), { ...pass, core: 'fail' }),
+    'E1-C1': oracleEvidence('E1-C1', proof('final-tree'), pass),
   } };
   expect(() => appendRun(dir, { ...event('e2-result'), rowId: c2.id, kind: 'solver', observation: regressed })).toThrow('E predecessor oracle regressed');
   const missingEarlierOracle = { ...good(), predecessorOracles: {
-    'E1-C1': { treeDigest: digest(proof('final-tree')), evidenceDigest: proof('c1-tests'), checks: pass },
+    'E1-C1': oracleEvidence('E1-C1', proof('final-tree'), pass),
   } };
   expect(() => appendRun(dir, { ...event('e2-result-missing-prior'), rowId: c2.id, kind: 'solver', observation: missingEarlierOracle }))
     .toThrow('E cumulative predecessor oracle set is incomplete');
   const passing = { ...good(), predecessorOracles: {
-    'E1-C0': { treeDigest: digest(proof('final-tree')), evidenceDigest: proof('c0-tests'), checks: pass },
-    'E1-C1': { treeDigest: digest(proof('final-tree')), evidenceDigest: proof('c1-tests'), checks: pass },
+    'E1-C0': oracleEvidence('E1-C0', proof('final-tree'), pass),
+    'E1-C1': oracleEvidence('E1-C1', proof('final-tree'), pass),
   } };
   expect(() => appendRun(dir, { ...event('e2-result-pass'), rowId: c2.id, kind: 'solver', observation: passing })).not.toThrow();
 });
@@ -452,27 +557,87 @@ test('curator completion requires the registered learner, delivery and original 
   appendRun(dir, { ...event('learn-result'), rowId: learn, kind: 'solver', observation: good() });
   const missingCurator = reportRun(dir).solvers.find(row => row.cell.id === learn)!;
   expect(missingCurator.metrics).toMatchObject({ fullyAccepted: false, curatorResources: null });
+  appendRun(dir, { ...event('curator-receipt'), rowId: curator.id, kind: 'receipt', status: 'accepted',
+    requestKey: `${design.campaign}:${curator.id}`, pipelineId: 'curator-pipeline' });
   expect(() => appendRun(dir, { ...event('curator-late'), rowId: curator.id, kind: 'curator', status: 'completed', packDigest: proof('pack'),
-    usage: { units: 1, activeSeconds: 1, queueSeconds: 1, sessions: 1 }, queuedAt: 1, deadlineAt: 5, completedAt: 6, deliveredArtifactDigest: digest(proof('final-tree')) })).toThrow('queue deadline');
+    usage: { units: 1, activeSeconds: 1, queueSeconds: 1, sessions: 1 }, queuedAt: 1, deadlineAt: 5, completedAt: 6,
+    deliveredArtifactDigest: digest(proof('final-tree')), queueReceipt: 'curator-pipeline', terminalReceipt: proof('curator-terminal'),
+    cleanupReceipt: proof('curator-cleanup') })).toThrow('queue deadline');
   const golds = Object.fromEntries(design.judgingCells.filter(j => j.kind === 'calibration').map(j => [j.gold!, j.gold === 'complete' ? [] : ['defect']]));
   const judgeRun = join(scratch(), 'judge-run');
-  sealRun(judgeRun, 'harness-only', contracts, golds, BINDING, bindings());
+  const goldArtifactDigests = Object.fromEntries(Object.keys(golds).map(gold => [gold, proof(`sealed-gold:${gold}`)]));
+  sealRun(judgeRun, 'harness-only', contracts, golds, BINDING, bindings(), goldArtifactDigests);
   const calibrationRows = design.judgingCells.filter(j => j.kind === 'calibration').slice(0, 2);
   const first = calibrationRows[0]!;
   appendRun(judgeRun, { ...event('calibration-one'), rowId: first.id, kind: 'judge', status: 'completed', calibration: {
-    gold: first.gold!, artifactDigest: proof(`gold:${first.gold}`), judge: first.judge as 'J1'|'J2', session: 'reused-session', rating: [3,3,3], detected: [], usage: { ...usage, sessions: 1 }, terminalReceipt: proof('terminal'), cleanupReceipt: proof('cleanup'),
+    gold: first.gold!, artifactDigest: goldArtifactDigests[first.gold!], judge: first.judge as 'J1'|'J2', session: 'reused-session', rating: [3,3,3], detected: [], usage: { ...usage, sessions: 1 }, terminalReceipt: proof('terminal'), cleanupReceipt: proof('cleanup'),
   } });
   const second = calibrationRows[1]!;
   expect(() => appendRun(judgeRun, { ...event('calibration-two'), rowId: second.id, kind: 'judge', status: 'completed', calibration: {
-    gold: second.gold!, artifactDigest: proof(`gold:${second.gold}`), judge: second.judge as 'J1'|'J2', session: 'reused-session', rating: [2,2,2], detected: ['defect'], usage: { ...usage, sessions: 1 }, terminalReceipt: proof('terminal'), cleanupReceipt: proof('cleanup'),
+    gold: second.gold!, artifactDigest: goldArtifactDigests[second.gold!], judge: second.judge as 'J1'|'J2', session: 'reused-session', rating: [2,2,2], detected: ['defect'], usage: { ...usage, sessions: 1 }, terminalReceipt: proof('terminal'), cleanupReceipt: proof('cleanup'),
   } })).toThrow('Judge session reused');
 });
 
 const contracts = Object.fromEntries(design.tasks.map(t => [t.id, {
   requirements: reqs, residuals, opportunities: [{ id: t.id, task: t.id, principle: 'boundary', applicability: 'applicable' as const, proof: proof(t.id), version: '1' }],
-  ...(t.id === 'E1-C1' ? { predecessors: ['E1-C0'] } : t.id === 'E1-C2' ? { predecessors: ['E1-C0', 'E1-C1'] } : {}),
+  ...(t.id === 'E1-C1' ? { predecessors: ['E1-C0'], oracleCommands: { 'E1-C0': oracleCommand('E1-C0') } }
+    : t.id === 'E1-C2' ? { predecessors: ['E1-C0', 'E1-C1'], oracleCommands: { 'E1-C0': oracleCommand('E1-C0'), 'E1-C1': oracleCommand('E1-C1') } } : {}),
 }]));
 const event = (id: string) => ({ id, rowId: solver, evidenceDigest: proof(id) });
+
+function appendCausalRow(dir: string, id: string, driftInput: ReturnType<typeof preflights>[number]) {
+  const blockId = [...design.ordering.orchestrationBlocks, ...design.ordering.productPairedBlocks]
+    .find(block => block.orderedCells.includes(id))!.id;
+  const preflightId = `${id}-preflight`;
+  const startId = `${id}-start`;
+  const pipelineId = `pipeline-${id}`;
+  appendRun(dir, { ...event(preflightId), rowId: id, kind: 'preflight', snapshot: driftInput.before, blockId });
+  appendRun(dir, { ...event(`${id}-receipt`), rowId: id, kind: 'receipt', status: 'accepted',
+    requestKey: `${design.campaign}:${id}`, pipelineId });
+  appendRun(dir, { ...event(startId), rowId: id, kind: 'start', preflightId, startedAt: driftInput.firstModelWork,
+    pipelineId, sessionId: `session-${id}`, terminalStageId: 'solve' });
+  const drift = { ...driftInput, preflightId, startId };
+  appendRun(dir, { ...event(`${id}-result`), rowId: id, kind: 'solver', observation: good(), drift });
+}
+
+function appendScheduledPrefix(dir: string, stopBefore: string, frozenPack?: { id: string; digest: string }) {
+  const targets = design.cells.filter(c => c.ordinal < design.cells.find(x => x.id === stopBefore)!.ordinal);
+  for (const cell of targets) {
+    const priorEvents = readdirSync(dir).filter(name => /^\d{6}\.json$/.test(name))
+      .map(name => JSON.parse(readFileSync(join(dir, name), 'utf8')).entry as { rowId: string; kind: string });
+    if (priorEvents.some(entry => entry.rowId === cell.id && entry.kind === 'solver')) continue;
+    const pipelineId = `prefix-pipeline-${cell.id}`;
+    let drift: ReturnType<typeof preflights>[number] | undefined;
+    if (cell.phase === 'O' || cell.phase === 'P') {
+      const block = [...design.ordering.orchestrationBlocks, ...design.ordering.productPairedBlocks].find(b => b.orderedCells.includes(cell.id))!;
+      drift = preflights(block.id).find(row => row.id === cell.id)!;
+      const preflightId = `${cell.id}-preflight`;
+      const startId = `${cell.id}-start`;
+      appendRun(dir, { ...event(preflightId), rowId: cell.id, kind: 'preflight', snapshot: drift.before, blockId: block.id });
+      appendRun(dir, { ...event(`${cell.id}-receipt`), rowId: cell.id, kind: 'receipt', status: 'accepted',
+        requestKey: `${design.campaign}:${cell.id}`, pipelineId });
+      appendRun(dir, { ...event(startId), rowId: cell.id, kind: 'start', preflightId, startedAt: drift.firstModelWork,
+        pipelineId, sessionId: `session-${cell.id}`, terminalStageId: 'solve' });
+      drift = { ...drift, preflightId, startId };
+    } else {
+      appendRun(dir, { ...event(`${cell.id}-receipt`), rowId: cell.id, kind: 'receipt', status: 'accepted',
+        requestKey: `${design.campaign}:${cell.id}`, pipelineId });
+    }
+    appendRun(dir, { ...event(`${cell.id}-result`), rowId: cell.id, kind: 'solver', observation: good(), ...(drift ? { drift } : {}) });
+    const curator = design.curationCells.find(c => c.afterCell === cell.id);
+    if (curator) {
+      if (priorEvents.some(entry => entry.rowId === curator.id && entry.kind === 'curator')) continue;
+      const packDigest = frozenPack && curator.memoryOutput === frozenPack.id ? frozenPack.digest : proof(`pack:${curator.id}`);
+      const curatorPipeline = `curator-pipeline-${curator.id}`;
+      appendRun(dir, { ...event(`${curator.id}-receipt`), rowId: curator.id, kind: 'receipt', status: 'accepted',
+        requestKey: `${design.campaign}:${curator.id}`, pipelineId: curatorPipeline });
+      appendRun(dir, { ...event(`${curator.id}-result`), rowId: curator.id, kind: 'curator', status: 'completed', packDigest,
+        usage: { units: 20, activeSeconds: 10, queueSeconds: 2, sessions: 1 }, queuedAt: 10, deadlineAt: 100, completedAt: 20,
+        deliveredArtifactDigest: digest(proof('final-tree')), queueReceipt: curatorPipeline,
+        terminalReceipt: proof(`terminal:${curator.id}`), cleanupReceipt: proof(`cleanup:${curator.id}`) });
+    }
+  }
+}
 
 test('both held-out requests require the same immutable curator output', () => {
   const dir = join(scratch(), 'run');
@@ -481,23 +646,22 @@ test('both held-out requests require the same immutable curator output', () => {
   const memory = { id: heldOut[0].memory, bytes, digest: digest(bytes) };
   const inputs = { ...requestInputs, memory };
   sealRun(dir, 'harness-only', contracts, {}, BINDING, bindings(Object.fromEntries(heldOut.map(c => [c.id, inputs]))));
-  expect(expandSealedRequest(dir, solver, requestInputs).clientRequestId).toBe(`${design.campaign}:${solver}`);
-  expect(() => expandSealedRequest(dir, solver, { ...requestInputs, brief: 'changed brief' })).toThrow('treatment inputs');
-  expect(() => expandSealedRequest(dir, solver, { ...requestInputs, baseRef: 'b'.repeat(40) })).toThrow('treatment inputs');
-  const curator = design.curationCells.find(c => c.memoryOutput === heldOut[0].memory)!;
-  const rowId = curator.id;
-  expect(() => expandSealedRequest(dir, heldOut[0].id, inputs)).toThrow('ledger seal');
-  expect(() => appendRun(dir, { ...event('pack'), rowId, kind: 'curator', status: 'completed', packDigest: memory.digest }))
-    .toThrow('queue deadline');
-  const requestKey = `${design.campaign}:${curator.afterCell}`;
-  appendRun(dir, { ...event('learn-receipt'), rowId: curator.afterCell, kind: 'receipt', status: 'accepted', requestKey, pipelineId: 'learn-pipeline' });
-  appendRun(dir, { ...event('learn-artifact'), rowId: curator.afterCell, kind: 'solver', observation: good() });
-  appendRun(dir, { ...event('pack'), rowId, kind: 'curator', status: 'completed', packDigest: memory.digest,
-    usage: { units: 20, activeSeconds: 10, queueSeconds: 2, sessions: 1 }, queuedAt: 10, deadlineAt: 100, completedAt: 20,
-    deliveredArtifactDigest: digest(proof('final-tree')) });
-  for (const cell of heldOut) expect(expandSealedRequest(dir, cell.id, inputs).stages[1].prompt).toContain(bytes);
+  appendScheduledPrefix(dir, heldOut[0]!.id, memory);
+  const acquisition = reportRun(dir);
+  expect(acquisition.endpoints['M-acquisition'].MR.intended).toBe(4);
+  expect(acquisition.endpoints['M-acquisition'].MA.intended).toBe(4);
+  expect(acquisition.rows.filter(row => design.cells.some(cell => cell.id === row.id && cell.phase === 'M' && cell.kind === 'learn')
+    && row.status === 'delivered').length).toBeGreaterThanOrEqual(4);
+  appendRun(dir, { ...event('heldout-one-preflight'), rowId: heldOut[0]!.id, kind: 'preflight', snapshot: preflights('O-export')[0]!.before });
+  expect(expandSealedRequest(dir, heldOut[0]!.id, inputs).stages[1].prompt).toContain(bytes);
+  appendRun(dir, { ...event('heldout-one-receipt'), rowId: heldOut[0]!.id, kind: 'receipt', status: 'accepted',
+    requestKey: `${design.campaign}:${heldOut[0]!.id}`, pipelineId: 'heldout-one' });
+  appendRun(dir, { ...event('heldout-one-result'), rowId: heldOut[0]!.id, kind: 'solver', observation: good() });
+  appendScheduledPrefix(dir, heldOut[1]!.id, memory);
+  appendRun(dir, { ...event('heldout-two-preflight'), rowId: heldOut[1]!.id, kind: 'preflight', snapshot: preflights('O-export')[0]!.before });
+  expect(expandSealedRequest(dir, heldOut[1]!.id, inputs).stages[1].prompt).toContain(bytes);
   const replacement = { ...memory, bytes: 'fresh data', digest: digest('fresh data') };
-  expect(() => expandSealedRequest(dir, heldOut[1].id, { ...inputs, memory: replacement })).toThrow('treatment inputs');
+  expect(() => expandSealedRequest(dir, heldOut[1].id, { ...inputs, memory: replacement })).toThrow('ledger seal');
 });
 
 test('sealed run survives process restart, retains every failed row and allows durable delivery reconciliation only', () => {
@@ -510,7 +674,14 @@ test('sealed run survives process restart, retains every failed row and allows d
   expect(() => appendRun(dir, { ...event('retry'), kind: 'receipt', status: 'accepted', requestKey, pipelineId: 'fixture' })).toThrow('reconciliation');
   appendRun(dir, { ...event('duplicate'), kind: 'receipt', status: 'duplicate', requestKey, pipelineId: 'fixture' });
   appendRun(dir, { ...event('proof'), kind: 'receipt', status: 'reconciled', requestKey, pipelineId: 'fixture' });
-  appendRun(dir, { ...event('timeout'), kind: 'solver', observation: { status: 'timeout', reason: 'guard', usage } });
+  const firstDrift = preflights('O-export')[0]!;
+  appendRun(dir, { ...event('timeout-preflight'), rowId: solver, kind: 'preflight', snapshot: firstDrift.before, blockId: 'O-export' });
+  appendRun(dir, { ...event('timeout-start'), rowId: solver, kind: 'start', preflightId: 'timeout-preflight',
+    startedAt: firstDrift.firstModelWork, pipelineId: 'fixture', sessionId: 'timeout-session', terminalStageId: 'solve' });
+  appendRun(dir, { ...event('timeout'), kind: 'solver', observation: { status: 'timeout', reason: 'guard' },
+    drift: { ...firstDrift, preflightId: 'timeout-preflight', startId: 'timeout-start' } });
+  const productCell = design.cells.find(cell => cell.arm === 'P')!;
+  expect(() => expandSealedRequest(dir, productCell.id, requestInputs)).toThrow('Admission stopped');
   const replacement = { ...event('new'), kind: 'solver' as const, observation: good() };
   expect(() => appendRun(dir, replacement)).toThrow('outcome already sealed');
   const replay = Bun.spawnSync([process.execPath, entrypoint, 'report', dir], { timeout: 4000 });
@@ -520,20 +691,37 @@ test('sealed run survives process restart, retains every failed row and allows d
   expect(report.rows).toHaveLength(118);
   expect(report.rows[0].status).toBe('timeout');
   expect(report.endpoints.O.S).toMatchObject({ intended: 2, accepted: 0, unitsPerAccepted: null });
+  expect(report.endpoints['M-acquisition'].MR).toMatchObject({ intended: 4, accepted: 0 });
+  expect(report.endpoints['M-acquisition'].MA).toMatchObject({ intended: 4, accepted: 0 });
+  expect(report.endpoints['M-held-out'].MR.intended).toBe(4);
   expect(report.endpoints['M-held-out'].MR.primaryViolations).toMatchObject({ denominator: 4, unknown: 4, bounds: [0, 1] });
   expect(report.prefixes[2].prefixes[2].arms.EA.intended).toBe(3);
   unlinkSync(join(dir, '000004.json'));
-  expect(() => reportRun(dir)).toThrow('Ledger checkpoint count mismatch');
+  expect(() => reportRun(dir)).toThrow('Accepted ledger head was rolled back');
 });
 
 test('deleting the final terminal row is detected against its retained checkpoint', () => {
   const dir = join(scratch(), 'tail-run');
   sealRun(dir, 'harness-only', contracts, {}, BINDING, bindings());
-  const requestKey = expandRequest(solver, requestInputs).clientRequestId;
-  appendRun(dir, { ...event('tail-receipt'), kind: 'receipt', status: 'accepted', requestKey, pipelineId: 'tail-pipeline' });
-  appendRun(dir, { ...event('tail-solver'), kind: 'solver', observation: good() });
+  const safeCell = design.cells.find(c => c.phase === 'R')!;
+  const requestKey = `${design.campaign}:${safeCell.id}`;
+  appendRun(dir, { ...event('tail-receipt'), rowId: safeCell.id, kind: 'receipt', status: 'accepted', requestKey, pipelineId: 'tail-pipeline' });
+  appendRun(dir, { ...event('tail-solver'), rowId: safeCell.id, kind: 'solver', observation: good() });
   unlinkSync(join(dir, '000002.json'));
-  expect(() => reportRun(dir)).toThrow('Ledger checkpoint count mismatch');
+  expect(() => reportRun(dir)).toThrow('Accepted ledger head was rolled back');
+});
+
+test('interrupted ledger append recovers idempotently and the accepted head rejects tail loss', () => {
+  const dir = join(scratch(), 'recover-run');
+  const sealId = sealRun(dir, 'harness-only', contracts, {}, BINDING, bindings());
+  const partial = { ...event('interrupted-receipt'), kind: 'receipt' as const, status: 'unknown' as const,
+    requestKey: `${design.campaign}:${solver}` };
+  writeFileSync(join(dir, '000001.json'), JSON.stringify({ previous: sealId, entry: partial }) + '\n', { mode: 0o600 });
+  appendRun(dir, partial);
+  expect(reportRun(dir).rows[0]!.status).toBe('not_run');
+  unlinkSync(join(dir, '000001.json'));
+  unlinkSync(join(dir, 'checkpoint-000001.json'));
+  expect(() => reportRun(dir)).toThrow('Accepted ledger head was rolled back');
 });
 
 test('common opportunities retain missing outcomes independently from own-correction recurrence', () => {

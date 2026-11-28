@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -110,6 +110,8 @@ export function validateManifest(value: unknown) {
       O: { cellsPerArm: count('O') / 3, independentTaskClusters: 2 },
       R: { cellsPerArm: count('R') / 2, independentTaskClusters: 2 },
       'M-held-out': { cellsPerArm: count('M') / 4, independentSequenceClusters: 2, acquisitionCellsPerArmExcludedFromHeldOutContrast: curationCells.length / 2 },
+      'M-acquisition': { cellsPerArm: cells.filter(c => c.phase === 'M' && c.kind === 'learn').length / 2,
+        independentSequenceClusters: 2, includesFailuresAndNotRun: true },
       P: { cellsPerArm: count('P'), independentTaskClusters: 2, reuseControlFrom: 'O-S-r1-reviewed' },
       E: { cellsPerArm: count('E') / 2, independentSequenceClusters: 1 },
     },
@@ -150,28 +152,36 @@ export const gateRequirements = {
 type Gate = keyof typeof gateRequirements;
 type GateObservation = Record<string, 'pass' | 'fail' | 'unknown'>;
 type EvidencePointer = { path: string; digest: string };
-type GateProof = { status: 'verified' | 'failed' | 'unverified'; bindingDigest: string; artifactDigest: string; observationsDigest: string; observations: GateObservation; artifact: { schemaVersion: 1; classification: 'observed-gate-evidence' | 'harness-only'; gate: Gate; proof: string; manifestDigest: string; observations: GateObservation; evidence: EvidencePointer } };
+type GateProof = { status: 'verified' | 'failed' | 'unverified'; bindingDigest: string; checkedBindingDigest: string;
+  observationId: string; sourceDigest: string; artifactDigest: string; observationsDigest: string; observations: GateObservation;
+  artifact: { schemaVersion: 1; classification: 'observed-gate-evidence' | 'harness-only'; gate: Gate; proof: string;
+    manifestDigest: string; checkedBindingDigest: string; observationId: string; sourceDigest: string;
+    observations: GateObservation; evidence: EvidencePointer } };
 type GateEvidence = { status: 'verified' | 'unresolved'; proofs?: Record<string, GateProof> };
 export type Binding = {
   classification: 'observed' | 'harness-only';
   manifestDigest: string;
   gates?: Partial<Record<Gate, GateEvidence>>;
-  independentVerdict?: { approved: boolean; artifactDigest: string; bindingDigest: string; observationsDigest: string; observations: Record<string, 'pass' | 'fail' | 'unknown'>; artifact: { schemaVersion: 1; classification: 'independent-gate-review' | 'harness-only'; manifestDigest: string; observations: Record<string, 'pass' | 'fail' | 'unknown'>; evidence: EvidencePointer } };
+  independentVerdict?: { approved: boolean; artifactDigest: string; bindingDigest: string; observationsDigest: string;
+    observations: Record<string, 'pass' | 'fail' | 'unknown'>; gateEvidenceDigests: Record<string, string>;
+    artifact: { schemaVersion: 1; classification: 'independent-gate-review' | 'harness-only'; manifestDigest: string;
+      observations: Record<string, 'pass' | 'fail' | 'unknown'>; gateEvidenceDigests: Record<string, string>; evidence: EvidencePointer } };
   unresolved?: string[];
   taskProjectLinks?: { task: string; taskProject: string; canonicalProject: string; packageProject: string; worktreeProject: string }[];
 };
 const manifestDigest = () => digest(source('./pilot-manifest.json'));
-const PINNED_MANIFEST_DIGEST = '1073e077d7955a21b19655690e3e38801b78d7f3b78004c680b672da81e64abd';
+const PINNED_MANIFEST_DIGEST = 'b033ecde6a981da6c51326b00f4ffd2d7525280054f76ffcaa508eda8b745c9f';
 
 export function verifyManifestPin(bytes: Uint8Array, pin = PINNED_MANIFEST_DIGEST) {
   assert(sha(pin) && digest(bytes) === pin, 'Bundled manifest differs from the reviewed pin');
 }
 
 export function gateRefusals(binding?: Binding) {
-  const taskKeys = new Set(binding?.taskProjectLinks?.map(link => link?.task));
-  const linksValid = binding?.taskProjectLinks?.length === design.tasks.length && taskKeys.size === design.tasks.length
+  const links = Array.isArray(binding?.taskProjectLinks) ? binding.taskProjectLinks : [];
+  const taskKeys = new Set(links.map(link => link?.task));
+  const linksValid = links.length === design.tasks.length && taskKeys.size === design.tasks.length
     && design.tasks.every(task => taskKeys.has(task.id))
-    && binding!.taskProjectLinks!.every(link => !!link && typeof link === 'object' && !!link.taskProject && link.taskProject === link.canonicalProject
+    && links.every(link => !!link && typeof link === 'object' && !!link.taskProject && link.taskProject === link.canonicalProject
       && link.taskProject === link.packageProject && link.taskProject === link.worktreeProject);
   return (Object.keys(gateRequirements) as Gate[]).flatMap(gate => {
     const evidence = binding?.gates?.[gate];
@@ -186,12 +196,16 @@ export function gateRefusals(binding?: Binding) {
         || proof.artifact?.schemaVersion !== 1 || proof.artifact.classification !== 'observed-gate-evidence'
         || proof.artifact.gate !== gate || proof.artifact.proof !== name
         || proof.artifact.manifestDigest !== binding?.manifestDigest
+        || !sha(proof.checkedBindingDigest) || proof.artifact.checkedBindingDigest !== proof.checkedBindingDigest
+        || !proof.observationId || proof.artifact.observationId !== proof.observationId
+        || !sha(proof.sourceDigest) || proof.artifact.sourceDigest !== proof.sourceDigest
         || !isDeepStrictEqual(proof.artifact.observations, proof.observations)
-        || !verifiedEvidenceFile(proof.artifact.evidence, gate, name, binding!.manifestDigest, proof.observations)
+        || !verifiedEvidenceFile(proof.artifact.evidence, gate, name, binding!.manifestDigest, proof.checkedBindingDigest,
+          proof.observationId, proof.sourceDigest, proof.observations)
         || digest(json(proof.artifact)) !== proof.artifactDigest;
     });
-    const linkEvidence = gate === 'G6' && binding?.gates?.G6?.proofs?.['thirteen-package-and-worktree-links']
-      ? readEvidenceFile(binding.gates.G6.proofs['thirteen-package-and-worktree-links'].artifact.evidence) : null;
+    const linkProof = binding?.gates?.G6?.proofs?.['thirteen-package-and-worktree-links'];
+    const linkEvidence = gate === 'G6' && linkProof?.artifact?.evidence ? readEvidenceFile(linkProof.artifact.evidence) : null;
     const linkedTasks = linkEvidence?.taskProjectLinks;
     const exactLinksObserved = Array.isArray(linkedTasks) && isDeepStrictEqual(linkedTasks, binding?.taskProjectLinks);
     if (binding?.manifestDigest !== manifestDigest() || evidence?.status !== 'verified' || missing.length
@@ -217,35 +231,54 @@ function readEvidenceFile(pointer: EvidencePointer | undefined): Record<string, 
   }
 }
 
+function verifiedOracleFile(pointer: EvidencePointer | undefined, taskId: string, treeDigest: string, commandDigest: string,
+  checks: Record<string, string>, evidenceDigest: string) {
+  const record = readEvidenceFile(pointer);
+  return !!record && pointer?.digest === evidenceDigest && record.schemaVersion === 1 && record.classification === 'oracle-run-result'
+    && isDeepStrictEqual(record, { schemaVersion: 1, classification: 'oracle-run-result', taskId, treeDigest, commandDigest,
+      exitCode: 0, checks });
+}
+
 function verifiedEvidenceFile(pointer: EvidencePointer | undefined, gate: Gate, proof: string, manifest: string,
-  observations: GateObservation) {
+  checkedBindingDigest: string, observationId: string, sourceDigest: string, observations: GateObservation) {
   const record = readEvidenceFile(pointer);
   return !!record && record.schemaVersion === 1 && record.classification === 'observed-gate-evidence'
       && record.gate === gate && record.proof === proof && record.manifestDigest === manifest
-      && isDeepStrictEqual(record.observations, observations);
+      && record.checkedBindingDigest === checkedBindingDigest && record.observationId === observationId
+      && record.sourceDigest === sourceDigest && isDeepStrictEqual(record.observations, observations)
+      && record.result && typeof record.result === 'object'
+      && isDeepStrictEqual(record.result, { gate, proof, manifestDigest: manifest, checkedBindingDigest, observationId, sourceDigest, outcome: 'pass' });
 }
 
 export function launchRefusal(binding?: Binding) {
-  if (binding?.unresolved?.length) return `Unresolved static bindings: ${binding.unresolved.slice(0, 8).join(', ')}`;
+  if (Array.isArray(binding?.unresolved) && binding.unresolved.length) return `Unresolved static bindings: ${binding.unresolved.slice(0, 8).join(', ')}`;
   const gates = gateRefusals(binding);
   if (gates.length) return gates.map(item => `${item.gate}: ${item.missing.join(', ')}`).join('; ').slice(0, 1000);
   const verdict = binding?.independentVerdict;
+  const gateEvidenceDigests = Object.fromEntries((Object.keys(gateRequirements) as Gate[]).map(gate => [gate,
+    digest(json(Object.fromEntries(Object.entries(binding?.gates?.[gate]?.proofs ?? {})
+      .map(([name, proof]) => [name, proof.artifactDigest]).sort(([a], [b]) => String(a).localeCompare(String(b))))))]));
   if (!verdict?.approved || verdict.bindingDigest !== binding?.manifestDigest || !sha(verdict.artifactDigest)
     || !sha(verdict.observationsDigest) || !Object.keys(verdict.observations ?? {}).length
     || Object.values(verdict.observations).some(value => value !== 'pass')
     || !isDeepStrictEqual(Object.keys(verdict.observations).sort(), (Object.keys(gateRequirements) as Gate[]).sort())
+    || !isDeepStrictEqual(verdict.gateEvidenceDigests, gateEvidenceDigests)
     || digest(json(verdict.observations)) !== verdict.observationsDigest || verdict.artifact?.schemaVersion !== 1
     || verdict.artifact.classification !== 'independent-gate-review' || verdict.artifact.manifestDigest !== binding?.manifestDigest
     || !isDeepStrictEqual(verdict.artifact.observations, verdict.observations)
-    || !verifiedReviewFile(verdict.artifact.evidence, binding?.manifestDigest, verdict.observations)
+    || !isDeepStrictEqual(verdict.artifact.gateEvidenceDigests, verdict.gateEvidenceDigests)
+    || !verifiedReviewFile(verdict.artifact.evidence, binding?.manifestDigest, verdict.observations, verdict.gateEvidenceDigests)
     || digest(json(verdict.artifact)) !== verdict.artifactDigest) return 'G1–G7: independent verification required';
   return 'G1–G7: manifest launchAllowed is false; offline driver';
 }
 
-function verifiedReviewFile(pointer: EvidencePointer | undefined, manifest: string | undefined, observations: GateObservation) {
+function verifiedReviewFile(pointer: EvidencePointer | undefined, manifest: string | undefined, observations: GateObservation, gateEvidenceDigests: Record<string, string>) {
   const record = readEvidenceFile(pointer);
   return !!record && record.schemaVersion === 1 && record.classification === 'independent-gate-review'
-    && record.manifestDigest === manifest && isDeepStrictEqual(record.observations, observations);
+    && record.manifestDigest === manifest && isDeepStrictEqual(record.observations, observations)
+    && isDeepStrictEqual(record.gateEvidenceDigests, gateEvidenceDigests)
+    && record.result && typeof record.result === 'object'
+    && isDeepStrictEqual(record.result, { manifestDigest: manifest, gateEvidenceDigests, observations, approved: true });
 }
 
 export type RequestInputs = {
@@ -258,7 +291,21 @@ export type RequestInputs = {
   previous?: { cellId: string; commit: string; treeDigest: string; delivered: boolean; matchedPairDelivered: boolean };
 };
 
-type PlannerRoute = { solve: 'M' | 'H'; fix: 'M' | 'H'; plannerCellId: string; plannerPipelineId: string; plannerSessionId: string; output: string; outputDigest: string };
+/** Runtime-derived pack/tree fields are bound from ledger records after sealing. */
+export function sealedInputDigest(rowId: string, inputs: RequestInputs) {
+  const cell = design.cells.find(c => c.id === rowId);
+  const staticInputs = { ...inputs };
+  if (cell?.memory && cell.memory !== 'empty') delete (staticInputs as { memory?: RequestInputs['memory'] }).memory;
+  if (cell?.codeInput && cell.codeInput !== 'sealed-base') {
+    delete (staticInputs as { previous?: RequestInputs['previous'] }).previous;
+    staticInputs.baseRef = '<ledger-bound-predecessor>';
+  }
+  return digest(json(staticInputs));
+}
+
+type PlannerRoute = { solve: 'M' | 'H'; fix: 'M' | 'H'; plannerCellId: string; plannerPipelineId: string; plannerSessionId: string;
+  terminalStageId: 'planner'; terminalReceipt: string; cleanupReceipt: string; usage: Observation['usage']; output: string;
+  outputDigest: string; evidence: EvidencePointer };
 
 function routeOutputMatches(route: PlannerRoute) {
   try {
@@ -268,6 +315,14 @@ function routeOutputMatches(route: PlannerRoute) {
   } catch {
     return false;
   }
+}
+
+function verifiedPlannerResult(route: PlannerRoute) {
+  const record = readEvidenceFile(route.evidence);
+  return !!record && isDeepStrictEqual(record, { schemaVersion: 1, classification: 'planner-terminal-result',
+    pipelineId: route.plannerPipelineId, sessionId: route.plannerSessionId, stageId: route.terminalStageId,
+    terminalReceipt: route.terminalReceipt, cleanupReceipt: route.cleanupReceipt, usage: route.usage,
+    output: route.output, outputDigest: route.outputDigest });
 }
 
 function buildRequest(id: string, inputs: RequestInputs, verifiedRoute?: PlannerRoute, plannerOnly = false) {
@@ -374,11 +429,11 @@ export async function sampleDelivery(transport: InMemoryTransport, request: Retu
 type DriftSnapshot = {
   at: number; capacityBudgets: number; quotaStart: number; quotaEnd: number;
   sharedInputs: string; roles: Record<string, string>; providerRevision: string | null;
-  runtimeBindings?: Record<string, { declared: 'M' | 'H'; requested: Runtime; resolved: Runtime }>;
+  runtimeBindings?: Record<string, { declared: 'M' | 'H'; requested: Runtime; resolved: Runtime; bindingDigest: string }>;
 };
 type DriftRecord = {
   id: string; before: DriftSnapshot; after: DriftSnapshot; firstModelWork: number;
-  checkpoint?: Record<string, string>;
+  checkpoint?: Record<string, string>; preflightId?: string; startId?: string;
 };
 
 export function checkBlock(blockId: string, rows: DriftRecord[], allSolverRows: Pick<DriftRecord, 'id'>[] = rows) {
@@ -398,6 +453,7 @@ export function checkBlock(blockId: string, rows: DriftRecord[], allSolverRows: 
   const initial = rows[0]?.before;
   if (!initial) return fail('Missing block preflight');
   const roles = new Map<string, string>();
+  const profiles = new Map<string, Runtime>();
   let previousEnd = initial.at;
   for (const [i, row] of rows.entries()) {
     const [before, first, after] = [row.before.at, row.firstModelWork, row.after.at];
@@ -421,11 +477,16 @@ export function checkBlock(blockId: string, rows: DriftRecord[], allSolverRows: 
         roles.set(role, hash);
         const binding = s.runtimeBindings[role]!;
         if (!binding || !['M', 'H'].includes(binding.declared)) return fail('Unknown declared runtime binding');
+        if (binding.bindingDigest !== digest(json({ roleHash: hash, declared: binding.declared,
+          requested: binding.requested, resolved: binding.resolved }))) return fail('Runtime observation is not bound to the sealed role identity');
         const declared = design.runtimePool[binding.declared];
         const expectedProfile = { engine: declared.engine, model: declared.model, effort: declared.effort };
         if (!isDeepStrictEqual(binding.requested, expectedProfile) || !isDeepStrictEqual(binding.resolved, expectedProfile)) {
           return fail('Requested or resolved runtime differs from declared model binding');
         }
+        const previousProfile = profiles.get(role);
+        if (previousProfile && !isDeepStrictEqual(previousProfile, binding.resolved)) return fail('Role runtime changed within causal pair');
+        profiles.set(role, binding.resolved);
         if ((cell.arm === 'HF' && ['solve', 'fix'].includes(role) && binding.declared !== 'H')
           || (cell.arm === 'HF' && ['planner', 'review'].includes(role) && binding.declared !== 'M')
           || ((cell.arm === 'S' || cell.arm === 'F' || cell.arm === 'A') && binding.declared !== 'M')) {
@@ -456,7 +517,7 @@ export function campaignChronologyValid(rows: Pick<DriftRecord, 'id'>[]) {
   return rows.length === expectedRows.length && rows.every((row, index) => row.id === expectedRows[index]);
 }
 
-type Contract = { requirements: Requirement[]; residuals: string[]; opportunities: Opportunity[]; predecessors?: string[] };
+type Contract = { requirements: Requirement[]; residuals: string[]; opportunities: Opportunity[]; predecessors?: string[]; oracleCommands?: Record<string, string> };
 type Seal = {
   schemaVersion: number;
   classification: 'harness-only';
@@ -464,6 +525,7 @@ type Seal = {
   rows: { id: string; kind: 'solver' | 'curator' | 'judge' }[];
   contracts: Record<string, Contract>;
   golds: Record<string, string[]>;
+  goldArtifactDigests: Record<string, string>;
   bindingDigest: string;
   requestBindings: Record<string, string>;
 };
@@ -473,9 +535,11 @@ type Entry = {
   evidenceDigest: string;
 } & (
   | { kind: 'receipt'; status: 'accepted' | 'unknown' | 'duplicate' | 'reconciled'; requestKey: string; pipelineId?: string }
+  | { kind: 'preflight'; snapshot: DriftSnapshot; blockId?: string }
+  | { kind: 'start'; preflightId: string; startedAt: number; pipelineId: string; sessionId: string; terminalStageId: string }
   | { kind: 'planner-route'; status: 'completed'; route: PlannerRoute }
   | { kind: 'solver'; observation: Observation; drift?: DriftRecord }
-  | { kind: 'curator'; status: 'completed' | 'failed' | 'not_run_after_stop'; usage?: Observation['usage']; packDigest?: string; queuedAt?: number; deadlineAt?: number; completedAt?: number; deliveredArtifactDigest?: string }
+  | { kind: 'curator'; status: 'completed' | 'failed' | 'not_run_after_stop'; usage?: Observation['usage']; packDigest?: string; queuedAt?: number; deadlineAt?: number; completedAt?: number; deliveredArtifactDigest?: string; queueReceipt?: string; terminalReceipt?: string; cleanupReceipt?: string }
   | { kind: 'judge'; status: 'completed' | 'failed' | 'not_run_after_stop'; usage?: Observation['usage']; calibration?: Calibration; judgment?: Judgment }
 );
 type LedgerRecord = { previous: string; entry: Entry };
@@ -512,11 +576,20 @@ function publishFile(directory: string, name: string, value: unknown) {
   try { fsyncSync(dir); } finally { closeSync(dir); }
 }
 
+function replaceFile(directory: string, name: string, value: unknown) {
+  const scratch = join(directory, `.replace-${randomUUID()}`);
+  const fd = openSync(scratch, 'wx', 0o400);
+  try { writeFileSync(fd, json(value)); fsyncSync(fd); } finally { closeSync(fd); }
+  renameSync(scratch, join(directory, name));
+  const dir = openSync(directory, 'r');
+  try { fsyncSync(dir); } finally { closeSync(dir); }
+}
+
 const checkpointName = (index: number) => `checkpoint-${String(index).padStart(6, '0')}.json`;
 const checkpointBody = (index: number, count: number, headDigest: string, previous: string) => ({ index, count, digest: headDigest, previous });
 
 export function sealRun(directory: string, classification: 'harness-only', contracts: Record<string, Contract>,
-  golds: Record<string, string[]> = {}, bindingDigest?: string, requestBindings?: Record<string, string>) {
+  golds: Record<string, string[]> = {}, bindingDigest?: string, requestBindings?: Record<string, string>, goldArtifactDigests: Record<string, string> = {}) {
   validateManifest(design);
   assert(classification === 'harness-only' && sha(bindingDigest), 'Missing sealed treatment binding');
   expected(Object.keys(requestBindings ?? {}).sort(), intendedRows().map(row => row.id).sort(), 'sealed request bindings');
@@ -525,6 +598,12 @@ export function sealRun(directory: string, classification: 'harness-only', contr
   if (Object.keys(golds).length) {
     expected(Object.keys(golds).sort(), [...new Set(design.judgingCells.flatMap(j => j.gold ? [j.gold] : []))].sort(), 'judge golds');
     assert(Object.values(golds).every(ids => Array.isArray(ids) && ids.every(id => typeof id === 'string' && id)), 'Invalid gold defect registry');
+    expected(Object.keys(goldArtifactDigests).sort(), Object.keys(golds).sort(), 'judge gold artifact digests');
+    assert(Object.values(goldArtifactDigests).every(sha) && new Set(Object.values(goldArtifactDigests)).size === Object.keys(goldArtifactDigests).length,
+      'Judge gold artifacts must have distinct sealed content digests');
+  } else expected(Object.keys(goldArtifactDigests), [], 'unexpected judge gold artifact digests');
+  for (const [gold, defects] of Object.entries(golds)) {
+    assert(new Set(defects).size === defects.length, `Duplicate defect in ${gold} gold`);
   }
   for (const [task, contract] of Object.entries(contracts)) {
     assert(contract.residuals.length && new Set(contract.residuals).size === contract.residuals.length, 'Unsealed residual requirements');
@@ -535,14 +614,18 @@ export function sealRun(directory: string, classification: 'harness-only', contr
     if (cell && cell.step! > 0) {
       const expectedPredecessors = design.evolvingCodeSequences.find(s => s.id === cell.sequence)!.tasks.slice(0, cell.step);
       expected(contract.predecessors, expectedPredecessors, 'cumulative E predecessor contracts');
+      expected(Object.keys(contract.oracleCommands ?? {}).sort(), [...expectedPredecessors].sort(), 'cumulative E oracle command bindings');
+      assert(Object.values(contract.oracleCommands!).every(sha), 'Invalid E oracle command digest');
     }
   }
   mkdirSync(directory, { mode: 0o700 });
-  const seal: Seal = { schemaVersion: design.schemaVersion, classification, sources: sourceDigests(), rows: intendedRows(), contracts, golds, bindingDigest, requestBindings: requestBindings! };
+  const seal: Seal = { schemaVersion: design.schemaVersion, classification, sources: sourceDigests(), rows: intendedRows(), contracts, golds, goldArtifactDigests, bindingDigest, requestBindings: requestBindings! };
   const id = digest(json(seal));
   publishFile(directory, 'seal.json', { id, seal });
   const checkpoint = checkpointBody(0, 0, id, id);
-  publishFile(directory, checkpointName(0), { ...checkpoint, id: digest(json(checkpoint)) });
+  const initialCheckpoint = { ...checkpoint, id: digest(json(checkpoint)) };
+  publishFile(directory, checkpointName(0), initialCheckpoint);
+  publishFile(directory, 'head.json', { index: 0, checkpointId: initialCheckpoint.id, entryDigest: id });
   return id;
 }
 
@@ -555,9 +638,13 @@ function readRun(directory: string) {
   expected(seal.schemaVersion, design.schemaVersion, 'sealed schema');
   expected(seal.sources, sourceDigests(), 'sealed sources');
   expected(seal.rows, intendedRows(), 'sealed intended rows');
+  assert(existsSync(join(directory, 'head.json')), 'Missing accepted ledger head anchor');
+  let head = JSON.parse(readFileSync(join(directory, 'head.json'), 'utf8')) as { index: number; checkpointId: string; entryDigest: string };
+  assert(Number.isSafeInteger(head.index) && head.index >= 0, 'Invalid ledger head anchor');
   let previous = id;
   const entries: Entry[] = [];
   const names = readdirSync(directory).filter(n => /^\d{6}\.json$/.test(n)).sort();
+  assert(head.index <= names.length, 'Accepted ledger head was rolled back');
   for (const [index, name] of names.entries()) {
     assert(name === eventName(index + 1), 'Ledger sequence gap');
     const data = readFileSync(join(directory, name));
@@ -567,7 +654,23 @@ function readRun(directory: string) {
     entries.push(record.entry);
     previous = digest(data);
   }
-  const checkpoints = readdirSync(directory).filter(n => /^checkpoint-\d{6}\.json$/.test(n)).sort();
+  let checkpoints = readdirSync(directory).filter(n => /^checkpoint-\d{6}\.json$/.test(n)).sort();
+  // Recover the one event that may have reached disk before its checkpoint/head update.
+  if (entries.length === checkpoints.length && head.index === entries.length - 1 && entries.length > 0) {
+    const previousCheckpoint = JSON.parse(readFileSync(join(directory, checkpointName(entries.length - 1)), 'utf8')) as { id: string };
+    const checkpoint = checkpointBody(entries.length, entries.length, digest(readFileSync(join(directory, eventName(entries.length)))), previousCheckpoint.id);
+    const committed = { ...checkpoint, id: digest(json(checkpoint)) };
+    publishFile(directory, checkpointName(entries.length), committed);
+    head = { index: entries.length, checkpointId: committed.id, entryDigest: checkpoint.digest };
+    replaceFile(directory, 'head.json', head);
+    checkpoints = [...checkpoints, checkpointName(entries.length)];
+  }
+  if (checkpoints.length === entries.length + 1 && head.index === entries.length - 1 && entries.length > 0) {
+    const committed = JSON.parse(readFileSync(join(directory, checkpointName(entries.length)), 'utf8')) as { id: string; digest: string };
+    head = { index: entries.length, checkpointId: committed.id, entryDigest: committed.digest };
+    replaceFile(directory, 'head.json', head);
+  }
+  assert(head.index === entries.length, 'Accepted ledger head was rolled back');
   assert(checkpoints.length === entries.length + 1, 'Ledger checkpoint count mismatch');
   let previousCheckpoint = id;
   for (const [index, name] of checkpoints.entries()) {
@@ -579,6 +682,9 @@ function readRun(directory: string) {
     previousCheckpoint = checkpoint.id;
   }
   assert(previous === JSON.parse(readFileSync(join(directory, checkpointName(entries.length)), 'utf8')).digest, 'Ledger head checkpoint mismatch');
+  const anchoredCheckpoint = JSON.parse(readFileSync(join(directory, checkpointName(head.index)), 'utf8')) as { id: string; digest: string };
+  assert(head.index === entries.length && head.checkpointId === anchoredCheckpoint.id
+    && head.entryDigest === anchoredCheckpoint.digest, 'Accepted ledger head was rolled back');
   return { id, seal, entries, previous };
 }
 
@@ -602,11 +708,36 @@ function validateEntry(seal: Seal, entries: Entry[], entry: Entry) {
     assert(!['accepted', 'reconciled'].includes(entry.status) || entry.pipelineId, 'Missing durable pipeline identity');
     return;
   }
+  if (entry.kind === 'preflight') {
+    const cell = design.cells.find(c => c.id === entry.rowId);
+    assert(row.kind === 'solver' && cell && !history.some(e => e.kind === 'preflight')
+      && Number.isSafeInteger(entry.snapshot.at) && entry.snapshot.at >= 0
+      && sha(entry.snapshot.sharedInputs) && entry.snapshot.providerRevision
+      && entry.blockId === ([...design.ordering.orchestrationBlocks, ...design.ordering.productPairedBlocks]
+        .find(block => block.orderedCells.includes(cell.id))?.id), 'Invalid or unregistered solver preflight');
+    const prior = design.cells.filter(c => c.ordinal < cell.ordinal);
+    assert(prior.every(c => entries.some(e => e.kind === 'solver' && e.rowId === c.id
+      && e.observation.status === 'delivered' && e.observation.usage && !e.observation.invalid)), 'Preflight is outside the registered schedule or follows a stop');
+    return;
+  }
+  if (entry.kind === 'start') {
+    const preflight = history.find(e => e.kind === 'preflight' && e.id === entry.preflightId);
+    const receipt = history.find(e => e.kind === 'receipt' && e.pipelineId === entry.pipelineId
+      && ['accepted', 'reconciled'].includes(e.status));
+    assert(row.kind === 'solver' && preflight?.kind === 'preflight' && receipt?.kind === 'receipt'
+      && !history.some(e => e.kind === 'start') && Number.isSafeInteger(entry.startedAt)
+      && entry.startedAt >= preflight.snapshot.at && entry.sessionId && entry.terminalStageId
+      && entry.terminalStageId.length <= 80, 'Start lacks durable preflight or accepted pipeline receipt');
+    return;
+  }
   if (entry.kind === 'planner-route') {
     assert(row.kind === 'solver' && design.cells.find(c => c.id === row.id)?.arm === 'HA'
       && !history.some(e => e.kind === 'planner-route')
       && entry.status === 'completed' && entry.route?.plannerCellId === row.id
       && entry.route.plannerPipelineId && entry.route.plannerSessionId && sha(entry.route.outputDigest)
+      && entry.route.terminalStageId === 'planner' && sha(entry.route.terminalReceipt) && sha(entry.route.cleanupReceipt)
+      && judgeUsageCovered(entry.route.usage) && entry.route.usage?.sessions === 1
+      && verifiedPlannerResult(entry.route)
       && entry.route.output && digest(entry.route.output) === entry.route.outputDigest
       && routeOutputMatches(entry.route)
       && ['M', 'H'].includes(entry.route.solve) && ['M', 'H'].includes(entry.route.fix)
@@ -622,9 +753,26 @@ function validateEntry(seal: Seal, entries: Entry[], entry: Entry) {
     const observation = entry.observation;
     assert(['delivered', 'timeout', 'infrastructure_failure', 'blocked', 'not_run_after_stop', 'undelivered'].includes(observation.status), 'Invalid solver outcome');
     assert(observation.status === 'delivered' || observation.reason, 'Missing failure reason');
+    if (observation.status === 'delivered') assert(observation.usage && [observation.usage.units, observation.usage.activeSeconds,
+      observation.usage.queueSeconds, observation.usage.sessions].every(Number.isSafeInteger)
+      && [observation.usage.units, observation.usage.activeSeconds, observation.usage.queueSeconds, observation.usage.sessions].every(value => value >= 0),
+    'Delivered solver row lacks nonnegative usage');
+    if (observation.status === 'delivered' && cell.kind === 'learn') assert(Number.isSafeInteger(observation.queueStartedAt)
+      && Number.isSafeInteger(observation.queueDeadlineAt) && observation.queueStartedAt! <= observation.queueDeadlineAt!
+      && observation.queueDeadlineAt! - observation.queueStartedAt! <= design.budgets.B.maxQueueSeconds,
+    'Learning row lacks its original bounded queue budget');
     if (observation.status === 'delivered') {
       assert(history.some(e => e.kind === 'receipt' && e.requestKey === `${design.campaign}:${entry.rowId}`
         && ['accepted', 'reconciled'].includes(e.status)), 'Missing durable solver receipt');
+    }
+    if (cell.phase === 'O' || cell.phase === 'P') {
+      const preflight = history.find(e => e.kind === 'preflight');
+      const start = history.find(e => e.kind === 'start');
+      assert(entry.drift && preflight?.kind === 'preflight' && start?.kind === 'start'
+        && entry.drift.preflightId === preflight.id && entry.drift.startId === start.id
+        && isDeepStrictEqual(entry.drift.before, preflight.snapshot) && entry.drift.firstModelWork === start.startedAt
+        && start.pipelineId === history.find(e => e.kind === 'receipt' && ['accepted', 'reconciled'].includes(e.status))?.pipelineId,
+      'Causal solver outcome lacks its durable preflight/start evidence');
     }
     const contract = seal.contracts[cell.task];
     if (observation.status === 'delivered' && cell.phase === 'E' && cell.step! > 0) {
@@ -633,11 +781,13 @@ function validateEntry(seal: Seal, entries: Entry[], entry: Entry) {
       assert(isDeepStrictEqual(Object.keys(observation.predecessorOracles ?? {}).sort(), [...required].sort()), 'E cumulative predecessor oracle set is incomplete');
       for (const predecessor of required) {
         const prior = seal.contracts[predecessor];
-          const oracle = observation.predecessorOracles?.[predecessor];
-          assert(prior && observation.final?.tree && oracle && sha(oracle.evidenceDigest)
-            && oracle.treeDigest === digest(observation.final.tree)
-            && prior.requirements.every(r => oracle.checks[r.id] === 'pass')
-            && Object.keys(oracle.checks).length === prior.requirements.length, `E predecessor oracle regressed: ${predecessor}`);
+        const oracle = observation.predecessorOracles?.[predecessor];
+        assert(prior && observation.final?.tree && oracle && sha(oracle.evidenceDigest)
+          && oracle.treeDigest === digest(observation.final.tree) && oracle.commandDigest === contract.oracleCommands?.[predecessor]
+          && oracle.exitCode === 0 && prior.requirements.every(r => oracle.checks[r.id] === 'pass')
+          && Object.keys(oracle.checks).length === prior.requirements.length
+          && verifiedOracleFile(oracle.evidence, predecessor, oracle.treeDigest, oracle.commandDigest, oracle.checks, oracle.evidenceDigest),
+        `E predecessor oracle regressed or lacks bound run evidence: ${predecessor}`);
       }
     }
     score(observation, contract.requirements, contract.residuals, arm(cell).maxSolverSessions, cell.kind === 'learn', false);
@@ -649,29 +799,40 @@ function validateEntry(seal: Seal, entries: Entry[], entry: Entry) {
       const curator = design.curationCells.find(c => c.id === entry.rowId)!;
       assert(sha(entry.packDigest), 'Missing curator pack seal');
       assert(entry.usage && entry.usage.sessions === 1 && [entry.usage.units, entry.usage.activeSeconds, entry.usage.queueSeconds].every(Number.isSafeInteger)
+        && [entry.usage.units, entry.usage.activeSeconds, entry.usage.queueSeconds].every(value => value >= 0)
         && entry.usage.units <= design.budgets['B-learn'].curatorUnits
         && entry.usage.activeSeconds <= design.budgets['B-learn'].curatorActiveSeconds
         && entry.usage.queueSeconds <= design.budgets.B.maxQueueSeconds && Number.isSafeInteger(entry.queuedAt)
         && Number.isSafeInteger(entry.deadlineAt) && Number.isSafeInteger(entry.completedAt)
         && entry.queuedAt! <= entry.completedAt! && entry.completedAt! <= entry.deadlineAt!
         && entry.deadlineAt! - entry.queuedAt! <= design.budgets.B.maxQueueSeconds
-        && sha(entry.deliveredArtifactDigest), 'Curator missed or lacks its registered queue deadline or artifact receipt');
+        && sha(entry.deliveredArtifactDigest) && !!entry.queueReceipt && entry.queueReceipt.length <= 160
+        && sha(entry.terminalReceipt) && sha(entry.cleanupReceipt),
+      'Curator missed or lacks its registered queue deadline or artifact receipt');
+      const delivery = entries.find(e => e.kind === 'receipt' && e.rowId === entry.rowId && e.requestKey === `${design.campaign}:${entry.rowId}`
+        && ['accepted', 'reconciled'].includes(e.status));
+      assert(delivery?.kind === 'receipt' && delivery.pipelineId === entry.queueReceipt, 'Curator completion lacks its durable delivery receipt');
       const learned = entries.find(e => e.kind === 'solver' && e.rowId === curator.afterCell);
       assert(learned?.kind === 'solver' && learned.observation.status === 'delivered'
-        && learned.observation.final?.tree && learned.observation.cleanupReceipt
-        && entry.deliveredArtifactDigest === digest(learned.observation.final.tree), 'Missing completed learn artifact');
+        && learned.observation.final?.tree && sha(learned.observation.terminalReceipt) && sha(learned.observation.cleanupReceipt)
+        && entry.deliveredArtifactDigest === digest(learned.observation.final.tree)
+        && Number.isSafeInteger(learned.observation.queueStartedAt) && Number.isSafeInteger(learned.observation.queueDeadlineAt)
+        && learned.observation.queueDeadlineAt! - learned.observation.queueStartedAt! <= design.budgets.B.maxQueueSeconds
+        && entry.queuedAt === learned.observation.queueStartedAt && entry.deadlineAt === learned.observation.queueDeadlineAt,
+      'Missing completed learn artifact or original queue budget');
     }
     if (entry.kind === 'judge' && entry.status === 'completed') {
       const judge = design.judgingCells.find(j => j.id === entry.rowId)!;
       if (judge.kind === 'calibration') {
         assert(entry.calibration?.gold === judge.gold && entry.calibration?.judge === judge.judge && !entry.judgment
           && entry.calibration.session && sha(entry.calibration.artifactDigest) && sha(entry.calibration.terminalReceipt)
+          && entry.calibration.artifactDigest === seal.goldArtifactDigests[judge.gold!]
           && sha(entry.calibration.cleanupReceipt) && judgeUsageCovered(entry.calibration.usage), 'Calibration identity or evidence mismatch');
       } else {
         assert(!entry.calibration && entry.judgment && judgeUsageCovered(entry.usage)
           && sha(entry.judgment.artifactDigest) && sha(entry.judgment.terminalReceipt) && sha(entry.judgment.cleanupReceipt), 'Missing score judgment evidence or bounded usage');
         const goldResults = entries.flatMap(e => e.kind === 'judge' && e.status === 'completed' && e.calibration ? [e.calibration] : []);
-        assert(calibrationPassed(seal.golds, goldResults), 'Calibration did not pass');
+        assert(calibrationPassed(seal.golds, goldResults, seal.goldArtifactDigests), 'Calibration did not pass');
         assert(design.memorySequences.every(s => entries.some(e => e.kind === 'curator' && e.status === 'completed'
           && design.curationCells.some(c => c.id === e.rowId && c.memoryOutput === s.freezeAfter))), 'Learning snapshots are unfrozen');
         assert(entries.some(e => e.kind === 'solver' && e.rowId === judge.cell && e.observation.status === 'delivered'
@@ -692,6 +853,11 @@ function validateEntry(seal: Seal, entries: Entry[], entry: Entry) {
 
 export function appendRun(directory: string, entry: Entry) {
   const { seal, entries, previous } = readRun(directory);
+  const replay = entries.find(existing => existing.id === entry.id);
+  if (replay) {
+    assert(isDeepStrictEqual(replay, entry), 'Ledger retry changed an accepted event');
+    return;
+  }
   validateEntry(seal, entries, entry);
   // The exclusive link claims the next sequence number. A concurrent writer
   // must reread the winner before proposing another event.
@@ -701,13 +867,29 @@ export function appendRun(directory: string, entry: Entry) {
   const checkpointIndex = entries.length + 1;
   const prior = JSON.parse(readFileSync(join(directory, checkpointName(entries.length)), 'utf8')) as { id: string };
   const body = checkpointBody(checkpointIndex, checkpointIndex, digest(bytes), prior.id);
-  publishFile(directory, checkpointName(checkpointIndex), { ...body, id: digest(json(body)) });
+  const checkpoint = { ...body, id: digest(json(body)) };
+  publishFile(directory, checkpointName(checkpointIndex), checkpoint);
+  replaceFile(directory, 'head.json', { index: checkpointIndex, checkpointId: checkpoint.id, entryDigest: checkpoint.digest });
 }
 
 export function expandSealedRequest(directory: string, id: string, inputs: RequestInputs) {
   const { entries, seal } = readRun(directory);
-  assert(inputs.bindingDigest === seal.bindingDigest && seal.requestBindings[id] === digest(json(inputs)), 'Request treatment inputs differ from the sealed row binding');
+  assert(inputs.bindingDigest === seal.bindingDigest && seal.requestBindings[id] === sealedInputDigest(id, inputs), 'Request static inputs differ from the sealed row binding');
   const cell = design.cells.find(c => c.id === id);
+  if (cell && cell.arm !== 'HA') assert(!entries.some(e => e.rowId === id && (e.kind === 'start'
+    || (e.kind === 'receipt' && e.requestKey === `${design.campaign}:${id}` && ['accepted', 'reconciled'].includes(e.status))
+    || e.kind === 'solver')), `Row ${id} has already started or has an outcome`);
+  if (cell) {
+    for (const prior of design.cells.filter(candidate => candidate.ordinal < cell.ordinal)) {
+      const result = entries.find(e => e.kind === 'solver' && e.rowId === prior.id);
+      assert(result?.kind === 'solver' && result.observation.status === 'delivered' && result.observation.usage
+        && !result.observation.invalid, `Admission stopped before ${cell.id}: prior row ${prior.id} is incomplete`);
+      const curator = design.curationCells.find(c => c.afterCell === prior.id);
+      if (curator) assert(entries.some(e => e.kind === 'curator' && e.rowId === curator.id && e.status === 'completed'),
+        `Admission stopped before ${cell.id}: curator ${curator.id} is incomplete`);
+    }
+    assert(entries.some(e => e.kind === 'preflight' && e.rowId === id), `Admission requires durable ${id} preflight first`);
+  }
   if (cell && (cell.phase === 'O' || cell.phase === 'P')) {
     const scheduled = design.cells.filter(c => c.phase === 'O' || c.phase === 'P')
       .sort((a, b) => a.ordinal - b.ordinal).map(c => c.id);
@@ -715,7 +897,10 @@ export function expandSealedRequest(directory: string, id: string, inputs: Reque
     if (targetIndex >= 0) {
       const priorIds = scheduled.slice(0, targetIndex);
       const prior = priorIds.map(priorId => entries.find(e => e.kind === 'solver' && e.rowId === priorId));
-      assert(prior.every(e => e?.kind === 'solver' && e.drift?.id === e.rowId), 'Missing scheduled solver start evidence before admission');
+      assert(prior.every(e => e?.kind === 'solver' && e.drift?.id === e.rowId
+        && entries.some(start => start.kind === 'start' && start.rowId === e.rowId)
+        && entries.some(preflight => preflight.kind === 'preflight' && preflight.rowId === e.rowId)),
+      'Missing scheduled durable solver start/preflight evidence before admission');
       const priorDrift = prior.flatMap(e => e?.kind === 'solver' && e.drift ? [e.drift] : []);
       const allSolverRows = entries.filter((e): e is Extract<Entry, { kind: 'solver' }> => e.kind === 'solver').map(e => ({ id: e.rowId }));
       const block = [...design.ordering.orchestrationBlocks, ...design.ordering.productPairedBlocks].find(b => b.orderedCells.includes(cell.id))!;
@@ -757,7 +942,10 @@ export function expandPlannerSealedRequest(directory: string, id: string, inputs
   const { entries, seal } = readRun(directory);
   const cell = design.cells.find(c => c.id === id);
   assert(cell?.arm === 'HA' && inputs.bindingDigest === seal.bindingDigest
-    && seal.requestBindings[id] === digest(json(inputs)), 'Unbound HA planner inputs');
+    && seal.requestBindings[id] === sealedInputDigest(id, inputs), 'Unbound HA planner inputs');
+  assert(entries.some(e => e.kind === 'preflight' && e.rowId === id), 'Admission requires durable HA preflight first');
+  assert(!entries.some(e => e.rowId === id && e.kind === 'receipt' && e.requestKey === `${design.campaign}:${id}:planner`),
+    'HA planner request already has a receipt');
   assert(!entries.some(e => e.kind === 'planner-route' && e.rowId === id), 'Planner route already resolved');
   return expandPlannerRequest(id, inputs);
 }
@@ -808,11 +996,19 @@ export function reportRun(directory: string) {
   const { id, seal, entries } = readRun(directory);
   const judgeEntries = entries.filter(e => e.kind === 'judge');
   const calibration = judgeEntries.flatMap(e => e.status === 'completed' && e.calibration ? [e.calibration] : []);
-  const calibrated = calibrationPassed(seal.golds, calibration);
+  const calibrated = calibrationPassed(seal.golds, calibration, seal.goldArtifactDigests);
+  const firstStoppedCell = design.cells.find(cell => {
+    const outcome = entries.find(e => e.kind === 'solver' && e.rowId === cell.id);
+    return outcome?.kind === 'solver' && (outcome.observation.status !== 'delivered' || !outcome.observation.usage || outcome.observation.invalid === true);
+  });
+  const stopOrdinal = firstStoppedCell?.ordinal ?? Infinity;
   const rows = seal.rows.map(row => {
     const evidence = entries.filter(e => e.rowId === row.id);
     const result = evidence.find(e => e.kind === row.kind);
-    return { ...row, status: !result ? 'not_run' : result.kind === 'solver' ? result.observation.status : result.status, evidence };
+    const cell = design.cells.find(c => c.id === row.id);
+    const afterStop = firstStoppedCell && (cell ? cell.ordinal > stopOrdinal : row.kind !== 'solver');
+    return { ...row, status: !result ? afterStop ? 'not_run_after_stop' : 'not_run'
+      : result.kind === 'solver' ? result.observation.status : result.status, evidence };
   });
   const solvers = design.cells.map(cell => {
     const contract = seal.contracts[cell.task];
@@ -838,6 +1034,7 @@ export function reportRun(directory: string) {
   const endpoints = Object.fromEntries(Object.keys(design.scoring.endpointDenominators).map(phase => {
     const selected = solvers.filter(({ cell }) => cell.phase === phase || (
       phase === 'M-held-out' && cell.phase === 'M' && cell.kind !== 'learn') || (
+      phase === 'M-acquisition' && cell.phase === 'M' && cell.kind === 'learn') || (
       phase === 'P' && cell.phase === 'O' && cell.arm === 'S'));
     return [phase, Object.fromEntries([...new Set(selected.map(r => r.cell.arm))].map(a =>
       [a, describe(selected.filter(r => r.cell.arm === a))]))];
@@ -870,7 +1067,10 @@ export function reportRun(directory: string) {
   const solverLedgerRows = entries.filter((e): e is Extract<Entry, { kind: 'solver' }> => e.kind === 'solver').map(e => ({ id: e.rowId }));
   const causalLedgerRows = solverLedgerRows.filter(row => design.ordering.orchestrationBlocks.some(b => b.orderedCells.includes(row.id))
     || design.ordering.productPairedBlocks.some(b => b.orderedCells.includes(row.id)));
-  const chronologyValid = campaignChronologyValid(causalLedgerRows);
+  const startRows = entries.filter((e): e is Extract<Entry, { kind: 'start' }> => e.kind === 'start')
+    .map(e => ({ id: e.rowId })).filter(row => design.ordering.orchestrationBlocks.some(b => b.orderedCells.includes(row.id))
+      || design.ordering.productPairedBlocks.some(b => b.orderedCells.includes(row.id)));
+  const chronologyValid = campaignChronologyValid(causalLedgerRows) && campaignChronologyValid(startRows);
   const blocks = [...design.ordering.orchestrationBlocks, ...design.ordering.productPairedBlocks].map(block => ({
     id: block.id, ...(!chronologyValid ? { eligible: false, stop: true, reason: 'Interleaved or reordered campaign solver start ledger' }
       : checkBlock(block.id, drift.filter(r => block.orderedCells.includes(r.id)), solverLedgerRows)),
@@ -913,7 +1113,12 @@ if (import.meta.main) {
         console.log(json({ manifestDigest: manifestDigest(), plannedTotals: design.plannedTotals }));
         break;
       case 'preflight':
-        console.log(json({ allowed: false, modelLaunches: 0, refusal: launchRefusal(input ? read(input) : undefined) }));
+        {
+          let refusal: string;
+          try { refusal = launchRefusal(input ? read(input) : undefined); }
+          catch { refusal = 'G1–G7: malformed gate evidence artifact'; }
+          console.log(json({ allowed: false, modelLaunches: 0, refusal: refusal.slice(0, 1000) }));
+        }
         process.exitCode = 2;
         break;
       case 'seal':
