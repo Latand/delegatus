@@ -20850,7 +20850,7 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
 
   /* The states the estimate meets, with realistic figures (`?spend=critic`): the popover and the phone's Limits section are compact, print
      each figure once, give a guest the share with its basis, and cover no text that is not the card's own. */
-  browserTest("critic states: compact popover and Limits section, a guest's share, no covered neighbours, at 1440, 1000 and 390 in en and uk, light and dark", async () => {
+  browserTest("critic states: compact popover and Limits section, a guest's share, no covered titles, at 1440, 1000 and 390 in en and uk, light and dark", async () => {
     const out = path.resolve(process.env.TASK_SPEND_PNG_DIR ?? ".artifacts/task-spend");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
@@ -20914,7 +20914,8 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
               readings.push({ label, id, name, popover: pop, shape: got });
               judge(label, id, got, false);
               if (pop.foreign.length) failures.push(`${label} ${id}: the popover covers another card's title or text outside the cards: ${pop.foreign.join(" | ")}`);
-              if (pop.foreignCards.length) failures.push(`${label} ${id}: the popover covers text of another card: ${pop.foreignCards.join(" | ")}`);
+              /* The card's own title and state line rank before a neighbour's body text: a short card in a tall column leaves a place over a neighbour's details or over its own title, and the title stays readable. */
+              if (pop.overlapsTitle) failures.push(`${label} ${id}: the popover covers its own card's title`);
               if (pop.gap === null || pop.gap > 1) failures.push(`${label} ${id}: the popover stands ${pop.gap}px from its own card`);
               if (pop.inBoard === false) failures.push(`${label} ${id}: the popover leaves the board (the sidebar's side)`);
               if (pop.inSeat) failures.push(`${label} ${id}: the popover stands over the seat pane`);
@@ -20985,6 +20986,141 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
       await browser.close();
       server.stop();
       fs.writeFileSync(path.join(out, "critic-readings.json"), `${JSON.stringify({ capturedAt: new Date().toISOString(), readings, failures }, null, 2)}\n`);
+    }
+    expect(failures).toEqual([]);
+  }, 900_000);
+
+  /* A card on the window's bottom edge with the orchestrator seat open above the columns: the popover has little room, and
+     whatever it covers must be the card's own details or a neighbour's body text, never the seat, the card's title or state
+     line, or a column header. The numbers are read again from the card in the window's middle to show the content is unchanged. */
+  browserTest("a card near the window bottom with the seat open: the popover keeps clear of the seat, the card's title and state line and the column headers, at 1440, 1000 and 390", async () => {
+    const out = path.resolve(process.env.TASK_SPEND_PNG_DIR ?? ".artifacts/task-spend");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: "/dev/shm" } });
+    const failures: string[] = [];
+    const readings: unknown[] = [];
+    const IDS = ["t-search", "t-export", "t-upload", "t-disk", "t-interrupt"] as const;
+    /* What the bubble covers, by text range: the seat's box and each of its controls, the card's own title and state words, and every column header. */
+    const covered = (page: Page, id: string) => page.evaluate((id) => {
+      const pop = document.querySelector<HTMLElement>(`[data-spend-pop="${id}"]`)!.closest<HTMLElement>("[role=tooltip]")!;
+      const r = pop.getBoundingClientRect();
+      const hit = (b: DOMRect) => b.width > 0 && b.height > 0 && b.left < r.right - 0.5 && r.left < b.right - 0.5 && b.top < r.bottom - 0.5 && r.top < b.bottom - 0.5;
+      /* Text only: the line boxes of the text nodes under each match, not the matched elements' own boxes. */
+      const textHits = (root: Element | null, selector: string) => {
+        const out: string[] = [];
+        const range = document.createRange();
+        for (const el of root ? [...root.querySelectorAll<HTMLElement>(selector)] : []) {
+          const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+          for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            if (!node.nodeValue?.trim()) continue;
+            range.selectNodeContents(node);
+            if ([...range.getClientRects()].some(hit)) out.push(node.nodeValue.trim().slice(0, 40));
+          }
+        }
+        return out;
+      };
+      const host = document.querySelector<HTMLElement>(`[data-kanban-card="task:${id}"]`)!;
+      const seat = document.querySelector<HTMLElement>("[data-kanban-seat]");
+      const seatBox = seat?.getBoundingClientRect();
+      const board = host.closest("[data-kanban-board]")!.getBoundingClientRect();
+      const anchor = host.querySelector<HTMLElement>(`[data-spend="${id}"]`)!.getBoundingClientRect();
+      return {
+        box: { left: r.left, top: r.top, right: r.right, bottom: r.bottom, height: r.height },
+        viewport: { width: innerWidth, height: innerHeight },
+        seat: seatBox ? { top: seatBox.top, bottom: seatBox.bottom } : null,
+        seatBox: seatBox ? hit(seatBox) : false,
+        /* A control the seat's own scroller or clip hides is not on screen, so only those inside the seat's box count. */
+        seatControls: seat && seatBox ? [...seat.querySelectorAll<HTMLElement>("button, a, textarea, input, [role=button], [contenteditable]")].filter((el) => {
+          const b = el.getBoundingClientRect();
+          return b.top >= seatBox.top - 0.5 && b.bottom <= seatBox.bottom + 0.5 && hit(b);
+        }).map((el) => el.getAttribute("aria-label") ?? el.textContent?.trim().slice(0, 30) ?? el.tagName) : [],
+        /* The board under a seat that stands above the marks is only so tall; a bubble taller than that cannot keep clear of the seat. */
+        room: seatBox && seatBox.bottom <= anchor.top ? Math.min(innerHeight - 8, board.bottom) - seatBox.bottom : null,
+        title: textHits(host, "h3.title"),
+        state: textHits(host, ".card-state-words"),
+        heads: textHits(document.body, ".col-head"),
+        inBoard: r.left >= board.left - 0.5 && r.right <= board.right + 0.5 && r.top >= board.top - 0.5 && r.bottom <= board.bottom + 0.5,
+        anchorBottom: anchor.bottom,
+        gap: Math.max(0, host.getBoundingClientRect().left - r.right, r.left - host.getBoundingClientRect().right, host.getBoundingClientRect().top - r.bottom, r.top - host.getBoundingClientRect().bottom),
+        lines: [...pop.querySelectorAll<HTMLElement>(".pop-title, .pop-main, .meter-note, .pop-note")].map((el) => el.innerText.replace(/\s+/g, " ").trim()),
+      };
+    }, id);
+    const reveal = async (page: Page, id: string) => {
+      const host = page.locator(card(id));
+      if (!(await host.isVisible())) {
+        const status = await host.evaluate((element) => element.closest<HTMLElement>(".column")?.dataset.status ?? "");
+        await page.locator(`.tabs-nav [data-tab="${status}"]`).first().click();
+      }
+    };
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        for (const [width, height] of [[1440, 900], [1000, 700]] as const) {
+          const label = `${lang}-${theme}-${width}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?spend=1`, { width, height }, theme, lang, "reduce");
+          try {
+            await page.locator('[data-spend="t-search"]').waitFor({ state: "attached", timeout: 30_000 });
+            if (!(await page.locator("[data-kanban-seat]").isVisible())) failures.push(`${label}: the seat is not open`);
+            for (const id of IDS) {
+              await reveal(page, id);
+              /* The reference: the card read from the window's middle, where any place is open. */
+              await page.locator(card(id)).evaluate((element) => element.scrollIntoView({ block: "center", inline: "nearest" }));
+              await page.locator(`[data-spend="${id}"]`).hover();
+              await page.locator(`[data-spend-pop="${id}"]`).waitFor({ timeout: 5_000 });
+              const middle = await covered(page, id);
+              await page.mouse.move(0, 0);
+              await page.locator(`[data-spend-pop="${id}"]`).waitFor({ state: "detached", timeout: 5_000 });
+              /* The case: the marks on the window's bottom edge. */
+              await page.locator(`[data-spend="${id}"]`).evaluate((element) => element.scrollIntoView({ block: "end", inline: "nearest" }));
+              await page.locator(`[data-spend="${id}"]`).hover();
+              await page.locator(`[data-spend-pop="${id}"]`).waitFor({ timeout: 5_000 });
+              const edge = await covered(page, id);
+              readings.push({ label, id, middle, edge });
+              const where = `${label} ${id} (marks end at ${Math.round(edge.anchorBottom)} of ${height}, bubble ${Math.round(edge.box.top)}–${Math.round(edge.box.bottom)}, seat ends ${Math.round(edge.seat?.bottom ?? 0)})`;
+              /* A seat that leaves the board a band shorter than the bubble leaves it no place that keeps clear; that state keeps the bubble in the window and is named in the readings. */
+              const crowded = edge.room !== null && edge.box.height > edge.room;
+              if (!crowded) {
+                if (edge.seatBox) failures.push(`${where}: the popover stands over the seat`);
+                if (edge.seatControls.length) failures.push(`${where}: the popover covers seat controls: ${edge.seatControls.join(" | ")}`);
+                if (edge.title.length) failures.push(`${where}: the popover covers the card's title: ${edge.title.join(" | ")}`);
+                if (edge.state.length) failures.push(`${where}: the popover covers the card's state line: ${edge.state.join(" | ")}`);
+                if (edge.heads.length) failures.push(`${where}: the popover covers a column header: ${edge.heads.join(" | ")}`);
+              }
+              /* In that state the bubble docks on the window's bottom edge, so it covers the least of the seat that the board's height allows. */
+              if (crowded && edge.box.bottom < edge.viewport.height - 8 - 1) failures.push(`${where}: the bubble does not dock at the window's bottom edge`);
+              if (!edge.inBoard) failures.push(`${where}: the popover leaves the board`);
+              if (edge.box.left < 0 || edge.box.top < 0 || edge.box.right > edge.viewport.width || edge.box.bottom > edge.viewport.height) failures.push(`${where}: the popover leaves the window`);
+              if (JSON.stringify(edge.lines) !== JSON.stringify(middle.lines)) failures.push(`${where}: the popover's lines changed:\n${edge.lines.join("\n")}\n≠\n${middle.lines.join("\n")}`);
+              await page.screenshot({ path: path.join(out, `${label}-${id}-bottom-edge.png`) });
+              await page.mouse.move(0, 0);
+              await page.locator(`[data-spend-pop="${id}"]`).waitFor({ state: "detached", timeout: 5_000 });
+            }
+          } finally { if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join("; ")}`); await context.close(); }
+        }
+        /* The phone's card face has passive marks and no bubble; its numbers are the task screen's Limits section. */
+        const label = `${lang}-${theme}-390`;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?spend=1`, { width: 390, height: 844 }, theme, lang, "reduce", true);
+        try {
+          await page.locator('[data-phone-kanban-tab="assigned"]').click();
+          const face = page.locator('[data-phone-card="task:t-search"]');
+          await face.locator(".spend").waitFor({ timeout: 30_000 });
+          await face.evaluate((element) => element.scrollIntoView({ block: "end" }));
+          /* The face is one button: its marks are passive, so no bubble can stand over the board or the seat. */
+          if (await face.locator(".spend").getAttribute("role") !== null || await page.locator("[role=tooltip]").count()) failures.push(`${label}: the phone card's marks are interactive or opened a bubble`);
+          await page.screenshot({ path: path.join(out, `${label}-card-bottom-edge.png`) });
+          await page.locator('[data-phone-card="task:t-search"] [data-phone-card-title]').click();
+          const section = page.locator('[data-phone-task-spend="t-search"]');
+          await section.waitFor({ timeout: 10_000 });
+          await section.scrollIntoViewIfNeeded();
+          const box = (await section.boundingBox())!;
+          if (box.x < 0 || box.x + box.width > 390 || box.y < 0 || box.y + box.height > 844) failures.push(`${label}: the Limits section is not whole on screen ${JSON.stringify(box)}`);
+          await page.screenshot({ path: path.join(out, `${label}-limits.png`) });
+        } finally { if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join("; ")}`); await context.close(); }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+      fs.writeFileSync(path.join(out, "bottom-edge-readings.json"), `${JSON.stringify({ capturedAt: new Date().toISOString(), readings, failures }, null, 2)}\n`);
     }
     expect(failures).toEqual([]);
   }, 900_000);

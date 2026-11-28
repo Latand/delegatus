@@ -1,8 +1,13 @@
 /**
  * Where the card's spend popover opens. It stays inside the board (never the
  * sidebar or the seat pane) and touches its own card: over the card, beside
- * it, or above or below it. The place that covers the least text belonging to
- * anything else wins, and a tie goes to the earlier candidate. A place that
+ * it, or above or below it. The seat's box is a keep-out: the board area the
+ * bubble is clamped to ends where the seat does. The place that covers the
+ * least wins, ranked: the seat, then text outside the cards (column headers,
+ * other cards' titles), then the card's own title and state line, then the
+ * rest of the neighbouring cards' text; a tie goes to the earlier candidate.
+ * A card at the window's bottom edge therefore flips above itself instead of
+ * covering its own title. A place that
  * leaves a line of the card's own text cut at its edge is widened or lowered
  * to take the whole line. The geometry is pure so a test can drive it with
  * boxes; the page supplies the text boxes it measured.
@@ -40,6 +45,23 @@ const clamp = (value: number, low: number, high: number) => Math.max(low, Math.m
 const boxOf = (c: SpendCandidate): Box => ({ left: c.left, top: c.top, right: c.left + c.width, bottom: c.top + c.height });
 
 /**
+ * The board's area the bubble is clamped to: what is left of it once the boxes
+ * it must stay out of (the seat) are taken away. A box wholly above the marks
+ * moves the top edge down to its bottom, one wholly below moves the bottom edge
+ * up, and one wholly beside them moves the side edge in.
+ */
+export function clearOf(board: Box, anchor: Box, avoid: readonly Box[] = []): Box {
+  const area = { ...board };
+  for (const box of avoid) {
+    if (box.bottom <= anchor.top + 1) area.top = Math.max(area.top, box.bottom);
+    else if (box.top >= anchor.bottom - 1) area.bottom = Math.min(area.bottom, box.top);
+    else if (box.right <= anchor.left + 1) area.left = Math.max(area.left, box.right);
+    else if (box.left >= anchor.right - 1) area.right = Math.min(area.right, box.left);
+  }
+  return area;
+}
+
+/**
  * The places to try, best-looking first: over the card under the marks, then
  * over it at its top or bottom edge and wider than the card, then to its
  * right, to its left, below it and above it. `sizeAt` answers how tall the
@@ -47,20 +69,23 @@ const boxOf = (c: SpendCandidate): Box => ({ left: c.left, top: c.top, right: c.
  */
 export function spendCandidates(input: SpendPlacementInput, sizeAt: (maxWidth: number) => { width: number; height: number }): SpendCandidate[] {
   const { viewport, card, anchor } = input;
-  const area: Box = {
+  const board: Box = {
     left: Math.max(EDGE, input.bounds?.left ?? EDGE), top: Math.max(EDGE, input.bounds?.top ?? EDGE),
     right: Math.min(viewport.width - EDGE, input.bounds?.right ?? Infinity), bottom: Math.min(viewport.height - EDGE, input.bounds?.bottom ?? Infinity),
   };
+  const area = clearOf(board, anchor, input.avoid);
   const out: SpendCandidate[] = [];
   /** `anchorRight` places the bubble's right edge at `left` instead of its left edge; `above` its bottom edge at `top`. */
   const place = (kind: SpendKind, left: number, top: number, maxWidth: number, anchorRight = false, above = false) => {
     const { width, height } = sizeAt(maxWidth);
     const x = anchorRight ? left - width : left;
     const y = above ? top - height : top;
+    /* A bubble taller than the room the seat leaves cannot keep clear of it: it keeps inside the board and covers the least of the seat. */
+    const room = height <= area.bottom - area.top ? area : { ...area, top: board.top, bottom: board.bottom };
     out.push({
       kind,
       left: clamp(x, area.left, area.right - width),
-      top: clamp(y, area.top, area.bottom - height),
+      top: clamp(y, room.top, room.bottom - height),
       width, height, maxWidth,
     });
   };
@@ -94,6 +119,10 @@ export interface WindowText {
   own: readonly Box[];
   /** The card's own title: covering it is the last thing a place should do. */
   ownTitle?: readonly Box[];
+  /** The words of the card's state line, which rank with its title. */
+  ownState?: readonly Box[];
+  /** Boxes a place must not touch while any place remains that does (the seat). */
+  keepOut?: readonly Box[];
   /** Other cards' titles and anything outside the cards (the sidebar, the seat): these must stay readable. */
   foreign: readonly Box[];
   /** The rest of the neighbouring cards' text. */
@@ -102,7 +131,13 @@ export interface WindowText {
   anchor?: Box;
 }
 /** The card and the board's box, which a place widened to take a cut line stays inside. */
-export interface SpendFrame { card: Box; area: Box }
+export interface SpendFrame {
+  card: Box;
+  /** What is left of the board outside the seat. */
+  area: Box;
+  /** The board whole: a bubble taller than `area` keeps inside this instead. */
+  outer?: Box;
+}
 
 const within = (inner: Box, outer: Box) => inner.left >= outer.left - 0.5 && inner.right <= outer.right + 0.5 && inner.top >= outer.top - 0.5 && inner.bottom <= outer.bottom + 0.5;
 
@@ -119,8 +154,9 @@ export function cutBy(box: Box, text: readonly Box[]): Box[] {
  */
 export function settleSpendPlacement(candidate: SpendCandidate, text: readonly Box[], frame: SpendFrame): SpendCandidate {
   let { left, top, width, height } = candidate;
-  const { card, area } = frame;
+  const { card } = frame;
   for (let pass = 0; pass < 6; pass += 1) {
+    const area = frame.outer && height > frame.area.bottom - frame.area.top ? frame.outer : frame.area;
     const box = { left, top, right: left + width, bottom: top + height };
     const cut = cutBy(box, text);
     if (!cut.length) break;
@@ -145,22 +181,23 @@ export function settleSpendPlacement(candidate: SpendCandidate, text: readonly B
 }
 
 /**
- * The candidate that covers the least text, a tie going to the earlier one.
- * Other cards' titles and text outside the cards decide first, then the rest
- * of the neighbouring cards' text, then the marks, then the card's own title;
- * the card's own other text, which the reader is already looking at, only
- * breaks a tie between places that cover none of the others. With a frame a
- * place first takes the whole of any line of the card's text it would cut.
+ * The candidate that covers the least, a tie going to the earlier one. The
+ * seat decides first, then other cards' titles and text outside the cards
+ * (column headers), then the card's own title and state line, then the rest of
+ * the neighbouring cards' text, then the marks; the card's own other text,
+ * which the reader is already looking at, only breaks a tie between places
+ * that cover none of the others. With a frame a place first takes the whole
+ * of any line of the card's text it would cut.
  */
 export function chooseSpendPlacement(candidates: SpendCandidate[], text: WindowText, frame?: SpendFrame): SpendCandidate | null {
   let best: SpendCandidate | null = null;
   let bestScore: number[] = [Infinity];
-  const cuttable = [...text.own, ...(text.ownTitle ?? [])];
+  const cuttable = [...text.own, ...(text.ownTitle ?? []), ...(text.ownState ?? [])];
   for (const raw of candidates) {
     const candidate = frame ? settleSpendPlacement(raw, cuttable, frame) : raw;
     const box = boxOf(candidate);
     const covered = (boxes: readonly Box[] = []) => boxes.reduce((sum, other) => sum + overlapArea(box, other), 0);
-    const score = [covered(text.foreign), covered(text.neighbours), text.anchor ? overlapArea(box, text.anchor) : 0, covered(text.ownTitle), covered(text.own)];
+    const score = [covered(text.keepOut), covered(text.foreign), covered(text.ownTitle) + covered(text.ownState), covered(text.neighbours), text.anchor ? overlapArea(box, text.anchor) : 0, covered(text.own)];
     const better = score.findIndex((value, at) => value !== (bestScore[at] ?? Infinity));
     if (better >= 0 && score[better]! < (bestScore[better] ?? Infinity)) { best = candidate; bestScore = score; }
   }
@@ -188,10 +225,11 @@ export function shownPart(from: Element, rect: DOMRect, clips: Map<Element, Box 
   return box;
 }
 
-/** The window's text boxes, split into the card's own title, every other card's title with everything outside the cards, the card's own other text, and the neighbouring cards' other text, as many nodes as `limit`. */
-export function windowTextBoxes(card: Element, skip: Element, limit = 8000): { own: Box[]; ownTitle: Box[]; foreign: Box[]; neighbours: Box[] } {
+/** The window's text boxes, split into the card's own title, the words of its state line, every other card's title with everything outside the cards, the card's own other text, and the neighbouring cards' other text, as many nodes as `limit`. */
+export function windowTextBoxes(card: Element, skip: Element, limit = 8000): { own: Box[]; ownTitle: Box[]; ownState: Box[]; foreign: Box[]; neighbours: Box[] } {
   const own: Box[] = [];
   const ownTitle: Box[] = [];
+  const ownState: Box[] = [];
   const foreign: Box[] = [];
   const neighbours: Box[] = [];
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
@@ -208,6 +246,7 @@ export function windowTextBoxes(card: Element, skip: Element, limit = 8000): { o
         const shown = shownPart(parent, rect, clips);
         if (!shown) continue;
         if (card.contains(node) && parent.closest(".title, h3")) ownTitle.push(shown);
+        else if (card.contains(node) && parent.closest(".card-state-words")) ownState.push(shown);
         else if (parent.closest(".title, h3") || !parent.closest("[data-kanban-card]")) foreign.push(shown);
         else if (card.contains(node)) own.push(shown);
         else neighbours.push(shown);
@@ -215,5 +254,5 @@ export function windowTextBoxes(card: Element, skip: Element, limit = 8000): { o
     }
   }
   range.detach();
-  return { own, ownTitle, foreign, neighbours };
+  return { own, ownTitle, ownState, foreign, neighbours };
 }

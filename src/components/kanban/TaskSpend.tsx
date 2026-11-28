@@ -9,7 +9,7 @@ import { TooltipBubble } from "@/components/TooltipBubble";
 import type { SpendBudget, SpendRange, TaskSpendAccount, TaskSpendProvider, TaskSpendSummary } from "@/lib/activity/taskLimitSpendTypes";
 import { useLocale, type Locale, type TFunction } from "@/lib/i18n";
 
-import { chooseSpendPlacement, settleSpendPlacement, spendCandidates, windowTextBoxes, type Box, type SpendKind } from "./spendPopoverPlacement";
+import { chooseSpendPlacement, clearOf, settleSpendPlacement, spendCandidates, windowTextBoxes, type Box, type SpendKind } from "./spendPopoverPlacement";
 import { useTaskSpend } from "./taskSpendSummaries";
 
 const ENGINE_NAME = { claude: "Claude", codex: "Codex" } as const;
@@ -252,15 +252,16 @@ export function TaskSpendMarks({ taskId, interactive }: { taskId: string; intera
             };
             const sizeAt = (maxWidth: number) => { bubble.style.maxWidth = `${maxWidth}px`; const box = bubble.getBoundingClientRect(); return { width: box.width, height: box.height }; };
             const candidates = spendCandidates(input, sizeAt);
-            const frame = { card: input.card, area: {
+            const outer = {
               left: Math.max(8, board?.left ?? 8), top: Math.max(8, board?.top ?? 8),
               right: Math.min(input.viewport.width - 8, board?.right ?? Infinity), bottom: Math.min(input.viewport.height - 8, board?.bottom ?? Infinity),
-            } };
+            };
+            const frame = { card: input.card, area: clearOf(outer, anchor, input.avoid), outer };
             /* The covered text is measured once per opening; a scroll or resize keeps that choice. */
             if (!kind.current) {
               const text = windowTextBoxes(card, bubble);
-              kind.current = chooseSpendPlacement(candidates, { ...text, anchor }, frame)?.kind ?? "over";
-              ownText.current = { card: input.card, boxes: [...text.own, ...text.ownTitle] };
+              kind.current = chooseSpendPlacement(candidates, { ...text, anchor, keepOut: input.avoid }, frame)?.kind ?? "over";
+              ownText.current = { card: input.card, boxes: [...text.own, ...text.ownTitle, ...text.ownState] };
             }
             const raw = candidates.find(c => c.kind === kind.current) ?? candidates[0];
             if (!raw) return null;
