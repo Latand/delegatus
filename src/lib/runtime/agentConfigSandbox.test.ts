@@ -11,10 +11,11 @@ import { agentConfigSandboxRoot, withAgentConfigSandbox } from "./agentConfigSan
 test("isolating configuration forwards only package cache paths supplied by the source", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "package-cache-sandbox-"));
   try {
-    const source = { HOME: root, TMPDIR: root };
+    const env = { NODE_ENV: "test" as const };
+    const source = { ...env, HOME: root, TMPDIR: root };
     const caches = { BUN_INSTALL_CACHE_DIR: path.join(root, "bun"), UV_CACHE_DIR: path.join(root, "uv") };
-    expect(withAgentConfigSandbox({}, { ...source, ...caches })).toMatchObject(caches);
-    const unpinned = withAgentConfigSandbox({}, source);
+    expect(withAgentConfigSandbox({ ...env }, { ...source, ...caches })).toMatchObject(caches);
+    const unpinned = withAgentConfigSandbox({ ...env }, source);
     expect(unpinned.BUN_INSTALL_CACHE_DIR).toBeUndefined();
     expect(unpinned.UV_CACHE_DIR).toBeUndefined();
   } finally {

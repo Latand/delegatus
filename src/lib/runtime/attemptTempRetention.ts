@@ -51,8 +51,9 @@ export type AttemptTempOwner = {
   retainUntilClose: boolean;
   createdAt: number;
 };
-type Row = AttemptTempOwner & { identity: string; released: number; checkedAt: number; bytes: number; measuredAt: number };
+type Row = AttemptTempOwner & { identity: string; released: number; checkedAt: number; bytes: number; measuredAt?: number };
 type ScheduledRoot = Row & { expiresAt: number };
+type AllocationRoot = Row & { measuredAt: number };
 export type EvidenceCopy = { destination: string; pipelineId: string | null; launchId: string; kind: "lane" | "agent" | "unattributed";
   createdAt: number; expiresAt: number | null; checkedAt: number; bytes: number };
 export const DEFAULT_ATTEMPT_TEMP_CAP_BYTES = 100 * 1024 ** 3;
@@ -558,10 +559,10 @@ export class AttemptTempStore {
     return [...expired, ...rest("SELECT * FROM roots WHERE checkedAt<=? ORDER BY bytes DESC,checkedAt,createdAt,directory LIMIT ?", limit - expired.length)]
       .sort((a, b) => b.bytes - a.bytes);
   }
-  allocationDue(now: number, limit = 4): Row[] {
+  allocationDue(now: number, limit = 4): AllocationRoot[] {
     // A proof retry can be hours or days away. Let its zero or stale
     // allocation through without repeating the retirement proof.
-    return this.db.query<Row, [number, number, number, number, number]>(`SELECT r.* FROM roots r WHERE measuredAt<=?
+    return this.db.query<AllocationRoot, [number, number, number, number, number]>(`SELECT r.* FROM roots r WHERE measuredAt<=?
       AND (r.bytes=0 OR r.measuredAt<=? OR r.checkedAt<=? OR NOT EXISTS (
         SELECT 1 FROM root_retention t WHERE t.directory=r.directory AND t.expiresAt<=?))
       ORDER BY measuredAt,createdAt,directory LIMIT ?`).all(now - 60_000, now - 60 * 60_000, now, now, limit);
@@ -747,7 +748,7 @@ export class AttemptTempStore {
     this.db.query("INSERT INTO copy_eligibility VALUES(?,?) ON CONFLICT(destination) DO UPDATE SET eligible=excluded.eligible").run(destination, Number(eligible));
   }
   measure(directory: string, bytes: number, at = Date.now()) { this.db.query("UPDATE roots SET bytes=?,measuredAt=? WHERE directory=?").run(bytes, at, directory); }
-  recordAllocation(owner: Row, bytes: number | null, at: number) {
+  recordAllocation(owner: AllocationRoot, bytes: number | null, at: number) {
     this.db.query(`UPDATE roots SET measuredAt=?${bytes === null ? "" : ",bytes=?"} WHERE directory=? AND identity=?
       AND launchId=? AND pipelineId IS ? AND createdAt=? AND retainUntilClose=? AND released=? AND measuredAt=?`)
       .run(at, ...(bytes === null ? [] : [bytes]), owner.directory, owner.identity, owner.launchId, owner.pipelineId, owner.createdAt,
@@ -1073,7 +1074,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         // A visit can beat preparation to the root, or release may have been
         // measured before the lane recorded the attempt's completion.
         const needsFinalMeasurement = owner.released && owner.pipelineId
-          && owner.measuredAt < (store.retentionExpiry(owner.directory) ?? 1);
+          && (owner.measuredAt ?? 0) < (store.retentionExpiry(owner.directory) ?? 1);
         const recordedOnly = owner.bytes > 0 && !needsFinalMeasurement && initialState !== null && finished(initialState)
           && !fs.existsSync(path.join(owner.directory, ".delegatus-keep")) && !recordedRootHeld(owner.directory)
           && ledgerLinkedEvidence(owner.directory).length === 0;

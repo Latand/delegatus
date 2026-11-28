@@ -88,13 +88,14 @@ test("full-access stages pin package caches before isolating their working direc
       { env: { XDG_CACHE_HOME: xdg }, bun: path.join(xdg, ".bun"), uv: path.join(xdg, "uv") },
       { env: { XDG_CACHE_HOME: xdg, BUN_INSTALL: bunInstall }, bun: bunInstall, uv: path.join(xdg, "uv") },
     ];
+    const base = { NODE_ENV: "test" as const, HOME: home };
     const owner = { pipelineId: "stage-cache", launchId: "stage-cache-launch", retainUntilClose: false };
     for (const { env, bun, uv } of cases) {
-      const full = materializeStructuredHostAccess(false, { HOME: home, ...env }, null, scratch, owner);
+      const full = materializeStructuredHostAccess(false, { ...base, ...env }, null, scratch, owner);
       expect(full.env.BUN_INSTALL_CACHE_DIR).toBe(path.join(bun, "install", "cache"));
       expect(full.env.UV_CACHE_DIR).toBe(uv);
     }
-    const source = { HOME: home, XDG_CACHE_HOME: xdg, BUN_INSTALL: bunInstall, ...explicit };
+    const source = { ...base, XDG_CACHE_HOME: xdg, BUN_INSTALL: bunInstall, ...explicit };
     const full = materializeStructuredHostAccess(false, source, null, scratch, owner);
     expect(full.env).toMatchObject(explicit);
     const restricted = materializeStructuredHostAccess(true, source, null, scratch, owner);

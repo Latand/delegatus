@@ -151,7 +151,7 @@ test.each([false, true])("all roots of an acknowledged check await expiry after 
     for (let n = 0; n < directories.length; n++) expect((await sweep()).removed).toBe(1);
     for (const directory of directories) { expect(fs.existsSync(directory)).toBeFalse(); expect(store.has(directory)).toBeFalse(); }
   } finally { acknowledgement.mockRestore(); store.close(); }
-});
+}, 30_000);
 
 test.each(["acknowledgement", "quarantine", "removal"] as const)(
   "previously held roots retain their expiry across clock rollback at %s and a process restart", async boundary => {

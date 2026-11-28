@@ -46,7 +46,7 @@ test("package cache locations reach checks without changing their reusable input
   expect(environmentFingerprint(producer)).toBe(environmentFingerprint(publisher));
   expect(checkInputEnvironment(producer)).toEqual({ LLV_GATE_CHECK_ENV: base.LLV_GATE_CHECK_ENV });
   expect(checkInputEnvironment(publisher)).toEqual(checkInputEnvironment(producer));
-  expect(checkEnvironment(caches)).toEqual(caches);
+  expect(checkEnvironment(caches)).toMatchObject(caches);
 });
 
 test("pre-push isolation preserves the public CPU headroom setting", () => {

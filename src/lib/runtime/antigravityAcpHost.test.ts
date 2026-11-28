@@ -129,7 +129,7 @@ describe("AntigravityAcpHost", () => {
 
   it.each([false, true])("resolves package caches after Antigravity isolates HOME (restricted=%s)", restricted => {
     const shared = path.join(root, "shared-cache");
-    const source = { HOME: root, XDG_CACHE_HOME: shared, PATH: process.env.PATH };
+    const source = { NODE_ENV: "test" as const, HOME: root, XDG_CACHE_HOME: shared, PATH: process.env.PATH };
     const owner = { pipelineId: "cache-probe", launchId: "cache-probe-launch", retainUntilClose: false };
     const access = materializeStructuredHostAccess(restricted, source, null, path.join(root, "scratch"), owner);
     const env = antigravityChildEnv(access.env, antigravityHome);

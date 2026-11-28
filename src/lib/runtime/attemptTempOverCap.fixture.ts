@@ -21,10 +21,11 @@ let answer: unknown;
 if (mode === "--seed-previous-release") {
   // A lane whose one attempt ended `value` hours ago, holding an unreleased stage root.
   const completedAt = new Date(NOW - Number(value) * HOUR).toISOString(), base = finishedLane(repo!, completedAt), id = "lane-upgraded";
-  savePipelines([{ ...base, ...pipelineIdentity(id, base.task, repo!), id, repoDir: repo!,
-    runs: [{ stageId: "build", attempts: [{ n: 1, state: "passed", launchId: id, effectiveRole: base.stages[0]!.effectiveRole,
+  const pipeline = { ...base, ...pipelineIdentity(id, base.task, repo!), id, repoDir: repo!,
+    runs: [{ stageId: "build", attempts: [{ n: 1, state: "passed" as const, launchId: id, effectiveRole: base.stages[0]!.effectiveRole,
       conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null, startedAt: completedAt, completedAt,
-      input: null, activatedBy: null, output: null, verdict: null, error: null }] }] }]);
+      input: null, activatedBy: null, output: null, verdict: null, error: null }] }] };
+  savePipelines([pipeline]);
   new AgentRegistry(statePath("agent-registry.json"), () => false, undefined, { sqliteMode: "sqlite" }).close();
   const directory = statePath("scratch", "llv-stage-upgrad");
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -33,6 +34,7 @@ if (mode === "--seed-previous-release") {
   const ledger = new AttemptTempStore();
   try {
     ledger.register({ directory, pipelineId: id, launchId: id, retainUntilClose: false, createdAt: Date.parse(completedAt) - HOUR });
+    ledger.schedulePipeline(pipeline);
     ledger.measure(directory, bytes);
   } finally { ledger.close(); }
   // The previous release's ledger: every table of this one but the over-cap
