@@ -3732,8 +3732,9 @@ export async function spawnStructuredConversation(
       if (state.pid && state.pid > 1) await writeSetupCustodyOffLoop(captureProcessIdentity(state.pid, undefined, state.processStartIdentity));
     };
     const confirmSetupCleanup = async () => {
-      if (foregroundAdmissionOwner) await input.registry.deliveryWriteOrBusy({ label: "spawn.setup-cleanup", operationId }, () =>
-        input.registry.confirmStructuredHostSetupCleanup(operationId, foregroundAdmissionOwner));
+      if (foregroundAdmissionOwner && !await input.registry.deliveryWriteOrBusy({ label: "spawn.setup-cleanup", operationId }, () =>
+        input.registry.confirmStructuredHostSetupCleanup(operationId, foregroundAdmissionOwner)))
+        throw new Error("structured setup exec custody evidence is unavailable");
       setupCleanupConfirmed = true;
       setupCustodyActive = false;
     };
@@ -4096,8 +4097,9 @@ export async function spawnStructuredConversation(
         try {
           await cleanupHost(host, binding, input.receipt.launchId);
           if (foregroundAdmissionOwner && !nativeSetupPending) {
-            await input.registry.deliveryWriteOrBusy({ label: "spawn.setup-cleanup", operationId }, () =>
-              input.registry.confirmStructuredHostSetupCleanup(operationId, foregroundAdmissionOwner));
+            if (!await input.registry.deliveryWriteOrBusy({ label: "spawn.setup-cleanup", operationId }, () =>
+              input.registry.confirmStructuredHostSetupCleanup(operationId, foregroundAdmissionOwner)))
+              throw new Error("structured setup exec custody evidence is unavailable");
             setupCleanupConfirmed = true;
             setupCustodyActive = false;
           }

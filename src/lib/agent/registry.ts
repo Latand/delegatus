@@ -35,10 +35,12 @@ import { hotStateWriterRevision, withHotStateAuthorityAttempt } from "@/lib/stat
 import { assertStateMutationAllowed, stateMutationActivationOpen } from "@/lib/state/stateMutationBarrier";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 import {
+  bootEpochProvesExit,
   captureProcessIdentity,
   processIdentityMayOwn,
   processIdentityStatus,
   sameRecordedProcessIdentity,
+  systemBootEpoch,
   type ProcessIdentity,
 } from "@/lib/processIdentity";
 import { durableSemanticTitle, firstMeaningfulPromptLine, SPAWN_TITLE_REQUIRED_ERROR } from "@/lib/title";
@@ -2357,20 +2359,34 @@ function missingSetupProcess(setup: NonNullable<SpawnReceipt["hostSetup"]>): boo
     distinct recorded identities therefore prove that historical exec crossed
     its boundary; a waiter-only receipt remains ambiguous. */
 function setupHasExecProcessEvidence(setup: NonNullable<SpawnReceipt["hostSetup"]>): boolean {
-  const recordedProcesses = new Set(setup.processes.map(identity => JSON.stringify([
-    identity.pid, identity.startIdentity, identity.bootEpoch ?? null,
-  ])));
-  return setup.execProcessRecorded === true
-    || setup.execPermitGranted === true && recordedProcesses.size >= 2;
+  if (setup.execProcessRecorded === true) return true;
+  const first = setup.processes[0];
+  if (!first) return false;
+  if (setup.processes.some(identity => identity.pid !== first.pid)) return true;
+  // A repeated PID needs two observed start tokens to prove it was reused.
+  const starts = new Set(setup.processes.map(identity => identity.startIdentity).filter(Boolean));
+  return starts.size >= 2;
+}
+
+/** A local PID lookup can clear setup custody only in the recorded domain. */
+function setupProcessMayOwn(identity: ProcessIdentity): boolean {
+  const current = systemBootEpoch();
+  if (!identity.bootEpoch || !current) return true;
+  if (identity.bootEpoch === current) return processIdentityMayOwn(identity);
+  return !bootEpochProvesExit(identity.bootEpoch, current);
+}
+
+function launchSetupAdmissionOwner(receipt: LaunchSetupReceipt): ProcessIdentity | null {
+  // Failed launches, including cancellations, retain their native process
+  // evidence. The controller that admitted them may serve for days after exit.
+  const admission = CLAIMABLE_RECEIPT_STATES.has(receipt.state)
+    || (receipt.state !== "failed" && unconfirmedLaunchSetup(receipt))
+    ? receipt.admissionOwner : null;
+  return admission && Number.isInteger(admission.pid) && admission.pid > 0 ? admission : null;
 }
 
 export function launchSetupIdentities(receipt: LaunchSetupReceipt): ProcessIdentity[] {
-  const setup = unconfirmedLaunchSetup(receipt);
-  // Failed launches, including cancellations, retain their native process
-  // evidence. The controller that admitted them may serve for days after exit.
-  const admission = CLAIMABLE_RECEIPT_STATES.has(receipt.state) || (receipt.state !== "failed" && setup)
-    ? receipt.admissionOwner : null;
-  return [admission, ...(setup?.processes ?? [])].filter((identity): identity is ProcessIdentity =>
+  return [launchSetupAdmissionOwner(receipt), ...(unconfirmedLaunchSetup(receipt)?.processes ?? [])].filter((identity): identity is ProcessIdentity =>
     !!identity && Number.isInteger(identity.pid) && identity.pid > 0);
 }
 
@@ -2382,8 +2398,7 @@ function failedLaunchSetupCanBeConfirmed(receipt: SpawnReceipt) {
     && !receipt.pane && !receipt.verifiedHost && !receipt.artifactPath && !receipt.completionMode
     && receipt.artifactLifecycle !== "materialized"
     && setup.adoptionClaimEpoch === undefined && setup.processes.length > 0
-    && ((setup.phase !== "executing" && setup.execPermitGranted !== true) || setupHasExecProcessEvidence(setup))
-    && setup.processes.every(identity => processIdentityStatus(identity) === "dead");
+    && !missingSetupProcess(setup) && !setup.processes.some(setupProcessMayOwn);
 }
 
 const LAUNCH_SETUP_CLEANUP_BATCH = 32;
@@ -7779,7 +7794,9 @@ export class AgentRegistry {
         const receipt = file.receipts[key];
         if (!receipt) continue;
         const setup = unconfirmedLaunchSetup(receipt);
-        if ((setup && missingSetupProcess(setup)) || launchSetupIdentities(receipt).some(identity => processIdentityMayOwn(identity))) {
+        const admission = launchSetupAdmissionOwner(receipt);
+        if ((setup && (missingSetupProcess(setup) || setup.processes.some(setupProcessMayOwn)))
+          || (admission && processIdentityMayOwn(admission))) {
           return receipt.launchId;
         }
       }
@@ -8934,17 +8951,17 @@ export class AgentRegistry {
     if (!written.acquired) throw new RegistryWriterBusyError("spawn.setup-custody");
   }
 
-  confirmStructuredHostSetupCleanup(launchId: string, owner: ProcessIdentity): void {
-    this.mutate(file => {
+  /** Returns false when an executing setup has no recorded engine evidence. */
+  confirmStructuredHostSetupCleanup(launchId: string, owner: ProcessIdentity): boolean {
+    return this.mutate(file => {
       const receipt = file.receipts[launchId];
       if (!receipt?.admissionOwner || !sameRecordedProcessIdentity(receipt.admissionOwner, owner))
         throw new Error("structured setup custody changed");
-      if (receipt.hostSetup && (receipt.hostSetup.phase === "executing" || receipt.hostSetup.execPermitGranted === true)
-        && (!receipt.hostSetup.processes.length || !setupHasExecProcessEvidence(receipt.hostSetup)))
-        throw new Error("structured setup exec custody evidence is unavailable");
-      if (receipt.hostSetup?.processes.some(process => processIdentityStatus(process) !== "dead"))
+      if (receipt.hostSetup && missingSetupProcess(receipt.hostSetup)) return false;
+      if (receipt.hostSetup?.processes.some(setupProcessMayOwn))
         throw new Error("structured setup process cleanup is not confirmed");
       if (receipt.hostSetup) receipt.hostSetup.cleanupConfirmed = true;
+      return true;
     });
   }
 

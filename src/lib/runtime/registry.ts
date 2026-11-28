@@ -88,14 +88,16 @@ async function memberAdoptionCustody(registry: AgentRegistry, entry: AgentRegist
       if (!active) return;
       if (persisted.structuredHost?.process) registry.completeStructuredHostAdoption(receipt.launchId, owner);
       else {
-        registry.confirmStructuredHostSetupCleanup(receipt.launchId, owner);
+        if (!registry.confirmStructuredHostSetupCleanup(receipt.launchId, owner))
+          throw new Error("structured setup exec custody evidence is unavailable");
         registry.releaseStructuredSpawnAdmissionOwner(receipt.launchId, owner);
       }
       active = false;
     },
     cleanup: async () => {
       await registry.deliveryWriteOrBusy({ label: "adoption.setup-cleanup", operationId: receipt.launchId }, () => {
-        registry.confirmStructuredHostSetupCleanup(receipt.launchId, owner);
+        if (!registry.confirmStructuredHostSetupCleanup(receipt.launchId, owner))
+          throw new Error("structured setup exec custody evidence is unavailable");
         registry.releaseStructuredSpawnAdmissionOwner(receipt.launchId, owner);
       });
       active = false;

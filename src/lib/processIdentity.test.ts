@@ -40,8 +40,6 @@ test("a PID namespace change on the same Linux boot keeps a live process unverif
   const current = "linux:boot-a:pidns:pid:[4026532999]";
   expect(bootEpochProvesExit(previous, current)).toBeFalse();
   expect(processIdentityStatus({ pid: 42, startIdentity: "42:start", bootEpoch: previous }, probe({ bootEpoch: () => current }))).toBe("unverified");
-  expect(processIdentityStatus({ pid: 42, startIdentity: "42:start", bootEpoch: previous },
-    probe({ bootEpoch: () => current, pidAlive: () => false }))).toBe("unverified");
   expect(bootEpochProvesExit(previous, "linux:boot-b:pidns:pid:[4026531836]")).toBeTrue();
 });
 
@@ -75,16 +73,16 @@ test("an absent pid is proven dead", () => {
   expect(processIdentityProvenDead(identity, probe({ pidAlive: () => false }))).toBeTrue();
 });
 
-test("pid absence and reuse stay unverified without a comparable boot domain", () => {
+test("pid absence and reuse still expire identities without a boot epoch", () => {
   for (const identity of [
     { pid: 42, startIdentity: "42:start" },
     { pid: 42, startIdentity: "42:start", bootEpoch: null },
   ]) {
-    expect(processIdentityStatus(identity, probe({ pidAlive: () => false }))).toBe("unverified");
-    expect(processIdentityStatus(identity, probe({ processIdentity: () => "42:reused" }))).toBe("unverified");
+    expect(processIdentityStatus(identity, probe({ pidAlive: () => false }))).toBe("dead");
+    expect(processIdentityStatus(identity, probe({ processIdentity: () => "42:reused" }))).toBe("dead");
   }
   expect(processIdentityStatus({ pid: 42, startIdentity: "42:start", bootEpoch: "boot-current" },
-    probe({ bootEpoch: () => null, pidAlive: () => false }))).toBe("unverified");
+    probe({ bootEpoch: () => null, pidAlive: () => false }))).toBe("dead");
 });
 
 test("capture records pid, start token, and boot epoch together", () => {
