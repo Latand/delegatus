@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "classification": "synthetic",
   "generator": "scripts/capture-readme-media.ts",
-  "generatorSha256": "7f0634901df07f4e4bf6932f7d508911759a4c5ddde56a5f19f5d229ec40436c",
+  "generatorSha256": "53cb0d8ef2118fd59cf992f62287fa6616e1702b7094e183b556367933860b7a",
   "seed": "scripts/readme-demo-state.ts",
-  "seedSha256": "19650ca24e809736702ef4cf1e2f3be32e761139070b8de4404092d0d289a714",
+  "seedSha256": "591ffb9ebec6872c8999e3eecd810ebc11046f211ebb47bb7f47735d2d0a4848",
   "command": "bun run build && bun scripts/capture-readme-media.ts",
   "assets": [
     {
@@ -51,7 +51,7 @@
         "meanDifference": 0.616,
         "ringsClipped": 1
       },
-      "sha256": "4f172eceeeb2333136212292876ceacc3e092fd7410bc3ecf65514bd8e62a35c"
+      "sha256": "40f6b41c72847df3b6888a89d8a6162d6508b60e4297c0f5802e29f461f2395d"
     },
     {
       "path": "conversation.svg",

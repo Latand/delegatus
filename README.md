@@ -262,17 +262,35 @@ usage endpoint requires **Direct Anthropic API calls with my subscription** unde
 existing installations with recorded direct usage keep it on.
 
 Voice Delegatus can run its text turns on a connected ChatGPT plan. Connecting
-is optional and the owner does it in the Keys section. For an eligible turn the
-backend sends ChatGPT the call's transcript text, the results of earlier
-registry reads in the call and the selected project context. It also sends
-the context of the call it continues, on a resumed call; with call memory on,
-notes from other earlier calls, which on a resumed call fill what the
-continued call leaves of the same budget, so both can travel together; the
-context of requests sent to the orchestrator during the call that still await
-its report; the instruction of a request that has not been sent and awaits your
-confirmation; the directory of known projects beside the selected one; and the
-output of any configured tool, in the next round of the same turn. It sends no
-image on this path.
+is optional and the owner does it in the Keys section. Each round of an eligible
+text turn uses the connected account's access token and sends ChatGPT the model
+and response settings, Delegatus's backend instructions, the interface language,
+and the built-in tools' names, descriptions and input schemas. If the connection
+needs refreshing, Delegatus sends its client ID and refresh token to OpenAI's
+sign-in service. When the call has added tools, it also sends rules for using
+them and each enabled tool's name, server title, description and input schema,
+starting with the first round even if the tool goes unused.
+
+The turn carries the current local date and time, the IANA time zone (UTC if
+unknown), elapsed call time, the selected project and, when available, a
+directory of known project names and handles. It includes recent timestamped
+transcript text and the latest operator words when transcribed. Earlier
+non-private registry reads contribute summaries, arguments and ages when
+available. The turn also includes details of orchestrator requests still
+awaiting reports and the instruction of any unsent request awaiting your
+confirmation. A resumed call includes a record of earlier dialogue, requests
+and reports, with a saved summary when available and needed. With call memory
+on, available notes from other calls can travel alongside that record within
+the same budget.
+
+Each follow-up round repeats that context and includes the turn's tool calls
+(names, arguments and call references) and their text results, from built-in
+and added tools alike. Private results can travel in that turn too. With owner
+access to Telegram history enabled, a group listing can include group titles
+and identifiers. A message read can include the group title, message text,
+author details, timestamps and attachment metadata. If the tool budget runs
+out, the final round asks for an answer with tools off. This path sends text
+only.
 
 ## License
 

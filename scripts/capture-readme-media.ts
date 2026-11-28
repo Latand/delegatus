@@ -4,10 +4,10 @@
  *   bun run build && bun scripts/capture-readme-media.ts
  *
  * The driver seeds an invented home (scripts/readme-demo-state.ts) under a
- * fresh capture directory under /var/tmp that the run allocates and never
- * clears (LLV_README_CAPTURE_ROOT may name an existing `llv-readme-*` parent
- * there), serves the production build against it
- * on a port the OS assigns, and captures each shot twice: a PNG for human
+ * fresh capture directory under TMPDIR (default /var/tmp). The run allocates it
+ * beneath an existing `llv-readme-*` parent if LLV_README_CAPTURE_ROOT names one.
+ * It serves the production build against that home on a port the OS assigns
+ * and captures each shot twice: a PNG for human
  * review, copied to the evidence directory and never committed, and a vector
  * SVG, which is what the README uses. An SVG reaches the repository only
  * after Chrome, rendering it back the way a README shows it, draws what its
@@ -28,6 +28,8 @@
  * --seed-only checks the complete seed without a build or browser.
  * --check-layout checks every frame in the built Viewer without vector conversion
  * or changing repository media; PNGs and bounds stay in its private capture root.
+ * --only=<id,...> captures selected frames and writes their provenance to the
+ * evidence directory.
  * Requirements: a completed `bun run build`, Chrome (CHROME_BIN, default
  * /usr/bin/google-chrome-stable) and poppler's `pdftocairo`.
  */
@@ -330,17 +332,18 @@ export const SHOTS: ReadmeShot[] = [
        whole three-question form, each question's «Already decided» row, its
        Telegram line and the Answer row fit in the column. */
     viewport: { width: WIDE.width, height: 1200 },
-    /* The column opens on Decisions while a form waits: the seeded retry
+    /* The column opens on Needs you while a form waits: the seeded retry
        window, which the seat handed on and Telegram received. */
-    requiredText: ["Orchestrator", "workers ", "Decisions", "Reports", "Take the open harbor-api work", "Retry policy for failed webhook deliveries", "Sent to Telegram"],
+    requiredText: ["Orchestrator", "workers ", "Reports", "Take the open harbor-api work", "it waits in Needs you with two related questions", "Retry policy for failed webhook deliveries", "Sent to Telegram"],
     /* A seat nothing hosts reads as finished, with the resume banner. */
-    absentText: ["tmux", "Untitled task", "resume ·", "has not reported anything yet", "finished", "has finished its run"],
+    absentText: ["Decisions", "tmux", "Untitled task", "resume ·", "has not reported anything yet", "finished", "has finished its run"],
     /* The demo seat's conversation is not in the agent registry, so the
        header has no model to size the context window by and would show a
        bare byte estimate; a real seat shows its share of the window. */
     /* The seat's resize grip straddles its bottom edge, half over the board
        below, and the frame of the panel would slice it. */
     prepare: async (page) => {
+      await page.getByRole("tab", { name: /^Needs you\b/, selected: true }).waitFor({ state: "visible" });
       await page.locator("[data-orchestrator-context], [data-seat-grip]").evaluateAll((elements) => {
         for (const element of elements) (element as HTMLElement).style.setProperty("display", "none", "important");
       });
@@ -968,7 +971,7 @@ async function main(): Promise<void> {
     prefix: "llv-readme",
     raw: process.env.LLV_README_CAPTURE_ROOT,
     repoRoot,
-    tempRoot: checkOnly ? os.tmpdir() : SCRATCH_ROOT,
+    tempRoot: checkOnly || process.env.TMPDIR?.trim() ? os.tmpdir() : SCRATCH_ROOT,
   });
   process.stdout.write(`capture root ${captureRoot}\n`);
   const env = buildCaptureEnvironment(captureRoot);
@@ -1286,11 +1289,11 @@ async function captureShots(repoRoot: string, baseUrl: string, layout: Layout, c
   } finally {
     await browser.close();
   }
-  if (!only && !checkLayout) {
+  if (!checkLayout) {
     const driver = fs.readFileSync(path.join(repoRoot, "scripts/capture-readme-media.ts"));
     const seed = fs.readFileSync(path.join(repoRoot, "scripts/readme-demo-state.ts"));
     fs.writeFileSync(
-      path.join(repoRoot, README_MEDIA_DIR, "provenance.json"),
+      path.join(only ? evidenceDir : path.join(repoRoot, README_MEDIA_DIR), "provenance.json"),
       `${JSON.stringify({
         schemaVersion: 1,
         classification: "synthetic",
