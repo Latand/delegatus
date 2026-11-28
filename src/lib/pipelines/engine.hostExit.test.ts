@@ -2,6 +2,8 @@ import { expect, test, fs, path, spawn, stopFixtureProcess, providerRecoveryHarn
 import { stopPipelineStageAgent } from "./engine";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { observeHostExit, readHostExit } from "@/lib/runtime/hostExit";
+import { initializeRecipientInterruptionIndex, interruptionObligationDirectory, interruptionObligationStore, recipientInterruptionEvidence } from "@/lib/runtime/interruptionObligations";
+import { journalTickets, startJournalPeer, until } from "@/lib/runtime/startup.interruptionAdmission.fixture";
 import { seatTickDecision, DEFAULT_SEAT_TICK_POLICY, SEAT_TICK_WAKE_INTERVAL_MS } from "@/lib/monitor/seatTick";
 import { defaultSeatTickSettings, effectiveSeatTickSettings } from "@/lib/monitor/seatTickSettings";
 import { emptySeatTickState, type SeatTickCheckInput } from "@/lib/monitor/types";
@@ -333,6 +335,59 @@ test("cancelled host-exit settlement waits for a deploy continuation", async () 
     expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("failed");
   } finally { await f.close(); }
 });
+
+
+for (const pause of [false, true]) test(`controller settlement waits for the production journal (pause while waiting=${pause})`, async () => {
+  const f = await cancelledHostDeath();
+  const directory = interruptionObligationDirectory(f.registry.filename);
+  let peer: ReturnType<typeof startJournalPeer> | undefined;
+  let recovery: Promise<unknown> | undefined;
+  try {
+    const attempt = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+    const seed = path.join(path.dirname(directory), "cut-seed");
+    const cut = interruptionObligationStore(seed).record({
+      conversationId: f.conversationId, engine: "codex", hostKey: "codex:stage-fixture",
+      path: attempt.agentPath!, owner: null, claimEpoch: 1, turnRef: "stage-turn",
+      boundary: "fixture-release", reason: "viewer-release", recordedAt: attempt.startedAt!,
+      checkpoint: { lastEventKind: null, lastEventAt: null }, seat: null,
+    }).obligation;
+    await initializeRecipientInterruptionIndex(directory);
+    peer = startJournalPeer(directory, path.join(path.dirname(directory), "cut-owner"), {
+      append: JSON.stringify(cut) + "\n", maxHoldMs: 2_000,
+    });
+    await peer.ready();
+    f.h.ports.conversationInterruption = defaultPipelinePorts().conversationInterruption;
+    f.h.ports.durableTurnEvidence = async () => ({ turn: "busy", message: null });
+    let completed = false;
+    recovery = tickPipelines([], f.h.ports).finally(() => { completed = true; });
+    void recovery.catch(() => {});
+    await until(() => journalTickets(directory) === 2 || completed);
+    expect(peer.held()).toBe(true);
+    expect(completed).toBe(false);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("running");
+    if (pause) {
+      const [concurrent] = loadPipelines();
+      concurrent!.state = "paused";
+      savePipelines([concurrent!]);
+    }
+    expect(await peer.stop()).toBe(0);
+    await recovery;
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("running");
+    expect(recipientInterruptionEvidence(directory, [f.conversationId]).records).toEqual([cut]);
+    if (pause) {
+      expect(loadPipelines()[0]!.state).toBe("paused");
+      return;
+    }
+
+    interruptionObligationStore(directory).update(cut.id, { state: "delivered", resolvedAt: f.h.ports.now() });
+    f.h.ports.conversationInterruption = defaultPipelinePorts().conversationInterruption;
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("failed");
+  } finally {
+    await Promise.allSettled([peer?.stop(), recovery]);
+    await f.close();
+  }
+}, 20_000);
 
 for (const recovered of [false, true]) test(`failed settlement preserves a live successor with restartRecovery=${recovered}`, async () => {
   const f = await cancelledHostDeath();

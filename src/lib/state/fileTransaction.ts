@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 import {
   blockingWaitRole,
@@ -91,6 +92,7 @@ const KNOWN_BUSY_LABELS: ReadonlyMap<string, string> = new Map([
   ["metadata collection is busy", "metadata.collection"],
   ["account guard obligations are busy", "account-guard.obligations"],
   ["interruption index initialization is busy", "interruption.index"],
+  ["interruption obligation import is busy", "interruption-obligations"],
   ["recipient interruption evidence is busy", "interruption.evidence"],
   ["project initialization is already in progress; retry", "pipeline.initialize"],
   ["conversation migration journals are busy", "accounts.migration"],
@@ -276,6 +278,15 @@ export async function refuseBusyBeforeAdmission<T>(
   }
 }
 
+function fileTransactionClock(): number {
+  return Math.floor(performance.timeOrigin + performance.now());
+}
+
+/** A clock step cannot make a live contender's partially written ticket old. */
+function ownerFileStale(mtimeMs: number): boolean {
+  return Math.min(Date.now(), fileTransactionClock()) - mtimeMs > LOCK_STALE_MS;
+}
+
 function ownerIsStale(ownerPath: string): boolean {
   try {
     const previous = JSON.parse(fs.readFileSync(ownerPath, "utf8")) as { pid?: unknown; startIdentity?: unknown };
@@ -288,10 +299,10 @@ function ownerIsStale(ownerPath: string): boolean {
       }
       return false;
     }
-    return Date.now() - fs.statSync(ownerPath).mtimeMs > LOCK_STALE_MS;
+    return ownerFileStale(fs.statSync(ownerPath).mtimeMs);
   } catch {
     try {
-      return Date.now() - fs.statSync(ownerPath).mtimeMs > LOCK_STALE_MS;
+      return ownerFileStale(fs.statSync(ownerPath).mtimeMs);
     } catch {
       return false;
     }
@@ -319,7 +330,7 @@ function enqueue(filePath: string): LockTicket {
   };
   const ticketPath = path.join(
     queuePath,
-    `${String(Date.now()).padStart(16, "0")}-${process.pid}-${crypto.randomUUID()}.json`,
+    `${String(fileTransactionClock()).padStart(16, "0")}-${process.pid}-${crypto.randomUUID()}.json`,
   );
   fs.writeFileSync(ticketPath, JSON.stringify(owner), { encoding: "utf8", flag: "wx", mode: 0o600 });
   return { lockPath, queuePath, owner, ticketPath };
@@ -492,7 +503,8 @@ export async function withFileTransaction<T>(filePath: string, busyMessage: stri
 
 /** Async filesystem admission for paths whose publication must not perform
  * synchronous filesystem work on the Viewer loop. */
-export async function withFileTransactionAsync<T>(filePath: string, busyMessage: string, operation: () => Promise<T> | T, options: { waitMs?: number; label?: string } = {}): Promise<T> {
+export async function withFileTransactionAsync<T>(filePath: string, busyMessage: string, operation: () => Promise<T> | T, options: { waitMs?: number; label?: string; signal?: AbortSignal } = {}): Promise<T> {
+  options.signal?.throwIfAborted();
   const startedAt = performance.now();
   let waited = false;
   let admittedAt: number | undefined;
@@ -507,7 +519,7 @@ export async function withFileTransactionAsync<T>(filePath: string, busyMessage:
   const deadline = options.waitMs === undefined ? Infinity : startedAt + Math.max(0, options.waitMs);
   await fsp.mkdir(queuePath, { recursive: true, mode: 0o700 });
   const owner: LockOwner = { pid: process.pid, startIdentity: await processIdentityAsync(process.pid), token: crypto.randomUUID(), role: normalizeBlockingWaitHolderKind(blockingWaitRole(), "unowned") };
-  const ticketPath = path.join(queuePath, `${String(Date.now()).padStart(16, "0")}-${process.pid}-${crypto.randomUUID()}.json`);
+  const ticketPath = path.join(queuePath, `${String(fileTransactionClock()).padStart(16, "0")}-${process.pid}-${crypto.randomUUID()}.json`);
   const ticket = { lockPath, queuePath, owner, ticketPath };
   const ticketHandle = await fsp.open(ticketPath, "wx", 0o600);
   try {
@@ -531,9 +543,9 @@ export async function withFileTransactionAsync<T>(filePath: string, busyMessage:
         }
         return false;
       }
-      return Date.now() - (await fsp.stat(ownerPath)).mtimeMs > LOCK_STALE_MS;
+      return ownerFileStale((await fsp.stat(ownerPath)).mtimeMs);
     } catch {
-      try { return Date.now() - (await fsp.stat(ownerPath)).mtimeMs > LOCK_STALE_MS; }
+      try { return ownerFileStale((await fsp.stat(ownerPath)).mtimeMs); }
       catch { return false; }
     }
   };
@@ -569,6 +581,7 @@ export async function withFileTransactionAsync<T>(filePath: string, busyMessage:
   };
   try {
     for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
+      options.signal?.throwIfAborted();
       if (performance.now() >= deadline) throw new FileTransactionBusyError(busyMessage);
       const handle = await acquireAsync();
       if (handle === null) {
@@ -582,24 +595,26 @@ export async function withFileTransactionAsync<T>(filePath: string, busyMessage:
             holder = resolved;
           }, () => undefined);
         }
-        await new Promise<void>((resolve) => setTimeout(resolve, Math.min(LOCK_WAIT_MS, Math.max(0, deadline - performance.now()))));
+        try {
+          await delay(Math.min(LOCK_WAIT_MS, Math.max(0, deadline - performance.now())), undefined, { signal: options.signal });
+        } catch (error) {
+          options.signal?.throwIfAborted();
+          throw error;
+        }
         continue;
       }
-      if (performance.now() >= deadline) {
-        await handle.close();
-        await removeOwnedAsync(lockPath, owner.token);
-        throw new FileTransactionBusyError(busyMessage);
-      }
-      admittedAt = performance.now();
-      noteWriterAdmitted();
       try {
+        options.signal?.throwIfAborted();
+        if (performance.now() >= deadline) throw new FileTransactionBusyError(busyMessage);
+        admittedAt = performance.now();
+        noteWriterAdmitted();
         const result = operation();
         // A synchronous commit releases before another in-process synchronous
         // writer can run. Only an asynchronous body holds across a microtask.
         return result && typeof (result as Promise<T>).then === "function" ? await result : result;
       } finally {
-        await handle.close();
-        await removeOwnedAsync(lockPath, owner.token);
+        try { await handle.close(); }
+        finally { await removeOwnedAsync(lockPath, owner.token); }
       }
     }
     throw new FileTransactionBusyError(busyMessage);
