@@ -420,10 +420,10 @@ fix or a small feature in one file. Then watch it appear:
    pipelines finish on their branch. The orchestrator files a report in the
    **Reports** log beside its chat.
 
-![A pipeline opened from its task: Build, Review and Verify stages, with Review's loop back to Build folded under it, and the builder's and the reviewer's conversations side by side](../media/readme/pipeline.svg)
+![A pipeline opened from its task: stage tabs Build, Review and Verify with Review selected, the rule «If Review fails → back to Build» under the tabs, and the reviewer's conversation open in the stage below](../media/readme/pipeline.svg)
 
 If the pipeline needs you, **Needs you** counts it and the card's state line
-says why. A question for you waits in the **Decisions** tab beside the
+says why. A question for you waits in the **Needs you** tab beside the
 orchestrator's chat.
 
 Merging is off by default, so you merge the pull request yourself, on GitHub

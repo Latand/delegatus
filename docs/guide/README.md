@@ -5,7 +5,7 @@ give it work and steer that work. To change Delegatus itself, start at
 [ARCHITECTURE.md](../../ARCHITECTURE.md) and
 [CONTRIBUTING.md](../../CONTRIBUTING.md).
 
-![A pipeline opened from its task: Build, Review and Verify stages, with Review's loop back to Build folded under it, and the builder's and the reviewer's conversations side by side](../media/readme/pipeline.svg)
+![A pipeline opened from its task: stage tabs Build, Review and Verify with Review selected, the rule «If Review fails → back to Build» under the tabs, and the reviewer's conversation open in the stage below](../media/readme/pipeline.svg)
 
 ## Start here
 

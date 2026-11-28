@@ -67,7 +67,7 @@ ambiguous.
   on a decision or a task nobody started wakes it. It answers in its chat and
   can move your screen to the card where something landed.
 - **Decisions reach you as forms.** A decision it cannot make alone appears in
-  the **Decisions** tab beside its chat, with a recommended answer for each
+  the **Needs you** tab beside its chat, with a recommended answer for each
   question, and counts in the board's **Needs you**.
 - **Side questions.** While it is busy with a turn, **Ask in parallel** in
   its composer sends a question to a copy of it, which answers in its own
@@ -199,7 +199,7 @@ Work for another project goes to that project's orchestrator, so each board stay
 
 - **Orchestrator panel.** Above the board by default, or at the side. The
   seat's conversation: who holds it, its context reading, **Rotate**, the
-  **Decisions** tab, the **Reports** log and its composer. The
+  **Needs you** tab, the **Reports** log and its composer. The
   **Orchestrator** button in the board header shows or hides it, and the
   panel's dock control moves it between the top and the side.
 - **Board.** The project's canvas: four columns of task cards, with the

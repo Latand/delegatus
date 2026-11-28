@@ -73,7 +73,7 @@ review and verify. It has up to eight stages and works in its own git
 worktree and branch, so your own checkout is left alone. Some messages call a
 pipeline a "lane".
 
-![A pipeline opened from its task: Build, Review and Verify stages, with Review's loop back to Build folded under it, and the builder's and the reviewer's conversations side by side](../media/readme/pipeline.svg)
+![A pipeline opened from its task: stage tabs Build, Review and Verify with Review selected, the rule «If Review fails → back to Build» under the tabs, and the reviewer's conversation open in the stage below](../media/readme/pipeline.svg)
 
 Each stage has a role, such as builder, reviewer, verifier, architect or
 visual critic. The role sets the engine, model and effort the stage runs on,
