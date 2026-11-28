@@ -332,10 +332,12 @@ test('calibration rejects red gold promotion and oracle controls require their i
 
 function preflights(id: string) {
   const block = [...design.ordering.orchestrationBlocks, ...design.ordering.productPairedBlocks].find(b => b.id === id)!;
+  type FixtureRuntime = { engine: 'codex' | 'claude'; model: string; effort: 'high' };
+  const profile: FixtureRuntime = { engine: design.runtimePool.M.engine as FixtureRuntime['engine'],
+    model: design.runtimePool.M.model, effort: 'high' };
   const runtimeBindings = (roles: Record<string, string>) => Object.fromEntries(Object.keys(roles).map(role => [role,
-    { declared: 'M' as const, requested: { engine: design.runtimePool.M.engine, model: design.runtimePool.M.model, effort: design.runtimePool.M.effort },
-      resolved: { engine: design.runtimePool.M.engine, model: design.runtimePool.M.model, effort: design.runtimePool.M.effort } },
-  ]));
+    { declared: 'M' as const, requested: profile, resolved: profile },
+  ])) as Record<string, { declared: 'M'; requested: FixtureRuntime; resolved: FixtureRuntime }>;
   return block.orderedCells.map((cellId, i) => {
     const snap = (at: number, capacityBudgets: number) => {
       const roles = {
