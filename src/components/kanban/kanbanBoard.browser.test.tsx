@@ -630,7 +630,7 @@ describe("board timeline hybrid", () => {
             if (top === lastTop) break;
             lastTop = top;
             await frame(`scroll-page-${pageIndex}`);
-            await timeScroll.evaluate(element => element.scrollTop += element.clientHeight - 44 - element.querySelector<HTMLElement>("[data-timeline-rest]")?.offsetHeight ?? 0);
+            await timeScroll.evaluate(element => element.scrollTop += element.clientHeight - 44 - (element.querySelector<HTMLElement>("[data-timeline-rest]")?.offsetHeight ?? 0));
           }
           const allRows = await chart.locator(".bt-row").evaluateAll(rows => rows.map(row => row.getAttribute("data-timeline-task") ?? row.getAttribute("data-timeline-attempt") ?? row.getAttribute("data-timeline-group-row")!));
           expect([...seenRows].sort()).toEqual(allRows.sort());
