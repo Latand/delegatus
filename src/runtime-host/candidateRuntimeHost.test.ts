@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { PassThrough } from "node:stream";
-import { CandidateBrowserStartupError, captureBrowserStartupStderr, candidateHostLoopRecords, startCandidateRuntimeHost, waitForServerStartup } from "./candidateRuntimeHost";
+import { spawn } from "node:child_process";
+import { captureBrowserStartupStderr, candidateHostLoopRecords, startCandidateRuntimeHost, waitForServerStartup } from "./candidateRuntimeHost";
 import { candidatePerformanceEvidence, CANDIDATE_PERFORMANCE_BOUNDS, CANDIDATE_PERFORMANCE_REPORT_PREFIX, parseCandidatePerformanceReport } from "./candidatePerformance";
 import { passingCandidatePerformanceMeasurements } from "./fixtures/candidatePerformanceMeasurements";
 
@@ -12,76 +12,101 @@ const line = (gap: number, at: number, extra = {}) => `[viewer loop-gap] ${JSON.
 const failurePhase = "reading structured startup registry";
 const nextRetryAt = "2026-11-28T08:14:05.000Z";
 const retryCategory = "registry-contention";
-const capability = (state: "pending" | "failed" | "ready", failureCategory: string | null, retryAt: string | null) =>
+const capability = (state: "pending" | "failed", failureCategory: string | null, retryAt: string | null) =>
   Response.json({ capability: "viewer-deployments", version: 1, structuredHostStartup: {
-    state, phase: failurePhase, completedHosts: 0, totalHosts: null, failurePhase, failureCategory, nextRetryAt: retryAt,
+    state, phase: failurePhase, completedHosts: 0, totalHosts: null,
+    failurePhase, failureCategory, nextRetryAt: retryAt,
   } });
+async function startupServer(mode: "terminal" | "hanging-body" | "retry-ready") {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "candidate-startup-server-"));
+  const stderrGateFile = path.join(directory, "write-stderr");
+  const stderrWrittenFile = path.join(directory, "stderr-written");
+  const child = spawn(process.execPath, ["run", path.join(import.meta.dir, "candidateStartupServer.fixture.ts"), mode, stderrGateFile, stderrWrittenFile], {
+    cwd: path.resolve(import.meta.dir, "../.."), env: process.env, stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  const origin = await new Promise<string>((resolve, reject) => {
+    child.stdout!.setEncoding("utf8").on("data", (chunk: string) => {
+      stdout += chunk;
+      const newline = stdout.indexOf("\n");
+      if (newline >= 0) resolve(stdout.slice(0, newline).trim());
+    });
+    child.once("error", reject);
+    child.once("exit", code => reject(new Error(`startup fixture exited before listening (${code}): ${stdout}`)));
+  });
+  if (!origin.startsWith("http://127.0.0.1:")) throw new Error("startup fixture did not publish its port");
+  return { origin, stderr: child.stderr!, emitStartupStderr() { fs.writeFileSync(stderrGateFile, "1"); },
+    async waitForStartupStderr() {
+      const deadline = performance.now() + 2_000;
+      while (!fs.existsSync(stderrWrittenFile) && performance.now() < deadline) await Bun.sleep(5);
+      if (!fs.existsSync(stderrWrittenFile)) throw new Error("startup fixture did not write stderr");
+      await Bun.sleep(10);
+    },
+    async stop() {
+    child.kill("SIGTERM");
+    await new Promise<void>(resolve => child.once("exit", () => resolve()));
+    fs.rmSync(directory, { recursive: true, force: true });
+  } };
+}
+
+async function runBrowserRefusalProbe(origin: string, excerpt: string) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "candidate-browser-refusal-"));
+  try {
+    const excerptFile = path.join(directory, "stderr.txt");
+    fs.writeFileSync(excerptFile, excerpt);
+    const child = Bun.spawn([process.execPath, "run", path.join(import.meta.dir, "candidatePerformanceRun.ts"),
+      "--probe-browser-refusal", origin, "--stderr-excerpt", excerptFile], {
+      cwd: path.resolve(import.meta.dir, "../.."), env: { ...process.env }, stdout: "pipe", stderr: "pipe",
+    });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+    ]);
+    if (!stdout.includes(CANDIDATE_PERFORMANCE_REPORT_PREFIX)) {
+      throw new Error(`candidate runner emitted no refusal report (exit ${code}): ${stderr.slice(-2_000)}`);
+    }
+    return { code, serialized: stdout, report: parseCandidatePerformanceReport(stdout) };
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
 
 test("browser startup waits through a scheduled and an executing retry", async () => {
-  let probes = 0;
-  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
-    if (new URL(request.url).pathname === "/api/runtime/snapshot") return Response.json({ structuredStartup: "failed" });
-    probes++;
-    return capability(probes >= 3 ? "ready" : "failed", probes >= 3 ? null : retryCategory, probes === 1 ? nextRetryAt : null);
-  } });
+  const server = await startupServer("retry-ready");
   try {
-    expect(await waitForServerStartup(server.url.origin, 3_000)).toMatchObject({ state: "ready" });
-    expect(probes).toBe(3);
-  } finally { server.stop(true); }
+    expect(await waitForServerStartup(server.origin, 3_000)).toMatchObject({ state: "ready" });
+  } finally { await server.stop(); }
 });
 
 test("a terminal startup refusal retains a bounded redacted excerpt in the gate report", async () => {
-  let probes = 0;
-  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
-    probes++;
-    return capability("failed", "configuration", null);
-  } });
-  const stderr = new PassThrough();
-  const excerpt = captureBrowserStartupStderr(stderr);
-  const secret = ["fictional", "credential", "value"].join("-");
-  const privatePath = path.join("/", "home", "fictional-owner", "fixture", "state.sqlite");
-  const url = new URL(`/callback?code=${secret}`, server.url).href;
-  stderr.write("startup exception\n" + "Authori");
-  stderr.write(`zation: Bearer ${secret}\n${JSON.stringify({ password: secret, path: privatePath, url })}\n`);
-  stderr.write("-----BEGIN PRIVATE KEY-----\n" + secret + "\n" + "extra\n".repeat(2_000));
-  stderr.end("\n-----END PRIVATE KEY-----\n");
+  const server = await startupServer("terminal");
+  const excerpt = captureBrowserStartupStderr(server.stderr);
   try {
-    const startup = await waitForServerStartup(server.url.origin, 3_000);
-    if (startup.state === "ready") throw new Error("terminal startup became ready");
-    expect(probes).toBe(1);
-    const error = new CandidateBrowserStartupError({ ...startup, stderr: excerpt() });
-    const measured = passingCandidatePerformanceMeasurements();
-    measured.browser = null;
-    const serialized = CANDIDATE_PERFORMANCE_REPORT_PREFIX + JSON.stringify({
-      checkedAt: "2026-11-28T08:14:00.000Z", runtime: `bun ${Bun.version}`,
-      bounds: CANDIDATE_PERFORMANCE_BOUNDS, measurements: measured, breaches: [error.message], ok: false,
-      browserStartupFailure: error.failure,
-    });
-    const report = parseCandidatePerformanceReport(serialized);
+    server.emitStartupStderr();
+    await server.waitForStartupStderr();
+    const result = await runBrowserRefusalProbe(server.origin, excerpt());
+    const report = result.report;
+    expect(result.code).toBe(1);
+    expect(report.breaches[0]).toContain("terminal");
     expect(report).toMatchObject({ ok: false, browserStartupFailure: {
       reason: "terminal", state: "failed", failurePhase, failureCategory: "configuration", nextRetryAt: null,
     } });
     expect(report.browserStartupFailure?.stderr).toContain("startup exception");
     expect(report.browserStartupFailure?.stderr).toContain("[stderr clipped]");
+    expect(report.browserStartupFailure?.stderr).toContain("Authorization: [redacted]");
     expect(report.browserStartupFailure!.stderr.length).toBeLessThanOrEqual(2048);
-    for (const privateText of [secret, privatePath, "fictional-owner", server.url.host]) {
-      expect(serialized).not.toContain(privateText);
+    for (const privateText of ["synthetic-fixture-token", "fixture-private-key-payload", new URL(server.origin).host]) {
+      expect(result.serialized).not.toContain(privateText);
     }
-  } finally { server.stop(true); }
+  } finally { await server.stop(); }
 });
 
-test("the startup deadline includes an unanswered HTTP body and retains the retry diagnostics", async () => {
-  let probes = 0;
-  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
-    if (++probes === 1) return capability("failed", retryCategory, nextRetryAt);
-    return new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode("{")); } }));
-  } });
+test("the startup deadline includes an unanswered HTTP body from an independent server process", async () => {
+  const server = await startupServer("hanging-body");
   try {
-    expect(await waitForServerStartup(server.url.origin, 1_500)).toEqual({
+    expect(await waitForServerStartup(server.origin, 1_500)).toEqual({
       reason: "deadline", state: "failed", failurePhase, failureCategory: retryCategory, nextRetryAt,
     });
-    expect(probes).toBe(2);
-  } finally { server.stop(true); }
+  } finally { await server.stop(); }
 }, 3_000);
 
 test("an exited browser server ends startup polling with the last observed phase", async () => {

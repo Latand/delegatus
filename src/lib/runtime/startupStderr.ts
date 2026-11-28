@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { stripVTControlCharacters } from "node:util";
 import { redactBounded, redactMonitorText } from "@/lib/monitor/redact";
 import { PRIVATE_KEY_BLOCK } from "@/lib/view/compactText";
 
@@ -26,7 +27,7 @@ export function startupStderrText(fd: number, size: number, limit = 2048): strin
 export function startupStderrExcerpt(
   bytes: Buffer, readClipped: boolean, limit = 2048, redact = redactMonitorText,
 ): string {
-  let text = bytes.toString("utf8");
+  let text = stripVTControlCharacters(bytes.toString("utf8"));
   if (readClipped) text = text.slice(0, Math.max(0, text.lastIndexOf("\n")));
   const redacted = redact(withoutUnterminatedSecret(text)).trim();
   if (!readClipped && redacted.length <= limit) return redacted;

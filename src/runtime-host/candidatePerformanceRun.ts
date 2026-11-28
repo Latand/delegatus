@@ -64,6 +64,7 @@ import {
   candidatePerformanceBreaches,
   latencySummary,
   projectionBuildSummary,
+  withBrowserStartupFailure,
   type CandidatePerformanceEvidence,
   type CandidatePerformanceMeasurements,
   type ProjectionBuildSample,
@@ -117,6 +118,15 @@ function options(name: string): string[] {
 }
 
 const debugging = () => process.env.LLV_CANDIDATE_PERFORMANCE_DEBUG === "1";
+
+function finalizeCandidatePerformanceReport<T extends { breaches: string[] }>(
+  report: T,
+  browserStartupError?: CandidateBrowserStartupError,
+): T | (T & { browserStartupFailure: CandidateBrowserStartupError["failure"] }) {
+  return browserStartupError
+    ? withBrowserStartupFailure(report, browserStartupError.failure, browserStartupError.message)
+    : report;
+}
 
 /** Every store here opens a registry the dataset already imported. */
 const importedAlready = (): never => { throw new Error("the candidate performance registry was not imported"); };
@@ -1054,6 +1064,33 @@ async function startupProbeMain(): Promise<void> {
   }
 }
 
+/** Focused refusal control: exercise the runner's real report assembly
+ * against an independently served startup endpoint without the full gate. */
+async function browserRefusalProbeMain(): Promise<void> {
+  const baseUrl = option("--probe-browser-refusal");
+  const excerptFile = option("--stderr-excerpt");
+  if (!baseUrl || !excerptFile || !fs.existsSync(excerptFile)) {
+    throw new Error("browser refusal probe needs an endpoint and a captured stderr excerpt");
+  }
+  const startup = await waitForServerStartup(baseUrl, 3_000);
+  if (startup.state === "ready") throw new Error("browser refusal probe reached ready");
+  const error = new CandidateBrowserStartupError({
+    ...startup,
+    stderr: fs.readFileSync(excerptFile, "utf8"),
+  });
+  const report = finalizeCandidatePerformanceReport({
+    checkedAt: new Date().toISOString(),
+    runtime: `bun ${Bun.version}`,
+    bounds: CANDIDATE_PERFORMANCE_BOUNDS,
+    measurements: null,
+    breaches: [],
+    ok: false,
+    detail: error.message,
+    log: [],
+  }, error);
+  console.log(CANDIDATE_PERFORMANCE_REPORT_PREFIX + JSON.stringify(report));
+}
+
 async function gateMain(): Promise<CandidatePerformanceEvidence> {
   const checkedAt = new Date().toISOString();
   const runtime = `bun ${Bun.version}`;
@@ -1518,20 +1555,19 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
     };
     const timingWarnings: string[] = [];
     const breaches = candidatePerformanceBreaches(measurements, CANDIDATE_PERFORMANCE_BOUNDS, timingWarnings);
-    if (browserStartupError) breaches.unshift(browserStartupError.message);
-    return {
+    const report = {
       checkedAt,
       runtime,
       bounds: CANDIDATE_PERFORMANCE_BOUNDS,
       measurements,
       breaches,
       timingWarnings,
-      ...(browserStartupError ? { browserStartupFailure: browserStartupError.failure } : {}),
       ...inducedFields,
       ok: breaches.length === 0 && !inducedDelayMs && !induced.length,
       ...(breaches.length ? { detail: breaches[0] } : {}),
       log,
     };
+    return finalizeCandidatePerformanceReport(report, browserStartupError);
   } catch (error) {
     return {
       checkedAt,
@@ -1576,6 +1612,10 @@ if (import.meta.main && option("--seed-census")) {
   previousReleaseSchema(dataset.filename);
   console.log(JSON.stringify({ rows: dataset.rows, receipts: dataset.receipts, payloadBytes: dataset.payloadBytes }));
   process.exit(0);
+}
+if (import.meta.main && process.argv.includes("--probe-browser-refusal")) {
+  await browserRefusalProbeMain();
+  process.exit(1);
 }
 if (import.meta.main && process.argv.includes("--probe-startup")) {
   await startupProbeMain();

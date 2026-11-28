@@ -86,6 +86,7 @@ import { hostTurnRecordIdentity, readHostTurnRecord } from "./eventStore";
 import { restartCutEvidenceHolds } from "./restartCutHold";
 import {
   interruptionObligationDirectory,
+  InterruptionJournalBusyError,
   interruptionStageOf,
   withInterruptionObligationAdmission,
   type InterruptionObligationStore,
@@ -3105,7 +3106,9 @@ export interface DemotionInterruptionOptions {
   backgroundWorkCache?: VerifiedBackgroundWorkCache;
 }
 
-const DEMOTION_HANDOFF_WAIT_MS = 5_000;
+/* A journal lock admission can itself wait five seconds. Leave enough of the
+   demotion grace window for a later admission after one bounded refusal. */
+const DEMOTION_HANDOFF_WAIT_MS = 15_000;
 const DEMOTION_HANDOFF_WRITE = { label: "registry.demotion-handoff" };
 
 async function admitDemotionRecord<T>(
@@ -3125,15 +3128,28 @@ async function admitDemotionRecord<T>(
   for (;;) {
     // The successor also uses this FIFO journal. Try the registry once
     // inside it and return the journal before any wait for the writer.
-    const result = await withInterruptionObligationAdmission(directory, store => {
-      const evidence = readEvidence();
-      return registry.deliveryWriteNow(DEMOTION_HANDOFF_WRITE, () => record(store, evidence));
-    }, { deadline });
+    let result: { acquired: true; value: boolean } | { acquired: false };
+    try {
+      result = await withInterruptionObligationAdmission(directory, store => {
+        const evidence = readEvidence();
+        return registry.deliveryWriteNow(DEMOTION_HANDOFF_WRITE, () => record(store, evidence));
+      }, { deadline });
+    } catch (error) {
+      if (!(error instanceof InterruptionJournalBusyError)) throw error;
+      const remaining = deadline - performance.now();
+      if (remaining <= 0) throw new RegistryWriterBusyError(DEMOTION_HANDOFF_WRITE.label);
+      await new Promise(resolve => setTimeout(resolve, Math.min(50, remaining)));
+      continue;
+    }
     if (result.acquired) return result.value;
     const remaining = deadline - performance.now();
     if (remaining <= 0) throw new RegistryWriterBusyError(DEMOTION_HANDOFF_WRITE.label);
     // Wait outside the journal. The next attempt revalidates the host and turn.
-    await registry.deliveryWriteOrBusy({ ...DEMOTION_HANDOFF_WRITE, waitDeadlineAt: Date.now() + remaining }, () => {});
+    try {
+      await registry.deliveryWriteOrBusy({ ...DEMOTION_HANDOFF_WRITE, waitDeadlineAt: Date.now() + remaining }, () => {});
+    } catch (error) {
+      if (!(error instanceof RegistryWriterBusyError)) throw error;
+    }
   }
 }
 
