@@ -105,6 +105,50 @@ test("an explicitly retained sandbox survives outer owned-runner cleanup", async
   expect(fs.readFileSync(path.join(sandbox, "input.txt"), "utf8")).toBe("held for an unconfirmed consumer");
 }, 30_000);
 
+test.skipIf(process.platform !== "linux" || process.getuid?.() === 0)(
+  "the owned runner removes an abandoned sealed cache without changing its linked targets", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "gate-sandbox-sealed-"));
+    roots.push(directory);
+    const env = isolatedEnvironment(directory, process.env);
+    delete env.LLV_GATE_SANDBOX_RECORD;
+    const outside = path.join(directory, "unowned");
+    fs.mkdirSync(outside);
+    const keeper = path.join(outside, "keep");
+    fs.writeFileSync(keeper, "retain", { mode: 0o444 });
+    fs.chmodSync(outside, 0o555);
+    const allocation = path.join(directory, "allocation"), script = path.join(directory, "sealed.ts");
+    fs.writeFileSync(script, [
+      'import fs from "node:fs"; import path from "node:path";',
+      "import { createGateSandbox } from " + JSON.stringify(path.join(root, "scripts/local-gate.ts")) + ";",
+      "const sandbox = createGateSandbox();",
+      "fs.writeFileSync(" + JSON.stringify(allocation) + ", sandbox);",
+      'const modules = path.join(sandbox, "node_modules"), pkg = path.join(modules, "fixture");',
+      "fs.mkdirSync(pkg, { recursive: true });",
+      "fs.symlinkSync(" + JSON.stringify(outside) + ', path.join(pkg, "link"), "dir");',
+      "fs.linkSync(" + JSON.stringify(keeper) + ', path.join(pkg, "file"));',
+      "fs.chmodSync(pkg, 0o555); fs.chmodSync(modules, 0o555);",
+    ].join("\n"));
+    try {
+      const child = Bun.spawn([process.execPath, path.join(root, "scripts/owned-runner.ts"), process.execPath, script],
+        { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+      const [out, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      const sandbox = fs.readFileSync(allocation, "utf8");
+      try {
+        expect({ out, error, code }).toMatchObject({ code: 0 });
+        expect(fs.existsSync(sandbox)).toBeFalse();
+        expect(fs.statSync(outside).mode & 0o777).toBe(0o555);
+        expect(fs.statSync(keeper).mode & 0o777).toBe(0o444);
+        expect(fs.readFileSync(keeper, "utf8")).toBe("retain");
+      } finally {
+        const modules = path.join(sandbox, "node_modules");
+        for (const target of [modules, path.join(modules, "fixture")]) {
+          if (fs.existsSync(target)) fs.chmodSync(target, 0o700);
+        }
+        fs.rmSync(sandbox, { recursive: true, force: true });
+      }
+    } finally { fs.chmodSync(outside, 0o700); }
+  }, 30_000);
+
 function activeJournalFixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-journal-"));
   roots.push(root);

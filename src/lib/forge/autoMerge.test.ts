@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { caseSensitiveAppFixture } from "./appWrite.fixture";
+import { fixtureNoreply, seedForgeCommitAccount } from "@/test-helpers/forgeCommitAccount";
 
 import { deepFreeze } from "@/lib/deepFreeze";
 import type { Pipeline, PipelineMerge } from "@/lib/pipelines/types";
@@ -15,6 +16,7 @@ import type { MergeOnReviewSetting } from "@/lib/projects/settings";
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-auto-merge-"));
 const previousStateDir = process.env.LLV_STATE_DIR;
 process.env.LLV_STATE_DIR = sandbox;
+seedForgeCommitAccount(sandbox);
 
 const {
   MERGE_POLL_MS, MERGE_REASONS, MERGE_SETTLE_MS, MERGE_WAIT_LIMIT_MS, decideMerge, parsePullRequestView, lanePullRequest, mergeEligible, productionAutoMergePorts, resetAutoMergeForTests, rollupChecks, scheduleAutoMerge, sweepAutoMerge, sweepTaskFinishes,
@@ -95,14 +97,14 @@ const red = (name: string): Check => ({ name, status: "COMPLETED", conclusion: "
 
 /** A fake GitHub: pull requests, commits, the base's required contexts, and
     legacy update receipts; any new GitHub branch update is refused. */
-function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: string[]; classicRead?: string; rulesRead?: string; rulesRefusal?: boolean; queuedMerge?: "unreadable" | "open" | "malformed"; lanes: Pipeline[]; prs: PullRequest[]; tasks?: string[] }) {
+function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: string[]; classicRead?: string; rulesRead?: string; rulesRefusal?: boolean; queuedMerge?: "unreadable" | "open" | "malformed"; mergeMethod?: "squash" | "merge" | "rebase"; lanes: Pipeline[]; prs: PullRequest[]; tasks?: string[] }) {
   let clock = T0;
   const calls: string[][] = [];
   const logs: string[] = [];
   const pipelines = new Map(options.lanes.map((pipeline) => [pipeline.id, structuredClone(pipeline)]));
   const prs = new Map(options.prs.map((pr) => [pr.number, pr]));
   const prOf = new Map(options.lanes.map((pipeline, index) => [pipeline.id, options.prs[index]!.number]));
-  const commits = new Map<string, { parents: string[]; committer: string }>();
+  const commits = new Map<string, { parents: string[]; committer?: string; identity?: { name: string; email: string } }>();
   const tasks = new Map((options.tasks ?? []).map((id) => [id, "assigned"]));
   let setting: MergeOnReviewSetting = { enabled: true, changedAt: iso(T0 - 3_600_000), changedBy: "operator", ...options.setting };
   let mergeRefusal: string | null = null;
@@ -158,7 +160,10 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
     if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/compare/`) && args.at(-1) === ".merge_base_commit.sha") return MAIN_1;
     if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/branches/`)) return options.classicRead ?? JSON.stringify(options.required ?? []);
     if (args[0] === "api" && /\/issues\/\d+\/comments/.test(args[1] ?? "")) return "";
-    if (args[0] === "repo" && args[1] === "view") return JSON.stringify({ squashMergeAllowed: true, mergeCommitAllowed: true, rebaseMergeAllowed: true });
+    if (args[0] === "repo" && args[1] === "view") return JSON.stringify(options.mergeMethod === "rebase"
+      ? { squashMergeAllowed: false, mergeCommitAllowed: false, rebaseMergeAllowed: true }
+      : options.mergeMethod === "merge" ? { squashMergeAllowed: false, mergeCommitAllowed: true, rebaseMergeAllowed: true }
+        : { squashMergeAllowed: true, mergeCommitAllowed: true, rebaseMergeAllowed: true });
     if (args[0] === "api" && args[1] === "-X" && args[2] === "PUT") throw new Error("GitHub update-branch is forbidden");
     if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/commits/`)) {
       const sha = args[1].split("/").at(-1)!;
@@ -349,7 +354,7 @@ describe("GitHub read failure recovery through production ports", () => {
     }
     expect(h.merge("L1")).toMatchObject({ readFailures: failureTimes.length, reason: expect.stringMatching(/^GitHub read timed out:/) });
     expect(h.merges()).toHaveLength(canMerge ? 1 : 0);
-    if (canMerge) expect(h.merges()[0]).toEqual(["pr", "merge", "12", "--repo", REPO, "--squash", "--match-head-commit", HEAD_A]);
+    if (canMerge) expect(h.merges()[0]).toEqual(["pr", "merge", "12", "--repo", REPO, "--squash", "--author-email", fixtureNoreply, "--match-head-commit", HEAD_A]);
   });
 
   test.each([[10, 1], [12, 1], [20, 1], [21, 2]])("%s failing predecessors cannot starve a healthy follower with %s slots", async (count, slots) => {
@@ -399,7 +404,10 @@ describe("GitHub read failure recovery through production ports", () => {
 
   test("the production runner reports its actual default timeout budget", async () => {
     const bin = fs.mkdtempSync(path.join(sandbox, "gh-budget-"));
-    fs.writeFileSync(path.join(bin, "gh"), "#!/usr/bin/env bun\nsetInterval(() => {}, 1000);\n", { mode: 0o700 });
+    fs.writeFileSync(path.join(bin, "gh"), `#!/bin/sh
+case " $* " in *" api user "*) printf '%s\\n' '{"id":1042,"login":"fixture-lane","type":"User"}'; exit 0 ;; esac
+exec bun -e 'setInterval(() => {}, 1000)'
+`, { mode: 0o700 });
     const previousPath = process.env.PATH;
     process.env.PATH = `${bin}${path.delimiter}${previousPath ?? ""}`;
     try {
@@ -415,7 +423,7 @@ describe("GitHub read failure recovery through production ports", () => {
       else process.env.PATH = previousPath;
       fs.rmSync(bin, { recursive: true, force: true });
     }
-  });
+  }, 35_000);
 
   test("a refused App read never falls back to the CLI identity", async () => {
     const { githubRunner } = await import("../monitor/githubEvidence");
@@ -455,7 +463,7 @@ describe("GitHub read failure recovery through production ports", () => {
       h.advance(MERGE_SETTLE_MS);
       await sweepAutoMerge(ports);
       expect(h.merge("L1")).toMatchObject({ state: "merged", repository: REPO, readFailures: 0 });
-      expect(h.writes).toHaveLength(1);
+      expect(h.writes).toEqual([{ repository: REPO, args: ["pr", "merge", "11", "--repo", REPO, "--squash", "--match-head-commit", HEAD_A] }]);
       expect(cliReads).toBe(0);
       expect(fixture.lookups().at(-1)?.at(-1)).toBe(fixture.repository);
     } finally { fs.unlinkSync(declaration); }
@@ -1255,17 +1263,30 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
     }
   });
 
-  test("CLEAN with settled green checks merges with --match-head-commit, and never before the checks settled", async () => {
+  test("an undeclared repository merges with the owner noreply and head match after green checks settle", async () => {
     const h = harness({ lanes: [lane("L1")], prs: [openPr(11)] });
     await h.run(MERGE_SETTLE_MS - MERGE_POLL_MS);
     expect(h.merges()).toEqual([]);
     expect(h.merge("L1")?.state).toBe("waiting-checks");
     await h.run(MERGE_POLL_MS * 2, () => h.merges().length > 0);
-    expect(h.merges()).toEqual([["pr", "merge", "11", "--repo", REPO, "--squash", "--match-head-commit", HEAD_A]]);
+    expect(h.merges()).toEqual([["pr", "merge", "11", "--repo", REPO, "--squash", "--author-email", fixtureNoreply, "--match-head-commit", HEAD_A]]);
     const merge = h.merge("L1")!;
     expect(merge).toMatchObject({ state: "merged", by: "auto-merge", mergedHead: HEAD_A, method: "squash", prNumber: 11 });
     expect(merge.mergeCommit).toBe("f".repeat(40));
     expect(merge.chain).toEqual([HEAD_A]);
+  });
+
+  test("merge commits bind the owner noreply author email and rebase-only repositories refuse dispatch", async () => {
+    const mergeCommit = harness({ mergeMethod: "merge", lanes: [lane("merge-commit")], prs: [openPr(11)] });
+    await mergeCommit.run(MERGE_SETTLE_MS * 3, () => mergeCommit.merges().length > 0);
+    expect(mergeCommit.merges()[0]).toContain(fixtureNoreply);
+    expect(mergeCommit.merges()[0]).toContain("--author-email");
+
+    resetAutoMergeForTests();
+    const rebaseOnly = harness({ mergeMethod: "rebase", lanes: [lane("rebase-only")], prs: [openPr(12)] });
+    await rebaseOnly.run(MERGE_SETTLE_MS * 3);
+    expect(rebaseOnly.merges()).toEqual([]);
+    expect(rebaseOnly.merge("rebase-only")).toMatchObject({ state: "blocked", reason: expect.stringContaining("rebase merges replace the committer identity") });
   });
 
   test("an empty rollup with CLEAN does not merge, and blocks after 3 min with no checks reported", async () => {
@@ -1321,7 +1342,7 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
     await h.sweep();
     Object.assign(h.prs.get(11)!, { checks: [green("ci")], mergeStateStatus: "CLEAN", mergeable: "MERGEABLE" });
     await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS * 2, () => h.merges().length > 0);
-    expect(h.merges()).toEqual([["pr", "merge", "11", "--repo", REPO, "--squash", "--match-head-commit", HEAD_B]]);
+      expect(h.merges()).toEqual([["pr", "merge", "11", "--repo", REPO, "--squash", "--author-email", fixtureNoreply, "--match-head-commit", HEAD_B]]);
     expect(h.merge("L1")).toMatchObject({ state: "merged", chain: [HEAD_A, HEAD_B], mergedHead: HEAD_B });
     expect(h.merge("L1")!.updates).toEqual([{ requestedAt: iso(T0), head: HEAD_B }]);
     expect(h.updates()).toHaveLength(0);
@@ -1548,7 +1569,7 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
     await h.sweep();
     retainedUpdate(h, HEAD_C);
     await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS * 2, () => h.merges().length > 0);
-    expect(h.merges()).toEqual([["pr", "merge", "11", "--repo", REPO, "--squash", "--match-head-commit", HEAD_C]]);
+    expect(h.merges()).toEqual([["pr", "merge", "11", "--repo", REPO, "--squash", "--author-email", fixtureNoreply, "--match-head-commit", HEAD_C]]);
     expect(h.merge("L1")).toMatchObject({ state: "merged", chain: [HEAD_A, HEAD_B, HEAD_C] });
     expect(h.updates()).toHaveLength(0);
   });
@@ -1569,6 +1590,23 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
     h.commits.set(HEAD_X, { parents: [HEAD_A, MAIN_1], committer: "web-flow" });
     await h.sweep();
     expect(h.merge("L1")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.headChanged });
+  });
+
+  test.each(["owner", "unrelated"] as const)("a two-parent refresh by the %s committer %s review eligibility", async committer => {
+    const completed = lane("L1");
+    completed.delivery = completedDelivery(completed);
+    const h = harness({ lanes: [completed], prs: [openPr(11)] });
+    let refreshes = 0;
+    Object.assign(h.ports, { startRefresh: async () => { refreshes += 1; return {}; } });
+    await h.sweep();
+    h.prs.get(11)!.head = HEAD_B;
+    h.commits.set(HEAD_B, { parents: [HEAD_A, MAIN_1], identity: {
+      name: "Fixture", email: committer === "owner" ? fixtureNoreply : "someone@example.invalid",
+    } });
+    h.advance(MERGE_POLL_MS);
+    await h.sweep();
+    expect(refreshes).toBe(committer === "owner" ? 1 : 0);
+    if (committer === "unrelated") expect(h.merge("L1")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.headChanged });
   });
 
   test("pending required checks time out at 90 min, and not before", async () => {
@@ -1826,7 +1864,7 @@ describe("writes go out as the App", () => {
     const h = harness({ lanes: [lane("L1")], prs: [openPr(11)] });
     await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS * 3, () => h.merges().length > 0);
     expect(h.writes).toEqual([
-      { args: ["pr", "merge", "11", "--repo", REPO, "--squash", "--match-head-commit", HEAD_A], repository: REPO },
+      { args: ["pr", "merge", "11", "--repo", REPO, "--squash", "--author-email", fixtureNoreply, "--match-head-commit", HEAD_A], repository: REPO },
     ]);
     expect(h.merge("L1")?.state).toBe("merged");
   });

@@ -442,13 +442,13 @@ queued → checking ─┬─ head in chain, CLEAN/HAS_HOOKS/UNSTABLE, required 
    (`docs/design/merge-queue-refresh-capacity.md` §5) the runner updates a PR
    in the lane's own repository and branch, whose finished lane still owns the
    delivery, by itself: `git merge-tree` of the base tip into the PR head,
-   `git commit-tree` under the machine identity with dates pinned to the
+   `git commit-tree` under the owner's GitHub noreply identity with dates pinned to the
    recorded request, the exact commit recorded in `merge.updates[]` before a
    fast-forward push, then the required checks on that head and the merge. One
    such update runs per repository and base tip. A textual conflict, a fork, a
    proactive lane, or a lane without a checkout starts the same owned,
    visible refresh pipeline used for conflicts. It merges the forge's saved
-   base into the delivery branch locally, under the enforced machine identity,
+   base into the delivery branch locally under the owner's GitHub noreply identity,
    then runs resolution review and publication checks. GitHub update-branch is
    forbidden: its merge identity can fail the privacy gate. The original leaves
    the repository queue while the successor runs. The successor waits for its

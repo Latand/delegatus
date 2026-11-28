@@ -1,3 +1,4 @@
+import { seedForgeCommitAccount } from "@/test-helpers/forgeCommitAccount";
 import { expect, test } from "bun:test";
 import { pipelineCorpus } from "./fixtures/corpus";
 import { APP_PUSH_RETRY_WINDOW_MS, isPublicationRecovery, mergePublicationRecovery, publicationEnvironmentFailure, publicationFailurePhase, publicationPrivacyConfigurationFault, publicationRemoteRefusal, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
@@ -118,6 +119,7 @@ test.each(["passed", "passed-phases", "privacy", "privacy-partial", "completed",
   "second-start", "second-fail", "second-pass", "quoted-pass", "quoted-start", "many-phases", "long-fail"])("publication clipping retains diagnostic provenance: %s", async shape => {
   const previous = loadPipelines();
   const f = await lockedFixture();
+  seedForgeCommitAccount();
   try {
     const remote = `${f.root}/origin.git`;
     await f.run(["git", "init", "--bare", "--initial-branch=main", remote]);
