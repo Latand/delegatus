@@ -17,6 +17,7 @@ import { CpuAdmissionQueue } from "@/lib/runtime/cpuAdmission";
 import { DEFAULT_CPU_PRESSURE_POLICY } from "@/lib/runtime/cpuPressure";
 import { OperationLeaseExpiredError } from "@/lib/operationLease";
 import { settleProvisioningJobsForTests } from "./provisioningJob";
+import { provisioningStripe } from "./provisionCheckoutCustody";
 
 async function committing(publication: "internal" | "remote-branch" = "internal") {
   const h = harness();
@@ -36,6 +37,15 @@ async function waitForProvisioning(check: () => Promise<boolean>) {
     if (performance.now() >= deadline) throw new Error("fixture provisioning did not reach its expected checkpoint");
     await Bun.sleep(10);
   }
+}
+
+function fixtureCheckoutOutsideStripes(stem: string, peers: ReadonlyArray<{ worktreeDir: string }>): string {
+  const occupied = new Set(peers.map(peer => provisioningStripe(path.resolve(peer.worktreeDir))));
+  for (let suffix = 0; suffix < 256; suffix++) {
+    const checkout = path.resolve(`${stem}-${suffix}`);
+    if (!occupied.has(provisioningStripe(checkout))) return checkout;
+  }
+  throw new Error("fixture could not select an independent checkout stripe");
 }
 
 test.each(["never", "late-write"] as const)("an expired controller abandons a %s await and the next tick admits and launches the waiting stage", async mode => {
@@ -1792,6 +1802,7 @@ test("a new controller process resumes active and repository-waiting provisionin
   const peer = structuredClone(lane);
   peer.id = "restart-repository-waiter"; peer.delivery = undefined;
   Object.assign(peer, pipelineIdentity(peer.id, peer.task, peer.repoDir));
+  lane.worktreeDir = fixtureCheckoutOutsideStripes("/restart-checkout-owner", [peer]);
   savePipelines([lane, peer]);
   const laneIds = [lane.id, peer.id];
   const clock = Date.parse(h.ports.now());
@@ -1855,8 +1866,10 @@ test("a new controller process resumes active and repository-waiting provisionin
     await until(entered.promise).catch(error => { throw new Error(stderr || "provisioning child did not reach the restart checkpoint", { cause: error }); });
     expect(await findControllerPipeline(lane.id)).toMatchObject({ state: "provisioning",
       provisioningJob: { step: "creatingCheckout", status: "running", owner: { pid: child.pid } } });
-    expect(await findControllerPipeline(peer.id)).toMatchObject({ state: "provisioning",
+    const waiting = await findControllerPipeline(peer.id);
+    expect(waiting).toMatchObject({ state: "provisioning",
       provisioningJob: { step: "waitingForTurn", status: "waiting", owner: { pid: child.pid } } });
+    expect(waiting?.provisioningJob?.resource).toBe(`repo:${provisioningStripe("/fixture/common.git")}`);
   } finally { await stopFixtureProcess(child); }
   const resumed = Bun.spawn([process.execPath, "-e", source, "resume"],
     { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
@@ -1930,6 +1943,9 @@ test.each(["success", "failure", "pause", "remove", "branch", "owner"] as const)
     row.id = id; row.repoDir = repo; row.delivery = undefined;
     Object.assign(row, pipelineIdentity(row.id, row.task, row.repoDir));
   }
+  // This case holds a repository stripe and requires an independent checkout grant.
+  lane.worktreeDir = fixtureCheckoutOutsideStripes("/linked-checkout-owner", [peer, unrelated]);
+  unrelated.worktreeDir = fixtureCheckoutOutsideStripes("/unrelated-checkout", [lane, peer]);
   savePipelines([lane]);
   const entered = latch(), release = latch(), peerLookup = latch(), otherReady = latch();
   const unregister = registerPipelineTick(async () => {
@@ -1962,7 +1978,7 @@ test.each(["success", "failure", "pause", "remove", "branch", "owner"] as const)
     await waitForProvisioning(async () => (await findControllerPipeline(peer.id))?.provisioningJob?.status === "waiting");
     const waiting = (await findControllerPipeline(peer.id))?.provisioningJob;
     expect(waiting?.step).toBe("waitingForTurn");
-    expect(waiting?.resource).toMatch(/^repo:/);
+    expect(waiting?.resource).toBe(`repo:${provisioningStripe("/linked-common.git")}`);
     expect(peerLookups).toBe(1);
     expect(peerCommands).toBe(0);
     expect((await findControllerPipeline(peer.id))?.state).toBe("provisioning");
@@ -2015,6 +2031,7 @@ test("four linked provisioning lanes leave capacity for a later independent laun
     Object.assign(row, pipelineIdentity(row.id, row.task, row.repoDir));
     return row;
   })];
+  lane.worktreeDir = fixtureCheckoutOutsideStripes("/linked-capacity-owner", linked.slice(1));
   savePipelines(linked);
   const entered = latch(), release = latch(), linkedLookups = latch(), independentReady = latch();
   const lookedUp = new Set<string>();
@@ -2051,6 +2068,8 @@ test("four linked provisioning lanes leave capacity for a later independent laun
     const created = await createPipelineFromRequest({ task: "Independent lane", spec: "Provision beside a held repository", repoDir: "/independent", stages: BUILD_ONLY as never, publication: "internal" }, h.ports);
     expect(created.pipeline).toBeDefined();
     independent = created.pipeline!;
+    independent.worktreeDir = fixtureCheckoutOutsideStripes("/independent-checkout", linked);
+    await withDeliveryMutationAsync(tx => { tx.put(independent!); }, 1);
     await until(tickPipelinesController([], h.ports));
     await until(independentReady.promise);
     await waitForProvisioning(async () => {
