@@ -111,6 +111,29 @@ test("an inactive Codex account adds its transcript backfill to the stored histo
   expect(fetchCalls).toEqual([]);
 });
 
+test("opening the same Codex account history twice reuses its transcript scan", async () => {
+  const account = createManagedCodexAccount("Codex Cached Panel");
+  const sessions = account.sessionsDir;
+  const original = fs.readdirSync;
+  let transcriptDirectoryReads = 0;
+  const scan = spyOn(fs, "readdirSync").mockImplementation(((...args: Parameters<typeof fs.readdirSync>) => {
+    if (String(args[0]).startsWith(sessions)) transcriptDirectoryReads++;
+    return original(...args);
+  }) as typeof fs.readdirSync);
+  try {
+    const first = await get(`?engine=codex&account=${encodeURIComponent(account.id)}`);
+    expect(first.status).toBe(200);
+    const readsAfterFirstOpen = transcriptDirectoryReads;
+    expect(readsAfterFirstOpen).toBeGreaterThan(0);
+
+    const second = await get(`?engine=codex&account=${encodeURIComponent(account.id)}`);
+    expect(second.status).toBe(200);
+    expect(transcriptDirectoryReads).toBe(readsAfterFirstOpen);
+  } finally {
+    scan.mockRestore();
+  }
+});
+
 test("an unknown or hostile id is not an account", async () => {
   for (const id of ["nope", "../x", "%00", "claude-two/../../etc", ""]) {
     expect(await readAccountBurndown("claude", id)).toBeNull();

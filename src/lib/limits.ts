@@ -1391,6 +1391,33 @@ export function collectCodexRateLimitSeries(sessionsDir: string, sinceUnix: numb
   return { session, weekly, sessionWindowSeconds, weeklyWindowSeconds, sessionResetsAt, weeklyResetsAt };
 }
 
+/** Transcript backfills are synchronous, so an account's panel rows share one
+    scan for a minute. Keep the cache small because it lives in the Viewer. */
+const CODEX_SERIES_CACHE_MS = 60_000;
+const CODEX_SERIES_CACHE_MAX = 32;
+const codexSeriesCache = new Map<string, { at: number; series: CodexTranscriptSeries }>();
+
+function cachedCodexRateLimitSeries(sessionsDir: string, sinceUnix: number, accountId: string): CodexTranscriptSeries {
+  const key = `${accountId}\0${sessionsDir}`;
+  const now = Date.now();
+  const cached = codexSeriesCache.get(key);
+  if (cached && now - cached.at < CODEX_SERIES_CACHE_MS) {
+    // Refresh insertion order so the bounded map evicts the least recently used account.
+    codexSeriesCache.delete(key);
+    codexSeriesCache.set(key, cached);
+    return cached.series;
+  }
+  const series = collectCodexRateLimitSeries(sessionsDir, sinceUnix, accountId);
+  codexSeriesCache.delete(key);
+  codexSeriesCache.set(key, { at: now, series });
+  while (codexSeriesCache.size > CODEX_SERIES_CACHE_MAX) {
+    const oldest = codexSeriesCache.keys().next().value;
+    if (oldest === undefined) break;
+    codexSeriesCache.delete(oldest);
+  }
+  return series;
+}
+
 export { buildSeries };
 
 export function buildEngineBurndown(
@@ -1444,7 +1471,7 @@ export async function readBurndown(options: { codexLiveReader?: CodexLiveLimitsR
   let codex: EngineBurndown | null = null;
   const codexAccount = payload.codexAccountId ? listedAccount(() => accountForSpawn(payload.codexAccountId)) : null;
   if (payload.codexAccountId && codexAccount) {
-    const backfill = collectCodexRateLimitSeries(codexAccount.sessionsDir, since, codexAccount.id);
+    const backfill = cachedCodexRateLimitSeries(codexAccount.sessionsDir, since, codexAccount.id);
     codex = buildEngineBurndown("codex", payload.codexAccountId, payload.codex, now, backfill);
   }
   return {
@@ -1476,7 +1503,7 @@ export async function readAccountBurndown(engine: "claude" | "codex", accountId:
   const live: EngineLimits | null = observation?.limits
     ? { ...observation.limits, capturedAt: observation.limits.capturedAt ?? (Number.isFinite(observedAt) ? Math.round(observedAt) : null) }
     : null;
-  const backfill = codexAccount ? collectCodexRateLimitSeries(codexAccount.sessionsDir, now - RETENTION_S, codexAccount.id) : null;
+  const backfill = codexAccount ? cachedCodexRateLimitSeries(codexAccount.sessionsDir, now - RETENTION_S, codexAccount.id) : null;
   const series = buildEngineBurndown(engine, accountId, live, now, backfill);
   return {
     claude: engine === "claude" ? series : null,
