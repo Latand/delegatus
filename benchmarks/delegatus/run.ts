@@ -204,7 +204,7 @@ async function checkTaskLinks(binding?: Binding) {
     const { stateDir } = await import('../../src/lib/configDir');
     if (stateDir() !== state) return {};
     const [
-      { loadTasksByIds, TASKS_FILE }, { projectForCwd, projectRootForCwd }, { pipelineTaskLinkError },
+      { loadTasksByIds, TASKS_FILE }, { projectForCwd, observeWorktreeResolution }, { pipelineTaskLinkError },
       { directoryProjectId, isRepositoryProjectId, repositoryRootForPath },
       { projectAliasSnapshot, withProjectAliasSnapshot },
     ] = await Promise.all([
@@ -227,7 +227,7 @@ async function checkTaskLinks(binding?: Binding) {
         return { task, packageProject, worktreeProject,
           repository: repositoryRootForPath(repoDir) === repoDir,
           worktree: lstatSync(join(worktreeDir, '.git'), { throwIfNoEntry: false })?.isFile() === true
-            && repositoryRootForPath(worktreeDir) === worktreeDir && projectRootForCwd(worktreeDir) === repoDir,
+            && repositoryRootForPath(worktreeDir) === worktreeDir && observeWorktreeResolution(worktreeDir)?.repo === repoDir,
           packageTaskError: packageProject ? pipelineTaskLinkError({ project: packageProject }, inputs.taskIds, tasks) : 'unresolved',
           worktreeTaskError: worktreeProject ? pipelineTaskLinkError({ project: worktreeProject }, inputs.taskIds, tasks) : 'unresolved' };
       });
@@ -239,7 +239,7 @@ async function checkTaskLinks(binding?: Binding) {
       };
       const readers = [
         ['loadTasksByIds', '../../src/lib/tasks/store.ts'],
-        ['projectForCwd/projectRootForCwd', '../../src/lib/scanner/describe.ts'],
+        ['projectForCwd/observeWorktreeResolution', '../../src/lib/scanner/describe.ts'],
         ['projectAliasSnapshot', '../../src/lib/projects/aliases.ts'],
         ['repositoryRootForPath', '../../src/lib/projects/identity.ts'],
         ['pipelineTaskLinkError', '../../src/lib/pipelines/store.ts'],

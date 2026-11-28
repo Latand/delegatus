@@ -23,7 +23,8 @@ Exit 0 means the probe returned observations. Each result carries its own
 `passed` value. An unavailable probe exits 2 and returns an empty object.
 
 The probe reads the exact task IDs via `loadTasksByIds`, resolves the
-parent, package and worktree projects using the product scanner, and calls
+parent, package and worktree projects and observes the worktree's Git
+backing repository using the product scanner. It calls
 `pipelineTaskLinkError` for the package and worktree bindings and the
 wrong-project and missing-task controls. Each result includes the manifest,
 effective input, reader and driver digests along with the raw outcomes.

@@ -123,7 +123,8 @@ const selfAttested = () => {
   };
 };
 
-const missingGateResults = Object.entries(gateRequirements).map(([gate, missing]) => ({ gate, missing }));
+const missingGateResults = (Object.keys(gateRequirements) as (keyof typeof gateRequirements)[])
+  .map(gate => ({ gate, missing: [...gateRequirements[gate]] }));
 
 function privateJson(path: string, value: unknown) {
   const bytes = JSON.stringify(value) + '\n';
@@ -183,10 +184,12 @@ test('persisted G6 receipts must match real task, namespace, and worktree reads'
   };
   const parentRepoDir = repo('parent', origin);
   const wrongRepoDir = repo('wrong-project', otherOrigin);
+  const commitBase = (dir: string) =>
+    git(dir, '-c', 'user.name=Benchmark', '-c', 'user.email=noreply', 'commit', '--allow-empty', '-qm', 'Fixture base');
   const packages = design.tasks.map(({ id }) => {
     const repoDir = repo(id, origin);
     const worktreeDir = join(root, `${id}-checkout`);
-    git(repoDir, '-c', 'user.name=Benchmark', '-c', 'user.email=noreply', 'commit', '--allow-empty', '-qm', 'Fixture base');
+    commitBase(repoDir);
     git(repoDir, 'worktree', 'add', '--quiet', '--detach', worktreeDir);
     return { task: id, repoDir, worktreeDir };
   });
@@ -246,12 +249,26 @@ test('persisted G6 receipts must match real task, namespace, and worktree reads'
   expect(refusal()).toContain('G6: current-seat-visible-lineage; G7:');
   binding.gateResults = receipts;
 
-  binding.taskLinks!.packages[0].worktreeDir = repo('same-namespace-lookalike', origin);
+  const lookalikeRepoDir = repo('same-namespace-lookalike', origin);
+  const originalWorktree = packages[0].worktreeDir;
+  binding.taskLinks!.packages[0].worktreeDir = lookalikeRepoDir;
   expect(checks()[links].observations.links[0]).toMatchObject({
     worktree: false, worktreeTaskError: null,
   });
   expect(refusal()).toBe(allMissing);
-  binding.taskLinks!.packages[0].worktreeDir = join(root, `${task}-checkout`);
+  commitBase(lookalikeRepoDir);
+  const nested = join(packages[0].repoDir, 'worktrees');
+  mkdirSync(nested);
+  const wrongOwner = join(nested, 'different-git-owner');
+  git(lookalikeRepoDir, 'worktree', 'add', '--quiet', '--detach', wrongOwner);
+  binding.taskLinks!.packages[0].worktreeDir = wrongOwner;
+  const wrongOwnerResult = checks();
+  expect(wrongOwnerResult[links].observations.links[0]).toMatchObject({
+    worktree: false, worktreeTaskError: null,
+  });
+  binding.gateResults = { ...receipts, [links]: privateJson(join(root, 'wrong-owner.json'), wrongOwnerResult[links]) };
+  expect(refusal()).toBe(allMissing);
+  binding.taskLinks!.packages[0].worktreeDir = originalWorktree;
 
   git(packages[0].repoDir, 'remote', 'set-url', 'origin', otherOrigin);
   const failed = checks();
