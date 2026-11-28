@@ -845,10 +845,28 @@ Implementation acceptance is concrete:
    E1 code dependencies, arm pairing, dependency references,
    the two identical frozen evaluation
    digests per accumulating sequence and the intended failure denominator.
+   Request expansion requires a sealed row digest covering fixture, prompt,
+   task, runtime, dependency, repository and predecessor inputs; the ordinary
+   CLI cannot expand an unbound row. Held-out evaluations bind the same frozen
+   learned-pack digest. The bundled manifest is checked against an independent
+   reviewed digest as well as its schedule invariants.
 2. Non-model tests exercise every gate red path, unknown usage, timeout,
    truncated context, duplicate/unknown MCP delivery, model fallback, judge
    calibration rejection and partial/unsafe oracle controls. Replayed/synthetic
    data is marked harness-only. None is counted as a model run.
+   Gate evidence binds a content-addressed evidence artifact and its observed
+   outcomes to the manifest. Missing, mismatched, failed or unknown observations
+   refuse with the named gate. G6 also requires all 13 exact task, canonical
+   project, package-project and worktree-project links. The solver ledger keeps
+   a head checkpoint, and causal comparisons check the complete scheduled start
+   order plus requested and resolved runtimes.
+   Learning acceptance joins each curator row to its registered learner,
+   delivered artifact, usage and original queue deadline. Every judge record is
+   tied to its artifact and has distinct session, terminal and cleanup evidence.
+   First/final acceptance requires valid captured artifacts. Reviewer findings
+   retain checkpoint, evidence, severity and disposition; incomplete defect
+   censuses are labeled coverage-limited. E continuations run every earlier
+   operation's oracle against the submitted tree.
 3. A private launch-binding file records current src/taskIds, approved
    subscription profile references, effective runtime versions and hashes,
    task/oracle/dependency seals, all 13 canonical project/task-link proofs, full
