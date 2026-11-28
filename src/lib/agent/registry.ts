@@ -10533,8 +10533,9 @@ export class AgentRegistry {
 
   /** Records a release handoff for one exact active engine. The process fence
       prevents an old registration from appointing a replacement that took the
-      same session key concurrently. */
-  markStructuredHostHandoff(key: SessionKey, expected: Readonly<ProcessIdentity>): boolean {
+      same session key concurrently. Publish any required cut after checking
+      that fence and before committing the handoff marker. */
+  markStructuredHostHandoff(key: SessionKey, expected: Readonly<ProcessIdentity>, publishCut?: () => void): boolean {
     invalidateAgentState(this.filename, key);
     return this.mutate((file) => {
       const entry = file.entries[sessionKeyId(key)];
@@ -10552,6 +10553,7 @@ export class AgentRegistry {
       };
       const changedHostPaths = activeHostPathsChangedByEntry(file, sessionKeyId(key), replacement);
       const readinessBefore = migrationReadinessSignature(file, key.engine, changedHostPaths);
+      publishCut?.();
       entry.pendingAction = replacement.pendingAction;
       entry.structuredHost = replacement.structuredHost;
       entry.updatedAt = now();

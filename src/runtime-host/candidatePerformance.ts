@@ -21,6 +21,7 @@ import {
   type CandidateBrowserBounds,
   type CandidateBrowserMeasurements,
 } from "./candidateBrowser";
+import type { CandidateBrowserStartupFailure } from "./candidateRuntimeHost";
 
 export const CANDIDATE_PERFORMANCE_REPORT_PREFIX = "[candidate performance] report ";
 /** The candidate's own Bun inside its image; `bun` there is a host shim. */
@@ -227,6 +228,7 @@ export interface CandidatePerformanceEvidence {
   runtime: string;
   bounds: CandidatePerformanceBounds;
   measurements: CandidatePerformanceMeasurements | null;
+  browserStartupFailure?: CandidateBrowserStartupFailure;
   /** Failed checks; duration-only observations are recorded separately. */
   breaches: string[];
   /** Duration thresholds are diagnostic; failed operations still refuse a release. */
@@ -238,6 +240,21 @@ export interface CandidatePerformanceEvidence {
   ok: boolean;
   detail?: string;
   log?: string[];
+}
+
+/** Attach the structured browser refusal to the report crossing the
+ * candidate-runner boundary. The production runner and refusal controls use
+ * the same assembly path so diagnostic fields cannot be dropped. */
+export function withBrowserStartupFailure<T extends { breaches: string[] }>(
+  report: T,
+  failure: CandidateBrowserStartupFailure,
+  message = `browser startup ${failure.reason} (state ${failure.state})`,
+): T & { browserStartupFailure: CandidateBrowserStartupFailure } {
+  return {
+    ...report,
+    breaches: [message, ...report.breaches],
+    browserStartupFailure: failure,
+  };
 }
 
 /** Classify measured checks. Supplying a timing collector keeps duration

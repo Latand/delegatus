@@ -55,7 +55,7 @@ import { activeDrain } from "@/lib/selfUpdate/drain";
 import { ACCOUNT_MIGRATION_PASS_INTERVAL_MS, requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { actingOperation } from "@/lib/deliveryActuation";
-import { agentRegistry, REGISTRY_WRITER_BUSY, resolveConversationAlias, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type StructuredTerminationCapture } from "@/lib/agent/registry";
+import { agentRegistry, REGISTRY_WRITER_BUSY, RegistryWriterBusyError, resolveConversationAlias, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type StructuredTerminationCapture } from "@/lib/agent/registry";
 import { registryConversationsForEntryKey } from "@/lib/agent/sqliteRegistryStore";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
@@ -86,8 +86,9 @@ import { hostTurnRecordIdentity, readHostTurnRecord } from "./eventStore";
 import { restartCutEvidenceHolds } from "./restartCutHold";
 import {
   interruptionObligationDirectory,
-  interruptionObligationStore,
+  InterruptionJournalBusyError,
   interruptionStageOf,
+  withInterruptionObligationAdmission,
   type InterruptionObligationStore,
 } from "./interruptionObligations";
 import { structuredHostKillRefFromRegistry, terminateStructuredHostTree } from "./structuredHostControl";
@@ -3101,10 +3102,77 @@ export interface DemotionInterruptionOptions {
   store?: InterruptionObligationStore;
   /** The active orchestrator seats. Defaults to the durable seat file. */
   seats?: () => readonly Pick<OrchestratorSeat, "project" | "seatEpoch" | "conversationId">[];
-  /** Keep the evidence check and continuation record in one admitted step. */
-  admitRecord?: (record: () => boolean) => Promise<boolean>;
   /** Optional cache reader for bounded custody recovery; production uses the shared cache. */
   backgroundWorkCache?: VerifiedBackgroundWorkCache;
+  /** Startup-owned handoffs inherit the startup read's cancellation and bound. */
+  signal?: AbortSignal;
+  deadline?: number;
+  assertActive?: () => void;
+}
+
+/* A journal lock admission can itself wait five seconds. Leave enough of the
+   demotion grace window for a later admission after one bounded refusal. */
+const DEMOTION_HANDOFF_WAIT_MS = 15_000;
+const DEMOTION_HANDOFF_WRITE = { label: "registry.demotion-handoff" };
+
+function assertDemotionAdmissionActive(options: DemotionInterruptionOptions): void {
+  options.assertActive?.();
+  if (options.signal?.aborted) throw options.signal.reason ?? new Error("startup authority was cancelled");
+  if (options.deadline !== undefined && performance.now() >= options.deadline) {
+    throw new Error("demotion handoff deadline exceeded");
+  }
+}
+
+async function admitDemotionRecord<T>(
+  registry: AgentRegistry,
+  options: DemotionInterruptionOptions,
+  readEvidence: () => T,
+  record: (store: InterruptionObligationStore, evidence: T) => boolean,
+): Promise<boolean> {
+  if (options.store) {
+    assertDemotionAdmissionActive(options);
+    const store = options.store;
+    const evidence = readEvidence();
+    assertDemotionAdmissionActive(options);
+    return registry.deliveryWriteOrBusy(DEMOTION_HANDOFF_WRITE, () => record(store, evidence));
+  }
+
+  const deadline = Math.min(options.deadline ?? Infinity, performance.now() + DEMOTION_HANDOFF_WAIT_MS);
+  const directory = interruptionObligationDirectory(registry.filename);
+  const registryBusy = new RegistryWriterBusyError(DEMOTION_HANDOFF_WRITE.label);
+  let lastBusy: InterruptionJournalBusyError | RegistryWriterBusyError | undefined;
+  const pause = (ms: number) => new Promise<void>((resolve, reject) => {
+    const finish = () => { options.signal?.removeEventListener("abort", abort); resolve(); };
+    const timer = setTimeout(finish, ms);
+    const abort = () => {
+      clearTimeout(timer);
+      options.signal?.removeEventListener("abort", abort);
+      reject(options.signal?.reason ?? new Error("startup authority was cancelled"));
+    };
+    options.signal?.addEventListener("abort", abort, { once: true });
+    if (options.signal?.aborted) abort();
+  });
+  for (;;) {
+    assertDemotionAdmissionActive(options);
+    if (performance.now() >= deadline) throw lastBusy ?? registryBusy;
+    // The successor also uses this FIFO journal. Try the registry once
+    // inside it and return the journal before any wait for the writer.
+    try {
+      const result = await withInterruptionObligationAdmission(directory, store => {
+        const evidence = readEvidence();
+        return registry.deliveryWriteNow(DEMOTION_HANDOFF_WRITE, () => record(store, evidence));
+      }, { deadline, signal: options.signal });
+      if (result.acquired) return result.value;
+      lastBusy = registryBusy;
+    } catch (error) {
+      if (!(error instanceof InterruptionJournalBusyError)) throw error;
+      lastBusy = error;
+    }
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) throw lastBusy;
+    // Wait outside the journal. The next attempt revalidates the host and turn.
+    await pause(Math.ceil(Math.min(50, remaining)));
+  }
 }
 
 /** The seat holding `conversationId`. A seat may still name an alias of the
@@ -3142,6 +3210,7 @@ export async function recordDemotionInterruption(
   /** Whether the evidence the cut was decided from still stands, asked after
       the last awaited read and before the record is written. */
   evidenceStands: () => boolean = () => true,
+  publishCut: (write: () => void) => void = write => write(),
 ): Promise<boolean> {
   const snapshot = startupHostSnapshot(registry, key);
   const hostKey = sessionKeyId(key);
@@ -3159,50 +3228,57 @@ export async function recordDemotionInterruption(
   const generation = conversation.generations.at(-1)!;
   const transcript = await readTranscriptCutEvidence(conversation.engine, generation.path).catch(() => null);
   const seats = options.seats ?? (await import("@/lib/orchestrator/seats")).activeOrchestratorSeats;
-  const store = options.store ?? interruptionObligationStore(interruptionObligationDirectory(registry.filename));
   const custody = (row: typeof entry, owner: typeof conversation) => JSON.stringify([
     row.claimOwner, row.claimEpoch, row.structuredHost?.writerClaimEpoch, row.structuredHost?.process,
     owner.generations.at(-1), owner.turn, owner.supersededBy,
   ]);
   const expected = custody(entry, conversation);
-  const record = () => {
-    let seat: { project: string; seatEpoch: number } | null = null;
-    try { seat = orchestratorSeatFor(registry, conversationId, seats); }
-    catch (error) { controllerDiagnosticError("[viewer release] orchestrator seat lookup failed while recording an interruption", { hostKey, error }); }
-    // Seat discovery can observe a completion. Validate after every evidence
-    // source, immediately before marking custody and recording the cut.
+  const readSeat = () => {
+    try { return orchestratorSeatFor(registry, conversationId, seats); }
+    catch (error) {
+      controllerDiagnosticError("[viewer release] orchestrator seat lookup failed while recording an interruption", { hostKey, error });
+      return null;
+    }
+  };
+  return admitDemotionRecord(registry, options, readSeat, (store, seat) => {
+    assertDemotionAdmissionActive(options);
+    // Seat discovery can observe a completion. Validate all the evidence
+    // under the registry writer before publishing the handoff.
     const fresh = startupHostSnapshot(registry, key);
     const currentEntry = fresh.entries[hostKey];
     const currentConversation = fresh.conversations[conversation.id];
     if (!currentEntry || !currentConversation || custody(currentEntry, currentConversation) !== expected || !evidenceStands()) return false;
-    const { obligation, created } = store.record({
-      conversationId,
-      engine,
-      hostKey,
-      path: generation.path,
-      owner: current.pid === null ? null : { pid: current.pid, startIdentity: current.processStartIdentity },
-      claimEpoch: entry.claimEpoch,
-      turnRef,
-      boundary: options.boundary ?? "viewer-release",
-      reason: "viewer-release",
-      checkpoint: {
-        lastEventKind: transcript?.lastWork?.kind ?? null,
-        lastEventAt: transcript?.lastWork?.at ?? null,
-        ...(backgroundTasks.length > 0 ? { backgroundTasks: [...backgroundTasks] } : {}),
-      },
-      seat,
-      /* Still owed: the stage stays held until the successor boots and hands
-         the cut to the stage's controller instead of continuing it. */
-      stage: interruptionStageOf(fresh.memberships, conversationId),
+    publishCut(() => {
+      assertDemotionAdmissionActive(options);
+      // The queued reader owns import and damaged-claim recovery.
+      const { obligation, created } = store.record({
+        conversationId,
+        engine,
+        hostKey,
+        path: generation.path,
+        owner: current.pid === null ? null : { pid: current.pid, startIdentity: current.processStartIdentity },
+        claimEpoch: entry.claimEpoch,
+        turnRef,
+        boundary: options.boundary ?? "viewer-release",
+        reason: "viewer-release",
+        checkpoint: {
+          lastEventKind: transcript?.lastWork?.kind ?? null,
+          lastEventAt: transcript?.lastWork?.at ?? null,
+          ...(backgroundTasks.length > 0 ? { backgroundTasks: [...backgroundTasks] } : {}),
+        },
+        seat,
+        /* Still owed: the stage stays held until the successor boots and hands
+           the cut to the stage's controller instead of continuing it. */
+        stage: interruptionStageOf(fresh.memberships, conversationId),
+      }, { importPending: false });
+      if (created) {
+        controllerDiagnosticError("[viewer release] recorded an interrupted turn owed one continuation", {
+          conversationId, hostKey, turnRef, obligation: obligation.id,
+        });
+      }
     });
-    if (created) {
-      controllerDiagnosticError("[viewer release] recorded an interrupted turn owed one continuation", {
-        conversationId, hostKey, turnRef, obligation: obligation.id,
-      });
-    }
     return true;
-  };
-  return options.admitRecord ? options.admitRecord(record) : record();
+  });
 }
 
 /** How many times a release reads a live CLI's transcript before it gives
@@ -3329,14 +3405,15 @@ export async function handOverHostForDemotion(
   const owner = captureProcessIdentity(current.pid, undefined, current.processStartIdentity);
   const observed = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
   let marked = false;
-  const markHandoff = () => {
+  const markHandoff = (publishCut?: () => void) => {
+    assertDemotionAdmissionActive(options);
     if (marked) return;
     const latest = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
     if (!latest || latest.claimOwner !== observed?.claimOwner || latest.claimEpoch !== observed?.claimEpoch
       || latest.structuredHost?.writerClaimEpoch !== observed?.structuredHost?.writerClaimEpoch) {
       throw new Error(`structured host ${sessionKeyId(key)} changed before Viewer demotion`);
     }
-    if (!registry.markStructuredHostHandoff(key, owner)) {
+    if (!registry.markStructuredHostHandoff(key, owner, publishCut)) {
       throw new Error(`structured host ${sessionKeyId(key)} changed before Viewer demotion`);
     }
     marked = true;
@@ -3363,20 +3440,14 @@ export async function handOverHostForDemotion(
     if (!evidenceStands() || !idle.evidenceStands()) continue;
     if (!inFlight && idle.backgroundTasks.length === 0 && !idle.selfStartedWork) return marked;
     if (await recordDemotionInterruption(
-      registry, key, current, {
-        ...options,
-        admitRecord: record => registry.deliveryWriteOrBusy({ label: "registry.demotion-handoff" }, record),
-      }, idle.backgroundTasks, idle.selfStartedWork,
-      () => {
-        if (!evidenceStands() || !idle.evidenceStands()) return false;
-        markHandoff();
-        return true;
-      },
+      registry, key, current, options, idle.backgroundTasks, idle.selfStartedWork,
+      () => evidenceStands() && idle.evidenceStands(), markHandoff,
     )) {
       if (marked) return true;
       // A conversation with no owed continuation still needs its handoff.
-      const published = await registry.deliveryWriteOrBusy({ label: "registry.demotion-handoff" }, () => {
+      const published = await registry.deliveryWriteOrBusy(DEMOTION_HANDOFF_WRITE, () => {
         if (!evidenceStands() || !idle.evidenceStands()) return false;
+        assertDemotionAdmissionActive(options);
         markHandoff();
         return true;
       });
@@ -3599,41 +3670,33 @@ export async function releaseStructuredDeliveryHostsForDemotion(
   const registrations = [...registered, ...[...unpublishedLaunchHosts.values()].filter(({ key }) => !ids.has(sessionKeyId(key)))];
   const release = releaseStructuredDeliveryHost;
   if (registrations.length === 0) return;
-  const recordFailures: unknown[] = [];
-  const releaseLater: Array<{ key: SessionKey; host: EngineHost }> = [];
-  /* Settled, not raced: one host whose health, handoff or record fails must
-     not end the demotion while the others' records are still being written. */
-  await Promise.allSettled(registrations.map(async ({ key, host }) => {
+  const outcomes = await Promise.allSettled(registrations.map(async ({ key, host }) => {
     const registry = unpublishedLaunchHosts.get(sessionKeyId(key))?.registry ?? state.activeRegistry;
+    const releaseOwned = () => withHostStopOrigin({ path: "deploy-cut", operationId: options.boundary ?? sessionKeyId(key) }, () => release(key, host));
     try {
       if (key.engine === "claude") {
         await releaseClaudeHostForDemotion(registry, key, host, options, async () => {
-          const released = await withHostStopOrigin({ path: "deploy-cut", operationId: options.boundary ?? sessionKeyId(key) }, () => release(key, host));
-          if (!released) throw new Error(`Claude host ${sessionKeyId(key)} registration changed during planned-succession release`);
+          if (!await releaseOwned()) throw new Error(`Claude host ${sessionKeyId(key)} registration changed during planned-succession release`);
         });
         return;
       }
-      if (registry && await detachCodexHostForViewerRestart(registry, key, host)) {
-        releaseLater.push({ key, host });
-        return;
+      if (!registry || !await detachCodexHostForViewerRestart(registry, key, host)) {
+        const current = await host.health();
+        if (registry) await handOverHostForDemotion(registry, key, current, options, () => host.health());
+        else if ((current.status === "active" || current.status === "attention")
+          && current.pid !== null && current.processStartIdentity !== null) {
+          throw new Error(`structured host ${sessionKeyId(key)} changed before Viewer demotion`);
+        }
       }
-      const current = await host.health();
-      if (registry) await handOverHostForDemotion(registry, key, current, options, () => host.health());
-      else if ((current.status === "active" || current.status === "attention")
-        && current.pid !== null && current.processStartIdentity !== null) {
-        throw new Error(`structured host ${sessionKeyId(key)} changed before Viewer demotion`);
-      }
-      releaseLater.push({ key, host });
+      await releaseOwned();
     } catch (error) {
-      controllerDiagnosticError("[viewer release] host could not be handed over with its interrupted turn recorded; leaving it running", {
+      controllerDiagnosticError("[viewer release] structured host demotion failed", {
         hostKey: sessionKeyId(key), error,
       });
-      recordFailures.push(error);
+      throw error;
     }
   }));
-  const outcomes = await Promise.allSettled(releaseLater.map(({ key, host }) =>
-    withHostStopOrigin({ path: "deploy-cut", operationId: options.boundary ?? sessionKeyId(key) }, () => release(key, host))));
-  const failures = [...recordFailures, ...outcomes.flatMap(outcome => outcome.status === "rejected" ? [outcome.reason] : [])];
+  const failures = outcomes.flatMap(outcome => outcome.status === "rejected" ? [outcome.reason] : []);
   if (failures.length > 0) {
     throw new AggregateError(failures, `failed to release ${failures.length} structured host(s) during Viewer demotion`);
   }

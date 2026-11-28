@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { stripVTControlCharacters } from "node:util";
 import { redactBounded, redactMonitorText } from "@/lib/monitor/redact";
 import { PRIVATE_KEY_BLOCK } from "@/lib/view/compactText";
 
@@ -20,10 +21,15 @@ export function withoutUnterminatedSecret(text: string): string {
 export function startupStderrText(fd: number, size: number, limit = 2048): string {
   const bytes = Buffer.alloc(Math.min(size, STDERR_READ_BYTES));
   fs.readSync(fd, bytes, 0, bytes.length, 0);
-  let text = bytes.toString("utf8");
-  const readClipped = size > bytes.length;
+  return startupStderrExcerpt(bytes, size > bytes.length, limit);
+}
+
+export function startupStderrExcerpt(
+  bytes: Buffer, readClipped: boolean, limit = 2048, redact = redactMonitorText,
+): string {
+  let text = stripVTControlCharacters(bytes.toString("utf8"));
   if (readClipped) text = text.slice(0, Math.max(0, text.lastIndexOf("\n")));
-  const redacted = redactMonitorText(withoutUnterminatedSecret(text)).trim();
+  const redacted = redact(withoutUnterminatedSecret(text)).trim();
   if (!readClipped && redacted.length <= limit) return redacted;
   // Reserve the notice after redaction and both caps: a partial drain can
   // exceed the text limit before reaching the read limit.

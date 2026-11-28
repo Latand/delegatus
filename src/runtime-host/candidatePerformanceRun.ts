@@ -51,11 +51,13 @@
    production server once while the browser views operate. They exist so the
    gate's own tests can prove such candidates are refused. */
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess, type ChildProcessByStdio } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import type { Readable } from "node:stream";
+import { redactBounded } from "@/lib/monitor/redact";
 
 import {
   CANDIDATE_PERFORMANCE_BOUNDS,
@@ -63,12 +65,13 @@ import {
   candidatePerformanceBreaches,
   latencySummary,
   projectionBuildSummary,
+  withBrowserStartupFailure,
   type CandidatePerformanceEvidence,
   type CandidatePerformanceMeasurements,
   type ProjectionBuildSample,
 } from "./candidatePerformance";
 import { browserViewPins, candidateBrowserExecutable, measureBoardInBrowser, serverLoopProbe } from "./candidateBrowserRun";
-import { startCandidateRuntimeHost, waitForServerStartup, type CandidateRuntimeHost } from "./candidateRuntimeHost";
+import { CandidateBrowserStartupError, captureBrowserStartupStderr, startCandidateRuntimeHost, waitForServerStartup, type CandidateRuntimeHost } from "./candidateRuntimeHost";
 import { CANDIDATE_HISTORY_PROJECT, CANDIDATE_HISTORY_SCOPE, CANDIDATE_HISTORY_PASS } from "./candidateStateDataset";
 import type { CandidateBrowserMeasurements } from "./candidateBrowser";
 
@@ -116,6 +119,15 @@ function options(name: string): string[] {
 }
 
 const debugging = () => process.env.LLV_CANDIDATE_PERFORMANCE_DEBUG === "1";
+
+function finalizeCandidatePerformanceReport<T extends { breaches: string[] }>(
+  report: T,
+  browserStartupError?: CandidateBrowserStartupError,
+): T | (T & { browserStartupFailure: CandidateBrowserStartupError["failure"] }) {
+  return browserStartupError
+    ? withBrowserStartupFailure(report, browserStartupError.failure, browserStartupError.message)
+    : report;
+}
 
 /** Every store here opens a registry the dataset already imported. */
 const importedAlready = (): never => { throw new Error("the candidate performance registry was not imported"); };
@@ -659,7 +671,13 @@ async function viewerMain(): Promise<void> {
       }, (code) => {
         finish({ demotionExitCode: code });
         process.exit(code);
-      }, (...args: unknown[]) => note(args.map((arg) => arg instanceof Error ? arg.message : String(arg)).join(" ")));
+      }, (message: unknown, error: unknown) => {
+        const summary = error instanceof Error ? error.message : "unknown demotion failure";
+        const causes = error instanceof AggregateError
+          ? error.errors.slice(0, 8).map((cause: unknown) => cause instanceof Error ? cause.message : "unknown host failure")
+          : [];
+        note(redactBounded([message, summary, ...causes].join(" | "), 1_200));
+      });
       },
     });
     report.readyMs = performance.now() - started;
@@ -845,6 +863,16 @@ async function freePort(): Promise<number> {
   return port;
 }
 
+type BrowserServerLaunch = (command: string, args: string[], env: NodeJS.ProcessEnv, origin: string) => {
+  server: ChildProcessByStdio<null, Readable | null, Readable>;
+  origin: string | Promise<string>;
+};
+
+interface BrowserPhaseResult {
+  browser: CandidateBrowserMeasurements | null;
+  browserStartupError?: CandidateBrowserStartupError;
+}
+
 /**
  * The candidate's own production build (`next start` from the image's `.next`)
  * over the registry the release phases left, opened in eight browser views
@@ -865,44 +893,14 @@ async function browserPhase(input: {
   inducedHostStall?: boolean;
   /** Hold the server's event loop this long once the views operate. */
   inducedStallMs?: number;
-}): Promise<CandidateBrowserMeasurements | null> {
+}): Promise<BrowserPhaseResult> {
   const executablePath = candidateBrowserExecutable();
-  if (!executablePath) { input.note("browser: no Chromium in this image or CHROME_BIN"); return null; }
-  if (!fs.existsSync(path.join(process.cwd(), ".next", "BUILD_ID"))) { input.note("browser: no production build to serve"); return null; }
-  const port = await freePort();
-  const baseUrl = `http://127.0.0.1:${port}`;
-  const env: Record<string, string> = {
-    ...input.env,
-    NODE_ENV: "production",
-    PORT: String(port),
-    HOSTNAME: "127.0.0.1",
-    NEXT_TELEMETRY_DISABLED: "1",
-    /* As the board driver's server: no account probes, no reaper of its own. */
-    LLV_ACCOUNT_CONTROLLER_DISABLED: "1",
-    LLV_REAPER_ENABLED: "0",
-  };
-  delete env.LLV_FILES_RESPONSE_WORKER_LAUNCH;
-  /* The server's event loop is read from inside it, over the views' whole load. */
-  fs.mkdirSync(path.join(input.root, "server-loop"), { recursive: true });
-  const probe = serverLoopProbe(path.join(input.root, "server-loop", "probe"));
-  const server = spawn(runtimeBin(), [...probe.preload, "--bun", "node_modules/.bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)], {
-    cwd: process.cwd(), env: { ...env, ...probe.env } as NodeJS.ProcessEnv, stdio: ["ignore", "ignore", debugging() ? "inherit" : "ignore"],
-  });
-  input.children.push(server);
-  try {
-    /* Up, then its first board built, as an operator's server is when they open it. */
-    for (const until = performance.now() + 180_000; ; await Bun.sleep(500)) {
-      if (server.exitCode !== null) throw new Error(`the production server exited ${server.exitCode}`);
-      if (performance.now() > until) throw new Error("the production server never served a board");
-      try {
-        const response = await fetch(`${baseUrl}/api/files?view=summary`);
-        if (response.ok && ((await response.json()) as { files?: unknown[] }).files?.length) break;
-      } catch { /* booting */ }
-    }
-    const startup = await waitForServerStartup(baseUrl);
-    input.note(`browser: the server's structured-host startup is ${startup}`);
-    if (startup !== "ready") throw new Error(`the production server's structured-host startup is ${startup}, never ready`);
-    await fetch(`${baseUrl}/api/onboarding`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }) });
+  if (!executablePath) { input.note("browser: no Chromium in this image or CHROME_BIN"); return { browser: null }; }
+  if (!fs.existsSync(path.join(process.cwd(), ".next", "BUILD_ID"))) {
+    input.note("browser: no production build to serve");
+    return { browser: null };
+  }
+  return withBrowserServer(input, async (server, baseUrl, probe) => {
     /* The probe must be watching the process that serves, or its reading says nothing. */
     if (probe.pid() !== server.pid) throw new Error("the production server carries no event-loop probe");
     let readsDoneAt = 0;
@@ -967,10 +965,70 @@ async function browserPhase(input: {
     input.note(`browser: the server's event loop ${JSON.stringify(result.measurements.server)}`
       + (result.serverStalls.length ? `; delays of ${SLOW_STEP_MS}ms or more: ${result.serverStalls.map((stall) => `${stall.ms}ms at ${stall.at}`).join(", ")}` : ""));
     return result.measurements;
+  });
+}
+
+async function withBrowserServer(
+  input: { root: string; env: Record<string, string>; children: ChildProcess[]; note: (line: string) => void },
+  onReady: (server: ChildProcess, baseUrl: string, probe: ReturnType<typeof serverLoopProbe>) => Promise<CandidateBrowserMeasurements>,
+  launch: BrowserServerLaunch = (command, args, env, origin) => ({
+    server: spawn(command, args, { cwd: process.cwd(), env, stdio: ["ignore", "ignore", "pipe"] }),
+    origin,
+  }),
+): Promise<BrowserPhaseResult> {
+  const port = await freePort();
+  const env: NodeJS.ProcessEnv = {
+    ...input.env,
+    NODE_ENV: "production",
+    PORT: String(port),
+    HOSTNAME: "127.0.0.1",
+    NEXT_TELEMETRY_DISABLED: "1",
+    /* As the board driver's server: no account probes, no reaper of its own. */
+    LLV_ACCOUNT_CONTROLLER_DISABLED: "1",
+    LLV_REAPER_ENABLED: "0",
+  };
+  delete env.LLV_FILES_RESPONSE_WORKER_LAUNCH;
+  /* The server's event loop is read from inside it, over the views' whole load. */
+  fs.mkdirSync(path.join(input.root, "server-loop"), { recursive: true });
+  const probe = serverLoopProbe(path.join(input.root, "server-loop", "probe"));
+  const { server, origin } = launch(
+    runtimeBin(), [...probe.preload, "--bun", "node_modules/.bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)],
+    { ...env, ...probe.env }, `http://127.0.0.1:${port}`,
+  );
+  input.children.push(server);
+  const startupStderr = captureBrowserStartupStderr(server.stderr);
+  const serverExit = new AbortController();
+  server.once("error", () => serverExit.abort());
+  server.once("close", () => serverExit.abort());
+  try {
+    /* Up, then its first board built, as an operator's server is when they open it. */
+    const boardStartup = AbortSignal.any([serverExit.signal, AbortSignal.timeout(180_000)]);
+    const baseUrl = await origin;
+    for (; !boardStartup.aborted; await Bun.sleep(500)) {
+      try {
+        const response = await fetch(`${baseUrl}/api/files?view=summary`, { signal: boardStartup });
+        if (response.ok && ((await response.json()) as { files?: unknown[] }).files?.length) break;
+      } catch { /* booting */ }
+    }
+    if (boardStartup.aborted) throw new CandidateBrowserStartupError({
+      state: "unanswered", reason: serverExit.signal.aborted ? "server-exit" : "deadline",
+      failurePhase: "serving first board", failureCategory: null, nextRetryAt: null, stderr: startupStderr(),
+    });
+    const startup = await waitForServerStartup(baseUrl, undefined, serverExit.signal);
+    if (startup.state !== "ready") throw new CandidateBrowserStartupError({ ...startup, stderr: startupStderr() });
+    input.note("browser: the server's structured-host startup is ready");
+    await fetch(`${baseUrl}/api/onboarding`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }) });
+    return { browser: await onReady(server, baseUrl, probe) };
+  } catch (error) {
+    if (!(error instanceof CandidateBrowserStartupError)) throw error;
+    input.note(`browser: ${error.message}`);
+    return { browser: null, browserStartupError: error };
   } finally {
     server.kill("SIGTERM");
     const timer = setTimeout(() => server.kill("SIGKILL"), 10_000);
-    if (server.exitCode === null && server.signalCode === null) await new Promise((resolve) => server.once("exit", resolve));
+    if (server.pid !== undefined && server.exitCode === null && server.signalCode === null) {
+      await new Promise((resolve) => server.once("exit", resolve));
+    }
     clearTimeout(timer);
   }
 }
@@ -1038,7 +1096,55 @@ async function startupProbeMain(): Promise<void> {
   }
 }
 
-async function gateMain(): Promise<CandidatePerformanceEvidence> {
+/** Run the browser startup and report path with an isolated server child. */
+async function browserRefusalProbeMain(): Promise<{
+  report: CandidatePerformanceEvidence;
+  browserPhase: BrowserPhaseResult;
+}> {
+  const mode = option("--probe-browser-refusal");
+  if (mode !== "terminal" && mode !== "terminal-interrupted") throw new Error("browser refusal probe needs a terminal startup fixture");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "candidate-browser-startup-probe-"));
+  const log: string[] = [];
+  try {
+    const browserPhase = await withBrowserServer(
+      { root, env: sandboxEnvironment(root), children: [], note: line => log.push(line) },
+      async () => { throw new Error("browser refusal probe unexpectedly reached ready"); },
+      (_command, _args, env) => {
+        const server = spawn(process.execPath, ["run", path.join(import.meta.dir, "candidateStartupServer.fixture.ts"), mode], {
+          cwd: process.cwd(), env, stdio: ["ignore", "pipe", "pipe"],
+        });
+        const origin = new Promise<string>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error("startup fixture did not publish its port")), 2_000);
+          let stdout = "";
+          server.stdout!.setEncoding("utf8").on("data", (chunk: string) => {
+            stdout += chunk;
+            const newline = stdout.indexOf("\n");
+            if (newline < 0) return;
+            clearTimeout(timer);
+            const url = stdout.slice(0, newline).trim();
+            if (/^http:\/\/127\.0\.0\.1:\d+$/.test(url)) resolve(url);
+            else reject(new Error("startup fixture published an invalid port"));
+          });
+          server.once("error", reject);
+          server.once("exit", code => { clearTimeout(timer); reject(new Error(`startup fixture exited (${code})`)); });
+        });
+        return { server, origin };
+      },
+    );
+    const report = {
+      checkedAt: new Date().toISOString(), runtime: `bun ${Bun.version}`, bounds: CANDIDATE_PERFORMANCE_BOUNDS,
+      measurements: null, breaches: [], ok: false, log,
+    };
+    return { report, browserPhase };
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+async function candidateGateBody(): Promise<{
+  report: CandidatePerformanceEvidence;
+  browserPhase?: BrowserPhaseResult;
+}> {
   const checkedAt = new Date().toISOString();
   const runtime = `bun ${Bun.version}`;
   const scale = Number(option("--scale") ?? "1");
@@ -1395,7 +1501,7 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
        a production server over the history they left. A structural run, or
        one under an induced fault, is a refusal already and skips it. */
     for (const pid of workerPids) { try { process.kill(pid, "SIGCONT"); process.kill(pid, "SIGKILL"); } catch { /* already gone */ } }
-    let browser: CandidateBrowserMeasurements | null = null;
+    let browserResult: BrowserPhaseResult = { browser: null };
     /* A run that holds the server is refused by what the browser half measures, so it runs it. */
     const servingHistory = { windowMs: 0, curatorReads: 0, curatorMs: 0, curatorLoopMaxMs: 0, rulesViews: 0, rulesMs: 0, rulesLoopMaxMs: 0 };
     const hostLoop = { records: 0, malformed: 0, maxMs: 0 };
@@ -1403,7 +1509,7 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
     if (!serverStall && (scale < 1 || inducedDelayMs || induced.length)) note("browser: skipped, this run is a refusal already");
     else {
       try {
-        browser = await browserPhase({
+        browserResult = await browserPhase({
           root, env, registry: dataset.filename, conversations: dataset.conversations,
           keys: entrySubjects.map(({ key, servers }) => ({ key, servers })), children, note,
           runtimeHost, servingHistory, hostLoop, inducedHostStall: induced.includes("host-loop-stall"),
@@ -1496,11 +1602,11 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
       runtimeTimeouts: runtimeRpc.timeouts,
       runtimeRpc,
       deliveryEvidence: { pending: dataset.pendingDeliveryIds.length, uncertain: dataset.uncertainDeliveryIds.length, retained: retainedDeliveryIds.length, pendingLaunches: pendingLaunchIds.length, preserved: deliveryPreserved },
-      browser,
+      browser: browserResult.browser,
     };
     const timingWarnings: string[] = [];
     const breaches = candidatePerformanceBreaches(measurements, CANDIDATE_PERFORMANCE_BOUNDS, timingWarnings);
-    return {
+    const report = {
       checkedAt,
       runtime,
       bounds: CANDIDATE_PERFORMANCE_BOUNDS,
@@ -1512,17 +1618,20 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
       ...(breaches.length ? { detail: breaches[0] } : {}),
       log,
     };
+    return { report, browserPhase: browserResult };
   } catch (error) {
     return {
-      checkedAt,
-      runtime,
-      bounds: CANDIDATE_PERFORMANCE_BOUNDS,
-      measurements: null,
-      breaches: [],
-      ...inducedFields,
-      ok: false,
-      detail: `the candidate performance gate could not run: ${error instanceof Error ? error.message : String(error)}`,
-      log,
+      report: {
+        checkedAt,
+        runtime,
+        bounds: CANDIDATE_PERFORMANCE_BOUNDS,
+        measurements: null,
+        breaches: [],
+        ...inducedFields,
+        ok: false,
+        detail: `the candidate performance gate could not run: ${error instanceof Error ? error.message : String(error)}`,
+        log,
+      },
     };
   } finally {
     /* Every process this run started, by the pid it recorded. Workers and
@@ -1532,6 +1641,15 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
     await runtimeHost?.stop().catch(() => undefined);
     fs.rmSync(root, { recursive: true, force: true });
   }
+}
+
+/** Both the full gate and its isolated startup refusal control pass through
+ * the same report attachment used by the deployment gate. */
+async function gateMain(): Promise<CandidatePerformanceEvidence> {
+  const result = option("--probe-browser-refusal")
+    ? await browserRefusalProbeMain()
+    : await candidateGateBody();
+  return finalizeCandidatePerformanceReport(result.report, result.browserPhase?.browserStartupError);
 }
 
 async function curatorMain(): Promise<void> {

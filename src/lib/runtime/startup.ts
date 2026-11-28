@@ -332,7 +332,10 @@ async function revalidateRetainedStartupHosts(
         forgetReleasedStartupHost(item.host);
       });
       if (item.key.engine === "claude" && stillOwns) {
-        await releaseClaudeHostForDemotion(registry, item.key, item.host, {}, release, assertStartupReadActive);
+        const budget = startupReadBudget.getStore();
+        await releaseClaudeHostForDemotion(registry, item.key, item.host, {
+          signal: budget?.signal, deadline: budget?.deadline, assertActive: assertStartupReadActive,
+        }, release, assertStartupReadActive);
       }
       else await release();
     }, assertStartupReadActive);
@@ -4845,7 +4848,7 @@ export async function releaseUnpublishedStartupHostsForDemotion(
     if (await detachCodexHostForViewerRestart(registry, key, host)) { released.add(sessionKeyId(key)); return; }
     const state = await host.health();
     try {
-      if (!await handOverHostForDemotion(registry, key, state, options, () => host.health())) return;
+      await handOverHostForDemotion(registry, key, state, options, () => host.health());
     } catch (error) {
       console.error("[viewer release] interrupted turn could not be recorded; leaving its unpublished host running", {
         hostKey: sessionKeyId(key), error,

@@ -2,11 +2,114 @@ import { expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { candidateHostLoopRecords, startCandidateRuntimeHost } from "./candidateRuntimeHost";
-import { candidatePerformanceEvidence, CANDIDATE_PERFORMANCE_BOUNDS } from "./candidatePerformance";
+import { spawn } from "node:child_process";
+import { candidateHostLoopRecords, startCandidateRuntimeHost, waitForServerStartup } from "./candidateRuntimeHost";
+import { candidatePerformanceEvidence, CANDIDATE_PERFORMANCE_BOUNDS, CANDIDATE_PERFORMANCE_REPORT_PREFIX, parseCandidatePerformanceReport } from "./candidatePerformance";
 import { passingCandidatePerformanceMeasurements } from "./fixtures/candidatePerformanceMeasurements";
 
 const line = (gap: number, at: number, extra = {}) => `[viewer loop-gap] ${JSON.stringify({ role: "runtime-host", pid: 42, utc: new Date(at).toISOString(), gapMs: gap, logDropped: 0, ...extra })}`;
+
+const failurePhase = "reading structured startup registry";
+const nextRetryAt = "2026-11-28T08:14:05.000Z";
+const retryCategory = "registry-contention";
+const capability = (state: "pending" | "failed", failureCategory: string | null, retryAt: string | null) =>
+  Response.json({ capability: "viewer-deployments", version: 1, structuredHostStartup: {
+    state, phase: failurePhase, completedHosts: 0, totalHosts: null,
+    failurePhase, failureCategory, nextRetryAt: retryAt,
+  } });
+async function startupServer(mode: "hanging-body" | "retry-ready" | "retry-cancelled" | "retry-interrupted") {
+  const child = spawn(process.execPath, ["run", path.join(import.meta.dir, "candidateStartupServer.fixture.ts"), mode], {
+    cwd: path.resolve(import.meta.dir, "../.."), env: process.env, stdio: ["ignore", "pipe", "inherit"],
+  });
+  let stdout = "";
+  const origin = await new Promise<string>((resolve, reject) => {
+    child.stdout!.setEncoding("utf8").on("data", (chunk: string) => {
+      stdout += chunk;
+      const newline = stdout.indexOf("\n");
+      if (newline >= 0) resolve(stdout.slice(0, newline).trim());
+    });
+    child.once("error", reject);
+    child.once("exit", code => reject(new Error(`startup fixture exited before listening (${code}): ${stdout}`)));
+  });
+  if (!origin.startsWith("http://127.0.0.1:")) throw new Error("startup fixture did not publish its port");
+  return { origin, async stop() {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    const exited = new Promise<void>(resolve => child.once("exit", () => resolve()));
+    child.kill("SIGTERM");
+    await exited;
+  } };
+}
+
+async function runBrowserRefusalProbe(mode: "terminal" | "terminal-interrupted") {
+  const child = Bun.spawn([process.execPath, "run", path.join(import.meta.dir, "candidatePerformanceRun.ts"),
+    "--probe-browser-refusal", mode], {
+    cwd: path.resolve(import.meta.dir, "../.."), env: { ...process.env }, stdout: "pipe", stderr: "pipe",
+  });
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+  ]);
+  if (!stdout.includes(CANDIDATE_PERFORMANCE_REPORT_PREFIX)) {
+    throw new Error(`candidate runner emitted no refusal report (exit ${code}): ${stderr.slice(-2_000)}`);
+  }
+  return { code, serialized: stdout, report: parseCandidatePerformanceReport(stdout) };
+}
+
+test("browser startup waits through a scheduled and an executing retry", async () => {
+  const server = await startupServer("retry-ready");
+  try {
+    expect(await waitForServerStartup(server.origin, 3_000)).toMatchObject({ state: "ready" });
+  } finally { await server.stop(); }
+});
+
+test.each(["retry-cancelled", "retry-interrupted"] as const)("browser startup refuses a stopped Viewer retry: %s", async mode => {
+  const server = await startupServer(mode);
+  try {
+    expect(await waitForServerStartup(server.origin, 2_000)).toMatchObject({
+      reason: "terminal", state: "failed", failureCategory: "runtime-host-unavailable", nextRetryAt: null,
+    });
+  } finally { await server.stop(); }
+});
+
+test.each(["terminal", "terminal-interrupted"] as const)("production browser startup refusal redacts encoded private-key material: %s", async mode => {
+    const result = await runBrowserRefusalProbe(mode);
+    const report = result.report;
+    expect(result.code).toBe(1);
+    expect(report).toMatchObject({ ok: false, browserStartupFailure: {
+      reason: "terminal", state: "failed", failurePhase, failureCategory: "configuration", nextRetryAt: null,
+    } });
+    expect(report.browserStartupFailure?.stderr).toContain("startup exception");
+    expect(report.browserStartupFailure?.stderr).toContain("Authorization: [redacted]");
+    expect(report.browserStartupFailure?.stderr).toContain("[redacted]");
+    expect(report.browserStartupFailure!.stderr.length).toBeLessThanOrEqual(2048);
+    for (const privateText of ["fixture marker value", "fixture-private-key-payload", "PRIVATE KEY"]) {
+      expect(result.serialized).not.toContain(privateText);
+    }
+});
+
+test("the startup deadline includes an unanswered HTTP body from an independent server process", async () => {
+  const server = await startupServer("hanging-body");
+  try {
+    expect(await waitForServerStartup(server.origin, 1_500)).toEqual({
+      reason: "deadline", state: "failed", failurePhase, failureCategory: retryCategory, nextRetryAt,
+    });
+  } finally { await server.stop(); }
+}, 3_000);
+
+test("an exited browser server ends startup polling with the last observed phase", async () => {
+  const gone = new AbortController();
+  const reached = Promise.withResolvers<void>();
+  let probes = 0;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
+    if (++probes === 2) reached.resolve();
+    return capability("pending", null, null);
+  } });
+  try {
+    const waiting = waitForServerStartup(server.url.origin, 10_000, gone.signal);
+    await reached.promise;
+    gone.abort();
+    expect(await waiting).toMatchObject({ reason: "server-exit", state: "pending", failurePhase });
+  } finally { server.stop(true); }
+});
 
 test("host readings require the host identity and exclude boot and gaps straddling warm-up", () => {
   const records = candidateHostLoopRecords();

@@ -52,6 +52,17 @@ test.each([false, true])("read clipping stays visible after redacting a key bloc
   expect(result.length).toBeLessThanOrEqual(2048);
 });
 
+test("control characters are normalized before clipping an unterminated key block", () => {
+  const keyPayload = "fixture-private-key-payload";
+  const escapedHeader = "-----BEGIN \u001b[31mPRIVATE KEY-----";
+  const result = diagnostic("EADDRINUSE: callback bind refused\n" + escapedHeader + "\n"
+    + keyPayload + "\n" + "x".repeat(STDERR_READ_BYTES));
+  expect(result).toStartWith("EADDRINUSE: callback bind refused\n[redacted]");
+  expect(result).toContain("[stderr clipped]");
+  expect(result).not.toContain(keyPayload);
+  expect(result).not.toContain("PRIVATE KEY");
+});
+
 test.each([0, 1, 15, 16, 32, 64])("clipping respects a custom diagnostic limit of %s", limit => {
   const result = diagnostic("EADDRINUSE: callback bind refused\n" + "x".repeat(100), limit);
   expect(result.length).toBeLessThanOrEqual(limit);

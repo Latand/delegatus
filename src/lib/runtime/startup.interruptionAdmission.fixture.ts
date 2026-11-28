@@ -9,9 +9,23 @@ export async function until(condition: () => boolean, ms = 2_000): Promise<void>
   }
 }
 
-export function journalTickets(directory: string): number {
+export function journalTickets(directory: string, pid?: number): number {
   const queue = `${directory}.pending.jsonl.write-locks`;
-  return fs.existsSync(queue) ? fs.readdirSync(queue).filter(name => name.endsWith(".json")).length : 0;
+  let names: string[];
+  try { names = fs.readdirSync(queue); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+    throw error;
+  }
+  return names.filter(name => {
+    if (!name.endsWith(".json")) return false;
+    if (pid === undefined) return true;
+    try { return JSON.parse(fs.readFileSync(path.join(queue, name), "utf8")).pid === pid; }
+    catch (error) {
+      if (error instanceof SyntaxError || (error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+  }).length;
 }
 
 export function journalClaims(directory: string): string[] {
