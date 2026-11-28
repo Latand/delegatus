@@ -23,6 +23,14 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
+import type { Readable } from "node:stream";
+import { setTimeout as delay } from "node:timers/promises";
+import { stripVTControlCharacters } from "node:util";
+
+import { redactMonitorText } from "@/lib/monitor/redact";
+import { redactStructuredText } from "@/lib/reviewHistory/redaction";
+import { startupStderrExcerpt, STDERR_READ_BYTES } from "@/lib/runtime/startupStderr";
+import { hasViewerDeploymentCapability, viewerDeploymentStructuredHostStartup } from "./deploymentHealth";
 
 const READY_TIMEOUT_MS = 60_000;
 const LOG_LINES = 20;
@@ -207,23 +215,78 @@ export async function startCandidateRuntimeHost(options: {
   };
 }
 
-/**
- * Wait until a production server over this host has finished its
- * structured-host startup, which `/api/runtime/snapshot` reports. That startup
- * is a release's activation, bounded apart by the gate; the views measure a
- * started server, as an operator's do. Returns the last state it saw.
- */
-export async function waitForServerStartup(baseUrl: string, timeoutMs = 120_000): Promise<string> {
-  let state = "unanswered";
-  for (const until = performance.now() + timeoutMs; performance.now() < until; await Bun.sleep(500)) {
-    try {
-      const response = await fetch(`${baseUrl}/api/runtime/snapshot?view=summary`);
-      const body = await response.json() as { structuredStartup?: string | null; error?: string };
-      state = response.ok ? String(body.structuredStartup ?? "disabled") : `HTTP ${response.status}`;
-      if (response.ok && body.structuredStartup !== "pending") return state;
-    } catch { /* booting */ }
+type StartupRefusal = {
+  state: "pending" | "failed" | "disabled" | "unanswered";
+  reason: "deadline" | "terminal" | "server-exit";
+  failurePhase: string | null;
+  failureCategory: string | null;
+  nextRetryAt: string | null;
+};
+
+export type CandidateBrowserStartupFailure = StartupRefusal & { stderr: string };
+
+export class CandidateBrowserStartupError extends Error {
+  constructor(readonly failure: CandidateBrowserStartupFailure) {
+    const { state, reason, failurePhase, failureCategory, nextRetryAt } = failure;
+    const details = [`state ${state}`, failurePhase && `phase ${failurePhase}`,
+      failureCategory && `category ${failureCategory}`, nextRetryAt && `next retry ${nextRetryAt}`];
+    super(`browser startup ${reason} (${details.filter(Boolean).join(", ")})`);
   }
-  return state;
+}
+
+/** Keep a small prefix from a known credential boundary. Continue draining
+ * the pipe after the buffer fills so logging cannot block the server. */
+export function captureBrowserStartupStderr(stderr: Readable): () => string {
+  const bytes = Buffer.alloc(STDERR_READ_BYTES);
+  let used = 0;
+  let clipped = false;
+  stderr.on("data", (chunk: Buffer) => {
+    const copied = chunk.copy(bytes, used);
+    used += copied;
+    clipped ||= copied < chunk.length;
+  });
+  return () => {
+    try {
+      return startupStderrExcerpt(bytes.subarray(0, used), clipped, 2048, text =>
+        redactStructuredText(stripVTControlCharacters(text), prose =>
+          redactMonitorText(prose.replace(/https?:\/\/[^\s<>"'\\]+/gi, "[redacted-url]"))));
+    } catch {
+      return "[stderr redacted]";
+    }
+  };
+}
+
+/** The capability reports the retry timetable without a runtime-host snapshot. */
+export async function waitForServerStartup(
+  baseUrl: string, timeoutMs = 120_000, serverExit?: AbortSignal,
+): Promise<{ state: "ready" } | StartupRefusal> {
+  const until = performance.now() + timeoutMs;
+  const timeout = AbortSignal.timeout(timeoutMs);
+  const signal = serverExit ? AbortSignal.any([timeout, serverExit]) : timeout;
+  let last: StartupRefusal = { state: "unanswered", reason: "deadline", failurePhase: null, failureCategory: null, nextRetryAt: null };
+  while (!signal.aborted && performance.now() < until) {
+    try {
+      const response = await fetch(`${baseUrl}/api/runtime/deployments/capabilities/v1`, { signal });
+      const body = await response.text();
+      if (signal.aborted || performance.now() >= until) break;
+      const progress = viewerDeploymentStructuredHostStartup(response.status, body);
+      if (progress) {
+        if (response.ok && progress.state === "ready") return { state: "ready" };
+        if (progress.state !== "ready") {
+          const { state, phase, failurePhase, failureCategory, nextRetryAt } = progress;
+          last = { state, reason: "deadline", failurePhase: failurePhase ?? phase, failureCategory: failureCategory ?? null, nextRetryAt: nextRetryAt ?? null };
+          // While a recoverable retry executes the Viewer clears nextRetryAt
+          // and keeps its failure category until startup reaches ready.
+          const terminal = failureCategory === "configuration" || failureCategory === "data-corruption";
+          if (state === "failed" && !nextRetryAt && (terminal || !failureCategory)) return { ...last, reason: "terminal" };
+        }
+      } else if (hasViewerDeploymentCapability(response.status, body) && JSON.parse(body).structuredHostStartup === null) {
+        return { state: "disabled", reason: "terminal", failurePhase: null, failureCategory: null, nextRetryAt: null };
+      }
+    } catch { /* The server is still booting or stopped answering. */ }
+    if (!signal.aborted) await delay(Math.min(500, Math.max(0, until - performance.now())), undefined, { signal }).catch(() => {});
+  }
+  return serverExit?.aborted ? { ...last, reason: "server-exit" } : last;
 }
 
 if (import.meta.main) {

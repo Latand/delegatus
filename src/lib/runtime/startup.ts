@@ -4845,7 +4845,7 @@ export async function releaseUnpublishedStartupHostsForDemotion(
     if (await detachCodexHostForViewerRestart(registry, key, host)) { released.add(sessionKeyId(key)); return; }
     const state = await host.health();
     try {
-      if (!await handOverHostForDemotion(registry, key, state, options, () => host.health())) return;
+      await handOverHostForDemotion(registry, key, state, options, () => host.health());
     } catch (error) {
       console.error("[viewer release] interrupted turn could not be recorded; leaving its unpublished host running", {
         hostKey: sessionKeyId(key), error,

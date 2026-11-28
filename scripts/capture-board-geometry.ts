@@ -8844,7 +8844,7 @@ async function registryHistoryMain(): Promise<void> {
        operator's do; the gate itself bounds the cold first projection. */
     await waitForBoard(baseUrl, false);
     const startup = await waitForServerStartup(baseUrl);
-    if (startup !== "ready") throw new Error(`the server's structured-host startup is ${startup}, never ready`);
+    if (startup.state !== "ready") throw new Error(`the server's structured-host startup is ${startup.state} (${startup.reason})`);
     await fetch(`${baseUrl}/api/onboarding`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }) });
     const keys = dataset.grantSubjects.filter((subject) => subject.collection === "entries"
       && !dataset.workers.some((worker) => worker.key === subject.key)).map(({ key, servers }) => ({ key, servers }));

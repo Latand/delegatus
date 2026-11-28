@@ -310,8 +310,10 @@ process, with nothing of the caller's environment but its `PATH`:
   connections counts: the operator waits through it too. That server reaches
   the same runtime host, so the board's runtime surfaces answer as they do
   in production; the views open once its structured-host startup reports
-  ready on `/api/runtime/snapshot`, since that startup is a release's
-  activation, bounded above. That server carries a probe preloaded into it
+  ready on `/api/runtime/deployments/capabilities/v1`. Scheduled and running
+  retries share the original startup deadline. A refusal records the last
+  startup phase, failure category, next retry time and redacted stderr.
+  That server carries a probe preloaded into it
   (`src/runtime-host/candidateServerLoopProbe.ts`, `bun --preload`), which
   samples how late a 10 ms timer fires inside the serving process itself: the
   releases whose event loop the gate bounds have stopped by then, and nothing

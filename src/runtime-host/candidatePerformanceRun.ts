@@ -56,6 +56,7 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { redactBounded } from "@/lib/monitor/redact";
 
 import {
   CANDIDATE_PERFORMANCE_BOUNDS,
@@ -68,7 +69,7 @@ import {
   type ProjectionBuildSample,
 } from "./candidatePerformance";
 import { browserViewPins, candidateBrowserExecutable, measureBoardInBrowser, serverLoopProbe } from "./candidateBrowserRun";
-import { startCandidateRuntimeHost, waitForServerStartup, type CandidateRuntimeHost } from "./candidateRuntimeHost";
+import { CandidateBrowserStartupError, captureBrowserStartupStderr, startCandidateRuntimeHost, waitForServerStartup, type CandidateRuntimeHost } from "./candidateRuntimeHost";
 import { CANDIDATE_HISTORY_PROJECT, CANDIDATE_HISTORY_SCOPE, CANDIDATE_HISTORY_PASS } from "./candidateStateDataset";
 import type { CandidateBrowserMeasurements } from "./candidateBrowser";
 
@@ -659,7 +660,13 @@ async function viewerMain(): Promise<void> {
       }, (code) => {
         finish({ demotionExitCode: code });
         process.exit(code);
-      }, (...args: unknown[]) => note(args.map((arg) => arg instanceof Error ? arg.message : String(arg)).join(" ")));
+      }, (message: unknown, error: unknown) => {
+        const summary = error instanceof Error ? error.message : "unknown demotion failure";
+        const causes = error instanceof AggregateError
+          ? error.errors.slice(0, 8).map((cause: unknown) => cause instanceof Error ? cause.message : "unknown host failure")
+          : [];
+        note(redactBounded([message, summary, ...causes].join(" | "), 1_200));
+      });
       },
     });
     report.readyMs = performance.now() - started;
@@ -886,22 +893,29 @@ async function browserPhase(input: {
   fs.mkdirSync(path.join(input.root, "server-loop"), { recursive: true });
   const probe = serverLoopProbe(path.join(input.root, "server-loop", "probe"));
   const server = spawn(runtimeBin(), [...probe.preload, "--bun", "node_modules/.bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)], {
-    cwd: process.cwd(), env: { ...env, ...probe.env } as NodeJS.ProcessEnv, stdio: ["ignore", "ignore", debugging() ? "inherit" : "ignore"],
+    cwd: process.cwd(), env: { ...env, ...probe.env } as NodeJS.ProcessEnv, stdio: ["ignore", "ignore", "pipe"],
   });
   input.children.push(server);
+  const startupStderr = captureBrowserStartupStderr(server.stderr);
+  const serverExit = new AbortController();
+  server.once("error", () => serverExit.abort());
+  server.once("close", () => serverExit.abort());
   try {
     /* Up, then its first board built, as an operator's server is when they open it. */
-    for (const until = performance.now() + 180_000; ; await Bun.sleep(500)) {
-      if (server.exitCode !== null) throw new Error(`the production server exited ${server.exitCode}`);
-      if (performance.now() > until) throw new Error("the production server never served a board");
+    const boardStartup = AbortSignal.any([serverExit.signal, AbortSignal.timeout(180_000)]);
+    for (; !boardStartup.aborted; await Bun.sleep(500)) {
       try {
-        const response = await fetch(`${baseUrl}/api/files?view=summary`);
+        const response = await fetch(`${baseUrl}/api/files?view=summary`, { signal: boardStartup });
         if (response.ok && ((await response.json()) as { files?: unknown[] }).files?.length) break;
       } catch { /* booting */ }
     }
-    const startup = await waitForServerStartup(baseUrl);
-    input.note(`browser: the server's structured-host startup is ${startup}`);
-    if (startup !== "ready") throw new Error(`the production server's structured-host startup is ${startup}, never ready`);
+    if (boardStartup.aborted) throw new CandidateBrowserStartupError({
+      state: "unanswered", reason: serverExit.signal.aborted ? "server-exit" : "deadline",
+      failurePhase: "serving first board", failureCategory: null, nextRetryAt: null, stderr: startupStderr(),
+    });
+    const startup = await waitForServerStartup(baseUrl, undefined, serverExit.signal);
+    if (startup.state !== "ready") throw new CandidateBrowserStartupError({ ...startup, stderr: startupStderr() });
+    input.note("browser: the server's structured-host startup is ready");
     await fetch(`${baseUrl}/api/onboarding`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }) });
     /* The probe must be watching the process that serves, or its reading says nothing. */
     if (probe.pid() !== server.pid) throw new Error("the production server carries no event-loop probe");
@@ -970,7 +984,9 @@ async function browserPhase(input: {
   } finally {
     server.kill("SIGTERM");
     const timer = setTimeout(() => server.kill("SIGKILL"), 10_000);
-    if (server.exitCode === null && server.signalCode === null) await new Promise((resolve) => server.once("exit", resolve));
+    if (server.pid !== undefined && server.exitCode === null && server.signalCode === null) {
+      await new Promise((resolve) => server.once("exit", resolve));
+    }
     clearTimeout(timer);
   }
 }
@@ -1396,6 +1412,7 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
        one under an induced fault, is a refusal already and skips it. */
     for (const pid of workerPids) { try { process.kill(pid, "SIGCONT"); process.kill(pid, "SIGKILL"); } catch { /* already gone */ } }
     let browser: CandidateBrowserMeasurements | null = null;
+    let browserStartupError: CandidateBrowserStartupError | undefined;
     /* A run that holds the server is refused by what the browser half measures, so it runs it. */
     const servingHistory = { windowMs: 0, curatorReads: 0, curatorMs: 0, curatorLoopMaxMs: 0, rulesViews: 0, rulesMs: 0, rulesLoopMaxMs: 0 };
     const hostLoop = { records: 0, malformed: 0, maxMs: 0 };
@@ -1410,6 +1427,7 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
           ...(induced.includes("server-stall") ? { inducedStallMs: INDUCED_SERVER_STALL_MS } : {}),
         });
       } catch (error) {
+        if (error instanceof CandidateBrowserStartupError) browserStartupError = error;
         note(`browser: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
@@ -1500,6 +1518,7 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
     };
     const timingWarnings: string[] = [];
     const breaches = candidatePerformanceBreaches(measurements, CANDIDATE_PERFORMANCE_BOUNDS, timingWarnings);
+    if (browserStartupError) breaches.unshift(browserStartupError.message);
     return {
       checkedAt,
       runtime,
@@ -1507,6 +1526,7 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
       measurements,
       breaches,
       timingWarnings,
+      ...(browserStartupError ? { browserStartupFailure: browserStartupError.failure } : {}),
       ...inducedFields,
       ok: breaches.length === 0 && !inducedDelayMs && !induced.length,
       ...(breaches.length ? { detail: breaches[0] } : {}),

@@ -127,6 +127,8 @@ export interface ViewerStructuredHostStartupProgress {
   completedHosts: number;
   totalHosts: number | null;
   failureCategory?: string | null;
+  failurePhase?: string;
+  nextRetryAt?: string;
   recovery?: { examined: number; total: number; completed: number; deferred: number };
 }
 
@@ -165,6 +167,11 @@ export function viewerDeploymentStructuredHostStartup(
       totalHosts: totalHosts as number | null,
       ...(typeof candidate.failureCategory === "string" && /^[a-z-]{1,40}$/.test(candidate.failureCategory)
         ? { failureCategory: candidate.failureCategory } : {}),
+      ...(typeof candidate.failurePhase === "string" && /^[A-Za-z0-9 -]{1,80}$/.test(candidate.failurePhase)
+        ? { failurePhase: candidate.failurePhase } : {}),
+      ...(typeof candidate.nextRetryAt === "string"
+        && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(candidate.nextRetryAt)
+        && Number.isFinite(Date.parse(candidate.nextRetryAt)) ? { nextRetryAt: candidate.nextRetryAt } : {}),
     };
   } catch {
     return null;
