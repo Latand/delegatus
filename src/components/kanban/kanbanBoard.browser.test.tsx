@@ -2122,6 +2122,45 @@ describe("board timeline manager view", () => {
     expect(failures).toEqual([]);
   }, 600_000);
 
+  managerTest("Tab through the chart with every task expanded: each focused control stays between the axis and the curtain", async () => {
+    const evidence = path.join(evidenceDirectory(), "scroll"); fs.mkdirSync(evidence, { recursive: true });
+    const failures: string[] = [], readings: unknown[] = [];
+    const check = (ok: boolean, detail: string) => { if (!ok) failures.push(detail); };
+    try {
+      await withManagerServer(await managerRecords("uk"), async ({ browser, base }) => {
+        for (const { width, height } of [{ width: 1440, height: 900 }, { width: 1024, height: 768 }]) {
+          const tag = `${width}x${height}`;
+          const stored = { view: "timeline", hours: 24, expanded: { ...Object.fromEntries(Array.from({ length: 28 }, (_, index) => [idOf(index + 1), true])), ...GROUP_KEYS } };
+          const { page, context, pageErrors } = await openManager(browser, base, { width, height, lang: "uk", theme: "light", seat: false, stored });
+          try {
+            await page.locator("[data-timeline-task]").first().waitFor(); await settleChart(page);
+            await page.locator("[data-timeline-scroll]").focus();
+            const stops: { text: string; top: number; bottom: number; axis: number; curtain: number; rest: number }[] = [];
+            for (let press = 0; press < 60; press++) {
+              await page.keyboard.press("Tab");
+              const stop = await page.evaluate(() => {
+                const list = document.querySelector<HTMLElement>("[data-timeline-scroll]")!, active = document.activeElement as HTMLElement | null;
+                if (!active || !list.contains(active) || active === list) return null;
+                const box = active.getBoundingClientRect(), curtain = list.querySelector<HTMLElement>("[data-timeline-rest]")!.getBoundingClientRect();
+                return { text: (active.textContent ?? active.getAttribute("aria-label") ?? "").trim().slice(0, 48), top: box.top, bottom: box.bottom, axis: list.querySelector<HTMLElement>(".bt-axis")!.getBoundingClientRect().bottom, curtain: curtain.top, rest: curtain.height };
+              });
+              if (stop) stops.push(stop);
+            }
+            readings.push({ tag, stops: stops.length, rest: stops[0]?.rest ?? null, hidden: stops.filter(stop => stop.bottom > stop.curtain + 1 || stop.top < stop.axis - 1) });
+            check(stops.length >= 20, `${tag}: Tab reached only ${stops.length} controls inside the chart`);
+            check(stops.some(stop => stop.rest > 0), `${tag}: the curtain is 0px tall, so the traversal does not cover it`);
+            for (const stop of stops) check(stop.top >= stop.axis - 1 && stop.bottom <= stop.curtain + 1, `${tag}: «${stop.text}» sits ${stop.top.toFixed(1)}..${stop.bottom.toFixed(1)} while the rows run ${stop.axis.toFixed(1)}..${stop.curtain.toFixed(1)}`);
+            await page.screenshot({ path: path.join(evidence, `${tag}-tab-focus.png`) });
+            check(pageErrors.length === 0, `${tag}: page errors ${pageErrors.join(" | ")}`);
+          } finally { await context.close(); }
+        }
+      });
+    } finally {
+      fs.writeFileSync(path.join(evidence, "tab-focus.json"), JSON.stringify({ now: MANAGER_NOW, failures, readings }, null, 2) + "\n");
+    }
+    expect(failures).toEqual([]);
+  }, 600_000);
+
   managerTest("every desktop stage row is the same height whatever its calendar span says", async () => {
     const { timelineDuration } = await import("@/lib/board/taskTimelineView");
     const evidence = path.join(evidenceDirectory(), "scroll"); fs.mkdirSync(evidence, { recursive: true });
