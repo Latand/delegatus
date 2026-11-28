@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
+import { captureProcessIdentity, processIdentityMayRun, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
 import { signalFixtureIdentity, stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
 import { procBackend } from "../src/lib/proc";
 import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
@@ -34,6 +34,11 @@ async function until(check: () => boolean, timeout = 5_000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) { if (check()) return; await Bun.sleep(20); }
   throw new Error("owned runner probe exceeded its bounded wait");
+}
+function publishedPid(marker: string): number | undefined {
+  if (!fs.existsSync(marker)) return;
+  const value = fs.readFileSync(marker, "utf8");
+  return /^\d+$/.test(value) ? Number(value) : undefined;
 }
 // Hide both systemd executables, or point the real client at an absent private
 // bus. Neither case changes the machine's manager or cgroup mount.
@@ -68,6 +73,39 @@ for (const mode of ["complete", "exit", "deadline", "TERM", "INT", "KILL", "test
   test.skipIf(process.platform !== "linux")(`Linux portable ${entry} ${mode} ends recorded children and preserves a bystander`, async () => {
     const { root, env, repo } = portableFixture("unreachable");
     const record = path.join(root, "ready.json"), release = path.join(root, "release"), received = path.join(root, "signal");
+    const portableOwner = path.join(root, "portable-runner-pid");
+    const portableOwnerTemp = portableOwner + ".tmp", portableOwnerPublishing = portableOwner + ".publishing";
+    const portableOwnerRelease = portableOwner + ".release";
+    const shutdownTail = path.join(root, "shutdown-tail-entered"), shutdownRelease = path.join(root, "shutdown-tail-release");
+    const shutdownTailTemp = shutdownTail + ".tmp", shutdownTailPublishing = path.join(root, "shutdown-tail-publishing");
+    const heldShutdown = entry === "direct" && mode === "KILL";
+    if (heldShutdown) {
+      // The dispatcher is killed while its portable runner holds stderr.
+      // Hold that runner in its final exit handler until the parent proves the
+      // dispatcher exited while the inherited diagnostic pipe remains open.
+      fs.writeFileSync(path.join(root, "shutdown-tail.ts"), `import fs from "node:fs";
+if (process.argv[1] === ${JSON.stringify(path.join(repo, "scripts/owned-runner.ts"))}) {
+  const owner = ${JSON.stringify(portableOwner)};
+  const ownerTemp = ${JSON.stringify(portableOwnerTemp)};
+  fs.writeFileSync(ownerTemp, "");
+  fs.writeFileSync(${JSON.stringify(portableOwnerPublishing)}, "publishing");
+  const ownerWait = new Int32Array(new SharedArrayBuffer(4));
+  while (!fs.existsSync(${JSON.stringify(portableOwnerRelease)})) Atomics.wait(ownerWait, 0, 0, 20);
+  fs.writeFileSync(ownerTemp, String(process.pid));
+  fs.renameSync(ownerTemp, owner);
+  process.once("exit", () => {
+    const marker = ${JSON.stringify(shutdownTail)};
+    const temporary = marker + ".tmp";
+    fs.writeFileSync(temporary, "");
+    fs.writeFileSync(${JSON.stringify(shutdownTailPublishing)}, "publishing");
+    const wait = new Int32Array(new SharedArrayBuffer(4));
+    while (!fs.existsSync(${JSON.stringify(shutdownRelease)})) Atomics.wait(wait, 0, 0, 20);
+    fs.writeFileSync(temporary, String(process.pid));
+    fs.renameSync(temporary, marker);
+  });
+}`);
+      env.BUN_OPTIONS = "--preload=./shutdown-tail.ts";
+    }
     fs.writeFileSync(path.join(root, "example.test.ts"), `import { test } from "bun:test";
 import { spawn } from "node:child_process"; import fs from "node:fs";
 import { captureProcessIdentity } from ${JSON.stringify(path.join(repo, "src/lib/processIdentity.ts"))};
@@ -76,7 +114,9 @@ for (const [signal, code] of [["SIGTERM", 143], ["SIGINT", 130]]) process.on(sig
 });
 test("portable lifetime", async () => {
   const child = spawn("/bin/sleep", ["300"], { detached: true, stdio: "ignore" }); child.unref();
-  fs.writeFileSync(${JSON.stringify(record)}, JSON.stringify([captureProcessIdentity(process.pid), captureProcessIdentity(child.pid)]));
+  const ready = ${JSON.stringify(record)};
+  fs.writeFileSync(ready + ".tmp", JSON.stringify([captureProcessIdentity(process.pid), captureProcessIdentity(child.pid)]));
+  fs.renameSync(ready + ".tmp", ready);
   while (!fs.existsSync(${JSON.stringify(release)})) await Bun.sleep(20);
   if (${mode === "complete"}) {
     const ended = new Promise(resolve => child.once("exit", resolve));
@@ -93,11 +133,29 @@ test("portable lifetime", async () => {
       : ["/bin/bash", path.join(repo, "scripts/gate-slot.sh"), ...command];
     const runner = spawn(argv[0]!, argv.slice(1), { cwd: root, env, stdio: ["ignore", "ignore", "pipe"] });
     let diagnostic = ""; runner.stderr!.on("data", chunk => { diagnostic += String(chunk); });
+    let closed = false;
+    let dispatcherExited = false;
+    runner.once("close", () => { closed = true; });
+    runner.once("exit", () => { dispatcherExited = true; });
+    runner.on("error", error => { diagnostic += String(error); });
     let owned: ProcessIdentity[] = [];
+    let portableRunner: ProcessIdentity | undefined;
     try {
-      await until(() => fs.existsSync(record) || runner.exitCode !== null);
+      if (heldShutdown) {
+        await until(() => fs.existsSync(portableOwnerPublishing), 5_000);
+        expect(fs.existsSync(portableOwnerTemp)).toBe(true);
+        expect(fs.existsSync(portableOwner)).toBe(false);
+        fs.writeFileSync(portableOwnerRelease, "publish");
+      }
+      await until(() => fs.existsSync(record) || closed);
       if (!fs.existsSync(record)) throw new Error(diagnostic);
       owned = JSON.parse(fs.readFileSync(record, "utf8"));
+      if (heldShutdown) {
+        await until(() => publishedPid(portableOwner) !== undefined);
+        portableRunner = captureProcessIdentity(publishedPid(portableOwner)!);
+        expect(processIdentityStatus(portableRunner)).toBe("alive");
+        expect(portableRunner.pid).not.toBe(runner.pid!);
+      }
       if (mode === "exit" || mode === "complete") fs.writeFileSync(release, "go");
       if (mode === "TERM" || mode === "INT" || mode === "KILL") runner.kill(mode === "TERM" ? "SIGTERM" : mode === "INT" ? "SIGINT" : "SIGKILL");
       if (mode === "test-KILL") signalFixtureIdentity(owned[0]!, "SIGKILL");
@@ -105,19 +163,35 @@ test("portable lifetime", async () => {
         const ended = new Promise(resolve => supervisor.once("exit", resolve));
         supervisor.kill("SIGKILL"); await ended;
       }
-      await until(() => runner.exitCode !== null || runner.signalCode !== null, 12000);
-      await until(() => owned.every(identity => processIdentityStatus(identity) === "dead"));
+      if (heldShutdown) {
+        await until(() => dispatcherExited, 5_000);
+        expect(closed).toBe(false);
+        await until(() => fs.existsSync(shutdownTailPublishing), 5_000);
+        expect(fs.existsSync(shutdownTailTemp)).toBe(true);
+        expect(fs.existsSync(shutdownTail)).toBe(false);
+        expect(closed).toBe(false);
+        fs.writeFileSync(shutdownRelease, "publish");
+        await until(() => publishedPid(shutdownTail) !== undefined, 5_000);
+        expect(publishedPid(shutdownTail)).toBe(portableRunner!.pid);
+      }
+      // On SIGKILL, exit only accounts for the dispatcher. Close also waits
+      // for the runner and guardians that inherited its diagnostic pipe.
+      await until(() => closed, 12_000);
+      await until(() => owned.every(identity => !processIdentityMayRun(identity)));
+      if (portableRunner) {
+        expect(processIdentityMayRun(portableRunner)).toBe(false);
+      }
       expect(processIdentityStatus(other)).toBe("alive");
       if (mode === "TERM" || mode === "INT") expect(fs.readFileSync(received, "utf8")).toBe(mode === "INT" ? "SIGINT" : "SIGTERM");
       expect(runner.exitCode).toBe(mode === "complete" ? 0 : mode === "exit" ? 1 : mode === "deadline" ? 124 : mode === "TERM" ? 143 : mode === "INT" ? 130 : mode === "KILL" ? null : 137);
     } finally {
-      await stopFixtureProcess(runner);
-      if (supervisor) await stopFixtureProcess(supervisor);
-      await stopFixtureProcess(bystander);
+      if (heldShutdown) fs.writeFileSync(shutdownRelease, "release");
+      const stopped = await Promise.allSettled([runner, bystander, ...(supervisor ? [supervisor] : [])].map(child => stopFixtureProcess(child)));
       if (!owned.length && fs.existsSync(record)) owned = JSON.parse(fs.readFileSync(record, "utf8"));
       for (const identity of owned) signalFixtureIdentity(identity, "SIGKILL");
-      await until(() => owned.every(identity => processIdentityStatus(identity) === "dead"));
+      await until(() => closed && owned.every(identity => !processIdentityMayRun(identity)), 12_000);
       fs.rmSync(root, { recursive: true, force: true });
+      for (const result of stopped) if (result.status === "rejected") throw result.reason;
     }
   }, 20000);
 }

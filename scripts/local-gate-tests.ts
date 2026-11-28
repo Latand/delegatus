@@ -10,20 +10,25 @@ import { cacheDirectory, checkInputEnvironment, environmentFingerprint, fileFing
 import { decisiveRefusal } from "../src/lib/pipelines/publication";
 import { cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 
-export interface TestSite { file: string; suite: string; name: string; kind: "test" | "error"; occurrence?: number }
-export interface TestRun { failures: TestSite[]; passed: TestSite[]; elapsedMs: number; completed: string[] }
+export interface TestSite { file: string; suite: string; name: string; kind: "test" | "error"; occurrence?: number; selection?: string; provenance?: string }
+export interface TestRun { failures: TestSite[]; passed: TestSite[]; elapsedMs: number; completed: string[]; selections?: Record<string, string> }
 const escapedTemporaryRoot = path.join(gateTemporaryRoot(), "delegatus-test-comparison-").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const privateTestRoot = new RegExp(`${escapedTemporaryRoot}[a-zA-Z0-9]{6}[/\\\\]test-[a-zA-Z0-9]{6}`, "g");
 const diagnosticName = (site: TestSite) => site.kind === "error" ? site.name.replace(privateTestRoot, "<sandbox>") : site.name;
+const normalizedOwnedIdentities = (text: string) => text
+  .replace(/(owned runner: surviving owned processes: )(.*)$/gm, (_whole, prefix: string, members: string) =>
+    prefix + (members.trim() ? members.split(/,\s*/).map(() => "<child>").join(", ") : "<no children>"))
+  .replace(/(owned test children survived teardown: )(.*?)(; guardian=)/g, (_whole, prefix: string, members: string, guardian: string) =>
+    prefix + (members.trim() ? members.split(/,\s*/).map(() => "<child>").join(", ") : "<no children>") + guardian)
+  .replace(/(owned test scope children survived teardown: )(.*)$/gm, (_whole, prefix: string, members: string) =>
+    prefix + (members.trim() ? members.split(/,\s*/).map(() => "<child>").join(", ") : "<no children>"));
+const diagnosticProvenance = (site: TestSite) => normalizedOwnedIdentities(site.provenance ?? "");
 // Keep the concrete identities in displayed evidence. A head/base comparison
 // of the same survivor failure must not depend on the different PIDs allocated
 // to those two isolated runs.
 const key = (site: TestSite) => JSON.stringify([site.file, site.suite,
-  site.kind === "error" ? diagnosticName(site)
-    .replace(/(owned runner: surviving owned processes: ).*$/, "$1<run-owned identities>")
-    .replace(/(owned test children survived teardown: )[\d, ]*(; guardian=)/, "$1<run-owned identities>$2")
-    .replace(/(owned test scope children survived teardown: )\d+ \((?:\d+:\d+|null)\)(?:, \d+ \((?:\d+:\d+|null)\))*$/, "$1<run-owned identities>")
-    : diagnosticName(site), site.kind]);
+  site.kind === "error" ? normalizedOwnedIdentities(diagnosticName(site))
+    : diagnosticName(site), site.kind, site.selection ?? "full", diagnosticProvenance(site)]);
 const occurrenceKey = (site: TestSite) => JSON.stringify([key(site), site.occurrence ?? 0]);
 const comparisonKey = (site: TestSite) => site.kind === "test" && site.occurrence !== undefined ? occurrenceKey(site) : key(site);
 const mergeObservedSites = (first: readonly TestSite[], retry: readonly TestSite[]) => {
@@ -37,6 +42,21 @@ const mergeObservedSites = (first: readonly TestSite[], retry: readonly TestSite
     if (missing > 0) merged.push(...retry.filter(site => comparisonKey(site) === identity).slice(0, missing));
   }
   return merged;
+};
+const collapseDiagnosticSelections = (sites: readonly TestSite[]) => {
+  const tests = sites.filter(site => site.kind !== "error");
+  const groups = new Map<string, Map<string, TestSite[]>>();
+  for (const site of sites.filter(site => site.kind === "error")) {
+    const core = JSON.stringify([site.file, site.suite, diagnosticName(site), site.kind, diagnosticProvenance(site)]);
+    const selection = site.selection ?? "full";
+    const bySelection = groups.get(core) ?? new Map<string, TestSite[]>();
+    const occurrences = bySelection.get(selection) ?? [];
+    occurrences.push(site);
+    bySelection.set(selection, occurrences);
+    groups.set(core, bySelection);
+  }
+  const diagnostics = [...groups.values()].flatMap(bySelection => [...bySelection.values()].flat());
+  return [...tests, ...diagnostics];
 };
 const digest = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 const MIN_PHASE_BUDGET_MS = 15 * 60_000;
@@ -71,7 +91,9 @@ export function comparisonFileWorkers(files: readonly string[], ceiling: number,
 
 export const FLAKY_RERUNS = 3;
 export const FLAKY_BUDGET_MS = 5 * 60 * 1000;
-export class BudgetExhausted extends Error {}
+export class BudgetExhausted extends Error {
+  partial?: TestRun;
+}
 
 export function comparatorEnding(error: unknown): { line: string; code: number } {
   const message = error instanceof Error ? error.message : String(error);
@@ -80,7 +102,7 @@ export function comparatorEnding(error: unknown): { line: string; code: number }
     : { line: `touched-tests: ${message}; gate error (blocking)`, code: 1 };
 }
 
-function assertWorkersSucceeded(workers: readonly PromiseSettledResult<unknown>[], diagnostics: readonly string[] = []): void {
+function assertWorkersSucceeded<T>(workers: readonly PromiseSettledResult<T>[], diagnostics: readonly string[] = []): asserts workers is readonly PromiseFulfilledResult<T>[] {
   const rejected = workers.filter((worker): worker is PromiseRejectedResult => worker.status === "rejected");
   if (!rejected.length) return;
   // Filtered workers can throw before recording a file result. Inspect every
@@ -90,21 +112,62 @@ function assertWorkersSucceeded(workers: readonly PromiseSettledResult<unknown>[
   }
   throw rejected[0]!.reason;
 }
+const selectionFor = (sites: readonly TestSite[] | undefined) => {
+  const tests = sites?.filter(site => site.kind !== "error");
+  if (!tests?.length) return "full";
+  return JSON.stringify([...new Set(testNameFilter(tests))].sort());
+};
 const RUNNER_ERROR = "<runner error> ";
+const runnerAbortEvidence = (output: string, root: string, privateRoot: string) => output
+  .replace(privateRoot, "<sandbox>").split(root).join("<checkout>")
+  .replace(/\x1b\[[0-9;]*m/g, "")
+  .split("\n").filter(line => !/^gate-slot:/.test(line) && !/^delegatus-gate-[\w-]+\.service:/.test(line))
+  .join("\n").replace(/; elapsed \d+ms/g, "").trim().slice(-12_000);
 interface Counts { pass: number; fail: number }
 interface FlakySite extends TestSite { base: Counts; head: Counts }
 const occurrenceCount = (sites: readonly TestSite[], site: TestSite) => sites.filter(other => occurrenceKey(other) === occurrenceKey(site)).length;
+const fileDiagnostics = (run: TestRun) => run.failures.filter(site => site.kind === "error");
+const describeDiagnostics = (sites: readonly TestSite[]) => sites.map(site => `${site.file}: ${diagnosticName(site)}`).join("; ");
+const matchedDiagnosticCounts = (base: readonly TestSite[], head: readonly TestSite[]) => {
+  const remaining = new Map<string, number>();
+  for (const site of base) remaining.set(key(site), (remaining.get(key(site)) ?? 0) + 1);
+  const matched = new Map<string, number>();
+  for (const site of head) {
+    const identity = key(site), count = remaining.get(identity) ?? 0;
+    if (!count) continue;
+    remaining.set(identity, count - 1);
+    matched.set(identity, (matched.get(identity) ?? 0) + 1);
+  }
+  return matched;
+};
 
-/** Confirm assertions that failed the first head sample and did not fail the
- * first base sample: those alone can refuse the push. A failure the base sample
- * already showed stays PRE-EXISTING on that one sample per side and costs no
- * reruns, since neither label it could end with blocks. Mixed results on either
- * side make a confirmed assertion non-blocking FLAKY and retire that occurrence
- * from later rounds; runner and between-tests errors keep their comparison by
- * identity. Never treat absence as a pass.
+/** Confirm new assertion failures and collect file diagnostics from the same
+ * samples. A first-sample match is already PRE-EXISTING. Mixed assertion
+ * results retire the occurrence as FLAKY. File diagnostics are compared by
+ * identity, and missing samples cannot certify a recovery.
  */
 export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side: "base" | "head", sites: readonly TestSite[]) => TestRun | Promise<TestRun>) {
   const comparison = compareTests(base, head);
+  const baseAssertions = base.failures.filter(site => site.kind === "test");
+  const baseDiagnostics = fileDiagnostics(base);
+  let observedBaseDiagnostics = [...baseDiagnostics];
+  let observedHeadDiagnostics = [...fileDiagnostics(head)];
+  let retainedHeadDiagnostics = [...fileDiagnostics(head)];
+  const recoveredDiagnosticKeys = new Set<string>();
+  let pendingHeadDiagnostics: TestSite[] = [];
+  const establishedDiagnosticMatches = matchedDiagnosticCounts(observedBaseDiagnostics, observedHeadDiagnostics);
+  const rememberDiagnosticPair = (baseRun: TestRun, headRun: TestRun) => {
+    observedBaseDiagnostics = mergeObservedSites(observedBaseDiagnostics, fileDiagnostics(baseRun));
+    observedHeadDiagnostics = mergeObservedSites(observedHeadDiagnostics, fileDiagnostics(headRun));
+    const judged = compareTests({ ...base, failures: observedBaseDiagnostics }, { ...head, failures: observedHeadDiagnostics });
+    comparison.introduced = [...comparison.introduced.filter(site => site.kind === "test"), ...judged.introduced];
+    comparison.preexisting = [...comparison.preexisting.filter(site => site.kind === "test"), ...judged.preexisting];
+    comparison.fixed = [...comparison.fixed.filter(site => site.kind === "test"), ...judged.fixed];
+    comparison.absent = [...comparison.absent.filter(site => site.kind === "test"), ...judged.absent];
+    for (const [identity, count] of matchedDiagnosticCounts(fileDiagnostics(baseRun), fileDiagnostics(headRun))) {
+      establishedDiagnosticMatches.set(identity, Math.max(establishedDiagnosticMatches.get(identity) ?? 0, count));
+    }
+  };
   const initialAssertions = new Set(head.failures.filter(site => site.kind === "test").map(comparisonKey));
   const needsConfirmation = (site: TestSite) => site.kind === "test" && initialAssertions.has(comparisonKey(site));
   const flaky: FlakySite[] = [];
@@ -115,31 +178,44 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
   let diagnosticRetryCompleted = false;
   try {
     if (diagnostics.length) {
-      const retry = await rerun("head", diagnostics);
       const files = new Set(diagnostics.map(site => site.file));
-      if ([...files].some(file => !retry.completed.includes(file))) throw new Error("head diagnostic retry: incomplete file");
+      const samples = await Promise.allSettled((["base", "head"] as const).map(async side => {
+        const run = await rerun(side, diagnostics);
+        const incomplete = fileDiagnostics(run).filter(site => !run.completed.includes(site.file)
+          && (side === "head" || !baseDiagnostics.some(known => key(known) === key(site))));
+        if (incomplete.length) throw new Error(`${side} diagnostic retry: ${describeDiagnostics(incomplete)}`);
+        if (side === "head" && [...files].some(file => !run.completed.includes(file))) throw new Error("head diagnostic retry: incomplete file");
+        return run;
+      }));
+      assertWorkersSucceeded(samples);
+      const baseRetry = samples[0]!.value, retry = samples[1]!.value;
+      rememberDiagnosticPair(baseRetry, retry);
+      const observedBase = { ...base, failures: [...baseAssertions, ...observedBaseDiagnostics] };
+      const initial = compareTests(observedBase, head);
       const recovered = new Set<string>();
-      for (const site of diagnostics) {
+      for (const site of initial.introduced.filter(site => diagnostics.includes(site))) {
         if (retry.failures.some(other => key(other) === key(site))) continue;
         recovered.add(key(site));
+        recoveredDiagnosticKeys.add(key(site));
         flaky.push({ ...site, base: { pass: base.completed.includes(site.file) ? 1 : 0, fail: 0 }, head: { pass: 1, fail: 1 } });
       }
-      comparison.introduced = comparison.introduced.filter(site => !recovered.has(key(site)));
+      retainedHeadDiagnostics = mergeObservedSites(retainedHeadDiagnostics, fileDiagnostics(retry));
+      comparison.introduced = initial.introduced.filter(site => !recovered.has(key(site)));
       // Compare the complete retry against the base so base occurrences are
       // consumed once. Merge the two samples by maximum multiplicity: repeated
       // observations do not inflate evidence, while an extra retry occurrence
       // remains visible even when its identity appeared in the first sample.
-      const retried = compareTests(base, retry);
+      const retried = compareTests(observedBase, retry);
       comparison.introduced = mergeObservedSites(comparison.introduced, retried.introduced);
-      comparison.preexisting = mergeObservedSites(comparison.preexisting, retried.preexisting);
-      comparison.fixed = mergeObservedSites(comparison.fixed, retried.fixed);
-      comparison.absent = mergeObservedSites(comparison.absent, retried.absent);
+      comparison.preexisting = mergeObservedSites(initial.preexisting, retried.preexisting);
+      comparison.fixed = mergeObservedSites(initial.fixed, retried.fixed);
+      comparison.absent = mergeObservedSites(initial.absent, retried.absent);
       diagnosticRetryCompleted = true;
     }
     // Only assertions in the initial sample have the occurrence counts required
     // for filtered confirmation. New retry failures above remain blocking.
     const candidates = [...new Map(comparison.introduced.filter(needsConfirmation).map(site => [occurrenceKey(site), site])).values()];
-    if (!candidates.length) return { ...comparison, flaky };
+    if (!candidates.length) return { ...comparison, flaky, baseDiagnostics: observedBaseDiagnostics };
     const evidence = candidates.map(site => ({ site,
       base: { pass: occurrenceCount(base.passed, site), fail: occurrenceCount(base.failures, site) },
       head: { pass: occurrenceCount(head.passed, site), fail: occurrenceCount(head.failures, site) },
@@ -155,14 +231,15 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
       const sides = ["base", "head"] as const;
       // The two isolated sides owe the same samples and share one deadline.
       // Await both even on refusal so no owned runner outlives this round.
+      const observed: Partial<Record<(typeof sides)[number], TestRun>> = {};
       const samples = await Promise.allSettled(sides.map(async side => {
-        const run = await rerun(side, sites);
-        // A between-tests error the same side already showed in its first sample
-        // is that file's known state; only a diagnostic the first sample lacked
-        // leaves the retry without usable evidence.
-        const known = new Set((side === "base" ? base : head).failures.filter(site => site.kind === "error").map(key));
-        const newDiagnostics = run.failures.filter(site => site.kind === "error" && !known.has(key(site)));
-        if (newDiagnostics.length) throw new Error(`${side} rerun: incomplete runner or between-tests error: ${newDiagnostics.map(site => `${site.file}: ${diagnosticName(site)}`).join("; ")}`);
+        let run: TestRun;
+        try { run = await rerun(side, sites); }
+        catch (error) {
+          if (error instanceof BudgetExhausted && error.partial) observed[side] = error.partial;
+          throw error;
+        }
+        observed[side] = run;
         for (const item of pending) {
           const first = side === "base" ? base : head;
           if (occurrenceCount(run.failures, item.site) + occurrenceCount(run.passed, item.site)
@@ -172,11 +249,57 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
         }
         return run;
       }));
-      assertWorkersSucceeded(samples);
+      // A complete paired sample can compare hook and between-tests errors
+      // alongside the filtered assertions. If either sample is unusable, a
+      // newly observed diagnostic still prevents a capacity-only verdict.
+      const unpaired = sides.flatMap(side => {
+        const run = observed[side];
+        const seen = new Map<string, number>();
+        const errors = run && fileDiagnostics(run).filter(site => {
+          const identity = key(site), occurrence = (seen.get(identity) ?? 0) + 1;
+          seen.set(identity, occurrence);
+          const counterpart = observed[side === "base" ? "head" : "base"];
+          const counterpartCount = counterpart ? occurrenceCount(fileDiagnostics(counterpart), site) : 0;
+          return occurrence > Math.max(establishedDiagnosticMatches.get(identity) ?? 0, counterpartCount);
+        });
+        return errors?.length ? [`${side} rerun: incomplete runner or between-tests error: ${describeDiagnostics(errors)}`] : [];
+      });
+      if (observed.head) {
+        const counts = new Map<string, number>();
+        for (const site of fileDiagnostics(observed.head)) counts.set(key(site), (counts.get(key(site)) ?? 0) + 1);
+        const newIdentities = new Set([...counts].filter(([identity, count]) =>
+          count > (establishedDiagnosticMatches.get(identity) ?? 0)).map(([identity]) => identity));
+        pendingHeadDiagnostics = mergeObservedSites(pendingHeadDiagnostics,
+          fileDiagnostics(observed.head).filter(site => newIdentities.has(key(site))));
+      }
+      // Keep diagnostics from a completed peer even if its sibling hit the
+      // shared deadline. The catch path compares these observations with the
+      // established base evidence and can still issue a decisive NEW refusal.
+      if (observed.base) observedBaseDiagnostics = mergeObservedSites(observedBaseDiagnostics, fileDiagnostics(observed.base));
+      if (observed.head) observedHeadDiagnostics = mergeObservedSites(observedHeadDiagnostics, fileDiagnostics(observed.head));
+      assertWorkersSucceeded(samples, unpaired);
+      const baseRetry = samples[0]!.value, headRetry = samples[1]!.value;
+      rememberDiagnosticPair(baseRetry, headRetry);
+      // Keep the established report order while rejudging diagnostics. The
+      // filtered assertion results still go through the occurrence counts.
+      const observedHead = mergeObservedSites(head.failures.filter(site => site.kind === "error"), fileDiagnostics(headRetry));
+      const retried = compareTests({ ...base, failures: [...baseAssertions, ...observedBaseDiagnostics] }, {
+        ...head, failures: [...head.failures.filter(site => site.kind === "test"),
+          ...comparison.introduced.filter(site => site.kind === "test" && !needsConfirmation(site)), ...observedHead],
+        selections: { ...head.selections, ...headRetry.selections },
+      });
+      comparison.introduced = [...retried.introduced.filter(site => site.kind === "test"), ...comparison.introduced.filter(site => site.kind === "error")];
+      // The retry comparison already includes the maximum observed diagnostic
+      // multiplicity. Carrying old PRE-EXISTING rows forward would duplicate
+      // the same base evidence once per confirmation round.
+      comparison.preexisting = [...retried.preexisting.filter(site => site.kind === "test"),
+        ...mergeObservedSites(comparison.preexisting.filter(site => site.kind === "error"), retried.preexisting.filter(site => site.kind === "error"))];
+      comparison.fixed = [...retried.fixed.filter(site => site.kind === "test"),
+        ...mergeObservedSites(comparison.fixed.filter(site => site.kind === "error"), retried.fixed.filter(site => site.kind === "error"))];
+      comparison.absent = [...retried.absent.filter(site => site.kind === "test"),
+        ...mergeObservedSites(comparison.absent.filter(site => site.kind === "error"), retried.absent.filter(site => site.kind === "error"))];
       for (const [index, side] of sides.entries()) {
-        const sample = samples[index]!;
-        if (sample.status === "rejected") throw sample.reason;
-        const run = sample.value;
+        const run = samples[index]!.value;
         for (const item of pending) {
           const fail = occurrenceCount(run.failures, item.site), pass = occurrenceCount(run.passed, item.site);
           if (side === "base" && fail) item.baseRetryFailed = true;
@@ -194,16 +317,23 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
       flaky.push({ ...item.site, base: item.base, head: item.head });
     }
     const keepNonFlaky = (sites: TestSite[]) => sites.filter(site => !flakyOccurrences.has(occurrenceKey(site)));
-    return { ...comparison, introduced: keepNonFlaky(comparison.introduced), preexisting: keepNonFlaky(comparison.preexisting), flaky };
+    return { ...comparison, introduced: keepNonFlaky(comparison.introduced), preexisting: keepNonFlaky(comparison.preexisting), flaky,
+      baseDiagnostics: observedBaseDiagnostics };
   } catch (error) {
     // Every exceptional exit retains refusals already established against
     // the base, including retry-only assertions outside filtered confirmation.
     // Initial assertions and between-tests errors still owe their existing
     // confirmations; an ordinary runner deadline alone remains retryable.
+    const partialHead = mergeObservedSites(retainedHeadDiagnostics, pendingHeadDiagnostics)
+      .filter(site => !recoveredDiagnosticKeys.has(key(site)));
+    const partialDiagnostics = compareTests({ ...base, failures: observedBaseDiagnostics },
+      { ...head, failures: [...head.failures.filter(site => site.kind !== "error"), ...partialHead] }).introduced.filter(site => site.kind === "error");
+    const retainedDiagnostics = diagnosticRetryCompleted ? partialDiagnostics
+      : mergeObservedSites(comparison.introduced.filter(site => site.kind === "error"), partialDiagnostics);
     const retained = comparison.introduced.filter(site => site.kind === "test"
       ? !needsConfirmation(site)
-      : site.name !== `${RUNNER_ERROR}runner did not finish (124)`
-        && (diagnosticRetryCompleted || !site.name.startsWith("<between-tests error> ")));
+      : false).concat(retainedDiagnostics.filter(site => site.name !== `${RUNNER_ERROR}runner did not finish (124)`
+        && (diagnosticRetryCompleted || !site.name.startsWith("<between-tests error> "))));
     if (!retained.length) throw error;
     throw new Error([error instanceof Error ? error.message : String(error),
       ...retained.map(site => `NEW ${site.file}: ${site.suite ? `${site.suite} > ` : ""}${diagnosticName(site)}`)].join("\n"));
@@ -228,6 +358,8 @@ export function compareTests(base: TestRun, head: TestRun) {
     if (!count) continue;
     remaining.set(identity, count - 1);
     const passed = passes.get(identity) ?? 0;
+    const sameSelection = site.kind !== "error" || (head.selections?.[site.file] ?? "full") === (site.selection ?? "full");
+    if (site.kind === "error" && head.completed.includes(site.file) && !sameSelection) continue;
     if (passed || (site.kind === "error" && head.completed.includes(site.file))) { fixed.push(site); passes.set(identity, passed - 1); }
     else absent.push(site);
   }
@@ -237,8 +369,19 @@ export function compareTests(base: TestRun, head: TestRun) {
 /** Bun's JUnit format retains describe ancestry and handles multiline/escaped names.
  * Validate totals; a truncated report must never certify a baseline.
  */
-export function parseReport(xml: string, output: string, file: string, root: string, filtered = false): Omit<TestRun, "elapsedMs" | "completed"> {
+export function parseReport(xml: string, output: string, file: string, root: string, filtered: boolean | string = false): Omit<TestRun, "elapsedMs" | "completed"> {
   const attributes = (tag: string) => Object.fromEntries([...tag.matchAll(/([\w-]+)="([^"]*)"/g)].map(m => [m[1]!, decodeXML(m[2]!)]));
+  const provenance = (text: string) => {
+    const lines = text.split("\n").map(line => line.trim()).filter(Boolean);
+    const start = lines.findIndex(line => /^(?:[\w.]*Error|error):/.test(line));
+    const diagnostic = start < 0 ? lines : lines.slice(start);
+    const firstFrame = diagnostic.findIndex(line => /^(?:[-*]\s+)?at\s/.test(line));
+    const message = firstFrame < 0 ? diagnostic : diagnostic.slice(0, firstFrame);
+    const frames = diagnostic.filter(line => /^(?:[-*]\s+)?at\s/.test(line));
+    return [...message, ...frames].map(line => line.split(root).join("<checkout>")
+      .replace(privateTestRoot, "<sandbox>").replace(/\x1b\[[0-9;]*m/g, "")).join("\n");
+  };
+  const selection = typeof filtered === "string" ? filtered : filtered ? "filtered" : "full";
   const opening = xml.match(/<testsuites\b[^>]*>/)?.[0];
   if (!opening || !xml.trimEnd().endsWith("</testsuites>")) throw new Error("missing or incomplete JUnit report");
   const totals = attributes(opening);
@@ -261,7 +404,10 @@ export function parseReport(xml: string, output: string, file: string, root: str
         const tag = match[2]!.match(/<(?:failure|error)\b[^>]*>/)?.[0];
         const message = tag ? attributes(tag).message : undefined;
         if (!message) throw new Error("unidentified JUnit hook failure");
-        failures.push({ file, suite: site.suite, name: `<hook error> ${message.split(root).join("<checkout>")}`, kind: "error" });
+        const body = decodeXML((match[2] ?? "").replace(/<[^>]*>/g, " "));
+        const type = tag ? attributes(tag).type : undefined;
+        failures.push({ file, suite: site.suite, name: `<hook error> ${type ? `${type}: ` : ""}${message.split(root).join("<checkout>")}`, kind: "error",
+          selection, provenance: provenance(`${type ? `${type}\n` : ""}${body}`) });
       } else failures.push(site);
       namedFailures++;
     }
@@ -271,11 +417,22 @@ export function parseReport(xml: string, output: string, file: string, root: str
   // Bun omits out-of-test exceptions from JUnit. Keep these visible as named
   // file-level diagnostics instead of losing them beside an existing assertion.
   let errors = 0;
-  for (const match of output.matchAll(/# Unhandled error between tests\s*\n-+\n([\s\S]*?)\n-+/g)) {
-    const message = match[1]!.match(/^(?:[\w.]*Error|error): (.*)$/m)?.[0];
+  const headers = [...output.matchAll(/^# Unhandled error between tests\s*$/gm)];
+  for (const [index, header] of headers.entries()) {
+    const start = header.index! + header[0].length;
+    const end = headers[index + 1]?.index ?? output.length;
+    const block = output.slice(start, end);
+    const separators = [...block.matchAll(/^[-]{5,}\s*$/gm)];
+    // Exception text may itself contain Bun's divider line. The actual closing
+    // boundary is the final divider in this diagnostic block; a missing one
+    // leaves the report ambiguous and cannot certify a base match.
+    if (separators.length < 2) throw new Error("ambiguous between-tests diagnostic boundary");
+    const body = block.slice(separators[0]!.index! + separators[0]![0].length, separators.at(-1)!.index).trim();
+    const message = body.match(/^(?:[\w.]*Error|error):[^\n]*/m)?.[0];
     if (!message) throw new Error("unidentified error between tests");
     errors++;
-    failures.push({ file, suite: "", name: `<between-tests error> ${message.split(root).join("<checkout>")}`, kind: "error" });
+    failures.push({ file, suite: "", name: `<between-tests error> ${message.split(root).join("<checkout>")}`, kind: "error",
+      selection, provenance: provenance(body) });
   }
   const reportedErrors = Number(output.match(/^\s*(\d+) errors?\s*$/m)?.[1] ?? 0);
   if (errors !== reportedErrors) throw new Error("incomplete between-tests error diagnostics");
@@ -292,7 +449,7 @@ function command(command: string[], cwd: string, env: NodeJS.ProcessEnv, timeout
 /** The preload and service can report the same surviving tree. Keep one
  * ownership failure for that exact identity set; other hook errors still block.
  */
-export function appendOwnershipFailure(failures: TestSite[], file: string, diagnostic: string): void {
+export function appendOwnershipFailure(failures: TestSite[], file: string, diagnostic: string, selection = "full"): void {
   const runnerPrefix = "owned runner: surviving owned processes: ";
   const hookPrefix = "<hook error> owned test scope children survived teardown: ";
   const identities = (value: string) => value.split(", ").sort().join(", ");
@@ -300,7 +457,7 @@ export function appendOwnershipFailure(failures: TestSite[], file: string, diagn
   const duplicate = failures.findIndex(site => site.file === file && site.kind === "error"
     && site.name.startsWith(hookPrefix) && identities(site.name.slice(hookPrefix.length)) === members);
   if (duplicate >= 0) failures.splice(duplicate, 1);
-  failures.push({ file, suite: "", name: `<ownership error> ${diagnostic}`, kind: "error" });
+  failures.push({ file, suite: "", name: `<ownership error> ${diagnostic}`, kind: "error", selection });
 }
 
 /** Bun arguments that run only the named cases of one file. */
@@ -357,6 +514,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
   const deadline = Math.min(now() + budgets.runMs, options.comparisonDeadline, options.confirmationDeadline ?? Infinity);
   const budgetLabel = deadline === options.comparisonDeadline ? "comparison" : options.confirmationDeadline === undefined ? "phase" : "flaky rerun";
   const results: TestRun[] = new Array(files.length);
+  const selections: Record<string, string> = {};
   const runFile = async (index: number) => {
     const file = files[index]!;
     const fileStarted = performance.now();
@@ -369,6 +527,8 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     const sites = options.sites?.filter(site => site.file === file);
     const filtered = !!sites && !sites.some(site => site.kind === "error");
     const filter = filtered ? testNameFilter(sites) : [];
+    const selection = filtered ? selectionFor(sites) : "full";
+    selections[file] = selection;
     const privateRoot = recordGateSandbox(mkdtempSync(path.join(sandbox, "test-")));
     const env = isolatedEnvironment(privateRoot, inherited);
     // HOME is private before this Bun process starts. The preload verifies it
@@ -417,24 +577,36 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
         if (refusal) throw new Error(`${label}: ${file}: runner did not finish (124); ${refusal.trim()}`);
         throw new BudgetExhausted(`${label}: ${file}: runner did not finish (124); ${budgetLabel} budget exhausted`);
       }
-      if (result.signalCode || ![0, 1].includes(exitCode)) throw new Error(`runner did not finish (${result.signalCode ?? exitCode})`);
-      const parsed = parseReport(readFileSync(report, "utf8"), output, file, root, filtered);
-      // A complete report still needs the service's ownership verdict.
-      // Retain it so cleanup fixed on head can recover a broken baseline.
-      if (survivors && exitCode !== 0) {
-        appendOwnershipFailure(parsed.failures, file, survivors);
+      const fileTimedOut = exitCode === 124 && output.includes("owned runner: deadline expired");
+      if (fileTimedOut) {
+        if (filtered) throw new Error("runner did not finish (124)");
+        failures.push({ file, suite: "", name: `${RUNNER_ERROR}runner did not finish (124)`, kind: "error", selection });
+        if (survivors) appendOwnershipFailure(failures, file, survivors, selection);
+        options.onFailure?.();
+      } else if (result.signalCode || ![0, 1].includes(exitCode)) {
+        const evidence = runnerAbortEvidence(output, root, privateRoot);
+        if (!evidence) throw new Error(`runner did not finish (${result.signalCode ?? exitCode}); cause unavailable`);
+        throw new Error(`runner did not finish (${result.signalCode ?? exitCode}): ${evidence}`);
+      } else {
+        const parsed = parseReport(readFileSync(report, "utf8"), output, file, root, selection);
+        // A complete report still needs the service's ownership verdict.
+        // Retain it so cleanup fixed on head can recover a broken baseline.
+        if (survivors && exitCode !== 0) {
+          appendOwnershipFailure(parsed.failures, file, survivors, selection);
+        }
+        if ((exitCode === 0) !== (parsed.failures.length === 0)) {
+          throw new Error(`runner exit disagrees with its report${survivors ? `; ${survivors}` : ""}`);
+        }
+        // Portable cleanup is best effort and can miss detached descendants.
+        // Its result remains observable but cannot certify later file reuse.
+        cleanupConfirmed = confirmedFileCleanup({ platform: process.platform, exitCode, survivors, taskPeak: task.peak, output,
+          cloudCleanup: env.LLV_GATE_CHECKPOINT_CLEANUP === "cloud-owned-runner",
+          receipt: existsSync(cleanupReceipt) ? readFileSync(cleanupReceipt, "utf8") : undefined, token: cleanupToken });
+        failures.push(...parsed.failures); passed.push(...parsed.passed); completed.push(file);
+        if (parsed.failures.length) options.onFailure?.();
       }
-      if ((exitCode === 0) !== (parsed.failures.length === 0)) {
-        throw new Error(`runner exit disagrees with its report${survivors ? `; ${survivors}` : ""}`);
-      }
-      // Portable cleanup is best effort and can miss detached descendants.
-      // Its result remains observable but cannot certify later file reuse.
-      cleanupConfirmed = confirmedFileCleanup({ platform: process.platform, exitCode, survivors, taskPeak: task.peak, output,
-        cloudCleanup: env.LLV_GATE_CHECKPOINT_CLEANUP === "cloud-owned-runner",
-        receipt: existsSync(cleanupReceipt) ? readFileSync(cleanupReceipt, "utf8") : undefined, token: cleanupToken });
-      failures.push(...parsed.failures); passed.push(...parsed.passed); completed.push(file);
-      if (parsed.failures.length) options.onFailure?.();
     } catch (error) {
+      if (error instanceof BudgetExhausted) throw error;
       if (cutShort) throw error;
       const cause = error instanceof Error ? error.message : String(error);
       const message = survivors && !cause.includes(survivors) ? `${cause}; ${survivors}` : cause;
@@ -448,7 +620,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
       }
       // A caller's TMPDIR may sit inside its checkout. Normalize the report
       // sandbox before replacing that checkout prefix on only the head side.
-      failures.push({ file, suite: "", name: `${RUNNER_ERROR}${message.replace(privateTestRoot, "<sandbox>").split(root).join("<checkout>")}`, kind: "error" });
+      failures.push({ file, suite: "", name: `${RUNNER_ERROR}${message.replace(privateTestRoot, "<sandbox>").split(root).join("<checkout>")}`, kind: "error", selection });
     } finally { releaseGateSandbox(privateRoot); }
     const elapsedMs = performance.now() - fileStarted;
     const hint = label === "head" && elapsedMs > budgets.fileMs / 2
@@ -474,13 +646,23 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
       finally { if (useNested) nestedRunning--; }
     }
   }));
-  // All owned runners have settled. Completed file diagnostics and filtered
-  // worker rejections must both veto a capacity retry after budget expiry.
+  // All owned runners have settled. Preserve completed evidence when the
+  // shared deadline stopped a sibling so confirmation can judge it against
+  // the paired side before choosing a verdict.
   const diagnostics = results.flatMap(run => run?.failures.filter(site => site.kind === "error"
     && site.name !== `${RUNNER_ERROR}runner did not finish (124)`) ?? []);
+  const rejected = workers.filter((worker): worker is PromiseRejectedResult => worker.status === "rejected");
+  if (rejected.length && rejected.every(worker => worker.reason instanceof BudgetExhausted)) {
+    const partial: TestRun = { failures: results.flatMap(run => run?.failures ?? []),
+      passed: results.flatMap(run => run?.passed ?? []), completed: results.flatMap(run => run?.completed ?? []),
+      elapsedMs: performance.now() - started };
+    const deadline = rejected[0]!.reason as BudgetExhausted;
+    deadline.partial = partial;
+    throw deadline;
+  }
   assertWorkersSucceeded(workers, diagnostics.map(site => `${label}: ${site.file}: ${diagnosticName(site)}`));
   for (const run of results) { failures.push(...run.failures); passed.push(...run.passed); completed.push(...run.completed); }
-  return { failures, passed, completed, elapsedMs: performance.now() - started };
+  return { failures, passed, completed, elapsedMs: performance.now() - started, selections };
 }
 
 function dependencyGraph(root: string) {
@@ -685,12 +867,22 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     // of the run with a clipped deadline can turn run exhaustion into a file
     // timeout and interrupt its nested runner during cleanup.
     const reserveFileBudget = !!headCache && budgets.runMs > budgets.fileMs + SUPERVISOR_MARGIN_MS;
-    const freshHead = await runFiles(root, pending, sandbox, inherited, "head", { ...runOptions, workers, reserveFileBudget,
-      onFile: headCache ? (run, cleanupConfirmed) => {
-        if (!cleanupConfirmed || !isGreenHeadFile(run)) return;
-        if (sameHeadInputs()) headCache.write(headKey(run.completed[0]!), run);
-        else inputsChanged = true;
-      } : undefined });
+    let freshHead: TestRun;
+    let headDeadline: BudgetExhausted | undefined;
+    try {
+      freshHead = await runFiles(root, pending, sandbox, inherited, "head", { ...runOptions, workers, reserveFileBudget,
+        onFile: headCache ? (run, cleanupConfirmed) => {
+          if (!cleanupConfirmed || !isGreenHeadFile(run)) return;
+          if (sameHeadInputs()) headCache.write(headKey(run.completed[0]!), run);
+          else inputsChanged = true;
+        } : undefined });
+    } catch (error) {
+      if (!(error instanceof BudgetExhausted) || !error.partial?.failures.length) throw error;
+      // Completed failures still need base evidence. Judge what we can within
+      // the comparison budget and keep the interrupted selection retryable.
+      freshHead = error.partial;
+      headDeadline = error;
+    }
     const head: TestRun = { failures: freshHead.failures, passed: [...reused.flatMap(run => run.passed), ...freshHead.passed],
       completed: [...reused.flatMap(run => run.completed), ...freshHead.completed], elapsedMs: freshHead.elapsedMs };
     log(`touched-tests: head ${head.elapsedMs.toFixed(0)}ms`);
@@ -787,29 +979,45 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     // A base file that did not finish certifies nothing, unless the head fails
     // to finish the same file with the same diagnostic: then the push changed
     // nothing there and the comparison below lists it as PRE-EXISTING.
-    const headErrors = new Set(head.failures.filter(site => site.kind === "error").map(key));
-    for (const site of baseline.failures) if (site.kind === "error" && site.name.startsWith(RUNNER_ERROR) && !headErrors.has(key(site))) throw new Error(`baseline: ${site.file}: ${diagnosticName(site).slice(RUNNER_ERROR.length)}`);
+    const headErrorFiles = new Set(head.failures.filter(site => site.kind === "error").map(site => site.file));
+    for (const site of baseline.failures) if (site.kind === "error" && site.name.startsWith(RUNNER_ERROR)) {
+      const detail = diagnosticName(site).slice(RUNNER_ERROR.length);
+      if (detail.includes("cause unavailable")) throw new Error(`baseline: ${site.file}: ${detail}`);
+      if (!headErrorFiles.has(site.file)) throw new Error(`baseline: ${site.file}: ${detail}`);
+    }
     const retryStarted = performance.now(), deadline = retryStarted - budget.elapsed() + FLAKY_BUDGET_MS;
     let reruns = 0, diagnosticReruns = 0;
     const comparison = await confirmFailures(baseline, head, async (side, sites) => {
-      if (sites.some(site => site.kind === "error")) diagnosticReruns++;
-      else reruns++;
+      const fullFile = sites.some(site => site.kind === "error");
+      if (side === "head") {
+        if (fullFile) diagnosticReruns++;
+        else reruns++;
+      }
       const retryFiles = [...new Set(sites.map(site => site.file))].filter(file => side === "head" || baseFiles.has(file));
       if (!retryFiles.length) return { failures: [], passed: [], completed: [], elapsedMs: 0 };
-      return await runFiles(side === "head" ? root : prepareBaseline(deadline), retryFiles, sandbox, inherited, `${side} rerun`, { ...runOptions, ...(sites.some(site => site.kind === "error") ? {} : { sites }), confirmationDeadline: deadline });
+      return await runFiles(side === "head" ? root : prepareBaseline(deadline), retryFiles, sandbox, inherited, `${side} rerun`, { ...runOptions, sites: fullFile ? undefined : sites, confirmationDeadline: deadline });
     });
+    // The same teardown/hook error can be observed repeatedly under one
+    // selector, or once under several selectors. Keep the maximum count within
+    // each selector; matching already happened independently per selection.
+    comparison.preexisting = collapseDiagnosticSelections(comparison.preexisting);
     // Observed intermittency cannot become a frozen baseline allowance.
     for (const file of new Set(comparison.flaky.map(site => site.file))) cache.remove(cacheKey(file));
-    if (diagnosticReruns) log(`touched-tests: between-tests diagnostic retry: ${diagnosticReruns} isolated full-file run (shared budget ${FLAKY_BUDGET_MS}ms)`);
-    if (reruns) log(`touched-tests: flaky confirmation ${reruns / 2} round${reruns === 2 ? "" : "s"} per side (maximum ${FLAKY_RERUNS}), ${(performance.now() - retryStarted).toFixed(0)}ms (shared budget ${FLAKY_BUDGET_MS}ms)`);
+    if (diagnosticReruns) log(`touched-tests: between-tests diagnostic retry: paired full-file selection (shared budget ${FLAKY_BUDGET_MS}ms)`);
+    if (reruns) log(`touched-tests: flaky confirmation ${reruns} round${reruns === 1 ? "" : "s"} per side (maximum ${FLAKY_RERUNS}), ${(performance.now() - retryStarted).toFixed(0)}ms (shared budget ${FLAKY_BUDGET_MS}ms)`);
     for (const site of comparison.flaky) log(`FLAKY ${site.file}: ${site.suite ? `${site.suite} > ` : ""}${diagnosticName(site)} (base ${site.base.pass} pass/${site.base.fail} fail; head ${site.head.pass} pass/${site.head.fail} fail)`);
     for (const [label, sites] of [["NEW", comparison.introduced], ["PRE-EXISTING", comparison.preexisting], ["FIXED", comparison.fixed], ["REMOVED/SKIPPED", comparison.absent]] as const) {
       for (const site of sites) {
         const evidence = label === "PRE-EXISTING" ? " (base: FAIL; head: FAIL; non-blocking note)" : "";
         log(`${label} ${site.file}: ${site.suite ? `${site.suite} > ` : ""}${diagnosticName(site)}${label === "PRE-EXISTING" && site.kind === "error" ? " (the base run of this file is broken the same way)" : ""}${evidence}`);
+        if (label === "PRE-EXISTING" && site.kind === "error") {
+          const match = comparison.baseDiagnostics.find(other => key(other) === key(site));
+          if (match) log(`  Base diagnostic ${site.file}: ${diagnosticName(match)}`);
+        }
       }
     }
     logTiming();
+    if (headDeadline && !comparison.introduced.length) throw headDeadline;
     log(`touched-tests: ${comparison.introduced.length} new failures, ${comparison.preexisting.length} pre-existing failures, ${comparison.fixed.length} fixed, ${comparison.absent.length} removed/skipped, ${comparison.flaky.length} flaky`);
     return comparison;
   } finally {

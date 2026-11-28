@@ -6,7 +6,7 @@ test("the retry bound stays small and incomplete samples cannot become FLAKY", a
   const run = (failures: TestSite[], passed: TestSite[]): TestRun => ({ failures, passed, completed: [site.file], elapsedMs: 0 });
   const base = run([], [site]), head = run([site], []);
   await expect(confirmFailures(base, head, side => side === "base" ? base : run([], []))).rejects.toThrow("missing or skipped test");
-  await expect(confirmFailures(base, head, () => run([{ ...site, kind: "error" }], []))).rejects.toThrow("incomplete runner");
+  await expect(confirmFailures(base, head, () => run([{ ...site, kind: "error" }], []))).rejects.toThrow("missing or skipped test");
   await expect(confirmFailures(base, head, () => { throw new Error("flaky rerun budget exhausted"); })).rejects.toThrow("budget exhausted");
   // A passing duplicate cannot certify recovery of another stable failing copy.
   const first = { ...site, occurrence: 0 }, second = { ...site, occurrence: 1 };
@@ -20,8 +20,9 @@ test("a failing base retry still requires a complete paired head sample before r
   const base = sample([], [site]), head = sample([site], []);
   await expect(confirmFailures(base, head, side => side === "base" ? head : sample([], [])))
     .rejects.toThrow("head rerun: missing or skipped test");
-  await expect(confirmFailures(base, head, side => side === "base" ? head : sample([{ ...site, kind: "error", name: "new diagnostic" }], [])))
-    .rejects.toThrow("head rerun: incomplete runner or between-tests error: example.test.ts: new diagnostic");
+  const diagnostic: TestSite = { ...site, kind: "error", name: "<hook error> new diagnostic" };
+  const outcome = await confirmFailures(base, head, side => side === "base" ? head : sample([diagnostic], [site]));
+  expect(outcome.introduced).toEqual([diagnostic]);
 });
 
 test.each(["accepts", "refuses"] as const)("confirmation sides overlap and await their peer when the base %s", async mode => {
@@ -131,7 +132,7 @@ test.each(["assertion confirmation", "diagnostic retry"] as const)("initial file
         return base;
       }).catch(error => error);
       const ending = comparatorEnding(error);
-      expect(calls).toEqual(boundary === "diagnostic retry" ? ["head"] : ["base", "head"]);
+      expect(calls).toEqual(["base", "head"]);
       const blocking = !known && reason !== "runner did not finish (124)";
       expect(ending.code).toBe(blocking ? 1 : 75);
       expect(ending.line).toContain("head confirmation deadline");
@@ -151,7 +152,7 @@ test.each(["repeated between-tests error", "new ownership error"] as const)("a c
   const base: TestRun = { failures: [], passed: [site], completed: [site.file], elapsedMs: 0 };
   const head: TestRun = { ...base, failures: [site, diagnostic], passed: [] };
   const error = await confirmFailures(base, head, (side, sites) => {
-    if (sites.some(site => site.kind === "error")) return { ...head, failures: [site, retained] };
+    if (sites.some(site => site.kind === "error")) return side === "base" ? base : { ...head, failures: [site, retained] };
     if (side === "head") throw new BudgetExhausted("later confirmation deadline");
     return base;
   }).catch(error => error);
@@ -168,6 +169,57 @@ test("an unconfirmed between-tests diagnostic alone retains the deadline policy"
     throw new BudgetExhausted("diagnostic retry deadline");
   }).catch(error => error);
   expect(comparatorEnding(error).code).toBe(75);
+});
+
+test.each([true, false] as const)("a later deadline respects whether the same-selection diagnostic was already matched: %s", async matched => {
+  const site: TestSite = { file: "example.test.ts", suite: "", name: "target", kind: "test", occurrence: 0 };
+  const diagnostic: TestSite = { file: site.file, suite: "", name: "<hook error> shared tail", kind: "error", selection: "filtered", provenance: "at sourceFault (<checkout>/example.test.ts:8:2)" };
+  const otherOrigin = { ...diagnostic, provenance: "at unrelatedFault (<checkout>/example.test.ts:18:2)" };
+  const base: TestRun = { failures: [], passed: [site], completed: [site.file], elapsedMs: 0 };
+  const head: TestRun = { ...base, failures: [site], passed: [] };
+  let headRounds = 0;
+  const error = await confirmFailures(base, head, side => {
+    if (side === "base") return { ...base, failures: [matched ? diagnostic : otherOrigin] };
+    headRounds++;
+    if (headRounds === 1) return { ...head, failures: [site, diagnostic], passed: [] };
+    throw new BudgetExhausted("confirmation deadline");
+  }).catch(error => error);
+  expect(comparatorEnding(error).code).toBe(matched ? 75 : 1);
+});
+
+test("a sibling deadline stays retryable after a paired diagnostic, while a fresh peer diagnostic refuses", async () => {
+  const site: TestSite = { file: "example.test.ts", suite: "", name: "target", kind: "test", occurrence: 0 };
+  const shared: TestSite = { ...site, name: "<hook error> shared cleanup", kind: "error", selection: "full", provenance: "at cleanup (<checkout>/test.ts:2:1)" };
+  const fresh: TestSite = { ...shared, name: "<hook error> candidate cleanup", provenance: "at candidate (<checkout>/test.ts:9:1)" };
+  const base: TestRun = { failures: [shared], passed: [site], completed: [site.file], elapsedMs: 0 };
+  const head: TestRun = { ...base, failures: [site, shared], passed: [] };
+  const pairedTimeout = await confirmFailures(base, head, side => side === "base" ? base : Promise.reject(new BudgetExhausted("sibling deadline"))).catch(error => error);
+  expect(comparatorEnding(pairedTimeout).code).toBe(75);
+
+  const candidateHead: TestRun = { ...base, failures: [site], passed: [] };
+  const candidateTimeout = await confirmFailures({ ...base, failures: [], passed: [site] }, candidateHead, side => side === "base"
+    ? Promise.reject(new BudgetExhausted("sibling deadline"))
+    : { ...candidateHead, failures: [site, fresh], passed: [] }).catch(error => error);
+  expect(comparatorEnding(candidateTimeout).code).toBe(1);
+  expect(comparatorEnding(candidateTimeout).line).toContain("<hook error> candidate cleanup");
+  expect(comparatorEnding(candidateTimeout).line).toContain("NEW example.test.ts:");
+});
+
+test("extra candidate diagnostic occurrences remain a refusal after a later deadline", async () => {
+  const alpha: TestSite = { file: "example.test.ts", suite: "", name: "alpha", kind: "test", occurrence: 0 };
+  const beta: TestSite = { ...alpha, name: "beta", occurrence: 1 };
+  const diagnostic: TestSite = { ...alpha, name: "<hook error> shared detail", kind: "error", selection: "full" };
+  const base: TestRun = { failures: [diagnostic], passed: [alpha, beta], completed: [alpha.file], elapsedMs: 0 };
+  const head: TestRun = { ...base, failures: [alpha, beta, diagnostic, diagnostic], passed: [] };
+  let headRound = 0;
+  const error = await confirmFailures(base, head, side => {
+    if (side === "base") return { ...base, failures: [diagnostic], passed: [alpha, beta] };
+    headRound++;
+    if (headRound === 1) return { ...head, failures: [beta, diagnostic, diagnostic], passed: [alpha] };
+    throw new BudgetExhausted("later sibling deadline");
+  }).catch(error => error);
+  expect(comparatorEnding(error).code).toBe(1);
+  expect(comparatorEnding(error).line).toContain("NEW example.test.ts: <hook error> shared detail");
 });
 
 test.each(["deadline", "completed", "no retry refusal", "pre-existing retry refusal"] as const)("diagnostic retry assertions keep their verdict across comparator processes: %s", mode => {
@@ -233,7 +285,7 @@ test.each(["base", "head"] as const)("diagnostic retry assertions retain later %
   for (const cause of [new BudgetExhausted("confirmation deadline"), new Error("confirmation cancelled"),
     new Error("ownership refused"), new Error("cleanup refused")]) {
     const error = await confirmFailures(base, head, (side, sites) => {
-      if (sites.some(site => site.kind === "error")) return { ...head, failures: [initial, added], passed: [] };
+      if (sites.some(site => site.kind === "error")) return side === "base" ? base : { ...head, failures: [initial, added], passed: [] };
       if (side === failingSide) throw cause;
       return side === "base" ? base : { ...head, failures: [initial], passed: [added] };
     }).catch(error => error);

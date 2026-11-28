@@ -1,7 +1,7 @@
 import { appendOwnershipFailure, compareTests, execFileSync, expect, fixture, gateTemporaryRoot, mkdirSync, parseReport, path, readFileSync, root, roots, source, spawnSync, spyOn, symlinkSync, test, type TestRun, type TestSite, writeFileSync } from "./local-gate-tests.fixture";
 import { chmodSync, existsSync, rmSync } from "node:fs";
 import { GATE_TASKS_MAX } from "./gate-tasks";
-import { BudgetExhausted, comparatorEnding, comparisonFileWorkers, comparisonPhaseBudgetMs, confirmedFileCleanup } from "./local-gate-tests";
+import { BudgetExhausted, comparatorEnding, comparisonFileWorkers, comparisonPhaseBudgetMs, confirmedFileCleanup, confirmFailures } from "./local-gate-tests";
 
 test("comparison phase allowance scales from 15 minutes up to 40", () => {
   expect([1, 30, 31, 51, 102, 130, 1_000].map(comparisonPhaseBudgetMs))
@@ -152,8 +152,21 @@ test("a head crash is named and blocks without hiding results from other files",
   const f = fixture(source(true)); writeFileSync(path.join(f.dir, "example.test.ts"), "process.exit(0);");
   writeFileSync(path.join(f.dir, "z.test.ts"), source(false));
   const result = await f.run(["./example.test.ts", "./z.test.ts"]);
-  expect(result.introduced).toHaveLength(2); expect(result.introduced[0]!.name).toStartWith("<runner error>");
+  expect(result.introduced).toHaveLength(2);
+  expect(result.introduced.some(site => site.name.startsWith("<runner error>"))).toBe(true);
   expect(f.logs.at(-1)).toContain("2 new failures, 0 pre-existing failures");
+});
+test("same-status runner aborts compare their reported causes", async () => {
+  const f = fixture('console.error("module import abort"); process.exit(2);');
+  writeFileSync(path.join(f.dir, "example.test.ts"), 'console.error("test startup abort"); process.exit(2);');
+  const distinct = await f.run();
+  expect(distinct.introduced.some(site => site.name.includes("test startup abort"))).toBe(true);
+  expect(distinct.preexisting).toHaveLength(0);
+
+  writeFileSync(path.join(f.dir, "example.test.ts"), 'console.error("module import abort"); process.exit(2);');
+  const shared = await f.run();
+  expect(shared.introduced).toHaveLength(0);
+  expect(shared.preexisting.some(site => site.name.includes("module import abort"))).toBe(true);
 });
 const taskControl = process.platform === "linux" && Bun.which("python3") && Bun.which("systemd-run")
   && spawnSync("systemctl", ["--user", "show-environment"], { stdio: "ignore", timeout: 5_000 }).status === 0
@@ -229,30 +242,80 @@ test("duplicate names match occurrences and keep suite ancestry", async () => {
   const result = compareTests(base, { ...base, failures: [site, site, { ...site, suite: "other" }] });
   expect(result.preexisting).toHaveLength(1); expect(result.introduced).toHaveLength(2);
 });
+test("between-tests diagnostics retain text after a divider inside the thrown message", () => {
+  const xml = `<testsuites tests="1" failures="0"><testsuite><testcase classname="suite" name="anchor" file="example.test.ts"/></testsuite></testsuites>`;
+  const report = (tail: string) => parseReport(xml, `# Unhandled error between tests\n${"-".repeat(39)}\nTypeError: shared first line\n${"-".repeat(39)}\n${tail}\n    at fault (example.test.ts:4:3)\n${"-".repeat(39)}\n1 error\n`, "example.test.ts", "/checkout");
+  const base = report("base detail").failures[0]!;
+  const head = report("candidate detail").failures[0]!;
+  expect(head.name).toContain("TypeError: shared first line");
+  expect(head.provenance).toContain("candidate detail");
+  expect(compareTests({ failures: [base], passed: [], completed: [base.file], elapsedMs: 0 },
+    { failures: [head], passed: [], completed: [head.file], elapsedMs: 0 }).introduced).toEqual([head]);
+  const same = report("base detail").failures[0]!;
+  expect(compareTests({ failures: [base], passed: [], completed: [base.file], elapsedMs: 0 },
+    { failures: [same], passed: [], completed: [same.file], elapsedMs: 0 }).preexisting).toEqual([same]);
+});
+test("confirmation rounds retain selector-specific candidate diagnostics and paired base evidence", async () => {
+  const assertion: TestSite = { file: "f.test.ts", suite: "", name: "alpha", kind: "test", occurrence: 0 };
+  const diagnostic: TestSite = { file: assertion.file, suite: "", name: "<hook error> fixture teardown failed", kind: "error",
+    selection: "[alpha,beta]", provenance: "Error: fixture teardown failed\nat teardown (<checkout>/fixture.ts:4:1)" };
+  const base: TestRun = { failures: [], passed: [assertion], completed: [assertion.file], elapsedMs: 0 };
+  const head: TestRun = { failures: [assertion], passed: [], completed: [assertion.file], elapsedMs: 0 };
+  const sample = (side: "base" | "head", round: number, shared: boolean): TestRun => ({
+    failures: [...(side === "head" ? [assertion] : []), ...(round === 0 && (side === "head" || shared) ? [diagnostic] : [])],
+    passed: side === "base" ? [assertion] : [], completed: [assertion.file], elapsedMs: 0,
+  });
+  let candidateHeadRound = 0, candidateBaseRound = 0;
+  const candidateOnly = await confirmFailures(base, head, async side => sample(side,
+    side === "head" ? candidateHeadRound++ : candidateBaseRound++, false));
+  expect(candidateOnly.introduced).toContainEqual(diagnostic);
+
+  let sharedHeadRound = 0, sharedBaseRound = 0;
+  const shared = await confirmFailures(base, head, async side => {
+    return sample(side, side === "head" ? sharedHeadRound++ : sharedBaseRound++, true);
+  });
+  expect(shared.introduced).not.toContainEqual(diagnostic);
+  expect(shared.preexisting).toContainEqual(diagnostic);
+  expect(shared.baseDiagnostics).toContainEqual(diagnostic);
+});
 test("scope and service guards report an identical surviving tree once across the baseline", async () => {
   const file = "fixture.test.ts";
   const failures: TestSite[] = [{ file, suite: "", kind: "error",
     name: "<hook error> owned test scope children survived teardown: 22 (22:2), 21 (21:1)" }];
   appendOwnershipFailure(failures, file, "owned runner: surviving owned processes: 21 (21:1), 22 (22:2)");
   const base: TestRun = { failures: [{ file, suite: "", kind: "error",
-    name: "<ownership error> owned runner: surviving owned processes: 31 (31:3)" }], passed: [], completed: [file], elapsedMs: 0 };
+    name: "<ownership error> owned runner: surviving owned processes: 31 (31:3), 32 (32:4)" }], passed: [], completed: [file], elapsedMs: 0 };
   const result = compareTests(base, { ...base, failures });
   expect(result.introduced).toEqual([]);
   expect(result.preexisting).toHaveLength(1);
   expect(result.preexisting[0]!.name).toContain("21 (21:1), 22 (22:2)");
+  const selected: TestSite[] = [];
+  appendOwnershipFailure(selected, file, "owned runner: surviving owned processes: 41 (41:1)", "[selected case]");
+  expect(selected[0]!.selection).toBe("[selected case]");
 });
 test.each([
-  ["owned test children survived teardown: 21, 22; guardian=0", "owned test children survived teardown: 31; guardian=0"],
-  ["owned test children survived teardown: ; guardian=1", "owned test children survived teardown: 31; guardian=1"],
-  ["owned test scope children survived teardown: 21 (21:1), 22 (null)", "owned test scope children survived teardown: 31 (31:3)"],
-])("teardown comparison ignores run identities and preserves evidence: %s", (oldMessage, newMessage) => {
+  ["owned test children survived teardown: 21, 22; guardian=0", "owned test children survived teardown: 31, 32; guardian=0", true],
+  ["owned test children survived teardown: ; guardian=1", "owned test children survived teardown: 31; guardian=1", false],
+  ["owned test scope children survived teardown: 21 (21:1), 22 (null)", "owned test scope children survived teardown: 31 (31:3), 32 (32:4)", true],
+  ["owned test scope children survived teardown: 31 (31:1)", "owned test scope children survived teardown: ", false],
+] as const)("teardown comparison preserves survivor counts: %s", (oldMessage, newMessage, sameCount) => {
   const site = (message: string): TestSite => ({ file: "fixture.test.ts", suite: "", kind: "error", name: `<hook error> ${message}` });
   const base: TestRun = { failures: [site(oldMessage)], passed: [], completed: ["fixture.test.ts"], elapsedMs: 0 };
   const head = { ...base, failures: [site(newMessage)] };
-  expect(compareTests(base, head)).toEqual({ introduced: [], preexisting: head.failures, fixed: [], absent: [] });
+  const compared = compareTests(base, head);
+  expect(compared.introduced).toEqual(sameCount ? [] : head.failures);
+  expect(compared.preexisting).toEqual(sameCount ? head.failures : []);
   expect(head.failures[0]!.name).toBe(`<hook error> ${newMessage}`);
   const changed = site("owned test child survived the final identity check");
   expect(compareTests(base, { ...head, failures: [changed] })).toEqual({ introduced: [changed], preexisting: [], fixed: base.failures, absent: [] });
+});
+test("runner survivor normalization preserves added members while ignoring PID churn", () => {
+  const site = (name: string): TestSite => ({ file: "fixture.test.ts", suite: "", kind: "error", name });
+  const base: TestRun = { failures: [site("<ownership error> owned runner: surviving owned processes: 12 (12:1), 13 (13:2)")], passed: [], completed: ["fixture.test.ts"], elapsedMs: 0 };
+  const same = { ...base, failures: [site("<ownership error> owned runner: surviving owned processes: 92 (92:7), 93 (93:8)")] };
+  expect(compareTests(base, same).introduced).toEqual([]);
+  const extra = { ...base, failures: [site("<ownership error> owned runner: surviving owned processes: 92 (92:7), 93 (93:8), 94 (94:9)")] };
+  expect(compareTests(base, extra).introduced).toEqual(extra.failures);
 });
 test("teardown comparison retains the guardian outcome", () => {
   const site = (guardian: number): TestSite => ({ file: "fixture.test.ts", suite: "", kind: "error",
@@ -260,6 +323,28 @@ test("teardown comparison retains the guardian outcome", () => {
   const base: TestRun = { failures: [site(0)], passed: [], completed: ["fixture.test.ts"], elapsedMs: 0 };
   const head = { ...base, failures: [site(1)] };
   expect(compareTests(base, head)).toEqual({ introduced: head.failures, preexisting: [], fixed: base.failures, absent: [] });
+});
+test("runner abort matching requires the normalized cause as well as its exit status", () => {
+  const baseSite: TestSite = { file: "fixture.test.ts", suite: "", kind: "error",
+    name: "<runner error> runner did not finish (2): module import failed: missing dependency" };
+  const candidateSite: TestSite = { ...baseSite,
+    name: "<runner error> runner did not finish (2): test body failed: assertion setup crashed" };
+  const run = (site: TestSite): TestRun => ({ failures: [site], passed: [], completed: [], elapsedMs: 0 });
+  expect(compareTests(run(baseSite), run(candidateSite)).introduced).toEqual([candidateSite]);
+  expect(compareTests(run(baseSite), run({ ...baseSite })).preexisting).toEqual([baseSite]);
+});
+test("a paired deadline retains an extra candidate diagnostic occurrence as a refusal", async () => {
+  const assertion: TestSite = { file: "f.test.ts", suite: "", name: "alpha", kind: "test", occurrence: 0 };
+  const error: TestSite = { file: assertion.file, suite: "", name: "<hook error> fixture close failed", kind: "error",
+    selection: "full", provenance: "Error: fixture close failed\nat close (<checkout>/fixture.ts:8:1)" };
+  const base: TestRun = { failures: [error], passed: [assertion], completed: [assertion.file], elapsedMs: 0 };
+  const head: TestRun = { failures: [assertion, error, error], passed: [], completed: [assertion.file], elapsedMs: 0 };
+  await expect(confirmFailures(base, head, async side => {
+    if (side === "base") return { ...base, failures: [error], passed: [assertion] };
+    const deadline = new BudgetExhausted("confirmation budget exhausted");
+    deadline.partial = { ...head, failures: [assertion, error, error], passed: [], completed: [] };
+    throw deadline;
+  })).rejects.toThrow(/NEW f\.test\.ts: <hook error> fixture close failed/);
 });
 test("distinct scope identities and unrelated hook failures remain blocking", async () => {
   const file = "fixture.test.ts";
@@ -292,9 +377,55 @@ test("report errors are retained; incomplete reports and unidentifiable errors a
   const parsed = parseReport(xml, output, "f.test.ts", "/checkout");
   expect(parsed.passed[0]!.name).toBe('Ω & "quoted"\nnext'); expect(parsed.passed[0]!.suite).toBe("outer > inner");
   expect(parsed.failures[0]!.name).toContain("<checkout>/file.ts");
+  expect(parsed.failures[0]!.selection).toBe("full");
+  const filtered = parseReport(xml, `${output.trimEnd()}\n    at origin (/checkout/file.ts:9:3)\n----------------\n 1 error\n`, "f.test.ts", "/checkout", true);
+  expect(filtered.failures[0]!.selection).toBe("filtered");
+  const hook = parseReport('<testsuites tests="1" failures="1"><testsuite><testcase file="f.test.ts" name="(unnamed)" classname="outer"><error type="RangeError" message="same hook"/></testcase></testsuite></testsuites>',
+    "", "f.test.ts", "/checkout");
+  expect(hook.failures[0]!.name).toContain("RangeError: same hook");
   expect(() => parseReport(xml.slice(0, -12), "", "f.test.ts", "/checkout")).toThrow();
   expect(() => parseReport(xml.replace('tests="1"', 'tests="2"'), "", "f.test.ts", "/checkout")).toThrow();
   expect(() => parseReport(xml, " 1 error\n", "f.test.ts", "/checkout")).toThrow();
+});
+
+test("diagnostic identity includes normalized throw-site provenance and file selection", () => {
+  const report = (checkout: string, throwSite: string, filtered = false) => parseReport(
+    '<testsuites tests="1" failures="0"><testcase file="f.test.ts" name="passing" /></testsuites>',
+    `# Unhandled error between tests\n----------------\nTypeError: shared diagnostic\n    at ${throwSite} (${checkout}/f.test.ts:12:4)\n----------------\n 1 error\n`,
+    "f.test.ts", checkout, filtered).failures[0]!;
+  const candidate = report("/head/sandbox", "candidateFault");
+  const sameBase = report("/base/sandbox", "candidateFault");
+  const otherBase = report("/base/sandbox", "baseFault");
+  const differentTail = parseReport('<testsuites tests="1" failures="0"><testcase file="f.test.ts" name="passing" /></testsuites>',
+    "# Unhandled error between tests\n----------------\nTypeError: shared diagnostic\nsecond detail changed\n    at candidateFault (/base/sandbox/f.test.ts:12:4)\n----------------\n 1 error\n", "f.test.ts", "/base/sandbox").failures[0]!;
+  const filteredBase = report("/base/sandbox", "candidateFault", true);
+  const run = (site: TestSite): TestRun => ({ failures: [site], passed: [], completed: [site.file], elapsedMs: 0 });
+  expect(compareTests(run(sameBase), run(candidate)).preexisting).toHaveLength(1);
+  expect(compareTests(run(otherBase), run(candidate)).introduced).toHaveLength(1);
+  expect(compareTests(run(differentTail), run(sameBase)).introduced).toHaveLength(1);
+  expect(compareTests(run(filteredBase), run(candidate)).introduced).toHaveLength(1);
+});
+
+test("diagnostic classification requires the same per-file selector and complete exception provenance", () => {
+  const target: TestSite = { file: "f.test.ts", suite: "", name: "alpha", kind: "test" };
+  const diagnostic = (selection: string, provenance: string): TestSite => ({ file: target.file, suite: "",
+    name: "<hook error> TypeError: shared failure", kind: "error", selection, provenance });
+  const run = (failures: TestSite[], passed: TestSite[] = []): TestRun => ({ failures, passed, completed: [target.file], elapsedMs: 0 });
+  const alphaBeta = diagnostic("[alpha,beta]", "TypeError: shared failure\nat atHook (<checkout>/hook.ts:8:2)\nsecond detail");
+  const betaOnly = diagnostic("[beta]", alphaBeta.provenance!);
+  const sameSelector = compareTests(run([betaOnly]), run([alphaBeta]));
+  expect(sameSelector.preexisting).toHaveLength(0);
+  expect(sameSelector.introduced).toEqual([alphaBeta]);
+  const same = compareTests(run([alphaBeta]), run([alphaBeta]));
+  expect(same.preexisting).toEqual([alphaBeta]);
+  expect(same.fixed).toHaveLength(0);
+  const fullBase = diagnostic("full", "TypeError: shared failure\nat atHook (<checkout>/hook.ts:8:2)");
+  const unlikeSelection = compareTests(run([fullBase]), { failures: [], passed: [], completed: [target.file], elapsedMs: 0,
+    selections: { [target.file]: "[beta]" } });
+  expect(unlikeSelection.fixed).toHaveLength(0);
+  expect(unlikeSelection.absent).toHaveLength(0);
+  expect(compareTests(run([fullBase]), run([])).fixed).toEqual([fullBase]);
+  expect(compareTests(run([alphaBeta]), run([diagnostic(alphaBeta.selection!, alphaBeta.provenance!.replace("second detail", "different second detail"))])).introduced).toHaveLength(1);
 });
 
 test("an unnamed teardown failure remains a named blocking diagnostic without a filtered retry", async () => {
