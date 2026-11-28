@@ -517,7 +517,7 @@ export function campaignChronologyValid(rows: Pick<DriftRecord, 'id'>[]) {
   return rows.length === expectedRows.length && rows.every((row, index) => row.id === expectedRows[index]);
 }
 
-type Contract = { requirements: Requirement[]; residuals: string[]; opportunities: Opportunity[]; predecessors?: string[]; oracleCommands?: Record<string, string> };
+export type Contract = { requirements: Requirement[]; residuals: string[]; opportunities: Opportunity[]; predecessors?: string[]; oracleCommands?: Record<string, string> };
 type Seal = {
   schemaVersion: number;
   classification: 'harness-only';
@@ -768,10 +768,12 @@ function validateEntry(seal: Seal, entries: Entry[], entry: Entry) {
     if (cell.phase === 'O' || cell.phase === 'P') {
       const preflight = history.find(e => e.kind === 'preflight');
       const start = history.find(e => e.kind === 'start');
+      const acceptedReceipt = history.find((e): e is Extract<Entry, { kind: 'receipt' }> => e.kind === 'receipt'
+        && ['accepted', 'reconciled'].includes(e.status));
       assert(entry.drift && preflight?.kind === 'preflight' && start?.kind === 'start'
         && entry.drift.preflightId === preflight.id && entry.drift.startId === start.id
         && isDeepStrictEqual(entry.drift.before, preflight.snapshot) && entry.drift.firstModelWork === start.startedAt
-        && start.pipelineId === history.find(e => e.kind === 'receipt' && ['accepted', 'reconciled'].includes(e.status))?.pipelineId,
+        && start.pipelineId === acceptedReceipt?.pipelineId,
       'Causal solver outcome lacks its durable preflight/start evidence');
     }
     const contract = seal.contracts[cell.task];
@@ -1007,8 +1009,10 @@ export function reportRun(directory: string) {
     const result = evidence.find(e => e.kind === row.kind);
     const cell = design.cells.find(c => c.id === row.id);
     const afterStop = firstStoppedCell && (cell ? cell.ordinal > stopOrdinal : row.kind !== 'solver');
-    return { ...row, status: !result ? afterStop ? 'not_run_after_stop' : 'not_run'
-      : result.kind === 'solver' ? result.observation.status : result.status, evidence };
+    const status = !result ? afterStop ? 'not_run_after_stop' : 'not_run'
+      : result.kind === 'solver' ? result.observation.status
+        : result.kind === 'curator' || result.kind === 'judge' || result.kind === 'planner-route' ? result.status : 'not_run';
+    return { ...row, status, evidence };
   });
   const solvers = design.cells.map(cell => {
     const contract = seal.contracts[cell.task];

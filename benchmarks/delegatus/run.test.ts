@@ -7,7 +7,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import design from './pilot-manifest.json';
 import {
   appendRun, campaignChronologyValid, checkBlock, digest, expandPlannerRequest, expandPlannerSealedRequest, expandRequest, expandSealedRequest, gateRefusals, gateRequirements, launchRefusal, sealedInputDigest,
-  reportRun, sampleDelivery, sealRun, validateManifest, verifyManifestPin, type Binding, type RequestInputs,
+  reportRun, sampleDelivery, sealRun, validateManifest, verifyManifestPin, type Binding, type Contract, type RequestInputs,
 } from './run';
 import { calibrationPassed, oracleControls, score, violationRates, type Calibration, type Checks, type Observation, type Requirement } from './score';
 
@@ -431,7 +431,7 @@ function preflights(id: string) {
   const runtimeBindings = (roles: Record<string, string>) => Object.fromEntries(Object.keys(roles).map(role => {
     const binding = { declared: 'M' as const, requested: { ...profile }, resolved: { ...profile } };
     return [role, { ...binding, bindingDigest: digest(JSON.stringify({ roleHash: roles[role], ...binding }) + '\n') }];
-  })) as Record<string, { declared: 'M'; requested: FixtureRuntime; resolved: FixtureRuntime; bindingDigest: string }>;
+  })) as Record<string, { declared: 'M' | 'H'; requested: FixtureRuntime; resolved: FixtureRuntime; bindingDigest: string }>;
   return block.orderedCells.map((cellId, i) => {
     const snap = (at: number, capacityBudgets: number) => {
       const roles = {
@@ -449,8 +449,10 @@ function preflights(id: string) {
 }
 
 const rebindRuntime = (snapshot: ReturnType<typeof preflights>[number]['before'], role: string) => {
-  const binding = snapshot.runtimeBindings![role]!;
-  binding.bindingDigest = digest(JSON.stringify({ roleHash: snapshot.roles[role], declared: binding.declared,
+  const bindings = snapshot.runtimeBindings as Record<string, { declared: 'M' | 'H'; requested: { engine: string; model: string; effort: string }; resolved: { engine: string; model: string; effort: string }; bindingDigest: string }>;
+  const roles = snapshot.roles as Record<string, string>;
+  const binding = bindings[role]!;
+  binding.bindingDigest = digest(JSON.stringify({ roleHash: roles[role], declared: binding.declared,
     requested: binding.requested, resolved: binding.resolved }) + '\n');
 };
 
@@ -578,7 +580,7 @@ test('curator completion requires the registered learner, delivery and original 
   } })).toThrow('Judge session reused');
 });
 
-const contracts = Object.fromEntries(design.tasks.map(t => [t.id, {
+const contracts: Record<string, Contract> = Object.fromEntries(design.tasks.map(t => [t.id, {
   requirements: reqs, residuals, opportunities: [{ id: t.id, task: t.id, principle: 'boundary', applicability: 'applicable' as const, proof: proof(t.id), version: '1' }],
   ...(t.id === 'E1-C1' ? { predecessors: ['E1-C0'], oracleCommands: { 'E1-C0': oracleCommand('E1-C0') } }
     : t.id === 'E1-C2' ? { predecessors: ['E1-C0', 'E1-C1'], oracleCommands: { 'E1-C0': oracleCommand('E1-C0'), 'E1-C1': oracleCommand('E1-C1') } } : {}),
