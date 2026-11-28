@@ -588,7 +588,46 @@ for (const readNumber of [1, 2]) test(`manual retry preserves a cut that arrives
   } finally { await f.close(); }
 });
 
-for (const decision of ["paused", "closed"] as const) test(`journal timeout defers one scheduled lane and preserves a concurrent ${decision} lane on recovery`, async () => {
+
+test("manual retry refuses a cut recorded at its final host inspection", async () => {
+  const f = await cancelledHostDeath();
+  try {
+    const original = loadPipelines()[0]!;
+    const attempt = original.runs[0]!.attempts[0]!;
+    const directory = interruptionObligationDirectory(f.registry.filename);
+    await initializeRecipientInterruptionIndex(directory);
+    const store = interruptionObligationStore(directory);
+    const production = defaultPipelinePorts();
+    const ports = { ...production, ...f.h.ports };
+    let reads = 0;
+    let cutId: string | undefined;
+    ports.conversationInterruption = (...args) => { reads++; return production.conversationInterruption!(...args); };
+    const inspect = f.h.ports.conversationHostProcess!;
+    ports.conversationHostProcess = async id => {
+      const host = await inspect(id);
+      if (reads >= 2 && !cutId) {
+        cutId = store.record({ conversationId: f.conversationId, engine: "codex", hostKey: "codex:stage-fixture",
+          path: attempt.agentPath!, owner: null, claimEpoch: 1, turnRef: "stage-final-check",
+          boundary: "fixture-release", reason: "viewer-release", recordedAt: attempt.startedAt!,
+          checkpoint: { lastEventKind: null, lastEventAt: null }, seat: null }).obligation.id;
+      }
+      return host;
+    };
+    const request = { action: "retry-stage" as const, expectedStageId: "plan", expectedAttempt: 1 };
+    const refused = await patchPipeline(f.lane.id, request, ports);
+    expect(cutId).toBeDefined();
+    expect(refused.status).toBe(409);
+    const retained = loadPipelines()[0]!;
+    expect(retained.cursor).toEqual(original.cursor);
+    expect(retained.runs[0]!.attempts).toEqual(original.runs[0]!.attempts);
+    expect(recipientInterruptionEvidence(directory, [f.conversationId]).records).toMatchObject([{ id: cutId, state: "owed" }]);
+    store.update(cutId!, { state: "delivered", resolvedAt: ports.now() });
+    expect((await patchPipeline(f.lane.id, request, ports)).error).toBeUndefined();
+    expect(loadPipelines()[0]!.cursor?.state).toBe("pending");
+  } finally { await f.close(); }
+});
+
+for (const decision of ["paused", "closed", "available"] as const) test(`journal timeout defers one scheduled lane and recovers when the journal is ${decision}`, async () => {
   const f = await cancelledHostDeath();
   const directory = interruptionObligationDirectory(f.registry.filename);
   let peer: ReturnType<typeof startJournalPeer> | undefined;
@@ -596,12 +635,12 @@ for (const decision of ["paused", "closed"] as const) test(`journal timeout defe
   try {
     const affected = loadPipelines()[0]!;
     const attempt = affected.runs[0]!.attempts[0]!;
-    affected.id = decision === "paused" ? "a-journal-lane" : "c-journal-lane";
+    affected.id = `journal-${decision}-a`;
     Object.assign(affected, pipelineIdentity(affected.id, affected.task, affected.repoDir));
     affected.delivery = undefined;
     affected.publication = "internal";
     const next = structuredClone(affected!);
-    next.id = decision === "paused" ? "b-unrelated-lane" : "d-unrelated-lane";
+    next.id = `journal-${decision}-b`;
     Object.assign(next, pipelineIdentity(next.id, next.task, next.repoDir));
     next.state = "paused";
     next.cursor = null;
@@ -631,18 +670,36 @@ for (const decision of ["paused", "closed"] as const) test(`journal timeout defe
     await initializeRecipientInterruptionIndex(directory);
     peer = startJournalPeer(directory, path.join(path.dirname(directory), "timed-writer"), { append: JSON.stringify(cut) + "\n" });
     await peer.ready();
-    f.h.ports.conversationInterruption = defaultPipelinePorts().conversationInterruption;
+    const read = defaultPipelinePorts().conversationInterruption!;
+    f.h.ports.conversationInterruption = async (...args) => {
+      try { return await read(...args); }
+      catch (error) {
+        if (decision === "available") await peer!.stop();
+        throw error;
+      }
+    };
+    if (decision === "available") {
+      f.h.ports.stageHostResident = async ({ paneId }) => {
+        expect((await read(f.conversationId))?.state).toBe("owed");
+        if (paneId) visited.push(paneId);
+        return false;
+      };
+    }
     pass = tickPipelinesController([], f.h.ports);
     void pass.catch(() => {});
     await until(() => journalTickets(directory) === 2);
     await pass;
-    expect(peer.held()).toBe(true);
+    if (decision !== "available") expect(peer.held()).toBe(true);
     expect(visited).toEqual(["peer-fixture"]);
     const afterTimeout = loadPipelines();
     expect(afterTimeout.find(row => row.id === affected.id)?.cursor?.state).toBe("running");
     expect(afterTimeout.find(row => row.id === next.id)?.unconfirmedHosts ?? []).toEqual([]);
     expect((await selectPipelineControllerWork(time, [])).some(row => row.row_key === affected.id)).toBe(true);
     expect(await peer.stop()).toBe(0);
+    if (decision === "available") {
+      expect(recipientInterruptionEvidence(directory, [f.conversationId]).records).toEqual([cut]);
+      return;
+    }
 
     const readCut = defaultPipelinePorts().conversationInterruption!;
     const states: string[] = [];

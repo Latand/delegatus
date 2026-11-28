@@ -3420,7 +3420,7 @@ async function adoptStructuredHostsPass(
   reportCensusPhase("reading structured startup registry");
   const rowRetries = startupRowRetries(registry);
   if (!rowRetry && !dependencies.interruptions) {
-    try { await initializeRecipientInterruptionIndex(interruptionDirectory, { ...journalAdmission, assertActive }); }
+    try { await initializeRecipientInterruptionIndex(interruptionDirectory, { ...journalAdmission, assertActive, recoverDamaged: true }); }
     catch (error) {
       if (error instanceof FileTransactionBusyError) throw new InterruptionJournalBusyError();
       console.error("[structured hosts] recipient interruption index is unavailable", error);

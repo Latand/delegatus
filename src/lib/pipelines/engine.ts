@@ -123,7 +123,7 @@ import { tierCutState as tierCutStateSync } from "@/lib/runtime/tierSwitch";
 import { DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR } from "@/lib/runtime/structuredDeliveryQueue";
 import { enqueueStructuredMessage, idleContinuationDeliveryRetryable } from "@/lib/runtime/structuredMessageDelivery";
 import { delegatusMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
-import { InterruptionJournalBusyError, interruptionObligationDirectory, readInterruptionObligations, submittedContinuationOutcome, type InterruptionObligation } from "@/lib/runtime/interruptionObligations";
+import { InterruptionJournalBusyError, interruptionObligationDirectory, readInterruptionObligations, submittedContinuationOutcome, withInterruptionObligationAdmission, type InterruptionObligation } from "@/lib/runtime/interruptionObligations";
 import { StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
 import { dispatchStructuredControl, RUNTIME_HOST_UNAVAILABLE_CODE } from "@/lib/runtime/structuredControls";
 import {
@@ -495,6 +495,8 @@ export interface PipelinePorts {
       its interruption obligation records it (#1835). Null when none was
       recorded, which is the answer for every conversation no deploy cut. */
   conversationInterruption?(conversationId: string, options?: { fresh?: boolean }): StageInterruption | null | Promise<StageInterruption | null>;
+  /** Keep the cut fence through the retry cursor's commit. */
+  withRetryCut?<T>(conversationId: string, commit: (cut: StageInterruption | null) => Promise<T>): Promise<T>;
   /** When a service restart last cut this conversation's turn: the release
       that handed its host over, or the boot that found the turn in flight,
       recorded it. Null for every conversation no restart cut. */
@@ -2006,10 +2008,29 @@ export function defaultPipelinePorts(
     if (!conversationId.startsWith("conversation_")) return null;
     // Keep one read for this pass. A journal refusal ends recovery that
     // depends on this evidence, leaving it for the next controller tick.
-    const records = await (fresh ? readInterruptions() : interruptions ??= readInterruptions());
+    const pending = fresh ? readInterruptions() : interruptions ??= readInterruptions();
+    let records: InterruptionObligation[];
+    try { records = await pending; }
+    catch (error) {
+      if (interruptions === pending) interruptions = null;
+      throw error;
+    }
+    return cutFor(records, conversationId);
+  };
+  const cutFor = (records: InterruptionObligation[], conversationId: string) => {
     const canonical = registry.canonicalConversationId(conversationId as ViewerConversationId);
     return records.filter((obligation) =>
       registry.canonicalConversationId(obligation.conversationId) === canonical).at(-1) ?? null;
+  };
+  const cutView = (cut: InterruptionObligation | null): StageInterruption | null => {
+    if (!cut) return null;
+    // A submitted cut counts as delivered only when its reservation proves it.
+    const outcome = cut.state === "submitted"
+      ? submittedContinuationOutcome(cut, registry.livenessConversationSnapshot(cut.conversationId), id => registry.canonicalConversationId(id))
+      : null;
+    return outcome && !outcome.compacted
+      ? { state: outcome.state, recordedAt: cut.recordedAt, resolvedAt: outcome.at }
+      : { state: cut.state, recordedAt: cut.recordedAt, resolvedAt: cut.resolvedAt };
   };
   const identityFence = () => materializationFence ??= identityMaterializationFence(snapshot());
   const invalidateRegistryProjection = () => {
@@ -2808,20 +2829,9 @@ export function defaultPipelinePorts(
       const result = hostEndEvidence(conversationId, launchId);
       return result ? [hostExitText(result.evidence), result.ended ? claudeHostEndText(result.ended) : null].filter(Boolean).join("; ") : null;
     },
-    conversationInterruption: async (conversationId, options) => {
-      const cut = await newestCut(conversationId, options?.fresh);
-      if (!cut) return null;
-      /* The queue answers `submitted` on admission, and the store records the
-         arrival only on a later startup pass; the reservation the obligation's
-         id keys says when the continuation arrived. A reservation retention
-         already dropped proves nothing about this turn, so it keeps the hold. */
-      const outcome = cut.state === "submitted"
-        ? submittedContinuationOutcome(cut, registry.livenessConversationSnapshot(cut.conversationId), (id) => registry.canonicalConversationId(id))
-        : null;
-      return outcome && !outcome.compacted
-        ? { state: outcome.state, recordedAt: cut.recordedAt, resolvedAt: outcome.at }
-        : { state: cut.state, recordedAt: cut.recordedAt, resolvedAt: cut.resolvedAt };
-    },
+    conversationInterruption: async (conversationId, options) => cutView(await newestCut(conversationId, options?.fresh)),
+    withRetryCut: async (conversationId, commit) => await withInterruptionObligationAdmission(interruptionObligationDirectory(registry.filename),
+      store => commit(cutView(cutFor(store.list(), conversationId)))),
     /* A release records the cut as it hands a host over and a booting Viewer
        records the ones nobody released; either is the service restarting. */
     conversationRestartCut: async (conversationId) => {
@@ -18603,8 +18613,9 @@ async function applyPipelinePatch(
           await persist();
           return { error: "the running attempt has a pending delivery; retry once that delivery settles", status: 409 };
         }
-        await park(pipeline, "confirmed stalled attempt was stopped for retry", attempt);
-        await persist();
+        // Keep this park provisional until the final retry decision. A cut
+        // can still arrive during receipt reconciliation or the host check.
+        parkPipelineState(pipeline, "confirmed stalled attempt was stopped for retry", attempt);
       }
       if (pipeline.state !== "needs_decision") return { error: "pipeline does not have a stage awaiting retry"
         + (attempt?.publicationRepair ? publicationRepairDeliveryDetail(attempt.publicationRepair) : ""), status: 409 };
@@ -18939,20 +18950,36 @@ async function applyPipelinePatch(
           await persist();
           return { error: refusal, status: 409 };
         }
-        // Later account recovery must not reopen this attempt if its error changes.
-        attempt.state = "failed";
-        attempt.completedAt ??= ports.now();
       }
-      resetStageForRetry(pipeline, stage);
-      if (pipeline.cursor) { pipeline.cursor.admittedAt = ports.now(); pipeline.cursor.repeatReason = req.repeatReason ?? "unknown"; }
-      recordHandLaunch(pipeline, actor, ports.now());
-      if (unreservedSpawnRetry && stage && attempt.launchId) {
-        const original = ports.spawnReceipt(attempt.launchId);
-        if (original?.error && interruptedStageLaunch(original.error)) {
-          attempt.error = original.error;
-          await newAttempt(pipeline, stage, ports.now(), req.repeatReason ?? "unknown");
+      const commitRetryReset = async (cut: StageInterruption | null): Promise<PipelinePatchResult | null> => {
+        assertAuthority?.();
+        if (attempt && (cut && unixMs(cut.recordedAt) >= unixMs(attemptEvidenceFloor(attempt)) && deployCutHoldsAttempt(cut, ports)
+          || attempt.conversationId && ports.conversationDeliveryOutstanding?.(attempt.conversationId))) {
+          return { error: "the attempt has a pending delivery; retry once that delivery settles", status: 409 };
         }
-      }
+        if (unreservedSpawnRetry && attempt) {
+          // Later account recovery must not reopen this attempt if its error changes.
+          attempt.state = "failed";
+          attempt.completedAt ??= ports.now();
+        }
+        resetStageForRetry(pipeline, stage);
+        if (pipeline.cursor) { pipeline.cursor.admittedAt = ports.now(); pipeline.cursor.repeatReason = req.repeatReason ?? "unknown"; }
+        recordHandLaunch(pipeline, actor, ports.now());
+        if (unreservedSpawnRetry && stage && attempt?.launchId) {
+          const original = ports.spawnReceipt(attempt.launchId);
+          if (original?.error && interruptedStageLaunch(original.error)) {
+            attempt.error = original.error;
+            await newAttempt(pipeline, stage, ports.now(), req.repeatReason ?? "unknown");
+          }
+        }
+        await persist();
+        return null;
+      };
+      const cutConversation = attempt && !attempt.paneId && attempt.startedAt ? attempt.conversationId : null;
+      const refusal = cutConversation && ports.withRetryCut
+        ? await ports.withRetryCut(cutConversation, commitRetryReset)
+        : await commitRetryReset(attempt ? await deployCutOf(attempt, ports, true) : null);
+      return refusal ?? { pipeline };
     } else if (req.action === "skip-stage") {
       const skipRefusal = visualCriticSkipRefusal(stage, attempt, actor);
       if (skipRefusal) return { error: skipRefusal, status: 403 };

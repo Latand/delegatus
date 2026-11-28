@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { defaultPipelinePorts } from "@/lib/pipelines/engine";
+import { injectStateWriteFaultForTests } from "@/lib/state/sqliteStateStore";
 import { classifyStructuredHostStartupError } from "@/lib/viewerInstrumentation";
 import * as cuts from "./interruptionObligations";
 import { adoptStructuredHostsAtStartup } from "./startup";
@@ -300,3 +301,52 @@ for (const startupFirst of [false, true]) test(`a torn sealed journal preserves 
     f.clean();
   }
 }, 15_000);
+
+for (const legacyJoined of [false, true]) test(`the fallback writer preserves an acknowledged cut beside a torn tail (legacy joined=${legacyJoined})`, async () => {
+  const f = fixture();
+  const first = f.record(1);
+  const input = f.record(2);
+  const torn = '{"version":1,"incomplete":';
+  const pending = `${f.journal}.pending.jsonl`;
+  try {
+    await cuts.initializeRecipientInterruptionIndex(f.journal);
+    const guard = cuts.accountGuardObligationStore(f.journal);
+    await guard.list();
+    fs.appendFileSync(pending, jsonl(first) + torn);
+    injectStateWriteFaultForTests({ site: "commit", collection: `interruption_obligations:${path.basename(f.journal)}`,
+      times: 2, error: new Error("fixture refused canonical commit") });
+    const { obligation: second, created } = await guard.record({ ...input, reason: "account-guard" });
+    expect(created).toBe(true);
+    injectStateWriteFaultForTests(null);
+    const fallback = fs.readFileSync(pending, "utf8");
+    if (legacyJoined) fs.writeFileSync(pending, fallback.replace(torn + "\n", torn));
+    const acknowledged = fs.readFileSync(pending, "utf8");
+    expect(acknowledged).toContain(JSON.stringify(second));
+    const ids = [first.id, second.id].sort();
+    for (let read = 0; read < 2; read++) expect((await readJournal(f.journal)).map(row => row.id).sort()).toEqual(ids);
+    if (!legacyJoined) expect(fallback).toContain(torn + "\n" + JSON.stringify(second));
+    expect(cuts.recipientInterruptionEvidence(f.journal, [first.conversationId, second.conversationId]).records
+      .map(row => row.id).sort()).toEqual(ids);
+    const artifact = fs.readdirSync(f.directory).find(name => name.startsWith(path.basename(pending) + ".damaged-"))!;
+    expect(fs.readFileSync(path.join(f.directory, artifact), "utf8")).toBe(acknowledged);
+    expect(journalClaims(f.journal)).toEqual([]);
+  } finally {
+    injectStateWriteFaultForTests(null);
+    f.clean();
+  }
+});
+
+test("one startup repairs and seals a legacy journal with a torn tail", async () => {
+  const f = fixture();
+  const record = f.record(1);
+  try {
+    fs.mkdirSync(f.journal);
+    fs.writeFileSync(`${f.journal}.pending.jsonl`, jsonl(record) + '{"version":1,');
+    await adoptStructuredHostsAtStartup({
+      registry: f.registry, client: null, orchestratorSeats: () => [], adopt: async () => [], adoptClaude: async () => [],
+    });
+    expect(cuts.recipientInterruptionEvidence(f.journal, [record.conversationId]).records)
+      .toMatchObject([{ id: record.id, state: "discharged" }]);
+    expect(journalClaims(f.journal)).toEqual([]);
+  } finally { f.clean(); }
+});

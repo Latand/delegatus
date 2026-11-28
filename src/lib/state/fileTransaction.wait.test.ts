@@ -584,3 +584,44 @@ test("published tickets keep live writers in admission order", async () => {
     await Promise.allSettled([holder, first, second]);
   }
 });
+
+for (const contender of ["async", "sync-scan"] as const) test(`a live publisher keeps its place before a later ${contender} contender`, async () => {
+  const file = path.join(root, `publisher-order-${contender}`);
+  const ready = file + ".ready";
+  const release = file + ".release";
+  const child = Bun.spawn([process.execPath, "-e", `
+    import fs from "node:fs";
+    import fsp from "node:fs/promises";
+    import { withFileTransactionAsync } from ${JSON.stringify(new URL("./fileTransaction.ts", import.meta.url).pathname)};
+    const [file, ready, release] = process.argv.slice(1);
+    const open = fsp.open.bind(fsp);
+    fsp.open = async (name, flags, ...args) => {
+      const handle = await open(name, flags, ...args);
+      if (flags === "wx" && String(name).startsWith(file + ".write-locks/")) {
+        fs.writeFileSync(ready, "");
+        const deadline = performance.now() + 10_000;
+        while (!fs.existsSync(release) && performance.now() < deadline) await Bun.sleep(5);
+      }
+      return handle;
+    };
+    await withFileTransactionAsync(file, "fixture first writer", () => fs.appendFileSync(file, "A"));
+  `, file, ready, release], { stdout: "ignore", stderr: "inherit" });
+  let second: Promise<void> | undefined;
+  try {
+    const deadline = performance.now() + 2_000;
+    while (!fs.existsSync(ready) && child.exitCode === null && performance.now() < deadline) await Bun.sleep(5);
+    expect(fs.existsSync(ready)).toBe(true);
+    const append = () => fs.appendFileSync(file, "B");
+    second = contender === "async" ? withFileTransactionAsync(file, "fixture second writer", append, { waitMs: 5_000 })
+      : withFileTransaction(file, "fixture second writer", append);
+    await Promise.race([second, Bun.sleep(100)]);
+    fs.writeFileSync(release, "");
+    expect(await child.exited).toBe(0);
+    await second;
+    expect(fs.readFileSync(file, "utf8")).toBe("AB");
+  } finally {
+    fs.writeFileSync(release, "");
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await Promise.allSettled([child.exited, second]);
+  }
+}, 12_000);

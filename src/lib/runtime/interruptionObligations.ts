@@ -368,7 +368,7 @@ export function recipientInterruptionObligationStore(directory: string, conversa
  * Incomplete cutovers refuse until this owner accounts for all legacy records
  * and claims. A sealed source keeps its transactionally maintained index. */
 export async function initializeRecipientInterruptionIndex(directory: string, options: {
-  signal?: AbortSignal; assertActive?: () => void; deadline?: number;
+  signal?: AbortSignal; assertActive?: () => void; deadline?: number; recoverDamaged?: boolean;
 } = {}): Promise<void> {
   const check = () => {
     options.signal?.throwIfAborted(); options.assertActive?.();
@@ -413,12 +413,14 @@ export async function initializeRecipientInterruptionIndex(directory: string, op
         return;
       }
     }
-    for (const name of [path.basename(pending), ...claims()]) {
-      let text: string;
-      try { text = await fs.promises.readFile(path.join(path.dirname(directory), name), "utf8"); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
-      check();
-      for (const line of text.split("\n")) if (line.trim() && !completeObligation(JSON.parse(line))) unavailableRecipientCuts();
+    if (!options.recoverDamaged) {
+      for (const name of [path.basename(pending), ...claims()]) {
+        let text: string;
+        try { text = await fs.promises.readFile(path.join(path.dirname(directory), name), "utf8"); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
+        check();
+        for (const line of text.split("\n")) if (line.trim() && !completeObligation(JSON.parse(line))) unavailableRecipientCuts();
+      }
     }
     // The marker is the cutover point. A durable intent blocks normal readers
     // and writers if the process dies between importing and sealing the path.
@@ -437,7 +439,7 @@ export async function initializeRecipientInterruptionIndex(directory: string, op
         collection: cutCollection(directory), schemaVersion: 2, migrationId: "interruption-source-v2", loadRecords: () => [], key: record => (record as InterruptionObligation).id,
       }]);
       const store = createInterruptionObligationStore(directory, { tryAdmission: true }, true);
-      store.importPending();
+      store.importPending(options.recoverDamaged);
       if (fileStamp(pending) !== cutSource(directory)!.pendingStamp || claims().length) unavailableRecipientCuts();
       // Check every row only in this fenced initializer. Recipient readers use
       // the expression index's bounded unknown bucket instead.
@@ -459,7 +461,7 @@ export async function initializeRecipientInterruptionIndex(directory: string, op
     // Importers below operate under the journal fence. Temporarily admit only
     // this initializer to the pre-cutover source while the intent remains.
     const store = createInterruptionObligationStore(directory, {}, true, false, undefined, true);
-    store.importPending();
+    store.importPending(options.recoverDamaged);
     if (fs.existsSync(pending) || claims().length) unavailableRecipientCuts();
     fs.mkdirSync(directory, { recursive: true });
     const records: InterruptionObligation[] = [];
@@ -640,7 +642,7 @@ function completeObligation(value: unknown): value is InterruptionObligation {
 function appendDurably(filename: string, line: string): void {
   const descriptor = fs.openSync(filename, "a", 0o600);
   try {
-    fs.writeSync(descriptor, line);
+    fs.writeFileSync(descriptor, "\n" + line, "utf8");
     fs.fsyncSync(descriptor);
   } finally {
     fs.closeSync(descriptor);
@@ -775,13 +777,23 @@ function createInterruptionObligationStore(
       console.error("[interruption recovery] unreadable pending obligations", { filename, error });
       return { records, damaged, unreadable: true };
     }
-    for (const line of text.split("\n")) {
-      if (!line.trim()) continue;
+    const decode = (line: string): InterruptionObligation | null => {
       try {
         const value: unknown = JSON.parse(line);
-        if (validate(value)) { records.push(value); continue; }
-      } catch { /* Keep the original file for repair. */ }
+        return validate(value) ? value : null;
+      } catch { return null; }
+    };
+    const start = `{"version":1,"id":"${OBLIGATION_PREFIX}`;
+    for (const line of text.split("\n")) {
+      if (!line.trim()) continue;
+      const whole = decode(line);
+      if (whole) { records.push(whole); continue; }
       damaged = true;
+      // Older fallback writers could append a complete record after a torn
+      // fragment without a newline. Only accept a complete writer record.
+      const suffix = line.lastIndexOf(start);
+      const recovered = suffix > 0 ? decode(line.slice(suffix)) : null;
+      if (recovered && completeObligation(recovered)) records.push(recovered);
     }
     return { records, damaged, unreadable: false };
   };
@@ -889,13 +901,13 @@ function createInterruptionObligationStore(
   };
   /* Moves pending records into the directory. Records still waiting remain
      in a claim or go back to the live journal. */
-  const importPending = (): void => {
+  const importPending = (recoverDamaged = false): void => {
     const sealed = source();
-    if (options.tryAdmission) {
+    if (options.tryAdmission || recoverDamaged) {
       // Synchronous guards run inside a registry decision. Finish under one
       // admission so a contended journal cannot leave a new claim behind.
       if (!sealed || sealed.pendingStamp !== fileStamp(pendingFile) || activeClaims().length) {
-        transaction(() => publishClaims(sealed, claimPending(sealed)));
+        transaction(() => publishClaims(sealed, claimPending(sealed), recoverDamaged));
       }
       return;
     }

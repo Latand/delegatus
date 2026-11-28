@@ -287,7 +287,7 @@ function ownerFileStale(mtimeMs: number): boolean {
   return Math.min(Date.now(), fileTransactionClock()) - mtimeMs > LOCK_STALE_MS;
 }
 
-function ownerIsStale(ownerPath: string): boolean {
+function ownerIsStale(ownerPath: string, creator: number | null = null): boolean {
   try {
     const previous = JSON.parse(fs.readFileSync(ownerPath, "utf8")) as { pid?: unknown; startIdentity?: unknown };
     if (typeof previous.pid === "number" && Number.isInteger(previous.pid) && previous.pid > 0) {
@@ -299,10 +299,10 @@ function ownerIsStale(ownerPath: string): boolean {
       }
       return false;
     }
-    return ownerFileStale(fs.statSync(ownerPath).mtimeMs);
+    return creator === null ? ownerFileStale(fs.statSync(ownerPath).mtimeMs) : !procBackend.pidAlive(creator);
   } catch {
     try {
-      return ownerFileStale(fs.statSync(ownerPath).mtimeMs);
+      return creator === null ? ownerFileStale(fs.statSync(ownerPath).mtimeMs) : !procBackend.pidAlive(creator);
     } catch {
       return false;
     }
@@ -332,31 +332,21 @@ function enqueue(filePath: string): LockTicket {
     queuePath,
     `${String(fileTransactionClock()).padStart(16, "0")}-${process.pid}-${crypto.randomUUID()}.json`,
   );
-  const temporary = ticketPath + ".tmp";
-  try {
-    fs.writeFileSync(temporary, JSON.stringify(owner), { encoding: "utf8", flag: "wx", mode: 0o600 });
-    fs.renameSync(temporary, ticketPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") fs.rmSync(temporary, { force: true });
-    throw error;
-  }
+  fs.writeFileSync(ticketPath, JSON.stringify(owner), { encoding: "utf8", flag: "wx", mode: 0o600 });
   return { lockPath, queuePath, owner, ticketPath };
 }
 
-function unpublishedTicketPid(name: string): number | null {
-  const match = /^\d{16}-(\d+)-[0-9a-f-]{36}\.json\.tmp$/.exec(name);
+// An incomplete ticket still owns its FIFO position while its creator lives.
+function ticketCreator(filename: string): number | null {
+  const match = /^\d{16}-(\d+)-[0-9a-f-]{36}\.json$/.exec(path.basename(filename));
   return match ? Number(match[1]) : null;
 }
 
 function firstLiveTicket(ticket: LockTicket): string | null {
-  for (const entry of fs.readdirSync(ticket.queuePath).sort()) {
+  for (const entry of fs.readdirSync(ticket.queuePath).filter(name => name.endsWith(".json")).sort()) {
     const candidate = path.join(ticket.queuePath, entry);
-    if (!entry.endsWith(".json")) {
-      const creator = unpublishedTicketPid(entry);
-      if (creator && !procBackend.pidAlive(creator)) fs.rmSync(candidate, { force: true });
-      continue;
-    }
-    if (ownerIsStale(candidate)) fs.rmSync(candidate, { force: true });
+    const creator = ticketCreator(candidate);
+    if (ownerIsStale(candidate, creator)) fs.rmSync(candidate, { force: true });
     else if (fs.existsSync(candidate)) return candidate;
   }
   return null;
@@ -531,8 +521,7 @@ export async function withFileTransactionAsync<T>(filePath: string, busyMessage:
   const owner: LockOwner = { pid: process.pid, startIdentity: await processIdentityAsync(process.pid), token: crypto.randomUUID(), role: normalizeBlockingWaitHolderKind(blockingWaitRole(), "unowned") };
   const ticketPath = path.join(queuePath, `${String(fileTransactionClock()).padStart(16, "0")}-${process.pid}-${crypto.randomUUID()}.json`);
   const ticket = { lockPath, queuePath, owner, ticketPath };
-  const temporary = ticketPath + ".tmp";
-  const handle = await fsp.open(temporary, "wx", 0o600);
+  const handle = await fsp.open(ticketPath, "wx", 0o600);
   try {
     try {
       await handle.writeFile(JSON.stringify(owner));
@@ -540,13 +529,12 @@ export async function withFileTransactionAsync<T>(filePath: string, busyMessage:
     } finally {
       await handle.close();
     }
-    await fsp.rename(temporary, ticketPath);
   } catch (error) {
-    await fsp.rm(temporary, { force: true });
+    await fsp.rm(ticketPath, { force: true });
     throw error;
   }
 
-  const ownerIsStaleAsync = async (ownerPath: string): Promise<boolean> => {
+  const ownerIsStaleAsync = async (ownerPath: string, creator: number | null = null): Promise<boolean> => {
     try {
       const previous = JSON.parse(await fsp.readFile(ownerPath, "utf8")) as { pid?: unknown; startIdentity?: unknown };
       if (typeof previous.pid === "number" && Number.isInteger(previous.pid) && previous.pid > 0) {
@@ -558,9 +546,9 @@ export async function withFileTransactionAsync<T>(filePath: string, busyMessage:
         }
         return false;
       }
-      return ownerFileStale((await fsp.stat(ownerPath)).mtimeMs);
+      return creator === null ? ownerFileStale((await fsp.stat(ownerPath)).mtimeMs) : !pidAliveAsyncSafe(creator);
     } catch {
-      try { return ownerFileStale((await fsp.stat(ownerPath)).mtimeMs); }
+      try { return creator === null ? ownerFileStale((await fsp.stat(ownerPath)).mtimeMs) : !pidAliveAsyncSafe(creator); }
       catch { return false; }
     }
   };
@@ -571,14 +559,10 @@ export async function withFileTransactionAsync<T>(filePath: string, busyMessage:
     } catch { /* The owner exited or another contender recovered its stale record. */ }
   };
   const firstLiveTicketAsync = async (): Promise<string | null> => {
-    for (const entry of (await fsp.readdir(queuePath)).sort()) {
+    for (const entry of (await fsp.readdir(queuePath)).filter(name => name.endsWith(".json")).sort()) {
       const candidate = path.join(queuePath, entry);
-      if (!entry.endsWith(".json")) {
-        const creator = unpublishedTicketPid(entry);
-        if (creator && !pidAliveAsyncSafe(creator)) await fsp.rm(candidate, { force: true });
-        continue;
-      }
-      if (await ownerIsStaleAsync(candidate)) await fsp.rm(candidate, { force: true });
+      const creator = ticketCreator(candidate);
+      if (await ownerIsStaleAsync(candidate, creator)) await fsp.rm(candidate, { force: true });
       else {
         try { await fsp.access(candidate); return candidate; }
         catch { /* Removed after the directory read. */ }
