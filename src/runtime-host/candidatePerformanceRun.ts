@@ -977,7 +977,7 @@ async function withBrowserServer(
   }),
 ): Promise<BrowserPhaseResult> {
   const port = await freePort();
-  const env: Record<string, string> = {
+  const env: NodeJS.ProcessEnv = {
     ...input.env,
     NODE_ENV: "production",
     PORT: String(port),
