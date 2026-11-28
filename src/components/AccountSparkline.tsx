@@ -65,7 +65,7 @@ export function useWeeklySeries(engine: "claude" | "codex", accountId: string, e
   useEffect(() => {
     if (!enabled || typeof fetch !== "function") return;
     let alive = true;
-    fetch(`/api/limits/history?engine=${engine}&account=${encodeURIComponent(accountId)}`)
+    fetch(`/api/limits/history?engine=${engine}&account=${encodeURIComponent(accountId)}&backfill=stored`)
       .then((res) => (res.ok ? (res.json() as Promise<BurndownPayload>) : Promise.reject(new Error(String(res.status)))))
       .then((json) => {
         if (alive) setSeries(burndownForAccount(json, engine, accountId)?.weekly ?? null);

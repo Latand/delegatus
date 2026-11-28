@@ -1397,9 +1397,12 @@ const CODEX_SERIES_CACHE_MS = 60_000;
 const CODEX_SERIES_CACHE_MAX = 32;
 const codexSeriesCache = new Map<string, { at: number; series: CodexTranscriptSeries }>();
 
-function cachedCodexRateLimitSeries(sessionsDir: string, sinceUnix: number, accountId: string): CodexTranscriptSeries {
+export function resetCodexSeriesCacheForTests(): void {
+  codexSeriesCache.clear();
+}
+
+function cachedCodexRateLimitSeries(sessionsDir: string, sinceUnix: number, accountId: string, now = Date.now()): CodexTranscriptSeries {
   const key = `${accountId}\0${sessionsDir}`;
-  const now = Date.now();
   const cached = codexSeriesCache.get(key);
   if (cached && now - cached.at < CODEX_SERIES_CACHE_MS) {
     // Refresh insertion order so the bounded map evicts the least recently used account.
@@ -1461,7 +1464,7 @@ export function buildEngineBurndown(
 /** Burndown history for both engines. Reads the current live snapshot (which
     also records a forward sample), merges the persisted poll history, and
     backfills the Codex curve from transcripts so it is never empty. */
-export async function readBurndown(options: { codexLiveReader?: CodexLiveLimitsReader } = {}): Promise<BurndownPayload> {
+export async function readBurndown(options: { codexLiveReader?: CodexLiveLimitsReader; transcriptBackfill?: boolean; cacheNow?: number } = {}): Promise<BurndownPayload> {
   const payload = await readLimits(options);
   const now = Math.round(Date.now() / 1000);
   const since = now - RETENTION_S;
@@ -1471,7 +1474,7 @@ export async function readBurndown(options: { codexLiveReader?: CodexLiveLimitsR
   let codex: EngineBurndown | null = null;
   const codexAccount = payload.codexAccountId ? listedAccount(() => accountForSpawn(payload.codexAccountId)) : null;
   if (payload.codexAccountId && codexAccount) {
-    const backfill = cachedCodexRateLimitSeries(codexAccount.sessionsDir, since, codexAccount.id);
+    const backfill = options.transcriptBackfill === false ? null : cachedCodexRateLimitSeries(codexAccount.sessionsDir, since, codexAccount.id, options.cacheNow);
     codex = buildEngineBurndown("codex", payload.codexAccountId, payload.codex, now, backfill);
   }
   return {
@@ -1484,17 +1487,17 @@ export async function readBurndown(options: { codexLiveReader?: CodexLiveLimitsR
 }
 
 /** Burndown history for one named account of an engine, or null when the engine
-    lists no such account. The engine's active account answers through
-    {@link readBurndown}, with its live read. Any other account makes no provider
-    read: its chart is the stored history plus the registry's latest observation,
-    the reading its footer line shows, and a Codex account adds its transcript
-    backfill. The id is only a lookup key, never part of a path. */
-export async function readAccountBurndown(engine: "claude" | "codex", accountId: string): Promise<BurndownPayload | null> {
+    lists no such account. Full chart reads use {@link readBurndown} for the
+    active account and add Codex transcript backfill. Stored-only reads, used by
+    row sparklines, use persisted history plus the registry's latest observation
+    for every account and do not read transcripts. The id is only a lookup key,
+    never part of a path. */
+export async function readAccountBurndown(engine: "claude" | "codex", accountId: string, options: { transcriptBackfill?: boolean; cacheNow?: number } = {}): Promise<BurndownPayload | null> {
   const codexAccount = engine === "codex" ? listedAccount(() => accountForSpawn(accountId)) : null;
   if (engine === "codex" ? !codexAccount || codexAccount.id !== accountId : !listClaudeAccounts().some((account) => account.id === accountId)) return null;
   const activeId = engine === "claude" ? activeClaudeAccountId() : activeCodexAccountId();
-  if (activeId === accountId) {
-    const payload = await readBurndown();
+  if (activeId === accountId && options.transcriptBackfill !== false) {
+    const payload = await readBurndown(options);
     return (engine === "claude" ? payload.claudeAccountId : payload.codexAccountId) === accountId ? payload : null;
   }
   const now = Math.round(Date.now() / 1000);
@@ -1503,7 +1506,9 @@ export async function readAccountBurndown(engine: "claude" | "codex", accountId:
   const live: EngineLimits | null = observation?.limits
     ? { ...observation.limits, capturedAt: observation.limits.capturedAt ?? (Number.isFinite(observedAt) ? Math.round(observedAt) : null) }
     : null;
-  const backfill = codexAccount ? cachedCodexRateLimitSeries(codexAccount.sessionsDir, now - RETENTION_S, codexAccount.id) : null;
+  const backfill = codexAccount && options.transcriptBackfill !== false
+    ? cachedCodexRateLimitSeries(codexAccount.sessionsDir, now - RETENTION_S, codexAccount.id, options.cacheNow)
+    : null;
   const series = buildEngineBurndown(engine, accountId, live, now, backfill);
   return {
     claude: engine === "claude" ? series : null,

@@ -1438,7 +1438,7 @@ test.each(["claude", "codex"] as const)("a %s account row draws its week as a di
     // Absent series: a failed read, a single reading, no weekly reading at all.
     for (const id of ["one-sample", "no-history", "no-reading"]) expect(rowOf(id).querySelector("[data-account-sparkline]")).toBeNull();
     // The request is the popover's, once per account that reports a week.
-    expect(urls.filter((url) => url.startsWith("/api/limits/history")).sort()).toEqual(["with-series", "one-sample", "no-history", "active-series"].sort().map((id) => `/api/limits/history?engine=${engine}&account=${id}`));
+    expect(urls.filter((url) => url.startsWith("/api/limits/history")).sort()).toEqual(["with-series", "one-sample", "no-history", "active-series"].sort().map((id) => `/api/limits/history?engine=${engine}&account=${id}&backfill=stored`));
   } finally { globalThis.fetch = saved; }
 });
 

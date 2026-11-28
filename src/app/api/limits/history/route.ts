@@ -15,10 +15,11 @@ export async function GET(request: Request): Promise<NextResponse<BurndownPayloa
   const params = new URL(request.url).searchParams;
   const engine = params.get("engine");
   const account = params.get("account");
+  const transcriptBackfill = params.get("backfill") !== "stored";
   if (engine === null && account === null) return NextResponse.json(await readBurndown());
   if (engine !== "claude" && engine !== "codex") return NextResponse.json({ error: "engine must be claude or codex" }, { status: 400 });
   if (!account || account.length > MAX_ACCOUNT_ID) return NextResponse.json({ error: "account is required" }, { status: 400 });
-  const payload = await readAccountBurndown(engine, account);
+  const payload = await readAccountBurndown(engine, account, { transcriptBackfill });
   if (!payload) return NextResponse.json({ error: "unknown account" }, { status: 404 });
   return NextResponse.json(payload);
 }

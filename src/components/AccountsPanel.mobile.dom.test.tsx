@@ -708,8 +708,8 @@ test.each(["en", "uk"] as const)("a non-active phone row opens its own burndown 
     expect(panel?.className).not.toContain("sm:absolute");
     // Each row read its own week for the sparkline behind it; the press then read the chart's.
     expect(urls).toEqual([
-      "/api/limits/history?engine=claude&account=cl-main",
-      "/api/limits/history?engine=claude&account=cl-lab",
+      "/api/limits/history?engine=claude&account=cl-main&backfill=stored",
+      "/api/limits/history?engine=claude&account=cl-lab&backfill=stored",
       "/api/limits/history?engine=claude&account=cl-lab",
     ]);
     // The chart still draws, from the row's own reading, though the history failed.
@@ -811,10 +811,10 @@ test("a Claude and a Codex account that share an id each open their own chart, o
   expect(dialog()?.getAttribute("aria-label")).toContain("ClaudeShared");
   // The four rows' sparkline reads come first; the three presses' chart reads follow, each naming the pressed engine.
   expect(urls).toEqual([
-    "/api/limits/history?engine=claude&account=other",
-    "/api/limits/history?engine=claude&account=default",
-    "/api/limits/history?engine=codex&account=other-cx",
-    "/api/limits/history?engine=codex&account=default",
+    "/api/limits/history?engine=claude&account=other&backfill=stored",
+    "/api/limits/history?engine=claude&account=default&backfill=stored",
+    "/api/limits/history?engine=codex&account=other-cx&backfill=stored",
+    "/api/limits/history?engine=codex&account=default&backfill=stored",
     "/api/limits/history?engine=claude&account=default",
     "/api/limits/history?engine=codex&account=default",
     "/api/limits/history?engine=claude&account=default",
