@@ -71,6 +71,13 @@ for (const mode of ["complete", "exit", "deadline", "TERM", "INT", "KILL", "test
   test.skipIf(process.platform !== "linux")(`Linux portable ${entry} ${mode} ends recorded children and preserves a bystander`, async () => {
     const scope = process.env.LLV_OWNED_TEST_RUN_CGROUP ? scopeBaseline() : null;
     const { root, env, repo } = portableFixture(entry === "gate" && mode === "KILL" ? "missing" : "unreachable");
+    if (entry === "gate" && mode === "KILL") {
+      // The configured interpreter can keep its shell between the wrapper
+      // and the runner. Admission commands still exec the real interpreter.
+      const shim = path.join(root, "bun-shim");
+      fs.writeFileSync(shim, '#!/bin/bash\nif [[ $1 != */owned-runner.ts ]]; then exec bun "$@"; fi\nbun "$@" &\nwait "$!"\n', { mode: 0o700 });
+      env.LLV_GATE_BUN = shim;
+    }
     const record = path.join(root, "ready.json"), release = path.join(root, "release"), received = path.join(root, "signal");
     fs.writeFileSync(path.join(root, "example.test.ts"), `import { test } from "bun:test";
 import { spawn } from "node:child_process"; import fs from "node:fs";

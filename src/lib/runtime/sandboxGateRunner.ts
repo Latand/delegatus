@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityMayRun, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 import { cpuSlotForOwner, inheritedCpuSlot } from "./cpuAdmission";
 import { cpuOwnerIdentity, signalSandboxContext } from "./signalSandboxContext";
 import { cpuWaitBudget, cpuInheritedWaitMs, cpuBudgetTimer } from "./cpuAdmissionBudget";
@@ -77,7 +77,7 @@ export async function guardSandboxGate(file: string): Promise<never> {
   fs.writeFileSync(path.join(gate.directory, "guardian-ready"), "ready");
   for (;;) {
       if (fs.existsSync(path.join(gate.directory, "done"))) break;
-      if (processIdentityStatus(gate.owner) !== "alive" || processIdentityStatus(gate.parent) !== "alive"
+      if (processIdentityStatus(gate.owner) !== "alive" || processIdentityStatus(gate.parent) !== "alive" || !processIdentityMayRun(gate.parent)
         || recordedSupervisorRefusal(gate.recorded ?? null)
         || Date.now() - gate.startedAt - cpuInheritedWaitMs() >= gate.timeoutMs + 2_000) {
         console.error("owned runner: namespace owner ended or deadline expired");
@@ -97,7 +97,7 @@ export async function guardSandboxGate(file: string): Promise<never> {
 /** Execute locally, inside the already established signal domain. The user
  * manager never starts the workload. A blocked child enters the bounded leaf
  * before its first exec, and a separate guardian owns its whole cgroup. */
-export async function runSandboxGate(command: string[], timeoutMs: number, entry: string): Promise<never> {
+export async function runSandboxGate(command: string[], timeoutMs: number, entry: string, parentIdentity?: ProcessIdentity): Promise<never> {
   const context = signalSandboxContext();
   if (!context) throw new Error("owned runner namespace context is missing");
   const currentGroup = fs.readFileSync("/proc/self/cgroup", "utf8").split("\n").find(line => line.startsWith("0::"))!.slice(3);
@@ -116,7 +116,7 @@ export async function runSandboxGate(command: string[], timeoutMs: number, entry
   let cancel: (() => void) | undefined;
   let cleanup: Promise<void> | undefined;
   const gate: Gate = { root, inode: fs.statSync(root, { bigint: true }).ino.toString(),
-    owner: captureProcessIdentity(process.pid), parent: captureProcessIdentity(process.ppid), timeoutMs, startedAt: Date.now(), directory,
+    owner: captureProcessIdentity(process.pid), parent: parentIdentity ?? captureProcessIdentity(process.ppid), timeoutMs, startedAt: Date.now(), directory,
     waitRoot: JSON.parse(budget.env.LLV_CPU_WAIT_ROOTS!).at(-1)!, recorded: recordedSupervisorObligation() };
   try {
     verifiedRoot(gate);

@@ -28,17 +28,23 @@ import { serviceSurvivors } from "./owned-runner.cleanup";
 /** `namespace` marks a caller inside an agent signal domain. Its identities
  * are translated to the host, where the service checks them, and the service
  * runs the command inside the owner's namespaces. */
-type Launch = { command: string[]; cwd: string; env: NodeJS.ProcessEnv; owner: ProcessIdentity; parent?: ProcessIdentity; unit: string; timeoutMs: number; namespace?: true };
+type Launch = { command: string[]; cwd: string; env: NodeJS.ProcessEnv; owner: ProcessIdentity; parent?: ProcessIdentity; gateParent?: ProcessIdentity; unit: string; timeoutMs: number; namespace?: true };
 const args = process.argv.slice(2);
-// Read the actual parent before asynchronous launch work can outlive it.
-// The gate names its child directly. A reparented runner has no authority
-// to start work, even if the gate's numeric PID is later reused.
-const gateParentPid = process.platform === "linux" ? process.env.LLV_OWNED_RUN_GATE_PARENT_PID : undefined;
-delete process.env.LLV_OWNED_RUN_GATE_PARENT_PID;
-const gateParent = gateParentPid !== undefined && Number(gateParentPid) === process.ppid
-  ? captureProcessIdentity(process.ppid) : undefined;
-const gateParentAlive = () => gateParentPid === undefined || (!!gateParent && process.ppid === gateParent.pid
-  && processIdentityStatus(gateParent) === "alive" && !procBackend.processExited(gateParent.pid));
+// Prove the gate shell's start token before asynchronous launch work can
+// outlive it. Interpreter shims may sit between the runner and that shell.
+const gateParentStamp = process.platform === "linux" ? process.env.LLV_OWNED_RUN_GATE_PARENT_IDENTITY : undefined;
+delete process.env.LLV_OWNED_RUN_GATE_PARENT_IDENTITY;
+const gateParentPid = Number(gateParentStamp?.split(":", 1)[0]);
+let gateParent: ProcessIdentity | undefined;
+if (gateParentStamp && Number.isSafeInteger(gateParentPid) && gateParentPid > 1) {
+  for (let ancestor: number | null = process.ppid; ancestor && ancestor > 1; ancestor = procBackend.readPpid(ancestor)) {
+    if (ancestor !== gateParentPid) continue;
+    gateParent = captureProcessIdentity(ancestor, undefined, gateParentStamp);
+    break;
+  }
+}
+const alive = (identity: ProcessIdentity) => processIdentityStatus(identity) === "alive" && !procBackend.processExited(identity.pid);
+const gateParentAlive = () => !gateParentStamp || (!!gateParent && alive(gateParent));
 if (!gateParentAlive()) process.exit(137);
 
 function writeCompletionReceipt() {
@@ -95,7 +101,7 @@ if (args[0] === "--namespace-guardian") {
   await guardSandboxGate(args[1]!);
 } else if (args[0] === "--namespace") {
   warnGateTaskFallback("namespace cleanup fallback has no systemd gate unit");
-  await runSandboxGate(args.slice(1), timeoutMs, import.meta.path);
+  await runSandboxGate(args.slice(1), timeoutMs, import.meta.path, gateParent);
 } else if (args[0] === "--budget") {
   const allowance = Number(args[1]), command = args.slice(2);
   if (!Number.isFinite(allowance) || allowance <= 0 || !command.length) throw new Error("owned runner budget needs a finite allowance and a command");
@@ -133,8 +139,7 @@ if (args[0] === "--namespace-guardian") {
   }
   const parent = process.env.LLV_OWNED_RUN_PARENT_IDENTITY
     ? JSON.parse(process.env.LLV_OWNED_RUN_PARENT_IDENTITY) as ProcessIdentity : undefined;
-  const parentAlive = () => gateParentAlive()
-    && (!parent || (processIdentityStatus(parent) === "alive" && !procBackend.processExited(parent.pid)));
+  const parentAlive = () => gateParentAlive() && (!parent || alive(parent));
   if (!parentAlive()) process.exit(137);
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-owned-run-"));
   fs.chmodSync(directory, 0o700);
@@ -271,7 +276,8 @@ if (args[0] === "--namespace-guardian") {
   }
   const serviceEvidence = { unit: launch.unit, invocation: process.env.INVOCATION_ID ?? "", cgroup };
   const refused = recordedSupervisorRefusal(recorded);
-  if (refused) {
+  const owners = [launch.owner, launch.parent, launch.gateParent].filter(owner => owner !== undefined);
+  if (refused || !owners.every(alive)) {
     producerReport("service", null, { service: serviceEvidence, phase: "close", cleanup: "pending" });
     budget.close(); process.exit(refused === "deadline" ? 124 : 137);
   }
@@ -322,10 +328,9 @@ if (args[0] === "--namespace-guardian") {
     catch (error) { console.error(`GATE_TASK_OBSERVATION_FAILED: ${launch.unit}: ${(error as Error).message}`); void finish(1); }
   }, 50);
   setInterval(() => {
-    const alive = (owner: ProcessIdentity) => processIdentityStatus(owner) === "alive" && !procBackend.processExited(owner.pid);
     const refusal = recordedSupervisorRefusal(recorded);
     if (refusal) cancellation ??= supervisorCancellation(refusal);
-    if (refusal || !alive(launch.owner) || (launch.parent && !alive(launch.parent))) void finish(refusal === "deadline" ? 124 : 137);
+    if (refusal || !owners.every(alive)) void finish(refusal === "deadline" ? 124 : 137);
   }, 100);
   stopExecutionTimer = cpuBudgetTimer(launch.timeoutMs, budget.elapsed, () => { console.error("owned runner: deadline expired"); void finish(124); });
   // A kernel watchdog bounds a hung supervisor while its execution timer
@@ -380,21 +385,22 @@ if (args[0] === "--namespace-guardian") {
   if (sandbox && spawnSync("systemctl", ["--user", "show-environment"], { stdio: "ignore", timeout: 5_000 }).status !== 0) {
     console.error("owned runner: no reachable systemd user manager, so no gate service; the command runs in a bounded leaf of this agent's own scope instead");
     warnGateTaskFallback("no reachable systemd user manager for a gate unit");
-    await runSandboxGate(args, timeoutMs, import.meta.path);
+    await runSandboxGate(args, timeoutMs, import.meta.path, gateParent);
   }
   const unit = `delegatus-gate-${randomUUID()}.service`;
-  // The service checks both identities from the host PID namespace.
+  // The service checks ownership from the host PID namespace.
   const owner = sandbox ? cpuOwnerIdentity(process.pid) : captureProcessIdentity(process.pid);
   if (!owner.startIdentity || !owner.bootEpoch) throw new Error("owned runner has no verifiable start identity");
+  const parent = process.env.LLV_OWNED_RUN_PARENT_IDENTITY ? JSON.parse(process.env.LLV_OWNED_RUN_PARENT_IDENTITY) as ProcessIdentity : undefined;
+  const serviceIdentity = (identity?: ProcessIdentity) => identity && sandbox ? hostProcessIdentity(identity) : identity;
+  let supervisors: Pick<Launch, "parent" | "gateParent">;
+  try { supervisors = { parent: serviceIdentity(parent), gateParent: serviceIdentity(gateParent) }; }
+  catch (error) { throw new Error(`owned runner cannot verify its supervising process from the gate service: ${(error as Error).message}`); }
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-owned-run-"));
   fs.chmodSync(directory, 0o700);
   const file = path.join(directory, "launch.json");
-  let parent = process.env.LLV_OWNED_RUN_PARENT_IDENTITY ? JSON.parse(process.env.LLV_OWNED_RUN_PARENT_IDENTITY) as ProcessIdentity : undefined;
-  if (parent && sandbox) {
-    try { parent = hostProcessIdentity(parent); }
-    catch (error) { throw new Error(`owned runner cannot verify its supervising process from the gate service: ${(error as Error).message}`); }
-  }
-  fs.writeFileSync(file, JSON.stringify({ command: args, cwd: process.cwd(), env: process.env, owner, parent, unit, timeoutMs, ...(sandbox ? { namespace: true as const } : {}) } satisfies Launch), { mode: 0o600 });
+  fs.writeFileSync(file, JSON.stringify({ command: args, cwd: process.cwd(), env: process.env, owner, ...supervisors, unit, timeoutMs,
+    ...(sandbox ? { namespace: true as const } : {}) } satisfies Launch), { mode: 0o600 });
   const cpu = [...gateServiceProperties(), ...gateTaskProperties()];
   const recorded = process.env.LLV_RECORDED_CHECK_ID ? [`--setenv=LLV_RECORDED_CHECK_ID=${process.env.LLV_RECORDED_CHECK_ID}`] : [];
   const service = spawn("systemd-run", [...cpu, "--user", "--quiet", "--wait", "--pipe", "--collect", `--unit=${unit}`, ...recorded, "--service-type=exec", "-p", "Delegate=yes", "-p", "KillMode=control-group", "-p", "TimeoutStopSec=2s", "-p", "WatchdogSec=60s", "-p", "NotifyAccess=all", "-p", `MemoryMax=${process.env.LLV_GATE_MEM ?? "14G"}`, "--", process.execPath, import.meta.path, "--service", file], { stdio: "inherit" });
