@@ -4,11 +4,14 @@ import path from "node:path";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { closeAgentRegistryForTests } from "@/lib/agent/registry";
+import { statePath } from "@/lib/configDir";
 import { AttemptTempStore } from "./attemptTempRetention";
-import { measureAttemptAllocation } from "./attemptTempFilesystem";
+import * as attemptTempFilesystem from "./attemptTempFilesystem";
+import { measureAttemptAllocation, measureAttemptAllocations } from "./attemptTempFilesystem";
 import { attemptScratchAuthority as attemptTempAuthority, backfillAttemptTempRetention, runAttemptTempSweep } from "./attemptTempProduction";
 import { finishedLane } from "./attemptTempRetention.testSupport";
 import { savePipelines } from "../pipelines/store";
+import { AttemptTempBudgetDeferred } from "./attemptTempDiagnostics";
 
 const roots: string[] = [], NOW = Date.parse("2035-01-15T00:00:00Z");
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -74,7 +77,8 @@ test("one production allocation page measures nested probe copies beyond the fir
     }, { NODE_ENV: "test", LLV_TEMP_SWEEP: "on", LLV_ATTEMPT_TEMP_CAP_BYTES: String(bytes / 2) });
     expect(report?.overCapBytes).toBeGreaterThan(0);
     expect(store.bytes()).toBeGreaterThanOrEqual(bytes);
-    expect(store.owner(live)).toMatchObject({ measuredAt: NOW + 61_000 });
+    expect(store.owner(live)?.measuredAt).toBeGreaterThanOrEqual(NOW + 61_000);
+    expect(store.owner(live)?.measuredAt).toBeLessThan(NOW + 62_000);
     expect(store.owner(live)?.bytes).toBeGreaterThanOrEqual(bytes);
     for (const { file, bytes } of copies) expect(fs.statSync(file).size).toBe(bytes);
   } finally {
@@ -83,6 +87,45 @@ test("one production allocation page measures nested probe copies beyond the fir
     closeAgentRegistryForTests();
     if (previous === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previous;
+  }
+});
+
+test("a slow earlier root cannot hide a live allocation past the next bounded page", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "allocation-slow-first-")); roots.push(root);
+  const priorState = process.env.LLV_STATE_DIR, priorCap = process.env.LLV_ATTEMPT_TEMP_CAP_BYTES;
+  process.env.LLV_STATE_DIR = path.join(root, "state"); process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = String(4 * 1024 ** 2);
+  const now = Date.parse("2035-01-15T00:00:00Z"), clock = spyOn(Date, "now").mockImplementation(() => now), MiB = 1024 ** 2;
+  const lane = finishedLane(root, "2035-01-14T00:00:00Z"); lane.state = "running"; savePipelines([lane]);
+  const scratch = statePath("scratch"); fs.mkdirSync(scratch, { recursive: true });
+  const slow = path.join(scratch, "llv-stage-slow-allocation"), live = path.join(scratch, "llv-stage-live-allocation");
+  fs.mkdirSync(slow); fs.mkdirSync(live); fs.writeFileSync(path.join(live, "payload"), Buffer.alloc(64 * MiB, 5));
+  const store = new AttemptTempStore();
+  const realMeasure = attemptTempFilesystem.measureAttemptAllocations;
+  let interrupted = false;
+  const measured = spyOn(attemptTempFilesystem, "measureAttemptAllocations").mockImplementation(async (...args) => {
+    if (!interrupted) { interrupted = true; throw new AttemptTempBudgetDeferred("attempt measurement time budget exhausted"); }
+    return realMeasure(...args);
+  });
+  try {
+    for (const [index, directory] of [slow, live].entries()) {
+      store.register({ directory, pipelineId: lane.id, launchId: `allocation-${index}`, retainUntilClose: false, createdAt: now - 10_000 + index });
+      store.measure(directory, 4096, now - 60_000);
+    }
+    const ports = { scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true, availableBytes: () => 400e9 };
+    const sweepEnv: NodeJS.ProcessEnv = { NODE_ENV: "test", LLV_TEMP_SWEEP: "on", LLV_ATTEMPT_TEMP_CAP_BYTES: String(4 * MiB) };
+    const incomplete = await runAttemptTempSweep(ports, sweepEnv);
+    expect(incomplete?.overCapBytes).toBe(0);
+    expect(store.owner(live)?.measuredAt).toBe(now - 60_000);
+    clock.mockImplementation(() => now + 61_000);
+    expect(store.allocationDue(now + 61_000).map(owner => owner.directory)).toEqual([live]);
+    const recovered = await runAttemptTempSweep(ports, sweepEnv);
+    expect(recovered?.overCapBytes).toBeGreaterThan(0);
+    expect(store.owner(live)?.bytes).toBeGreaterThanOrEqual(64 * MiB);
+    expect(fs.existsSync(path.join(live, "payload"))).toBeTrue();
+  } finally {
+    measured.mockRestore(); clock.mockRestore(); store.close(); closeAgentRegistryForTests(); savePipelines([]);
+    if (priorState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = priorState;
+    if (priorCap === undefined) delete process.env.LLV_ATTEMPT_TEMP_CAP_BYTES; else process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = priorCap;
   }
 });
 
@@ -98,6 +141,49 @@ test("release queues a new allocation observation and rejects a pre-release chec
     expect(f.store.allocationDue(NOW + 1000)).toHaveLength(0);
     f.store.release(directory);
     expect(f.store.allocationDue(NOW + 1000)[0]).toMatchObject({ directory, measuredAt: 0 });
+  } finally { f.store.close(); }
+});
+
+test("an incomplete allocation attempt cannot satisfy the post-release full measurement", () => {
+  const f = fixture(), directory = f.make("incomplete-release"), due = f.store.allocationDue(NOW)[0]!;
+  try {
+    f.store.measure(directory, 4096, NOW - 10_000);
+    f.store.release(directory);
+    const released = f.store.allocationDue(NOW)[0]!;
+    f.store.recordAllocation(released, 4096, NOW, false);
+    expect(f.store.owner(directory)).toMatchObject({ bytes: 4096, measuredAt: 0, allocationAttemptAt: NOW });
+    expect((f.store.owner(directory)?.measuredAt ?? 0) < (f.store.retentionExpiry(directory) ?? 1)).toBeTrue();
+    expect(f.store.allocationDue(NOW + 61_000)[0]?.directory).toBe(directory);
+    expect(due.directory).toBe(directory);
+  } finally { f.store.close(); }
+});
+
+test.skipIf(process.platform === "win32")("one allocation page charges shared hardlinks once and retains the charge while a link survives", async () => {
+  const f = fixture(), first = f.make("linked-a"), second = f.make("linked-b"), MiB = 1024 ** 2;
+  const shared = path.join(first, "probe", "registry.sqlite"), alias = path.join(second, "probe", "registry.sqlite");
+  fs.mkdirSync(path.dirname(shared)); fs.mkdirSync(path.dirname(alias)); fs.writeFileSync(shared, Buffer.alloc(8 * MiB, 7)); fs.linkSync(shared, alias);
+  try {
+    const initial = await measureAttemptAllocations([first, second], { budgetMs: 5000 });
+    expect(initial.get(first)! + initial.get(second)!).toBeLessThan(10 * MiB);
+    expect(initial.get(first)! + initial.get(second)!).toBeGreaterThanOrEqual(8 * MiB);
+    f.store.measure(first, initial.get(first)!, NOW); f.store.measure(second, initial.get(second)!, NOW);
+    expect(f.store.bytes()).toBeGreaterThanOrEqual(8 * MiB);
+    expect(f.store.bytes()).toBeLessThan(10 * MiB);
+    fs.rmSync(shared);
+    const oneLink = await measureAttemptAllocations([first, second], { budgetMs: 5000 });
+    f.store.measure(first, oneLink.get(first)!, NOW + 1); f.store.measure(second, oneLink.get(second)!, NOW + 1);
+    expect(f.store.bytes()).toBeGreaterThanOrEqual(8 * MiB);
+    fs.rmSync(first, { recursive: true });
+    f.store.forget(first);
+    const remaining = await measureAttemptAllocations([second], { budgetMs: 5000 });
+    expect(remaining.get(second)).toBeGreaterThanOrEqual(8 * MiB);
+    f.store.measure(second, remaining.get(second)!, NOW + 2);
+    expect(f.store.bytes()).toBeGreaterThanOrEqual(8 * MiB);
+    fs.rmSync(alias);
+    const released = await measureAttemptAllocations([second], { budgetMs: 5000 });
+    expect(released.get(second)).toBeLessThan(8 * MiB);
+    f.store.measure(second, released.get(second)!, NOW + 3);
+    expect(f.store.bytes()).toBeLessThan(8 * MiB);
   } finally { f.store.close(); }
 });
 

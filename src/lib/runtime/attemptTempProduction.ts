@@ -16,7 +16,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { RepositoryLinkInventory, type RetainedCheckoutReads } from "./attemptTempFilesystem";
 import { attributeCopyBeforeRootRetirement, sweepEvidenceCopies } from "./attemptEvidenceCopies";
-import { measureAttemptAllocation } from "./attemptTempFilesystem";
+import { measureAttemptAllocations } from "./attemptTempFilesystem";
 import { agentRegistry } from "@/lib/agent/registry";
 import { finishedAgent } from "./temporaryDataProduction";
 import { stateDatabaseBusy } from "@/lib/state/lockWait";
@@ -240,24 +240,35 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
           backfill = await backfillAttemptTempRetention(store, { audit: true, remaining: () => auditEnd - sweepMonotonicNow() });
         }
         const remaining = () => end - sweepMonotonicNow();
-        for (const owner of store.allocationDue(Date.now(), 64)) {
+        const due = store.allocationDue(Date.now(), 64), measurable: typeof due = [];
+        for (const [index, owner] of due.entries()) {
           if (remaining() <= 0) break;
-          let bytes: number | null = null;
+          if (mode === "on" && store.rebindRenumberedRoot(owner)) continue;
           try {
-            if (mode === "on" && store.rebindRenumberedRoot(owner)) continue; // Measured under its new binding next.
             const before = fs.lstatSync(owner.directory, { throwIfNoEntry: false });
             if (!before && !store.recoveredTrash(owner.directory)
-              && !fs.lstatSync(attemptTempJournalPath(owner.directory), { throwIfNoEntry: false })) bytes = 0;
-            if (before?.isDirectory() && `${before.dev}:${before.ino}` === owner.identity) {
-              const measured = await measureAttemptAllocation(owner.directory, { budgetMs: Math.max(1, remaining()) });
+              && !fs.lstatSync(attemptTempJournalPath(owner.directory), { throwIfNoEntry: false })) {
+              store.recordAllocation(owner, 0, Date.now() + index);
+            } else if (before?.isDirectory() && `${before.dev}:${before.ino}` === owner.identity) measurable.push(owner);
+            else store.recordAllocation(owner, null, Date.now() + index, false);
+          } catch { store.recordAllocation(owner, null, Date.now() + index, false); }
+        }
+        if (measurable.length && remaining() > 0) {
+          const attemptedAt = Date.now();
+          try {
+            const observations = await measureAttemptAllocations(measurable.map(owner => owner.directory), { budgetMs: Math.max(1, remaining()) });
+            for (const [index, owner] of measurable.entries()) {
               const after = fs.lstatSync(owner.directory, { throwIfNoEntry: false });
-              if (after?.isDirectory() && `${after.dev}:${after.ino}` === owner.identity)
-                bytes = measured.unreadable ? Math.max(owner.bytes, measured.bytes) : measured.bytes;
+              const stable = after?.isDirectory() && `${after.dev}:${after.ino}` === owner.identity;
+              store.recordAllocation(owner, stable ? observations.get(owner.directory)! : null, attemptedAt + index, !!stable);
             }
-          } catch { /* Keep the last allocation when the observation could not complete. */ }
-          // Advance even on ENOENT, a replaced inode or a refused read.
-          // Ownership and any quarantine remain available for normal replay.
-          store.recordAllocation(owner, bytes, Date.now());
+          } catch {
+            // The attempt time is separate from the last successful sample.
+            // Stagger equal-time failures so one oversized root cannot pin the
+            // head of the next page indefinitely.
+            for (const [index, owner] of measurable.entries())
+              store.recordAllocation(owner, null, attemptedAt + (index === 0 ? 60_000 : index), false);
+          }
         }
       },
       beforeRootRetirement: (directory, identity) => {

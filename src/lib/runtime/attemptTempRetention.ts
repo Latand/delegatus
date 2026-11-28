@@ -51,8 +51,8 @@ export type AttemptTempOwner = {
   retainUntilClose: boolean;
   createdAt: number;
 };
-type Row = AttemptTempOwner & { identity: string; released: number; checkedAt: number; bytes: number; measuredAt?: number };
-type ScheduledRoot = Row & { expiresAt: number };
+type Row = AttemptTempOwner & { identity: string; released: number; checkedAt: number; bytes: number; measuredAt?: number; allocationAttemptAt?: number };
+type ScheduledRoot = Row & { expiresAt: number; failure?: string | null };
 type AllocationRoot = Row & { measuredAt: number };
 export type EvidenceCopy = { destination: string; pipelineId: string | null; launchId: string; kind: "lane" | "agent" | "unattributed";
   createdAt: number; expiresAt: number | null; checkedAt: number; bytes: number };
@@ -119,7 +119,7 @@ const attemptTempIndexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS roots_pipeline ON roots(pipelineId,directory)",
   "CREATE INDEX IF NOT EXISTS roots_due ON roots(checkedAt,createdAt,directory)",
   "CREATE INDEX IF NOT EXISTS roots_age ON roots(createdAt,directory)",
-  "CREATE INDEX IF NOT EXISTS roots_allocation_due ON roots(measuredAt,createdAt,directory)",
+  "CREATE INDEX IF NOT EXISTS roots_allocation_due ON roots(allocationAttemptAt,createdAt,directory)",
   "CREATE INDEX IF NOT EXISTS roots_size ON roots(bytes DESC,createdAt,directory)",
   "CREATE INDEX IF NOT EXISTS copies_due ON copies(checkedAt,destination) WHERE kind<>'unattributed'",
   "CREATE INDEX IF NOT EXISTS copies_inspection ON copies(destination) WHERE kind<>'unattributed'",
@@ -149,9 +149,15 @@ export class AttemptTempStore {
         directory TEXT PRIMARY KEY, pipelineId TEXT, launchId TEXT NOT NULL,
         retainUntilClose INTEGER NOT NULL, createdAt REAL NOT NULL,
         identity TEXT NOT NULL, released INTEGER NOT NULL DEFAULT 0,
-        checkedAt REAL NOT NULL DEFAULT 0, bytes REAL NOT NULL DEFAULT 0)`);
+        checkedAt REAL NOT NULL DEFAULT 0, bytes REAL NOT NULL DEFAULT 0,
+        allocationAttemptAt REAL NOT NULL DEFAULT 0)`);
       if (!this.db.query<{ name: string }, []>("PRAGMA table_info(roots)").all().some(column => column.name === "measuredAt"))
         this.db.exec("ALTER TABLE roots ADD COLUMN measuredAt REAL NOT NULL DEFAULT 0");
+      if (!this.db.query<{ name: string }, []>("PRAGMA table_info(roots)").all().some(column => column.name === "allocationAttemptAt")) {
+        this.db.exec("ALTER TABLE roots ADD COLUMN allocationAttemptAt REAL NOT NULL DEFAULT 0");
+        this.db.exec("UPDATE roots SET allocationAttemptAt=measuredAt");
+        this.db.exec("DROP INDEX IF EXISTS roots_allocation_due");
+      }
       this.db.exec(`CREATE TABLE IF NOT EXISTS copies (
         destination TEXT PRIMARY KEY, pipelineId TEXT, launchId TEXT NOT NULL, kind TEXT NOT NULL,
         createdAt REAL NOT NULL, expiresAt REAL, checkedAt REAL NOT NULL DEFAULT 0, bytes REAL NOT NULL DEFAULT 0)`);
@@ -354,7 +360,7 @@ export class AttemptTempStore {
   }
   release(directory: string) {
     this.upgradeScratchRetention();
-    this.db.query("UPDATE roots SET released=1,checkedAt=0,measuredAt=0 WHERE directory=?").run(directory);
+    this.db.query("UPDATE roots SET released=1,checkedAt=0,measuredAt=0,allocationAttemptAt=0 WHERE directory=?").run(directory);
     const owner = this.owner(directory);
     if (owner?.pipelineId) {
       const pipeline = pipelineRecordReader(owner.pipelineId).read();
@@ -505,7 +511,7 @@ export class AttemptTempStore {
     return row ? { ...row, durationMs: Math.max(0, row.endedAt - row.startedAt) } : null;
   }
   private scheduledDue(now: number, limit: number, after?: Pick<ScheduledRoot, "expiresAt" | "directory">) {
-    return this.db.query<ScheduledRoot, [number, number, string, number, number]>(`SELECT r.*,t.expiresAt FROM root_retention t
+    return this.db.query<ScheduledRoot, [number, number, string, number, number]>(`SELECT r.*,t.expiresAt,t.failure FROM root_retention t
       JOIN roots r ON r.directory=t.directory WHERE t.expiresAt<=? AND (t.expiresAt,t.directory)>(?,?) AND r.checkedAt<=?
       ORDER BY t.expiresAt,t.directory LIMIT ?`).all(now, after?.expiresAt ?? -Number.MAX_VALUE, after?.directory ?? "", now, limit);
   }
@@ -562,10 +568,10 @@ export class AttemptTempStore {
   allocationDue(now: number, limit = 4): AllocationRoot[] {
     // A proof retry can be hours or days away. Let its zero or stale
     // allocation through without repeating the retirement proof.
-    return this.db.query<AllocationRoot, [number, number, number, number, number]>(`SELECT r.* FROM roots r WHERE measuredAt<=?
+    return this.db.query<AllocationRoot, [number, number, number, number, number]>(`SELECT r.* FROM roots r WHERE allocationAttemptAt<=?
       AND (r.bytes=0 OR r.measuredAt<=? OR r.checkedAt<=? OR NOT EXISTS (
         SELECT 1 FROM root_retention t WHERE t.directory=r.directory AND t.expiresAt<=?))
-      ORDER BY measuredAt,createdAt,directory LIMIT ?`).all(now - 60_000, now - 60 * 60_000, now, now, limit);
+      ORDER BY allocationAttemptAt,createdAt,directory LIMIT ?`).all(now - 60_000, now - 60 * 60_000, now, now, limit);
   }
   /** Subtrees of a root that this user cannot remove, as last observed. */
   recordBlocked(directory: string, blocked: { count: number; entries: BlockedSubtree[] } | null, at: number) {
@@ -747,11 +753,13 @@ export class AttemptTempStore {
   copyEligible(destination: string, eligible: boolean) {
     this.db.query("INSERT INTO copy_eligibility VALUES(?,?) ON CONFLICT(destination) DO UPDATE SET eligible=excluded.eligible").run(destination, Number(eligible));
   }
-  measure(directory: string, bytes: number, at = Date.now()) { this.db.query("UPDATE roots SET bytes=?,measuredAt=? WHERE directory=?").run(bytes, at, directory); }
-  recordAllocation(owner: AllocationRoot, bytes: number | null, at: number) {
-    this.db.query(`UPDATE roots SET measuredAt=?${bytes === null ? "" : ",bytes=?"} WHERE directory=? AND identity=?
+  measure(directory: string, bytes: number, at = Date.now()) {
+    this.db.query("UPDATE roots SET bytes=?,measuredAt=?,allocationAttemptAt=? WHERE directory=?").run(bytes, at, at, directory);
+  }
+  recordAllocation(owner: AllocationRoot, bytes: number | null, at: number, complete = true) {
+    this.db.query(`UPDATE roots SET allocationAttemptAt=?${complete ? ",measuredAt=?" : ""}${bytes === null ? "" : ",bytes=?"} WHERE directory=? AND identity=?
       AND launchId=? AND pipelineId IS ? AND createdAt=? AND retainUntilClose=? AND released=? AND measuredAt=?`)
-      .run(at, ...(bytes === null ? [] : [bytes]), owner.directory, owner.identity, owner.launchId, owner.pipelineId, owner.createdAt,
+      .run(at, ...(complete ? [at] : []), ...(bytes === null ? [] : [bytes]), owner.directory, owner.identity, owner.launchId, owner.pipelineId, owner.createdAt,
         Number(owner.retainUntilClose), owner.released, owner.measuredAt);
   }
   bytes() { return this.db.query<{ bytes: number }, []>("SELECT bytes FROM totals WHERE id=1").get()!.bytes; }
@@ -1288,6 +1296,19 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         const settled = state === "closed" || state === "expired" || state === "settled" && !owner.retainUntilClose
           || state === "orphan" && now() - owner.createdAt >= (options.maxAgeMs ?? 86400000);
         if (!settled || cleaner && !finished(state)) return false;
+        // The process scan cannot see a paused lane's durable checkout. Read
+        // its owner-bound checkout dependency before the expensive retirement
+        // proof, then repeat the same observation at the dispatch boundary.
+        if (options.authority) {
+          const admission = await options.authority(owner, inventory);
+          checkBudget();
+          if (admission.state !== state || !admission.isCurrent()) {
+            reason = "ownership changed during checkout dependency admission";
+            reasonCode = "authority_changed";
+            return false;
+          }
+          if (admission.checkout !== undefined && !await observeReferences(directory, admission.checkout)) return false;
+        }
         const idleHold = cleanerHold(directory);
         if (idleHold) {
           reason = idleHold;
@@ -1557,6 +1578,8 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       // A root still held after its retention ended steps back from the
       // expired share of the page, so the next oldest gets its visit.
       const last = report.outcomes.at(-1), ended = store.retentionExpiry(owner.directory);
+      if (last?.directory === owner.directory && last.reasonCode === "permission_budget")
+        noteFailure("permission_budget");
       if (ended !== null && ended <= now() && last?.directory === owner.directory && !options.cleaner?.overCap
         && (!options.scheduledOnly || last.disposition !== "removed")) {
         const current = store.owner(owner.directory);
@@ -1565,7 +1588,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
             || last.reasonCode === "root_budget" && AttemptProtectionInventory.exists(owner.directory);
           const quarantined = !fs.existsSync(owner.directory) && fs.existsSync(attemptTempJournalPath(owner.directory));
           const fullProofWithoutProgress = ["checkout_budget", "namespace_budget", "root_budget", "mutation_fence_budget"].includes(last.reasonCode);
-          const retryMs = !options.cleaner && last.reasonCode === "checkout_changed" ? 0
+          const retryMs = !options.cleaner && ["checkout_changed", "checkout_link_reference", "permission_budget"].includes(last.reasonCode) ? 0
             : last.disposition !== "deferred" ? EXPIRED_HOLD_RETRY_MS
             : !quarantined && !actionable && (options.scheduledOnly && !pressure || pressure && fullProofWithoutProgress)
               ? EXPIRED_PROOF_RETRY_MS : 0;
@@ -1599,7 +1622,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
     }
   } else if (!pressure && options.scheduledOnly) {
     for (const owner of store.routineDue(now(), budget)) {
-      const rootWindow = !owner.bytes || AttemptProtectionInventory.exists(owner.directory)
+      const rootWindow = !owner.bytes || owner.failure === "permission_budget" || AttemptProtectionInventory.exists(owner.directory)
         ? ATTEMPT_TEMP_LARGE_ROOT_BUDGET_MS : attemptTempRootWindow(owner.bytes);
       const window = Math.min(rootWindow, remaining());
       // Keep a root at the head of the continuation when the preceding work

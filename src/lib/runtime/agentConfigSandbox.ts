@@ -89,7 +89,7 @@ export function withAgentConfigSandbox(
   home?: string,
 ): NodeJS.ProcessEnv {
   Object.assign(env, agentPublicationIdentityEnv(source));
-  for (const name of ["BUN_INSTALL_CACHE_DIR", "UV_CACHE_DIR"]) {
+  for (const name of ["BUN_INSTALL_CACHE_DIR", "UV_CACHE_DIR", "GOMODCACHE"]) {
     if (source[name]) env[name] = source[name];
   }
   discardUnsupportedApiCredentials(env);

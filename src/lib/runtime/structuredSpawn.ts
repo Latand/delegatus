@@ -270,6 +270,8 @@ export function materializeStructuredHostAccess(
           : path.join(sourceEnv.XDG_CACHE_HOME || path.join(home, ".cache"), "uv");
         baseEnv.BUN_INSTALL_CACHE_DIR = sourceEnv.BUN_INSTALL_CACHE_DIR || path.join(bunRoot, "install", "cache");
         baseEnv.UV_CACHE_DIR = sourceEnv.UV_CACHE_DIR || uvRoot;
+        const goPath = sourceEnv.GOPATH?.split(path.delimiter).find(Boolean) || path.join(home, "go");
+        baseEnv.GOMODCACHE = sourceEnv.GOMODCACHE || path.join(goPath, "pkg", "mod");
       }
       return {
         env: {
@@ -286,8 +288,18 @@ export function materializeStructuredHostAccess(
         cleanup,
       };
     }
-    delete baseEnv.BUN_INSTALL_CACHE_DIR;
-    delete baseEnv.UV_CACHE_DIR;
+    // Restricted stages may read the shared caches. The sandbox still denies
+    // writes outside its granted roots, so package-manager cache paths do not
+    // silently fall back beneath this attempt's isolated HOME/XDG roots.
+    const home = sourceEnv.HOME || os.homedir();
+    const bunRoot = sourceEnv.BUN_INSTALL || path.join(sourceEnv.XDG_CACHE_HOME || home, ".bun");
+    const uvRoot = process.platform === "win32" && sourceEnv.LOCALAPPDATA
+      ? path.join(sourceEnv.LOCALAPPDATA, "uv", "cache")
+      : path.join(sourceEnv.XDG_CACHE_HOME || path.join(home, ".cache"), "uv");
+    baseEnv.BUN_INSTALL_CACHE_DIR ||= path.join(bunRoot, "install", "cache");
+    baseEnv.UV_CACHE_DIR ||= uvRoot;
+    const goPath = sourceEnv.GOPATH?.split(path.delimiter).find(Boolean) || path.join(home, "go");
+    baseEnv.GOMODCACHE ||= path.join(goPath, "pkg", "mod");
     const codex = ownerRelayHandoffOnly
       ? { permissionProfile: READ_ONLY_STAGE_PERMISSION_PROFILE,
           permissionProfileConfig: `permissions.${READ_ONLY_STAGE_PERMISSION_PROFILE}={extends=":read-only",filesystem={${JSON.stringify(scratchDirectory)}="write",${JSON.stringify(evidenceDirectory)}="write"}}` }

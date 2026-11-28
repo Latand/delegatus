@@ -1196,6 +1196,106 @@ test("a scheduled namespace proof above the cap persists its retry across ticks"
   }
 }, 15_000);
 
+test("an incomplete preparation sample is followed by a full post-completion allocation sample", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-incomplete-allocation-")); roots.push(root); isolateState(root);
+  const now = Date.parse("2035-01-15T00:02:00Z"), clock = spyOn(Date, "now").mockReturnValue(now), MiB = 1024 ** 2;
+  const pipeline = buildPipeline({ id: "allocation-timeout-lane", task: "Allocation completion", project: "fixture", repoDir: root,
+    stages: [{ id: "build", kind: "run", prompt: "Fixture", next: null,
+      effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } }],
+    srcPath: null, srcConversationId: null, now: "2035-01-15T00:00:00Z" });
+  pipeline.state = "paused";
+  const attempt = { n: 1, state: "failed" as const, launchId: "allocation-timeout-launch", effectiveRole: pipeline.stages[0]!.effectiveRole,
+    conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
+    startedAt: "2035-01-15T00:00:00Z", completedAt: "2035-01-15T00:01:00Z", input: null, activatedBy: null,
+    output: "complete", verdict: null, error: null };
+  pipeline.runs = [{ stageId: "build", attempts: [attempt] }];
+  fs.mkdirSync(path.join(pipeline.worktreeDir!, ".git"), { recursive: true }); savePipelines([pipeline]);
+  const directory = path.join(statePath("scratch"), "llv-stage-allocation-timeout"); fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, "allocation.bin"), Buffer.alloc(8 * MiB, 3));
+  const store = new AttemptTempStore();
+  const measurePage = spyOn(attemptTempFilesystem, "measureAttemptAllocations").mockImplementation(async () => {
+    throw new AttemptTempBudgetDeferred("attempt measurement time budget exhausted");
+  });
+  try {
+    store.register({ directory, pipelineId: pipeline.id, launchId: attempt.launchId, retainUntilClose: false,
+      createdAt: Date.parse(attempt.startedAt) });
+    store.measure(directory, 4096, now - 60_000);
+    store.release(directory);
+    const report = await runAttemptTempSweep({ scan: emptyScan, references, availableBytes: () => 400e9 },
+      { NODE_ENV: "test", LLV_TEMP_SWEEP: "on" });
+    expect(measurePage).toHaveBeenCalledTimes(1);
+    expect(report).toMatchObject({ removed: 1, errors: 0 });
+    expect(report?.removedBytes).toBeGreaterThanOrEqual(8 * MiB);
+    expect(fs.existsSync(directory)).toBeFalse();
+  } finally { measurePage.mockRestore(); clock.mockRestore(); store.close(); }
+});
+
+test.skipIf(process.platform !== "linux")("permission repair progress retries next minute and retires a 3,395-directory module cache", async () => {
+  const { store, directories: [directory] } = workScratchFixture(1, 1);
+  const cache = path.join(directory!, "go", "pkg", "mod"), groups: string[] = [];
+  fs.mkdirSync(cache, { recursive: true });
+  for (let group = 0; group < 54; group++) {
+    const folder = path.join(cache, `group-${String(group).padStart(2, "0")}`); fs.mkdirSync(folder); groups.push(folder);
+    const children = group < 52 ? 62 : 58;
+    for (let child = 0; child < children; child++) fs.mkdirSync(path.join(folder, `module-${String(child).padStart(2, "0")}`));
+  }
+  for (const folder of groups) {
+    for (const entry of fs.readdirSync(folder)) fs.chmodSync(path.join(folder, entry), 0o555);
+    fs.chmodSync(folder, 0o555);
+  }
+  // One cache root plus 54 group and 3,340 module directories.
+  expect(groups.length + groups.reduce((total, group) => total + fs.readdirSync(group).length, 0) + 1).toBe(3395);
+  const previousCap = process.env.LLV_ATTEMPT_TEMP_CAP_BYTES;
+  process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = "1";
+  let now = WORK_TICK, slices = 0, progressed = false;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const remove = attemptTempFilesystem.removeAttemptTree;
+  const injected = spyOn(attemptTempFilesystem, "removeAttemptTree").mockImplementation(async (...args) => {
+    if (slices < 2) {
+      const cacheRoot = path.join(args[0], "go", "pkg", "mod");
+      if (slices === 0) {
+        fs.chmodSync(path.join(cacheRoot, "group-00"), 0o755);
+      } else {
+        for (const group of fs.readdirSync(cacheRoot)) {
+          const folder = path.join(cacheRoot, group);
+          fs.chmodSync(folder, 0o755);
+          for (const child of fs.readdirSync(folder)) fs.chmodSync(path.join(folder, child), 0o755);
+        }
+      }
+      slices++;
+      progressed = true;
+      throw new AttemptTempBudgetDeferred("attempt permission repair time budget exhausted");
+    }
+    return remove(...args);
+  });
+  try {
+    const deferred = await runAttemptTempSweep({ ...workPorts, references }, workMode);
+    expect(deferred).toMatchObject({ checked: 1, deferred: 1, removed: 0,
+      outcomes: [expect.objectContaining({ reasonCode: "permission_budget", retryAt: WORK_TICK + 60_000 })] });
+    expect(progressed).toBeTrue();
+    let report;
+    for (let tick = 1; tick <= 3; tick++) {
+      now = WORK_TICK + tick * 60_000;
+      report = await runAttemptTempSweep({ ...workPorts, references }, workMode);
+      if (report?.removed) break;
+      expect(report?.outcomes.some(outcome => outcome.reasonCode === "permission_budget")).toBeTrue();
+    }
+    expect(report).toMatchObject({ removed: 1, errors: 0 });
+    expect(fs.existsSync(directory!)).toBeFalse();
+  } finally {
+    injected.mockRestore(); clock.mockRestore();
+    if (previousCap === undefined) delete process.env.LLV_ATTEMPT_TEMP_CAP_BYTES;
+    else process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = previousCap;
+    const makeWritable = (directory: string) => {
+      try { fs.chmodSync(directory, 0o700); } catch { return; }
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true }))
+        if (entry.isDirectory() && !entry.isSymbolicLink()) makeWritable(path.join(directory, entry.name));
+    };
+    makeWritable(path.dirname(directory!));
+    store.close();
+  }
+}, 480_000);
+
 test("a scheduled mutation fence deadline above the cap backs off across fresh helpers", async () => {
   const { store, directories: [directory] } = workScratchFixture(1, 1);
   const env = { ...process.env, LLV_ATTEMPT_TEMP_CAP_BYTES: "1" };
@@ -1549,6 +1649,48 @@ test("a checkout link created after the first authority inventory keeps its atte
     expect(fs.existsSync(directory)).toBeTrue();
     expect(fs.lstatSync(checkoutLink).isSymbolicLink()).toBeTrue();
   } finally { observed.mockRestore(); store.close(); }
+});
+
+test("a paused lane's durable checkout keeps a released producer payload with an empty process scan", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-paused-checkout-owner-")); roots.push(root); isolateState(root);
+  const completedAt = "2035-01-15T00:01:00.000Z", now = Date.parse("2035-01-15T00:02:00.000Z");
+  const clock = spyOn(Date, "now").mockReturnValue(now);
+  const pipeline = buildPipeline({ id: "paused-consumer", task: "Paused checkout consumer", project: "fixture", repoDir: root,
+    stages: [{ id: "build", kind: "run", prompt: "Fixture", next: null,
+      effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } }],
+    srcPath: null, srcConversationId: null, now: "2035-01-15T00:00:00Z" });
+  pipeline.state = "paused";
+  const attempt = { n: 1, state: "failed" as const, launchId: "paused-producer", effectiveRole: pipeline.stages[0]!.effectiveRole,
+    conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
+    startedAt: "2035-01-15T00:00:00.000Z", completedAt, input: null, activatedBy: null, output: "done", verdict: null, error: null };
+  pipeline.runs = [{ stageId: "build", attempts: [attempt] }];
+  const checkout = pipeline.worktreeDir!;
+  fs.mkdirSync(path.join(checkout, ".git"), { recursive: true });
+  const directory = path.join(statePath("scratch"), "llv-stage-paused-producer"); fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, "payload"), "consumer dependency");
+  const link = path.join(checkout, "node_modules", "producer-payload"); fs.mkdirSync(path.dirname(link), { recursive: true }); fs.symlinkSync(directory, link, "dir");
+  savePipelines([pipeline]);
+  const store = new AttemptTempStore();
+  try {
+    store.register({ directory, pipelineId: pipeline.id, launchId: attempt.launchId, retainUntilClose: false,
+      createdAt: Date.parse(attempt.startedAt) });
+    store.release(directory);
+    expect(store.retentionExpiry(directory)).toBe(Date.parse(completedAt) + 1);
+    expect((await attemptScratchAuthority(store.owner(directory)!)).state).toBe("expired");
+    const ports = { scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true, availableBytes: () => 400e9 };
+    expect(await runAttemptTempSweep(ports, { NODE_ENV: "test", LLV_TEMP_SWEEP: "on" })).toMatchObject({ liveHeld: 1, removed: 0 });
+    expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("consumer dependency");
+    fs.unlinkSync(link);
+    clock.mockReturnValue(now + 60_000);
+    let released;
+    for (let tick = 0; tick < 3; tick++) {
+      released = await runAttemptTempSweep(ports, { NODE_ENV: "test", LLV_TEMP_SWEEP: "on" });
+      if (released?.removed) break;
+      clock.mockReturnValue(now + (tick + 2) * 60_000);
+    }
+    expect(released).toMatchObject({ removed: 1, errors: 0 });
+    expect(fs.existsSync(directory)).toBeFalse();
+  } finally { store.close(); clock.mockRestore(); }
 });
 
 test.each([0, 1, 2, 3, 4])("a restored checkout holds scratch across consumer await boundary %i (zero is the removal control)", async boundary => {

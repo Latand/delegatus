@@ -97,15 +97,36 @@ test("full-access stages pin package caches before isolating their working direc
     }
     const source = { ...base, XDG_CACHE_HOME: xdg, BUN_INSTALL: bunInstall, ...explicit };
     const full = materializeStructuredHostAccess(false, source, null, scratch, owner);
-    expect(full.env).toMatchObject(explicit);
+    expect(full.env).toMatchObject({ ...explicit, GOMODCACHE: path.join(home, "go", "pkg", "mod") });
     const restricted = materializeStructuredHostAccess(true, source, null, scratch, owner);
-    expect(restricted.env.BUN_INSTALL_CACHE_DIR).toBeUndefined();
-    expect(restricted.env.UV_CACHE_DIR).toBeUndefined();
+    expect(restricted.env).toMatchObject({ ...explicit, GOMODCACHE: path.join(home, "go", "pkg", "mod") });
   } finally {
     if (originalState === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = originalState;
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("full-access stages retain the machine Go module cache across distinct isolated homes", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "stage-go-cache-"));
+  try {
+    const sharedHome = path.join(root, "machine-home");
+    const source = { NODE_ENV: "test" as const, HOME: sharedHome };
+    const owner = { pipelineId: "go-cache", launchId: "go-cache-launch", retainUntilClose: false };
+    const go = Bun.which("go");
+    if (!go) return;
+    const resolved: string[] = [];
+    for (const stageHome of [path.join(root, "stage-a"), path.join(root, "stage-b")]) {
+      const access = materializeStructuredHostAccess(false, source, null, path.join(root, "scratch"), owner);
+      const result = Bun.spawnSync([go, "env", "GOMODCACHE"], {
+        env: { ...access.env, HOME: stageHome, GOPATH: undefined }, stdout: "pipe", stderr: "pipe",
+      });
+      expect(result.exitCode, result.stderr.toString()).toBe(0);
+      resolved.push(result.stdout.toString().trim());
+      access.cleanup();
+    }
+    expect(resolved).toEqual([path.join(sharedHome, "go", "pkg", "mod"), path.join(sharedHome, "go", "pkg", "mod")]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test("resume successors preserve both explicit pipeline access axes", () => {

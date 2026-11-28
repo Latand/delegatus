@@ -220,13 +220,13 @@ variable the project's instruction files name". Here that is `LLV_STATE_DIR`:
 besides HOME, XDG_CONFIG_HOME and TMPDIR, isolate `LLV_STATE_DIR` for every
 test run.
 
-Keep the stage's `BUN_INSTALL_CACHE_DIR` and `UV_CACHE_DIR` when isolating
-HOME or the XDG directories. Use the shared package caches in place and leave
+Keep the stage's `BUN_INSTALL_CACHE_DIR`, `UV_CACHE_DIR` and `GOMODCACHE` when
+isolating HOME or the XDG directories. Use the shared package caches in place and leave
 uv at its default link mode. Never copy a cache into scratch. A check that
-needs a clean cache can set its own cache directory under TMPDIR and record that
+needs a clean cache can explicitly set its own cache directory under TMPDIR and record that
 choice in its report. If a check modifies installed files, use
-`UV_LINK_MODE=copy` for that environment only. A restricted stage with unset
-cache variables that needs to install can use a cache under TMPDIR.
+`UV_LINK_MODE=copy` for that environment only. A restricted stage that needs
+to install can explicitly select a cache under TMPDIR.
 
 Reuse one scratch copy of large state across probes. Use a Git worktree for
 repository probes, or hardlink files that each probe only reads. Delete each

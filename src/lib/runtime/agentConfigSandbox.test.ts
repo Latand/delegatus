@@ -18,6 +18,7 @@ test("isolating configuration forwards only package cache paths supplied by the 
     const unpinned = withAgentConfigSandbox({ ...env }, source);
     expect(unpinned.BUN_INSTALL_CACHE_DIR).toBeUndefined();
     expect(unpinned.UV_CACHE_DIR).toBeUndefined();
+    expect(unpinned.GOMODCACHE).toBeUndefined();
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -37,6 +38,9 @@ test("a spawned agent's environment carries its own config and state root", () =
     XDG_CONFIG_HOME: path.join(home, ".config"),
     LLV_STATE_DIR: path.join(home, ".config", "agent-log-viewer", "state"),
     TMPDIR: "/scratch/tmp",
+    BUN_INSTALL_CACHE_DIR: "/shared/bun",
+    UV_CACHE_DIR: "/shared/uv",
+    GOMODCACHE: "/shared/go-mod",
     [STATE_OWNER_ENV]: "viewer",
     [QUIET_DIAGNOSTICS_ENV]: "1",
     [pluginKey]: "private-fixture",
@@ -53,6 +57,7 @@ test("a spawned agent's environment carries its own config and state root", () =
   expect(env[pluginKey]).toBeUndefined();
   /* `gh` read its configuration out of XDG_CONFIG_HOME, so it is pinned. */
   expect(env.GH_CONFIG_DIR).toBe(path.join(home, ".config", "gh"));
+  expect(env).toMatchObject({ BUN_INSTALL_CACHE_DIR: "/shared/bun", UV_CACHE_DIR: "/shared/uv", GOMODCACHE: "/shared/go-mod" });
   fs.rmSync(home, { recursive: true, force: true });
 });
 

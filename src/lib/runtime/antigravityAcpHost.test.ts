@@ -127,7 +127,7 @@ describe("AntigravityAcpHost", () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it.each([false, true])("resolves package caches after Antigravity isolates HOME (restricted=%s)", restricted => {
+  it.each([false, true])("resolves shared package caches after Antigravity isolates HOME (restricted=%s)", restricted => {
     const shared = path.join(root, "shared-cache");
     const source = { NODE_ENV: "test" as const, HOME: root, XDG_CACHE_HOME: shared, PATH: process.env.PATH };
     const owner = { pipelineId: "cache-probe", launchId: "cache-probe-launch", retainUntilClose: false };
@@ -136,7 +136,7 @@ describe("AntigravityAcpHost", () => {
     env.HOME = path.join(root, "isolated-home");
     fs.mkdirSync(env.HOME);
     fs.writeFileSync(path.join(cwd, "package.json"), "{}");
-    const cacheRoot = restricted ? path.join(access.env.LLV_AGENT_SANDBOX_ROOT!, "cache") : shared;
+    const cacheRoot = shared;
     const probe = (command: string[], expected: string) => {
       const result = Bun.spawnSync(command, { cwd, env, stdout: "pipe", stderr: "pipe" });
       expect(result.exitCode, result.stderr.toString()).toBe(0);

@@ -117,31 +117,31 @@ bottleneck; the 14-hour cycle was.
 
 ### Smallest change
 
-1. **Pin the two caches for full-access stages.** In
+1. **Pin package caches for every stage.** In
    `materializeStructuredHostAccess`, on the full-access branch
-   (`structuredSpawn.ts:264-279`), add `BUN_INSTALL_CACHE_DIR` and
-   `UV_CACHE_DIR` to the stage environment. Resolve each from the Viewer's own
-   environment in the orders above. A value the Viewer already has wins. On
+   (`structuredSpawn.ts:264-303`), set `BUN_INSTALL_CACHE_DIR`, `UV_CACHE_DIR`
+   and `GOMODCACHE` from the Viewer environment. Go defaults its module cache
+   to `$GOPATH/pkg/mod`, or `$HOME/go/pkg/mod` when GOPATH is unset; pin that
+   resolved path before the stage HOME changes. Existing explicit values win. On
    Windows, uv uses `%LOCALAPPDATA%\uv\cache`; the #4167 branch already has
    that form in `agentArtifactCacheEnv`. Both variables outrank XDG_CACHE_HOME
    and HOME, so a test that isolates HOME or XDG keeps the shared cache. The
-   Antigravity stage keeps its private XDG roots but no longer gets a private
-   package cache.
+   Antigravity keeps private XDG roots for native app data while package cache
+   variables point at the shared machine roots.
 2. **Carry them through the one seam every host shares.** In
    `withAgentConfigSandbox`, copy the two names from `source` when they are
    set. All four hosts and the headless reviewer pass through it, so no
    allowlist changes.
-3. **Leave read-only stages as they are.** On the restricted branch
-   (`structuredSpawn.ts:280-303`), delete the two names from `baseEnv`, as the
-   allowlists effectively do today. A read-only sandbox cannot write the shared
-   cache. uv refuses a read-only cache even when it is warm, measured: "Failed
-   to initialize cache … Permission denied". Pinning it there would break uv
-   for a read-only stage that isolates HOME, which works today.
+3. **Keep restricted writes blocked.** Restricted stages also receive the
+   shared cache paths. The sandbox grants no write access to those roots, so
+   package managers cannot silently create attempt-local cache trees under the
+   private XDG cache. A restricted stage that must install explicitly selects
+   its own cache under TMPDIR.
 4. **Keep check reuse stable.** `scripts/gate-cache.ts` keys every `BUN_*`
    variable (`:126`), and the Viewer's publication runs the hook without the
    stage's variables. A check step a stage passed would otherwise get a new
    fingerprint and not be reused. Add both names to `ROOTS` (`:118-119`): they
-   name a location and do not change what a check checks. Also skip `ROOTS`
+   names name locations and do not change what a check checks. Also skip `ROOTS`
    names in `checkInputEnvironment` (`:162`), which feeds the baseline-sample
    key (`scripts/local-gate-tests.ts:536`) and the cloud canonical environment
    (`scripts/cloud-checks.ts:134`). The remote gate runner never sends unlisted
@@ -150,7 +150,7 @@ bottleneck; the 14-hour cycle was.
    That text is appended to every stage brief, builder and reviewer included.
    Isolation covers HOME, the XDG directories, TMPDIR and state directories.
    It does not cover package caches:
-   - keep `BUN_INSTALL_CACHE_DIR` and `UV_CACHE_DIR` as the stage environment
+   - keep `BUN_INSTALL_CACHE_DIR`, `UV_CACHE_DIR` and `GOMODCACHE` as the stage environment
      sets them;
    - never copy a package cache into scratch;
    - leave uv's link mode at its default;
@@ -158,8 +158,8 @@ bottleneck; the 14-hour cycle was.
      TMPDIR and says so in its report;
    - a check that modifies installed files uses `UV_LINK_MODE=copy` for that
      environment only;
-   - a read-only stage, where the variables are unset, uses a cache under TMPDIR
-     if it must install.
+   - a restricted stage uses the shared cache as read-only and selects a cache
+     under TMPDIR explicitly if it must install.
 
    Add the same rule after `AGENTS.md:221`. Hardlinks are free here: uv's
    default hardlinked an installed file from the cache (link count 2), and
@@ -169,28 +169,29 @@ bottleneck; the 14-hour cycle was.
 
 | File | Case | Red path |
 | --- | --- | --- |
-| `src/lib/runtime/structuredHostAccess.test.ts` | Full-access env resolves both caches from a source with each of: explicit variables, `BUN_INSTALL`, `XDG_CACHE_HOME`, HOME only | Restricted env carries neither, even when the source has them |
+| `src/lib/runtime/structuredHostAccess.test.ts` | Full and restricted env resolve shared Bun, uv and Go module caches across two isolated homes | Restricted env must not fall back to its attempt-local XDG cache |
 | same | Neither value lies under the attempt's scratch or config root | Fails on main for an Antigravity child env |
 | `src/lib/runtime/agentConfigSandbox.test.ts` | Values in `source` reach the child env; absent values stay absent | — |
-| `src/lib/runtime/antigravityAcpHost.test.ts` | `antigravityChildEnv` built from a full-access materialization: run real `bun pm cache` in a temp project with that env plus a private HOME. It prints the shared path; on main it prints `<attempt config root>/cache/.bun/install/cache`. Run `uv cache dir` the same way when uv is on PATH. | Same probe for a restricted materialization keeps today's private path |
+| `src/lib/runtime/antigravityAcpHost.test.ts` | Full and restricted `antigravityChildEnv`: real `bun pm cache` and `uv cache dir` resolve the shared path after HOME and XDG isolation | Both commands must avoid `<attempt config root>/cache` |
 | `scripts/gate-cache.test.ts` | `environmentFingerprint(checkEnvironment(env))` is equal with and without the two variables; `checkEnvironment` still passes their values | — |
 
 ## 3. Acceptance 2: measured while it lives and once after it ends
 
 ### Where the current numbers come from
 
-- Registration writes `bytes=0`, `measuredAt=0` and `checkedAt=createdAt`
+- Registration writes `bytes=0`, `measuredAt=0`, `allocationAttemptAt=0` and `checkedAt=createdAt`
   (`attemptTempRetention.ts:153-154,224-225`).
-- The minute tick's preparation measures roots from
-  `store.allocationDue(Date.now(), 4)` within a 5-second window
-  (`attemptTempProduction.ts:28,233-262`). The queue orders by `measuredAt` and
-  admits every row measured over a minute ago that is unexpired, zero, stale by
-  an hour or due (`attemptTempRetention.ts:561-568`). Live roots, ended roots,
-  config roots and rows of vanished directories share one round robin. Four per
-  tick over 3,351 rows is the 14-hour cycle in §1.
-- Release sets `released=1, checkedAt=0` and leaves `measuredAt` alone
-  (`attemptTempRetention.ts:354-362`). Nothing measures a root because its
-  attempt ended.
+- The minute tick's preparation measures up to 64 due roots in one `du`
+  invocation within a 5-second window (`attemptTempProduction.ts:28,233-262`).
+  Grouping the page lets GNU `du` count a hardlinked inode once across roots.
+  The queue orders by `allocationAttemptAt` and
+  admits every row whose last attempt is at least a minute old and whose size
+  is zero, stale or otherwise due (`attemptTempRetention.ts:561-568`). Live
+  roots, ended roots, config roots and rows of vanished directories share a
+  bounded round robin.
+- Release sets `released=1, checkedAt=0`, resets the full sample and queues a
+  new observation. A separate attempt timestamp prevents a timeout from
+  masquerading as a successful sample.
 - An expiry-page visit of a finished root with a recorded size reuses that
   size (`recordedOnly`, `attemptTempRetention.ts:1072-1076`). Its window
   follows that size (`attemptTempRootWindow`, `:78-80`), so a 29 GB root
@@ -205,35 +206,32 @@ bottleneck; the 14-hour cycle was.
 
 ### Smallest change
 
-1. **Measure once at the end.** `release()` also sets `measuredAt=0`. The
-   queue already orders by `measuredAt`, so the released root is first at the
-   next preparation. Preparation runs before the expiry page in the same tick,
-   so a removal in that tick reports the measured size. Its window follows it
-   too. A Viewer release that lands while the helper is measuring makes
-   `recordAllocation`'s compare-and-set miss (`:750-755`). The row then stays
-   at `measuredAt=0` and is measured on the next tick.
-2. **Bound the lap by time.** Raise the production call from 4 to
-   64 roots (`attemptTempProduction.ts:243`) and keep the 5-second window as
-   the bound. A missing or tiny root costs an `lstat` or a millisecond `du`; a
-   large one takes the window. Today's 3,351 rows need about 52 ticks. After
-   §4 drains the expired backlog, the ledger holds live roots, held roots and
-   unreleased roots inside their 24 hours, a few hundred rows: a lap of a few
-   minutes. A root whose `du` outlasts the window is recorded as a lower bound,
-   as today (an unreadable reading can only raise a size), and is measured
-   again one lap later.
+1. **Separate successful observations from attempts.** `measuredAt` advances
+   only with a complete allocation sample. `allocationAttemptAt` schedules
+   retries without replacing the last full size. Release clears both timestamps
+   so the post-completion sample is due. Compare-and-set still rejects a release
+   or owner change that races the walk.
+2. **Measure shared inodes once and keep the queue fair.** The production page
+   sends up to 64 valid roots to one `du` command, which deduplicates hardlinks
+   across its operands. A timed-out command records no full sample; attempt
+   timestamps are staggered so the same slow first root cannot pin later roots
+   at the head of the next page. Preparation remains bounded by five seconds.
 3. **Stop charging vanished directories.** Apply the stale-intent rule of §4.
    It clears a recovery row that has no quarantine journal. The existing
    missing-root paths then record zero (`attemptTempProduction.ts:249-250`)
    and forget the row (`attemptTempRetention.ts:1517-1522`).
 
-No new column, index or table. The queue keeps its indexed order.
+The ledger adds an indexed `allocationAttemptAt` column alongside the
+successful-sample timestamp. Existing rows backfill their attempt time from
+`measuredAt`.
 
 ### Tests
 
 | File | Case | Red path |
 | --- | --- | --- |
-| `src/lib/runtime/attemptTempProduction.backfill.test.ts` | A large root is counted. 40 older-measured rows and one live root that gains 64 MiB after its first measurement; one preparation pass at `now+61 s` measures the live root, and `store.bytes()` rises by at least 64 MiB. | On main the root stays at its first size for the same tick: 4 rows per tick, ordered behind 40. |
-| same | After `release()` the root is the first row `allocationDue` returns, even one second after its last measurement; the following production tick records its `du` | On main it is absent from the head |
+| `src/lib/runtime/attemptTempProduction.backfill.test.ts` | A large live root beyond 40 older rows is measured in one production page | The root remains at its first size |
+| same | An incomplete attempt leaves `measuredAt` unchanged and cannot satisfy the post-release full sample | A timeout advances `measuredAt` and retirement accepts the old size |
+| same | Two roots sharing an 8 MiB hardlink are charged once; removing one name keeps the charge while the other remains | Independent `du` walks double count or drop the remaining allocation |
 | same | A directory removed by someone else, with a stale intent row and no journal, counts zero after one tick and its row is gone | On main its bytes stay in `store.bytes()` |
 | same | A pending quarantine (journal present) keeps its recorded bytes | Guards the existing custody rule |
 
@@ -298,10 +296,12 @@ No new column, index or table. The queue keeps its indexed order.
 
    This removes a leftover and adds no state. The present case is the rule the
    recovery page already applies, run where the visit can see it.
-3. **Retry after a changed checkout.** In the retry block
-   (`attemptTempRetention.ts:1562`), `checkout_changed` keeps the visit's own
-   one-minute deferral (`:1002`); the 30-minute step stays for other holds.
-   Timing grants nothing: the next visit repeats every proof.
+3. **Retry consumer release and repair progress promptly.** An open lane's
+   durable worktree/repository checkout is observed at retirement admission and
+   again at dispatch. When that checkout releases its scratch link, or a bounded
+   permission-repair slice made progress, the root is due on the next minute
+   sweep. Permission-repair continuation gets the 30-second root window. Each
+   visit still repeats every authority, identity and mutation proof.
 
 The routine page's order, cursor and 32-visit budget stay. Once the
 stale-intent rule has cleared the backlog, the due set is small and each tick
@@ -353,8 +353,9 @@ and runs on every visit.
 - *Report pictures linked into the root* hold it (`:1292-1295,1148`).
 - *A `.delegatus-keep` marker, a Git or mount boundary, or tree evidence* hold
   it (`:1296-1305,1485-1488`).
-- *An open lane whose checkout links into the root* holds it (`:1350`,
-  `1191-1205`), as does any live process's checkout with such a link
+- *An open lane whose checkout links into the root* holds it even when no
+  consumer process is running (`:1350`, `1191-1205`); checkout state is read at
+  admission and again at dispatch. Any live process checkout with such a link
   (`attemptTempFilesystem.ts:661-700`).
 - *Permissions the sweep cannot clear* hold the root for the operator
   (`attemptTempRetention.ts:955-972`).
@@ -382,11 +383,13 @@ supplied process scan and no live scanner, in private state.
 | Same root not released | Kept until 24 hours | Guards the unreleased path |
 | Running attempt, root released (re-host) | Kept, `owner_live` | — |
 | Ended, released root whose supplied scan lists a process with `TMPDIR` inside it | Kept, `process_reference` | — |
+| A paused lane's persisted checkout links a released producer payload with an empty process scan | Payload stays until the checkout link is removed, then the next sweep retires it | Process-only inventory misses the paused consumer and leaves a dangling link |
 | `retainUntilClose` root of an open lane; recorded-check custody; linked report picture; keep marker; passed attempt with the stage cursor still on it | Each kept, with its existing reason code | — |
 | Intent row with unmoved original and no journal | Root removed by the next tick | Held `recovery_owner_unknown` |
 | Intent row, original gone, no journal | Row forgotten; bytes leave the total | Held forever |
 | Quarantine cut with its journal present | Intent kept; the existing replay finishes or restores it | Guards custody |
 | Dispatch refused with `checkout_changed` | Next visit due within 60 seconds | Due after 30 minutes |
+| Permission repair makes bounded additive progress through 3,395 read-only Go-cache directories | Retry next minute with a 30-second continuation budget and retire within minutes | Retry waits 15 minutes between short slices |
 
 ## 5. Existing tests that enter the changed paths
 
@@ -471,13 +474,6 @@ of the pin and keeps its other scope.
 
 ## 9. Deferred — not currently justified
 
-- **Re-reading only changed checkout directories at dispatch**, or trusting
-  fresh reads for released roots as the unregistered pass does
-  (`unregisteredScratch.ts:333`). Either would keep `checkout_changed` from
-  refusing a dispatch while some other agent writes its worktree. The first
-  adds a mechanism; the second weakens a guard for roots minutes old.
-  Reconsider if the post-deploy check shows released roots held by
-  `checkout_changed` for more than 15 minutes.
 - **A shared cache for the in-place private install**
   (`provisionPrivateDependencies.ts:600`). It is transient, once per lane, and
   removed in the same call. Sharing would widen a write-restricted installer to
@@ -485,12 +481,13 @@ of the pin and keeps its other scope.
   lasting allocation.
 - **Hardlinked lane `node_modules`.** The copy keeps a stage's writes out of the
   cache every lane reads.
-- **A writable shared cache for read-only stages.** It would widen their
-  sandbox.
+- **A writable shared cache for restricted stages.** The sandbox keeps shared
+  package roots read-only; a restricted installer chooses a cache in TMPDIR.
 - **The prompt clock for standalone agents and seats** (no lane). Their
   conversations resume across hosts, and the requirement names stage attempts.
-- **Live-first measurement order, resumable `du` or a new index.** Reconsider
-  if one allocation lap still exceeds 15 minutes after the backlog drains.
+- **A resumable `du` or an inode side index.** Grouped page measurements count
+  hardlinks once. Reconsider if a production allocation page still exceeds its
+  time bound after the queue drains.
 - **Fresh-release priority in the routine page**, if the due set stays large
   after the drain.
 - **A per-attempt disk allowance** (the #4167 branch). It is no longer needed to

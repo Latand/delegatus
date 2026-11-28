@@ -1485,6 +1485,36 @@ export async function measureAttemptAllocation(directory: string, settings: Name
   return { bytes, unreadable: true };
 }
 
+/** Measure a bounded allocation page in one du process. GNU du tracks inode
+ * identities across all operands, so a hardlinked payload shared by two stage
+ * roots contributes once to the ledger total. A timed-out walk yields no full
+ * observations; callers keep the prior sizes and schedule another attempt. */
+export async function measureAttemptAllocations(directories: readonly string[], settings: NamespaceBudget = {}): Promise<Map<string, number>> {
+  const result = new Map<string, number>();
+  if (!directories.length) return result;
+  if (directories.length === 1 || process.platform === "win32") {
+    for (const directory of directories) {
+      const measured = await measureAttemptAllocation(directory, settings);
+      if (measured.unreadable) throw new AttemptTempBudgetDeferred("attempt allocation observation incomplete");
+      result.set(directory, measured.bytes);
+    }
+    return result;
+  }
+  const until = performance.now() + attemptTempRemaining(Math.max(0, Math.min(30_000, settings.budgetMs ?? 30_000)));
+  const output = await run("du", ["-skx", "--", ...directories], Math.max(1, Math.floor(attemptTempRemaining(until - performance.now()))));
+  const byPath = new Map<string, number>();
+  for (const line of output.stdout.trimEnd().split("\n")) {
+    const tab = line.indexOf("\t"), kibibytes = Number(line.slice(0, tab));
+    if (tab > 0 && Number.isFinite(kibibytes) && kibibytes >= 0) byPath.set(line.slice(tab + 1), kibibytes * 1024);
+  }
+  for (const directory of directories) {
+    const bytes = byPath.get(directory);
+    if (bytes === undefined) throw new AttemptTempBudgetDeferred("attempt allocation page returned incomplete measurements");
+    result.set(directory, bytes);
+  }
+  return result;
+}
+
 export async function allocatedAttemptBytes(directory: string, settings: NamespaceBudget = {}): Promise<number> {
   return (await measureAttemptAllocation(directory, settings)).bytes;
 }
