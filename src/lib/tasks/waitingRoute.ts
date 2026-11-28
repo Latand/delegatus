@@ -6,6 +6,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import { deriveTaskSteps } from "./steps";
 import { currentPrototypeSummary, prototypeReviewSummary, prototypeRoundsSuperseded, prototypeWaitsOnOperator } from "@/lib/prototypeReview/model";
 import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
+import { resolveHoldFormRef, taskFormIds } from "./hold";
 import type { BoardTask } from "./types";
 
 type SeatRule = "lane-stop" | "lane-dismissed" | "pause-ready" | "wait-cleared" | "unowned" | "form-answered";
@@ -24,7 +25,9 @@ export type HoldPullRequestState = (taskId: string, ref: string) => PullRequestS
     whether it still waits. An answered or retired round names the round that
     carries the answer. */
 export type PublishedRound = { project: string } & ({ open: true } | { open: false; answeredBy: string });
-export type PublishedRoundLookup = (reviewId: string) => PublishedRound | undefined;
+export type PublishedRoundLookup = ((reviewId: string) => PublishedRound | undefined) & {
+  formIds?: (project: string, prefix: string) => Iterable<string>;
+};
 
 /** Every round of one task, from its stored history or the summary it carries. */
 function taskRounds(task: Pick<BoardTask, "prototypeReview" | "prototypeReviews" | "prototypeReviewReplica" | "status" | "doneAt" | "updatedAt">): Map<string, { open: true } | { open: false; answeredBy: string }> {
@@ -54,17 +57,31 @@ export function waitingRouteIndex(
 ) {
   const tasksById = new Map(tasks.map(task => [task.id, task]));
   // Index every task's rounds once, and only when an operator hold names one.
-  let roundOwners: Map<string, PublishedRound> | undefined;
-  const publishedRound: PublishedRoundLookup = reviewId => {
-    if (!roundOwners) {
-      roundOwners = new Map();
-      for (const task of tasks) {
-        if (!task.prototypeReview && !task.prototypeReviews?.length && !task.prototypeReviewReplica || !task.project) continue;
-        for (const [id, state] of taskRounds(task as WaitingTask)) roundOwners.set(id, { project: task.project, ...state });
-      }
+  const roundOwners = new Map<string, PublishedRound>();
+  const formIdsByProject = new Map<string, Set<string>>();
+  let roundsIndexed = false;
+  function indexRounds() {
+    if (roundsIndexed) return;
+    roundsIndexed = true;
+    for (const task of tasks) {
+      if ((!task.prototypeReview && !task.prototypeReviews?.length && !task.prototypeReviewReplica) || !task.project) continue;
+      for (const [id, state] of taskRounds(task as WaitingTask)) roundOwners.set(id, { project: task.project, ...state });
+      const project = canonicalOrchestratorProject(task.project);
+      let ids = formIdsByProject.get(project);
+      if (!ids) formIdsByProject.set(project, ids = new Set());
+      for (const id of taskFormIds(task)) ids.add(id);
     }
+  }
+  const publishedRound = (reviewId: string) => {
+    indexRounds();
     return roundOwners.get(reviewId) ?? seatRound?.(reviewId);
   };
+  const resolveFormRef = (ref: string, project: string) => resolveHoldFormRef(ref, function* (prefix) {
+    indexRounds();
+    const key = canonicalOrchestratorProject(project);
+    yield* formIdsByProject.get(key) ?? [];
+    yield* seatRound?.formIds?.(key, prefix) ?? [];
+  });
   const lanesById = new Map<string, Pipeline>();
   const lanesByTask = new Map<string, Set<Pipeline>>();
   const successors = indexMergeSuccessors(pipelines);
@@ -96,7 +113,7 @@ export function waitingRouteIndex(
     for (const visited of path) cyclic.set(visited, result);
     return result;
   }
-  return { tasksById, lanesById, lanesByTask, liveAssignments, readyPauses, pullRequestState, publishedRound, hasCircularPrerequisite };
+  return { tasksById, lanesById, lanesByTask, liveAssignments, readyPauses, pullRequestState, publishedRound, resolveFormRef, hasCircularPrerequisite };
 }
 
 function laneOpen(lane: Pipeline): boolean {
@@ -147,21 +164,30 @@ export function waitingRoute(task: WaitingTask, input: ReturnType<typeof waiting
   if (hold?.kind === "operator") {
     const answered = (reviewId: string) => seat("form-answered", "the operator answered the task’s decision form",
       `Read round ${reviewId} with read_prototype_review and carry out the answer. Clear the hold or set a new one naming the operator’s next action.`);
-    const ownRound = hold.ref ? taskRounds(task).get(hold.ref) : undefined;
     if (decision && !hold.ref && Date.parse(decision.at) > Date.parse(hold.since)) return answered(decision.id);
-    if (ownRound && !ownRound.open) return answered(ownRound.answeredBy);
     if (hold.ref) {
-      if (hold.ref === form?.latestReviewId) return cleared();
-      const published = input.publishedRound(hold.ref);
+      const ref = hold.ref;
+      const resolved = input.resolveFormRef(ref, task.project);
+      if (resolved?.kind === "ambiguous") return seat("unowned", "its operator hold has an ambiguous form ID prefix",
+        "Check the intended form and record its full ID.");
+      if (resolved?.kind === "unavailable") return seat("unowned", "its operator hold form ID could not be resolved",
+        "Check the intended form and record its full ID.");
+      const formId = resolved?.kind === "match" ? resolved.value : ref;
+      const ownRound = taskRounds(task).get(formId);
+      if (ownRound && !ownRound.open) return answered(ownRound.answeredBy);
+      if (formId === form?.latestReviewId) return cleared();
+      const published = input.publishedRound(formId);
       if (published && canonicalOrchestratorProject(published.project) === canonicalOrchestratorProject(task.project)) {
         return published.open ? { owner: "operator", rule: "operator-hold" } : answered(published.answeredBy);
       }
-      const step = task.steps?.find(step => step.id === hold.ref);
+      const step = task.steps?.find(step => step.id === formId);
       if (step) {
         // The card's own lanes decide a linked step, as on the board.
         const derived = deriveTaskSteps([step], lanes, now).steps[0];
         return derived?.effectiveState === "open" ? { owner: "operator", rule: "operator-hold" } : cleared();
       }
+      if (resolved?.kind === "none") return seat("unowned", "its operator hold has an unknown form ID prefix",
+        "Check the intended form and record its full ID, or resume the task.");
       return seat("unowned", "its operator hold no longer points to a published form or open step",
         "Verify the wait now. Resume it or publish a new decision form or name an open step for the operator action.");
     }

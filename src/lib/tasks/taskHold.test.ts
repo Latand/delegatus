@@ -212,6 +212,47 @@ test("holds survive persistence and old blocked rows load without a migration", 
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
+test.each(["create", "update"] as const)("%s normalizes unique form prefixes for task and step holds before persistence", async operation => {
+  const { prototypeTask } = await import("@/lib/voiceCompanion/prototypeRead.fixture");
+  const { clearSeatRoundsForTests, insertSeatRound } = await import("@/lib/prototypeReview/seatRounds");
+  const fromTask = `pr_12345678${"a".repeat(24)}`;
+  const fromSeat = `pr_12345678${"b".repeat(24)}`;
+  const template = prototypeTask("form-owner");
+  const owner = task({ id: template.id, prototypeReviews: [{ ...template.prototypeReviews![0]!, id: fromTask }] });
+  clearSeatRoundsForTests();
+  try {
+    insertSeatRound({ id: fromSeat, taskId: null, project: owner.project, title: "Choose", createdAt: NOW, publicationKey: "seat-fixture",
+      inputDigest: "fixture", source: { conversationId: null }, variants: [] });
+    for (const [ref, expected] of [
+      [fromTask, fromTask],
+      [fromTask.slice(0, 12), fromTask],
+      [fromSeat.slice(0, 12), fromSeat],
+      [fromSeat.slice(0, 11), fromSeat.slice(0, 11)],
+      ["pr_90807060", "pr_90807060"],
+      ["operator-step", "operator-step"],
+    ] as const) {
+      saveTasks([task(), owner]);
+      const hold = { kind: "operator", note: "Choose an option", ref };
+      const steps = [{ id: "operator-step", text: "Choose an option", state: "open", hold }];
+      const result = mutateTasks(rows => {
+        const write = operation === "update"
+          ? ok(patchTask(rows, "hold-task", { hold, steps }, NOW))
+          : ok(createTask(rows, { project: owner.project, placement: "unplaced", text: "Choose", hold, steps }, [],
+            { id: () => "new-hold", now: () => NOW }));
+        return { tasks: write.tasks, result: write.task };
+      });
+      expect(result.hold?.ref).toBe(expected);
+      expect(result.steps?.[0]?.hold?.ref).toBe(expected);
+      const stored = loadTasks().find(row => row.id === result.id);
+      expect(stored?.hold).toEqual(result.hold);
+      expect(stored?.steps).toEqual(result.steps);
+    }
+  } finally {
+    clearSeatRoundsForTests();
+    saveTasks([]);
+  }
+});
+
 test("operator undo restores hold age and provenance, requires its revision, and refuses an agent restore", () => {
   const held = ok(patchTask([task()], "hold-task", { hold: { kind: "worker", note: "When free" } }, NOW, { actor: "agent", conversationId: "conversation_fixture" })).task;
   const moved = ok(patchTask([held], held.id, { status: "assigned" }, LATER)).task;

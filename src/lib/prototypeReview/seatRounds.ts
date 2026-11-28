@@ -109,6 +109,13 @@ export function findSeatRound(reviewId: string): PrototypeReviewRound | undefine
   return collection("read")?.get(reviewId) ?? undefined;
 }
 
+/** A normalized short form ID selects a bounded range of retained seat rounds. */
+export function seatFormIds(project: string, prefix: string): string[] {
+  const rounds = collection("read")?.keyRange(prefix, `${prefix}\uffff`, SEAT_ROUNDS_LIMIT) ?? [];
+  const key = canonicalProject(project);
+  return rounds.filter(round => canonicalProject(round.project) === key).map(round => round.id);
+}
+
 /** One round's read-modify-write; nothing is written when the change leaves it as it was. */
 export function mutateSeatRound<T>(reviewId: string, change: (round: PrototypeReviewRound) => T): T {
   const store = collection("write")!;
