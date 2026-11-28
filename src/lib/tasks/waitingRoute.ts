@@ -172,7 +172,7 @@ export function waitingRoute(task: WaitingTask, input: ReturnType<typeof waiting
         "Check the intended form and record its full ID.");
       if (resolved?.kind === "unavailable") return seat("unowned", "its operator hold form ID could not be resolved",
         "Check the intended form and record its full ID.");
-      const formId = resolved?.value ?? ref;
+      const formId = resolved?.kind === "match" ? resolved.value : ref;
       const ownRound = taskRounds(task).get(formId);
       if (ownRound && !ownRound.open) return answered(ownRound.answeredBy);
       if (formId === form?.latestReviewId) return cleared();
