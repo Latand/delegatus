@@ -36,7 +36,7 @@ for (const lowSpace of [false, true]) for (const clearsCap of lowSpace ? [false]
         const stat = fs.statSync(directory); directories.push({ directory, identity: `${stat.dev}:${stat.ino}` });
       }
       const held = directories[count]!, heldBytes = store.owner(held.directory)!.bytes;
-      if (clearsCap) store.measure(held.directory, 2e9);
+      if (clearsCap) store.measure(held.directory, 2e9, NOW);
       process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = lowSpace || clearsCap ? "1000000000" : "0";
       process.env.LLV_PRESSURE_FIXTURE = config;
       fs.writeFileSync(config, JSON.stringify({ pressureInventory: true, now: NOW, freeBytes: lowSpace ? 0 : 1e12,

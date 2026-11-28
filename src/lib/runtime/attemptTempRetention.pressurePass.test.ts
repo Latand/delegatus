@@ -202,7 +202,7 @@ test.each(["allocation", "protection"] as const)("a large recorded root can fini
   try {
     savePipelines([finishedLane(f.root, new Date(NOW - 2 * 86400_000).toISOString())]);
     store.register({ directory, pipelineId: "retention-lane", launchId: "retention-launch", retainUntilClose: false, createdAt: NOW - 1000 });
-    store.measure(directory, 8 * 1024 ** 3);
+    store.measure(directory, 8 * 1024 ** 3, NOW);
     fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: 1e12, fixtureMutationFence: true, fixtureRemoval: true,
       slowProof: { phase, prefix: 1, requiredCost: 6000 } }));
     process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = "0"; process.env.LLV_PRESSURE_FIXTURE = config;

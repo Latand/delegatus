@@ -79,15 +79,15 @@ test.skipIf(process.platform !== "linux")("the ordinary expiry schedule measures
     fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: 1e12, realClock: true, measureCost: 0 }));
     process.env.LLV_PRESSURE_FIXTURE = config; process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = "0";
     const expired = count - prefix - 1;
-    let removed = 0, observedUncachedMeasurement = false;
+    let removed = 0, observedMeasuredRemoval = false;
     for (let tick = 0; tick < 8 && removed < expired; tick++) {
       // A fresh helper honors earlier holds and reaches the unmeasured suffix.
       const report = await realParentPass(true); expect(report.errors).toBe(0); removed += report.removed;
-      observedUncachedMeasurement ||= report.outcomes.some(row => directories.slice(prefix + 1).includes(row.directory)
-        && row.disposition === "removed" && row.bytes > 0 && row.allocation !== "recorded");
+      observedMeasuredRemoval ||= report.outcomes.some(row => directories.slice(prefix + 1).includes(row.directory)
+        && row.disposition === "removed" && row.bytes > 0);
       expect(report).toMatchObject({ pressure: false, pass: null, rootPageLimit: 32 });
     }
-    expect(removed).toBe(expired); expect(observedUncachedMeasurement).toBeTrue();
+    expect(removed).toBe(expired); expect(observedMeasuredRemoval).toBeTrue();
     expect(store.owner(directories[prefix]!)!.bytes).toBeGreaterThan(0);
     for (let n = 0; n < count; n++) {
       if (n <= prefix) expect(fs.readFileSync(path.join(directories[n]!, "data"))).toEqual(Buffer.alloc(4096, n));

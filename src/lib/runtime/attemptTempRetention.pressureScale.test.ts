@@ -33,7 +33,8 @@ test.skipIf(process.platform !== "linux")("a thousand roots progress through rea
       const directory = path.join(scratch, `llv-stage-${String(n).padStart(6, "0")}`); directories.push(directory);
       fs.mkdirSync(directory, { mode: 0o700 }); fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(4096, n % 256));
       store.register({ directory, pipelineId: n === 0 ? live.id : ended.id, launchId: "retention-launch", retainUntilClose: false, createdAt: NOW - 1000 + n });
-      store.measure(directory, 12288 + n);
+      // The first tick starts with a measured size order and stalls in the pressure visit.
+      store.measure(directory, 12288 + n, NOW);
       if (n > 0 && n < retained) plantKeepMarker(path.join(directory, ".delegatus-keep"));
     }
     expect((await attemptTempAuthority(store.owner(directories[0]!)!, undefined, () => NOW)).state).toBe("live");
