@@ -8,6 +8,106 @@ compatibility raises the major version.
 
 ## [Unreleased]
 
+## [2.5.0] — 2026-11-28
+
+### Added
+- **Task cards estimate the subscription share and the API price.** Cards show
+  the task's tokens, an estimated share of the plan's limit and what the same
+  tokens would cost at API prices. Most tasks used to read "unknown" because a
+  day's measured rate was erased about two days later and every figure was
+  marked as a lower bound. Rates are now kept, the Claude 20× tier is told apart
+  from the 5× tier, a lost plan falls back to the data file, and "≥" appears
+  only for days before counting began ([#4427]).
+- **Sign in with ChatGPT for Voice Delegatus.** The owner can connect a ChatGPT
+  plan from the Keys section, and eligible text turns of the voice backend run
+  on the plan instead of an API key, with the API key as an in-call fallback and
+  a visible reason when the plan cannot be used. It stays off until the
+  installation owner configures a client ID, and it is not available on Windows
+  ([#4416]).
+- **An agent's HTML evidence report opens in the preview.** The report renders
+  in the sandboxed frame, scripts and stylesheets stay denied, and source and
+  download controls are hidden for it ([#4466]).
+- **The Telegram relay understands more of a conversation.** A verified direct
+  message from the owner, or from a requester trusted for the project, creates
+  one board task and replies with a button that opens the card; an ambiguous
+  request offers expiring project choices. This needs the paired relay service
+  to support it ([#4521]). Prompts show sticker messages with their emoji and
+  description ([#4503]) and the quoted part of a reply together with external
+  reply context, marked as untrusted ([#4515]).
+- **Codex CLI 0.171.0 and 0.172.0 are supported.** The supported window is
+  0.170.0 to 0.172.0. Protocol schema generation works behind the Docker
+  command shim, and MCP elicitation requests, which every pin used to refuse,
+  are accepted ([#4513]).
+- **Disk and memory self-care.** Stage attempts keep their temporary files on
+  disk ([#4517]). Expired scratch of stages that have no registry row is deleted
+  by age and liveness, and sooner when free space runs low ([#4509]). Stray
+  entries in `/tmp` older than 12 hours are swept, and the System panel and the
+  seat's machine line warn when swap use passes 50 % or a `/tmp` held in memory
+  passes 4 GB ([#4517]).
+
+### Changed
+- **Self-update waits while startup advances.** The Viewer reports completed
+  database checks, registry slices and controller work, and the launcher fails
+  after 90 seconds without progress or at an absolute ceiling instead of a fixed
+  90 seconds. Errors name the phase and the last progress in English and
+  Ukrainian ([#4524]).
+- **A stage that Codex refuses as a cybersecurity risk continues.** The first
+  refusal starts a fresh Codex attempt and the second moves the stage to the
+  role's Claude equivalent at Opus; the lane parks only when that move cannot
+  run ([#4520]).
+- **Onboarding.** While the setup dialog is open, the first-run install notice
+  sits inside it, and with neither Claude nor Codex able to run, the
+  orchestrator step says "Connect Claude or Codex first." with a link to
+  Engines ([#4528]).
+- **Typing and board rows stay smooth under other sessions' activity.** The
+  composer and board rows ignore runtime events from other projects, and card
+  handlers stay stable. With a neighbour project busy at six events a second,
+  the 95th percentile of key-to-frame time at 1440 px fell from 379 to 184 ms
+  for the composer ([#4545]). Preparing a registry snapshot seeks the journal
+  bounds instead of scanning it, which cut the median from 36.8 to 26.3 ms on a
+  100,000-row journal ([#4502]), and Decisions reads reuse one dismissal index
+  per snapshot ([#4496]).
+- **Resource reads stay responsive on macOS and Windows.** Cold process
+  discovery runs off the event loop, and a pending Darwin response uses the
+  latest memory sample ([#4506]).
+
+### Fixed
+- **Rollback no longer leaves the previous release broken.** A restarted release
+  waits up to 120 seconds for a deploy fence to clear instead of failing, a
+  rollback allows the previous release several minutes to become ready, and the
+  adapter's own refusal reaches the failure record ([#4538]). The candidate state check also
+  finishes inside the readiness bound under load, because its worker runs at the
+  Viewer's priority ([#4522]).
+- **Stage launches survive a deploy.** A launch interrupted before admission is
+  retired by one `retry-stage` action and a fresh attempt starts ([#4548]).
+  A launch whose publication reply was lost is recovered from its durable
+  receipt ([#4198]). Provisioning keeps a due retry's remaining time through
+  disk, repository and pool holds and controller restarts ([#4460]), and installs
+  and attests private dependencies in Bun workspace repositories instead of
+  parking the lane ([#4523]).
+- **Provider cuts and aliases.** A provider-cut stage attempt releases its idle
+  host so retry and decision resolution work ([#4511]). `create_pipeline`
+  accepts a task from a project reached through an alias ([#4534]).
+- **A conversation kill also stops the older generation** that an account
+  migration left running ([#4546]).
+- **The Telegram file confirmation page names the missing step** (no team, not
+  the owner, no relay pairing, no linked Telegram, another linked account, or a
+  session not signed in through Telegram) in English and Ukrainian and offers it
+  in place, instead of sending the owner round a sign-in loop ([#4484]).
+
+### Maintainer notes
+- **Secret input, slices 1 and 2.** The destination rules, the metadata-only
+  request ledger and the atomic mode-0600 writer ([#4498]), then the owner
+  routes and the masked entry card in Decisions ([#4508]). Nothing creates a
+  request yet; agent tools and Telegram delivery are later slices.
+- **Publication and deploy gates.** Publication retries keep green touched-test
+  checkpoints under load ([#4380]). The candidate performance gate accepts the
+  settlement of deliveries to dead recipients as retained evidence ([#4518]).
+  The macOS newcomer rehearsal expects the Antigravity CLI as missing ([#4541]).
+- **Designs and notes.** [#4501] designs opening a conversation by identity.
+  [#4322] and [#4519] document how Codex project membership interacts with
+  moved chats; they change no behaviour.
+
 ## [2.4.0] — 2026-11-26
 
 ### Added
@@ -5837,7 +5937,8 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 - Implement→review flows with fresh headless reviewer rounds.
 - Remote access over Tailscale behind a token gate.
 
-[Unreleased]: https://github.com/Latand/delegatus/compare/v2.4.0...HEAD
+[Unreleased]: https://github.com/Latand/delegatus/compare/v2.5.0...HEAD
+[2.5.0]: https://github.com/Latand/delegatus/compare/v2.4.0...v2.5.0
 [2.4.0]: https://github.com/Latand/delegatus/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/Latand/delegatus/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/Latand/delegatus/compare/v2.1.0...v2.2.0
@@ -7401,6 +7502,7 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#4183]: https://github.com/Latand/delegatus/pull/4183
 [#4193]: https://github.com/Latand/delegatus/pull/4193
 [#4196]: https://github.com/Latand/delegatus/pull/4196
+[#4198]: https://github.com/Latand/delegatus/pull/4198
 [#4199]: https://github.com/Latand/delegatus/pull/4199
 [#4200]: https://github.com/Latand/delegatus/pull/4200
 [#4201]: https://github.com/Latand/delegatus/pull/4201
@@ -7453,6 +7555,7 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#4308]: https://github.com/Latand/delegatus/pull/4308
 [#4309]: https://github.com/Latand/delegatus/pull/4309
 [#4318]: https://github.com/Latand/delegatus/pull/4318
+[#4322]: https://github.com/Latand/delegatus/pull/4322
 [#4324]: https://github.com/Latand/delegatus/pull/4324
 [#4325]: https://github.com/Latand/delegatus/pull/4325
 [#4326]: https://github.com/Latand/delegatus/pull/4326
@@ -7501,6 +7604,7 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#4376]: https://github.com/Latand/delegatus/pull/4376
 [#4377]: https://github.com/Latand/delegatus/pull/4377
 [#4378]: https://github.com/Latand/delegatus/pull/4378
+[#4380]: https://github.com/Latand/delegatus/pull/4380
 [#4381]: https://github.com/Latand/delegatus/pull/4381
 [#4383]: https://github.com/Latand/delegatus/pull/4383
 [#4384]: https://github.com/Latand/delegatus/pull/4384
@@ -7519,12 +7623,14 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#4407]: https://github.com/Latand/delegatus/pull/4407
 [#4412]: https://github.com/Latand/delegatus/pull/4412
 [#4415]: https://github.com/Latand/delegatus/pull/4415
+[#4416]: https://github.com/Latand/delegatus/pull/4416
 [#4418]: https://github.com/Latand/delegatus/pull/4418
 [#4419]: https://github.com/Latand/delegatus/pull/4419
 [#4420]: https://github.com/Latand/delegatus/pull/4420
 [#4422]: https://github.com/Latand/delegatus/pull/4422
 [#4423]: https://github.com/Latand/delegatus/pull/4423
 [#4426]: https://github.com/Latand/delegatus/pull/4426
+[#4427]: https://github.com/Latand/delegatus/pull/4427
 [#4428]: https://github.com/Latand/delegatus/pull/4428
 [#4429]: https://github.com/Latand/delegatus/pull/4429
 [#4430]: https://github.com/Latand/delegatus/pull/4430
@@ -7551,9 +7657,11 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#4455]: https://github.com/Latand/delegatus/pull/4455
 [#4457]: https://github.com/Latand/delegatus/pull/4457
 [#4458]: https://github.com/Latand/delegatus/pull/4458
+[#4460]: https://github.com/Latand/delegatus/pull/4460
 [#4462]: https://github.com/Latand/delegatus/pull/4462
 [#4463]: https://github.com/Latand/delegatus/pull/4463
 [#4465]: https://github.com/Latand/delegatus/pull/4465
+[#4466]: https://github.com/Latand/delegatus/pull/4466
 [#4467]: https://github.com/Latand/delegatus/pull/4467
 [#4468]: https://github.com/Latand/delegatus/pull/4468
 [#4469]: https://github.com/Latand/delegatus/pull/4469
@@ -7562,5 +7670,32 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#4472]: https://github.com/Latand/delegatus/pull/4472
 [#4473]: https://github.com/Latand/delegatus/pull/4473
 [#4482]: https://github.com/Latand/delegatus/pull/4482
+[#4484]: https://github.com/Latand/delegatus/pull/4484
+[#4496]: https://github.com/Latand/delegatus/pull/4496
 [#4497]: https://github.com/Latand/delegatus/pull/4497
+[#4498]: https://github.com/Latand/delegatus/pull/4498
 [#4500]: https://github.com/Latand/delegatus/pull/4500
+[#4501]: https://github.com/Latand/delegatus/pull/4501
+[#4502]: https://github.com/Latand/delegatus/pull/4502
+[#4503]: https://github.com/Latand/delegatus/pull/4503
+[#4506]: https://github.com/Latand/delegatus/pull/4506
+[#4508]: https://github.com/Latand/delegatus/pull/4508
+[#4509]: https://github.com/Latand/delegatus/pull/4509
+[#4511]: https://github.com/Latand/delegatus/pull/4511
+[#4513]: https://github.com/Latand/delegatus/pull/4513
+[#4515]: https://github.com/Latand/delegatus/pull/4515
+[#4517]: https://github.com/Latand/delegatus/pull/4517
+[#4518]: https://github.com/Latand/delegatus/pull/4518
+[#4519]: https://github.com/Latand/delegatus/pull/4519
+[#4520]: https://github.com/Latand/delegatus/pull/4520
+[#4521]: https://github.com/Latand/delegatus/pull/4521
+[#4522]: https://github.com/Latand/delegatus/pull/4522
+[#4523]: https://github.com/Latand/delegatus/pull/4523
+[#4524]: https://github.com/Latand/delegatus/pull/4524
+[#4528]: https://github.com/Latand/delegatus/pull/4528
+[#4534]: https://github.com/Latand/delegatus/pull/4534
+[#4538]: https://github.com/Latand/delegatus/pull/4538
+[#4541]: https://github.com/Latand/delegatus/pull/4541
+[#4545]: https://github.com/Latand/delegatus/pull/4545
+[#4546]: https://github.com/Latand/delegatus/pull/4546
+[#4548]: https://github.com/Latand/delegatus/pull/4548
