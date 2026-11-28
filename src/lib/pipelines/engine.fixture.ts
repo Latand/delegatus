@@ -1,3 +1,4 @@
+import { seedForgeCommitAccount } from "@/test-helpers/forgeCommitAccount";
 import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { afterAll, expect, spyOn, test } from "bun:test";
 import crypto from "node:crypto";
@@ -33,6 +34,7 @@ import { repositoryPublicationSource } from "@/lib/git/repositoryCommitIdentity"
 import { prepareStageGitGuard } from "@/lib/git/stageAttemptGuard";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-engine-"));
+seedForgeCommitAccount();
 const engineModule = await import("./engine");
 // Native Git and reserved-host fixtures model their forge separately;
 // PR delivery regressions use a GitHub target and execute the real helper.

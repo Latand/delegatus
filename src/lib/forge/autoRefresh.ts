@@ -79,11 +79,11 @@ export function refreshRequest(lane: Pipeline, legacyBase = "main"): CreatePipel
     spec: `Automatic refresh is authorized for a PR behind or in conflict with its base branch.
 A content-preserving refresh from ${base} gets one review of the resolution only.
 ${facts}
-Both sides keep their behaviour. Commits use the enforced Delegatus machine identity plus the engine's noreply Co-Authored-By trailer. Never rebase, force-push or call GitHub update-branch. A semantic conflict parks needs_decision with its file:line and @@ hunk. Review only the resolution. The project's checks must pass.`,
+Both sides keep their behaviour. Use the Git publication identity and attribution chosen at launch. Keep the engine's noreply Co-Authored-By trailer. Never rebase, force-push or call GitHub update-branch. A semantic conflict parks needs_decision with its file:line and @@ hunk. Review only the resolution. The project's checks must pass.`,
     stages: [
       { id: "refresh", kind: "run", role: merger, ...runtime, next: "review", onFail: null,
         "prompt": `Merge current origin/${base} into this PR's delivery branch ${target.branch} as a merge commit on top of reviewed head ${refresh.head}. ${facts}
-Resolve every conflict so the PR keeps its behaviour and ${base} keeps everything it merged. Never rebase, force-push or call GitHub update-branch. The launch environment enforces the Delegatus machine identity; keep your engine's noreply Co-Authored-By trailer.
+Resolve every conflict so the PR keeps its behaviour and ${base} keeps everything it merged. Never rebase, force-push or call GitHub update-branch. Use the Git publication identity and attribution chosen at launch. Keep your engine's noreply Co-Authored-By trailer.
 Run tests of files the PR touches and files the resolution changed, by explicit path using the project's test command and the assembled gate guidance, with isolated HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR, and a closed LLV_VIEWER_CONTROL_URL.
 If resolving a conflict would change either side's behaviour, run git merge --abort and report needs_decision with exactly one finding naming the file:line, the @@ hunk header and the behaviour each resolution would change. This stage has no fail edge. Never guess.` },
       { id: "review", kind: "run", role: { roleId: "reviewer" }, ...runtime, next: null,

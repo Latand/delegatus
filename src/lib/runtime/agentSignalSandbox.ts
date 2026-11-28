@@ -423,7 +423,8 @@ if [[ $# -ge 2 && \${1##*/} == cpu-admission.ts ]]; then
 fi
 exec ${launcherBun ? quote(launcherBun) : "bun"} "$@"
 `);
-    const directory = cacheSignalTooling(gateAdmissionLauncherParent(), new Map([["bun", body], ["interpreter", Buffer.from(nativeBun)]]));
+    const home = source.HOME?.trim() || process.env.HOME || os.homedir();
+    const directory = cacheSignalTooling(gateAdmissionLauncherParent(home), new Map([["bun", body], ["interpreter", Buffer.from(nativeBun)]]));
     return { LLV_GATE_BUN: path.join(directory, "bun") };
   } catch { return {}; }
 }

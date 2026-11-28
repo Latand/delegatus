@@ -1,3 +1,4 @@
+import { seedForgeCommitAccount } from "@/test-helpers/forgeCommitAccount";
 import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import type { BigIntStats, StatOptions, Stats } from "node:fs";
@@ -226,6 +227,7 @@ test("a malformed manifest is an environment refusal and preserves the installed
 }, 30_000);
 
 test.each(["cache-hit", "stale-link", "invalid-lock", "ENOSPC", "EEXIST", "hook-install", "hook-registry", "hook-privacy"])("publication retains the dependency contract for %s", async shape => {
+  seedForgeCommitAccount();
   const f = await lockedFixture({ registry: shape === "hook-registry" });
   try {
     await prepareWorktreeDependencies(f.pipeline);

@@ -162,7 +162,7 @@ export function agentForgeDir(source: AgentEnvironment): string {
   const files: Array<[string, string, number]> = [["gh", runner("gh"), 0o700], ["git", gitRunner(), 0o700], ["forge-git-credential", runner("git-credential"), 0o700]];
   if (helper !== null) files.push([HELPER, helper, 0o600]);
   const hash = crypto.createHash("sha256").update(JSON.stringify(files)).digest("hex").slice(0, 24);
-  const directory = path.join(source.HOME?.trim() || os.homedir(), ".cache", "delegatus", "agent-forge", hash);
+  const directory = path.join(source.HOME?.trim() || process.env.HOME || os.homedir(), ".cache", "delegatus", "agent-forge", hash);
   fs.mkdirSync(path.join(directory, "gh-config"), { recursive: true, mode: 0o700 });
   for (const [name, content, mode] of files) publish(path.join(directory, name), content, mode);
   return directory;

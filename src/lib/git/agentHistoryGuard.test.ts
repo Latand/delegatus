@@ -1,3 +1,4 @@
+import { fixtureNoreply, seedForgeCommitAccount } from "@/test-helpers/forgeCommitAccount";
 import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -101,9 +102,12 @@ function mailbox(root: string, name: string, email: string): string {
 
 test("git am adds one repository coauthor and --no-verify refuses to publish without it", async () => {
   const f = fixture();
-  const userName = "Repository Fixture", userEmail = "repo-fixture@example.invalid";
+  const userName = "Repository Fixture", userEmail = fixtureNoreply;
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(f.root, "state");
+  seedForgeCommitAccount();
   try {
-    f.ok(["config", "user.name", userName]); f.ok(["config", "user.email", userEmail]);
+    f.ok(["config", "user.name", userName]);
     const source = await repositoryPublicationSource(f.root, f.source);
     Object.assign(f.env, agentPublicationIdentityEnv(source));
     const patch = mailbox(f.root, userName, userEmail);
@@ -119,7 +123,11 @@ test("git am adds one repository coauthor and --no-verify refuses to publish wit
     expect(bypass.stderr.toString()).toContain("add a new commit on top");
     expect(f.ok(["rev-parse", "HEAD"])).toBe(before);
     f.run(["am", "--abort"]);
-  } finally { f.close(); }
+  } finally {
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+    f.close();
+  }
 });
 
 test("machine-policy git am keeps its existing identity and trailer behavior under --no-verify", () => {
