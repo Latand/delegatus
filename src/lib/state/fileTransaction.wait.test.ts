@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import { blockingWaitDiagnostics, fileTransactionCallSite, registryWaitCallSite, resetBlockingWaitsForTests, withWaitCorrelation } from "@/lib/blockingWaits";
 import {
   FileTransactionBusyError,
@@ -625,3 +625,20 @@ for (const contender of ["async", "sync-scan"] as const) test(`a live publisher 
     await Promise.allSettled([child.exited, second]);
   }
 }, 12_000);
+
+test("a failed ticket write releases its incomplete file while the creator stays alive", async () => {
+  const file = path.join(root, "incomplete-ticket");
+  const write = fs.writeFileSync;
+  const fault = Object.assign(new Error("fixture ticket write refused"), { code: "EDQUOT" });
+  const hook = spyOn(fs, "writeFileSync").mockImplementation((target, data, options) => {
+    if (String(target).startsWith(file + ".write-locks" + path.sep)) {
+      write(target, "", options);
+      throw fault;
+    }
+    return write(target, data, options);
+  });
+  try { expect(() => withFileTransactionSync(file, "fixture writer", () => {})).toThrow(fault); }
+  finally { hook.mockRestore(); }
+  expect(await withFileTransactionAsync(file, "fixture next writer", () => "admitted", { waitMs: 500 })).toBe("admitted");
+  expect(fs.readdirSync(file + ".write-locks")).toEqual([]);
+});

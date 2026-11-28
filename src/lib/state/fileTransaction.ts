@@ -332,7 +332,12 @@ function enqueue(filePath: string): LockTicket {
     queuePath,
     `${String(fileTransactionClock()).padStart(16, "0")}-${process.pid}-${crypto.randomUUID()}.json`,
   );
-  fs.writeFileSync(ticketPath, JSON.stringify(owner), { encoding: "utf8", flag: "wx", mode: 0o600 });
+  try {
+    fs.writeFileSync(ticketPath, JSON.stringify(owner), { encoding: "utf8", flag: "wx", mode: 0o600 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") fs.rmSync(ticketPath, { force: true });
+    throw error;
+  }
   return { lockPath, queuePath, owner, ticketPath };
 }
 
