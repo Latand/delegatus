@@ -12,7 +12,7 @@ rotation authority, the HTTP and MCP surfaces) is in
 ## Create the orchestrator
 
 A new install creates it in the setup guide, which has four numbered steps:
-Engines, Project, Telegram (optional) and Orchestrator. On a project without
+Accounts, Project, Telegram (optional) and Orchestrator. On a project without
 one, there are two ways in:
 
 - **Overview.** Press **Start with an orchestrator**.

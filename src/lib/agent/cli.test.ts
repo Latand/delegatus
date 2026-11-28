@@ -1007,3 +1007,17 @@ for (const model of ["gpt-6.2-sol", "gpt-6.2-astra"]) {
     }
   });
 }
+
+test("the Viewer's Windows search for agy covers the folder its PowerShell installer writes", async () => {
+  const { windowsBinaryCandidates } = await import("./cli");
+  const home = path.join(SANDBOX, "windows-home");
+  const usual = path.join(home, "AppData", "Local", "agy", "bin", "agy.exe");
+  expect(windowsBinaryCandidates(home, "agy", "")).toContain(usual);
+  const redirected = path.join(SANDBOX, "redirected-local");
+  const candidates = windowsBinaryCandidates(home, "agy", redirected);
+  expect(candidates.indexOf(path.join(redirected, "agy", "bin", "agy.exe"))).toBeGreaterThan(-1);
+  expect(candidates.indexOf(path.join(redirected, "agy", "bin", "agy.exe"))).toBeLessThan(candidates.indexOf(usual));
+  /* The folders every program is looked for in come first, in their order, and stay the whole list for the others. */
+  expect(candidates.slice(0, 3)).toEqual(windowsBinaryCandidates(home, "claude", redirected).map((file) => file.replaceAll("claude", "agy")));
+  expect(windowsBinaryCandidates(home, "claude", redirected)).toHaveLength(3);
+});

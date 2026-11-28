@@ -5,7 +5,7 @@ import { activeClaudeAccountId, claudeAccountsMutationLocked, claudeLegacyAccoun
 import { claudeLoginSupervisor, LIVE_CLAUDE_LOGIN_PHASES } from "@/lib/accounts/claudeLogin";
 import { providerCredentialChangedAt, readProviderMessageHealth } from "@/lib/accounts/claudeProviderHealth";
 import { antigravityAccountSection } from "@/lib/accounts/antigravityAccountSection";
-import { engineCliPresence } from "@/lib/accounts/engineConnection";
+import { cliInstalls, cliReports } from "@/lib/accounts/engineConnection";
 import { activeCopilotAccountId, listCopilotAccounts } from "@/lib/accounts/copilot";
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
 import { accountProjectRows } from "@/lib/accounts/projectAccountsView";
@@ -118,7 +118,7 @@ export async function GET() {
   /* Whether each engine's command resolves (#1876): a bounded `--version`,
      cached for a minute, started before the durable reads so it overlaps them.
      `GET /api/accounts/cli` re-probes on demand. */
-  const cliProbe = Promise.all([engineCliPresence("claude"), engineCliPresence("codex"), engineCliPresence("antigravity")]);
+  const cliProbe = cliReports();
   const registry = agentRegistry();
   const snapshot = registry.readOnlySnapshot();
   const now = Date.now();
@@ -225,7 +225,10 @@ export async function GET() {
   const claudeMigration = migrationProjection("claude", snapshot, phasesByIntent);
   const codexAuto = autoBalanceProjection("codex", snapshot, now);
   const claudeAuto = autoBalanceProjection("claude", snapshot, now);
-  const [claudeCli, codexCli, antigravityCli] = await cliProbe;
+  const cli = await cliProbe;
+  const claudeCli = cli.claude.presence;
+  const codexCli = cli.codex.presence;
+  const antigravityCli = cli.antigravity.presence;
   return NextResponse.json({
     codex: {
       active: listedOr(codexAccountList, snapshot.engineRouting.codex.activeAccountId) ?? listedOr(codexAccountList, activeCodexAccountId()) ?? "",
@@ -246,6 +249,8 @@ export async function GET() {
     },
     /* The recorded Antigravity sign-in; the setup guide and the accounts screens read it. */
     antigravity: antigravityAccountSection(antigravityCli),
+    /* Where each program's command was found and its version, for the setup guide's status popovers. */
+    cliInstalls: cliInstalls(cli),
     /* The launch draft reads this section to offer Copilot accounts. */
     copilot: copilotLaunchSection(),
     mutationLocked: { codex: codexAccountsMutationLocked(), claude: claudeAccountsMutationLocked() },

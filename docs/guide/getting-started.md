@@ -297,16 +297,23 @@ window needs the running Delegatus even to open.
 ## The setup guide
 
 On a new install, the page opens the setup guide, titled **Set up
-Delegatus**. Its numbered steps are **Engines**, **Project**, **Telegram
+Delegatus**. It opens on a welcome that lists the agent programs found on the
+computer running Delegatus. With an account already signed in, **Continue
+with these** goes straight to the project; otherwise its button leads to the
+first step. The numbered steps are **Accounts**, **Project**, **Telegram
 (optional)** and **Orchestrator**, and they end on a running orchestrator.
 
-1. **Engines** shows Claude Code, Codex and GitHub Copilot, each as
-   **Connected**, **Installed, signed out** or **Not installed**. Sign in to
-   the ones you use. After installing a missing CLI, press **Check again**.
-   If you use a service that speaks the Anthropic Messages API, **Add
-   compatible provider** under Claude accounts takes its address, token and
-   models; [Compatible providers](accounts-and-roles.md#compatible-providers)
-   has the fields.
+1. **Accounts** has one row each for Claude Code, Codex, Antigravity and
+   GitHub Copilot, reading **Connected**, **Installed, signed out** or **Not
+   installed**; the dot before each state says more when pressed. **Sign in**
+   on a Claude Code or Codex row starts the sign-in under that row, and **Add
+   an account** adds another one. Antigravity and Copilot sign in from their
+   own terminal, and the row says how. A program that is not installed shows
+   the command to copy; after installing it, press **Check again** beside the
+   step's heading. One signed-in account is enough to continue. A service
+   that speaks the Anthropic Messages API is added on the accounts screen;
+   [Compatible providers](accounts-and-roles.md#compatible-providers) has the
+   fields.
 2. **Project** asks for the folder the orchestrator will work on. Pick it from
    **Already on this computer**, which lists the projects Delegatus already
    found here with how many conversations each has, or **Open another
@@ -394,7 +401,7 @@ one of those, or a setup with only Claude Code connected, is refused before
 any stage starts, with a message that a stage's engine is not connected.
 Before the first pipeline, do one of these:
 
-- connect the other engine in the setup guide's **Engines** step;
+- connect the other engine in the setup guide's **Accounts** step;
 - open the sidebar's ⋯ menu → **Settings** → **Roles and workers** → **Roles: engine and model**
   and move every role you will use to the engine you have. When roles sit on
   an engine that is not connected, the table says so above its rows and
@@ -435,8 +442,8 @@ turn on **Merge when the review passes**; see
 
 - **No agent CLI found.** The start output prints the install commands for
   Claude Code and Codex. Install one, restart Delegatus, and press **Check
-  again** in the setup guide's **Engines** step.
-- **An account is signed out.** The **Engines** step shows **Installed, signed
+  again** in the setup guide's **Accounts** step.
+- **An account is signed out.** The **Accounts** step shows **Installed, signed
   out**. Sign in there; the orchestrator draft also asks you to sign in
   before it can start.
 - **The port is busy.** The start output suggests the next port; start again

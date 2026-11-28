@@ -22,7 +22,7 @@ const { GET: GET_ROLES } = await import("@/app/api/roles/route");
 const { OnboardingHost } = await import("@/components/onboarding/OnboardingDialog");
 const { openOnboarding, resetOnboardingSnapshotForTests } = await import("@/components/onboarding/useOnboarding");
 
-/* Signed out, so the Engines step marks nothing by itself and every write the tests see is the close. */
+/* Signed out, so the Accounts step marks nothing by itself and every write the tests see is the close. */
 const signedIn = { id: "default", label: "Main", authPresent: false, auth: { state: "unauthenticated" } };
 const accounts = { claude: { active: "default", accounts: [signedIn] }, codex: { active: "default", accounts: [signedIn] } };
 /* One engine connected, which gives the mapping table its «connect the other» banner. */
@@ -177,6 +177,10 @@ test("a first run on inherited state with no marker opens the guide with the not
   const view = mount();
   await until(() => noticeOf() !== null);
   expect(noticeOf()).not.toBeNull();
+  /* A first run opens on the guide's welcome, and the notice is shown there, above it. */
+  const welcome = document.querySelector("[data-onboarding-welcome]");
+  expect(welcome).not.toBeNull();
+  expect(noticeOf()!.compareDocumentPosition(welcome!) & 4).toBe(4);
   closeWithEscape();
   await until(() => !dialogOf() && Boolean(markerOnDisk(f).legacyNoticeAckedAt));
   expect(puts.at(-1)).toMatchObject({ dismissed: true, legacyNoticeAcknowledged: true });

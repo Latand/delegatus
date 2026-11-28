@@ -2,20 +2,22 @@ import { afterEach, expect, test } from "bun:test";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 
+import type { EngineAccountsState } from "@/hooks/useEngineAccounts";
 import { installActEnv } from "@/test-helpers/actEnv";
 import { installOnboardingDom, jsonResponse, settle } from "@/test-helpers/onboardingDom";
 
 /*
- * Antigravity's sign-in card on the real hook: the recorded state it reads
- * (`GET /api/accounts/antigravity`), the one automatic check when `agy` is
- * installed and nothing has recorded its sign-in, and the "Check sign-in"
- * button's POST.
+ * Antigravity's row of the Accounts step on the real hook: the recorded state
+ * it reads (`GET /api/accounts/antigravity`), the one automatic check when
+ * `agy` is installed and nothing has recorded its sign-in, and the "Check
+ * sign-in" button's POST.
  */
 
 const dom = installOnboardingDom();
 installActEnv();
 const { createRoot } = await import("react-dom/client");
-const { AntigravityCard, useAntigravityAccount } = await import("./AntigravityCard");
+const { useAntigravityAccount } = await import("./AntigravityAccount");
+const { EnginesStep } = await import("./EnginesStep");
 
 type Recorded = { cli: "found" | "missing"; auth: "signed_in" | "signed_out" | "unknown"; plan: string | null };
 let recorded: Recorded = { cli: "found", auth: "unknown", plan: null };
@@ -23,7 +25,11 @@ let recorded: Recorded = { cli: "found", auth: "unknown", plan: null };
 let probeAnswer: Recorded | null = null;
 
 const section = (state: Recorded) => ({ cli: state.cli, active: "default", accounts: [{ id: "default", label: "Default", kind: "legacy", auth: state.auth, plan: state.plan, checkedAt: null, authPresent: state.auth === "signed_in" }] });
+/* When set, the recorded state cannot be read. */
+let readRefused = false;
 dom.setRoute((url, init) => {
+  if (readRefused && url.includes("/api/accounts/antigravity") && init?.method !== "POST") return jsonResponse({ error: "unreadable" }, 500);
+  if (url.includes("/api/accounts/copilot")) return jsonResponse({ cli: { present: true, reason: null }, active: "", accounts: [] });
   if (!url.includes("/api/accounts/antigravity")) return undefined;
   if (init?.method === "POST") {
     if (probeAnswer === null) return jsonResponse({ ...section(recorded), probe: { inconclusive: true } });
@@ -33,9 +39,12 @@ dom.setRoute((url, init) => {
   return jsonResponse(section(recorded));
 });
 
+/* Claude Code and Codex with no account: the step's other rows, which these cases leave alone. */
+const noAccounts = (engine: "claude" | "codex") => ({ engine, accounts: [], hidden: [], active: "", status: "ready", mutation: null, challenge: null, notice: null }) as unknown as EngineAccountsState;
+
 function Harness({ autoProbe }: { autoProbe: boolean }) {
   const agy = useAntigravityAccount({ autoProbe });
-  return <AntigravityCard agy={agy} cli={agy.cli} recheck={null} />;
+  return <EnginesStep claude={noAccounts("claude")} codex={noAccounts("codex")} antigravity={agy} cli={{ claude: "found", codex: "found" }} now={1_800_000_000} onRecheck={() => {}} />;
 }
 
 let mounted: { root: Root; host: HTMLDivElement } | null = null;
@@ -47,6 +56,7 @@ afterEach(async () => {
   }
   recorded = { cli: "found", auth: "unknown", plan: null };
   probeAnswer = null;
+  readRefused = false;
   dom.calls.length = 0;
 });
 
@@ -63,7 +73,7 @@ async function mount(autoProbe: boolean): Promise<HTMLDivElement> {
 const posts = () => dom.calls.filter((call) => call.method === "POST" && call.url.includes("/api/accounts/antigravity"));
 const card = (host: HTMLElement) => host.querySelector("[data-onboarding-engine=antigravity]")!;
 
-test("signed out: the card names the state, shows agy with a copy control, and Check sign-in posts the probe", async () => {
+test("signed out: the row names the state, shows agy with a copy control, and Check sign-in posts the probe", async () => {
   recorded = { cli: "found", auth: "signed_out", plan: null };
   const host = await mount(false);
   expect(card(host).getAttribute("data-engine-state")).toBe("signed-out");
@@ -121,4 +131,23 @@ test("agy missing: Not installed with the official install command and no sign-i
   expect(card(host).querySelector("[data-antigravity-signin]")).toBeNull();
   /* A missing command is never probed. */
   expect(posts()).toHaveLength(0);
+});
+
+test("the step's Check again reads the record again: an agy installed since then shows its sign-in", async () => {
+  recorded = { cli: "missing", auth: "unknown", plan: null };
+  const host = await mount(false);
+  expect(card(host).getAttribute("data-engine-state")).toBe("missing");
+  recorded = { cli: "found", auth: "signed_out", plan: null };
+  await act(async () => { host.querySelector<HTMLButtonElement>("[data-onboarding-recheck]")!.click(); await settle(); });
+  expect(card(host).getAttribute("data-engine-state")).toBe("signed-out");
+  expect(card(host).querySelector("[data-antigravity-signin]")).not.toBeNull();
+  /* Looking again starts no check of the sign-in. */
+  expect(posts()).toHaveLength(0);
+});
+
+test("a recorded state that cannot be read ends the wait: the row says the sign-in could not be checked", async () => {
+  readRefused = true;
+  const host = await mount(false);
+  expect(card(host).getAttribute("data-engine-state")).toBe("unknown");
+  expect(card(host).querySelector("[data-onboarding-engine-header]")?.textContent).toBe("Could not check sign-in.");
 });

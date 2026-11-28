@@ -370,7 +370,7 @@ test("the setup guide's step pairs only when an account of the chosen engine is 
   expect(host.textContent).toContain("No Codex account is signed in here. Sign one in first.");
   expect((host.querySelector("[data-external-relay-connect] input") as HTMLInputElement).disabled).toBe(true);
   expect((host.querySelector("[data-external-relay-connect-known=celestia]") as HTMLButtonElement).disabled).toBe(true);
-  await click(Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "Go to Engines"));
+  await click(Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "Go to Accounts"));
   await click(host.querySelector("[data-onboarding-relay-skip]"));
   expect(gone).toEqual(["engines", "skip"]);
   expect(reported.at(-1)).toBe(false);

@@ -35,7 +35,7 @@ import { receipts as tabReceipts, type ReceiptStore } from "./mobile/MobileRecei
 import { formatCheckedClock, formatQuotaAsOf, formatResetClock, windowLabel } from "./rateLimit";
 import { engineTintOf } from "./utils";
 import { Z } from "@/components/layers";
-import { AntigravityBody, useAntigravityAccount } from "./onboarding/AntigravityCard";
+import { AntigravityBody, useAntigravityAccount } from "./onboarding/AntigravityAccount";
 import { TransferAccountsChecklist, useImportedAccounts } from "./TransferAccountsChecklist";
 
 const AUTH_HEALTH_KEY = {
@@ -635,7 +635,7 @@ type RowSurface = {
   chart?: { openId: string | null; toggle: (accountId: string) => void };
 };
 
-type AccountSignIn = {
+export type AccountSignIn = {
   /** The link and code a press was handed, for as long as the account is signing in. */
   challenge: { accountId: string; deviceAuth: DeviceAuth } | null;
   start: (account: AccountOption) => void;
@@ -643,7 +643,7 @@ type AccountSignIn = {
 };
 
 /** The sign-in a row can start. A Codex device sign-in hands its link and code back in the answer to the tap only, so the surface keeps them for the row. They are kept while the account is signing in: the first list read after the answer that no longer shows the account signing in ends them, whether it signed in or gave up. */
-function useAccountSignIn(state: EngineAccountsState, receipts?: ReceiptStore): AccountSignIn {
+export function useAccountSignIn(state: EngineAccountsState, receipts?: ReceiptStore): AccountSignIn {
   const { t } = useLocale();
   const [held, setHeld] = useState<{ accountId: string; deviceAuth: DeviceAuth; read: AccountOption[] } | null>(null);
   const engine = state.engine;
@@ -874,7 +874,7 @@ function ProjectAccountDetail({ context }: { context: ProjectAccountContext }) {
     signed_out or error — legacy Main included (issue #470) — and never removes
     the account. Codex rows never mount this (device login owns its own inline
     affordance in AccountRow). */
-function ClaudeLoginRow({ account, state, loginBusy, headSignIn = false, inRow = false }: {
+function ClaudeLoginRow({ account, state, loginBusy, headSignIn = false, inRow = false, primary = false }: {
   account: AccountOption;
   state: EngineAccountsState;
   loginBusy: boolean;
@@ -882,6 +882,8 @@ function ClaudeLoginRow({ account, state, loginBusy, headSignIn = false, inRow =
   headSignIn?: boolean;
   /** Drawn inside an account row, on the row's own left edge. */
   inRow?: boolean;
+  /** The code's Submit is the surface's one filled button (the setup guide, while no agent is signed in). */
+  primary?: boolean;
 }) {
   const { t } = useLocale();
   const rowSizes = useSizes();
@@ -996,7 +998,8 @@ function ClaudeLoginRow({ account, state, loginBusy, headSignIn = false, inRow =
               <button
                 type="submit"
                 disabled={busy || submitted || code.trim() === ""}
-                className="h-11 shrink-0 rounded-[8px] border border-border bg-canvas px-2.5 text-[11px] font-semibold hover:bg-sunken disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-8"
+                data-account-login-submit={account.id}
+                className={`h-11 shrink-0 rounded-[8px] px-2.5 text-[11px] font-semibold disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-8 ${primary ? "bg-brand text-on-brand hover:opacity-90" : "border border-border bg-canvas hover:bg-sunken"}`}
               >
                 {t("accounts.claudeLogin.submit")}
               </button>
@@ -1049,6 +1052,107 @@ function ClaudeLoginRow({ account, state, loginBusy, headSignIn = false, inRow =
   }
 
   return null;
+}
+
+/* ── What a program's row in the setup guide embeds (docs/design/onboarding-v2.md §3.2, §4.4) ── */
+
+/** The share of the session limit an account has left and when that limit starts over; null without a session reading. */
+export function accountSessionLeft(account: AccountOption, now: number): { left: number; resetsAt: number | null } | null {
+  const session = accountQuota(account, now).session;
+  if (!session) return null;
+  return { left: Math.round(Math.max(0, Math.min(100, 100 - session.value.usedPercent))), resetsAt: session.value.resetsAt };
+}
+
+/** Whether a row may start this account's sign-in: the rule the account rows use. */
+export function accountSignInAvailable(engine: "claude" | "codex", account: AccountOption): boolean {
+  return mobileSignInAvailable(engine, account);
+}
+
+/** What an account's sign-in has on screen: a sign-in under way, a Claude sign-in that failed and offers Retry, or nothing. */
+export function accountSignInPhase(engine: "claude" | "codex", account: AccountOption, signIn: AccountSignIn): "running" | "failed" | null {
+  if (engine === "claude") {
+    if (account.provider || account.login == null) return null;
+    if (NONTERMINAL_CLAUDE_LOGIN_PHASES.has(account.login.phase)) return "running";
+    return account.login.result?.status === "failure" ? "failed" : null;
+  }
+  return account.loginPending || account.deviceAuth || signIn.challenge?.accountId === account.id ? "running" : null;
+}
+
+/**
+ * One account's sign-in as this panel draws it, for a row that embeds it: Claude's
+ * link, code field and Cancel (or its failure with Retry), Codex's link, device code
+ * and Cancel. It draws nothing while {@link accountSignInPhase} is null.
+ */
+export function AccountSignInBlock({ state, account, signIn, phone, primary = false }: {
+  state: EngineAccountsState;
+  account: AccountOption;
+  signIn: AccountSignIn;
+  phone: boolean;
+  /** Claude's Submit is the surface's one filled button. */
+  primary?: boolean;
+}) {
+  const { t } = useLocale();
+  const engine = state.engine;
+  const s = phone ? PHONE : DESK;
+  const loginBusy = engine === "claude" && state.accounts.some((candidate) => candidate.login != null && NONTERMINAL_CLAUDE_LOGIN_PHASES.has(candidate.login.phase));
+  const challenge = engine === "codex" ? account.deviceAuth ?? (signIn.challenge?.accountId === account.id ? signIn.challenge.deviceAuth : null) : null;
+  return (
+    <PhoneContext.Provider value={phone}>
+      {engine === "claude" ? (
+        <ClaudeLoginRow key={account.login?.operationId ?? account.id} account={account} state={state} loginBusy={loginBusy} headSignIn inRow primary={primary} />
+      ) : challenge ? (
+        <DeviceSignInLine account={account} deviceAuth={challenge} onCancel={() => signIn.cancel(account)} />
+      ) : account.loginPending ? (
+        /* A device sign-in the page did not start itself (a reload, another tab): its link and code were handed to that press only. */
+        <div data-account-signin={account.id} className={`flex items-center gap-x-2 ${s.line} text-muted`}>
+          <span className="min-w-0 flex-1">{t("accounts.pendingLogin")}</span>
+          <button type="button" data-account-signin-cancel={account.id} onClick={() => signIn.cancel(account)} className={`${quietAction(s)} ${s.edge}`}>{t("mobile2.accounts.cancelSignIn")}</button>
+        </div>
+      ) : null}
+    </PhoneContext.Provider>
+  );
+}
+
+/**
+ * The name a new account needs before its sign-in can start, as a row's own
+ * form: the field, Add and Cancel. Add creates the account and starts the
+ * engine's sign-in, as the accounts screen's add row does. The field is 16 px
+ * on a phone so iOS never zooms.
+ */
+export function AddAccountForm({ state, disabled, onClose }: { state: EngineAccountsState; disabled: boolean; onClose: () => void }) {
+  const { t } = useLocale();
+  const [label, setLabel] = useState("");
+  const busy = state.mutation !== null;
+  return (
+    <form
+      data-account-add-form={state.engine}
+      className="flex min-w-0 flex-wrap items-center gap-2"
+      onSubmit={(event) => {
+        event.preventDefault();
+        const trimmed = label.trim();
+        if (!trimmed || busy || disabled) return;
+        void state.add(trimmed).then((created) => { if (created) onClose(); });
+      }}
+    >
+      <input
+        value={label}
+        onChange={(event) => setLabel(event.target.value)}
+        aria-label={t("mobile2.accounts.addLabel")}
+        placeholder={t("accounts.labelPlaceholder")}
+        autoComplete="off"
+        autoCapitalize="words"
+        // eslint-disable-next-line jsx-a11y/no-autofocus -- the action the person just pressed became this field
+        autoFocus
+        className="h-8 min-w-0 max-w-[280px] flex-[1_1_12rem] rounded-[8px] border border-border bg-canvas px-2.5 text-ui text-primary outline-none placeholder:text-muted focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11 max-sm:max-w-none max-sm:flex-[1_1_100%] max-sm:text-[16px]"
+      />
+      <button type="submit" disabled={busy || disabled || label.trim() === ""} className="inline-flex h-8 shrink-0 items-center justify-center rounded-[8px] border border-border bg-card px-3.5 text-ui font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50 max-sm:h-11">
+        {t("accounts.confirmAdd")}
+      </button>
+      <button type="button" onClick={onClose} className="inline-flex min-h-8 shrink-0 items-center justify-center rounded-[6px] px-1.5 text-ui font-semibold text-secondary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:min-h-11 max-sm:min-w-11">
+        {t("mobile2.accounts.addCancel")}
+      </button>
+    </form>
+  );
 }
 
 /** Derived polite announcement for the sign-in live region (C9): the code-ready

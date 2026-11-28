@@ -9,7 +9,7 @@ import type { EngineLimits, LimitsProvenance } from "@/lib/types";
 import { EngineMark } from "./EngineMark";
 import { Z } from "./layers";
 import { barColor, LimitWindowLine, quotaAsOfHint } from "./LimitRow";
-import { AntigravityBody, antigravityCardState, antigravityStateLine, antigravityStateTone, useAntigravityAccount } from "./onboarding/AntigravityCard";
+import { AntigravityBody, antigravityCardState, antigravityStateLine, antigravityStateTone, useAntigravityAccount } from "./onboarding/AntigravityAccount";
 import { windowLabel } from "./rateLimit";
 import { LINE_EDGE, ReserveBar, type SidebarFooterDensity } from "./railFooterDensity";
 import { engineTintOf } from "./utils";

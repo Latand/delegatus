@@ -176,7 +176,8 @@ test("inside the open guide the notice is the guide's line above its footer with
   /* Its place is the guide's own: after the step's body and directly before the footer that holds Continue. */
   const footer = document.querySelector("[data-onboarding-dialog] footer")!;
   expect(guideNotice()!.parentElement!.nextElementSibling).toBe(footer);
-  expect(footer.querySelector("[data-onboarding-primary]")!.textContent).toBe(translate("en", "onboarding.continue"));
+  /* This machine has no agent program, so the Accounts step's button says what continuing means. */
+  expect(footer.querySelector("[data-onboarding-primary]")!.textContent).toBe(translate("en", "onboarding.continueNoAgent"));
   await act(async () => { footer.querySelector<HTMLElement>("[data-onboarding-primary]")!.click(); });
   expect(document.querySelector("[data-onboarding-dialog]")!.getAttribute("data-onboarding-current")).toBe("project");
   expect(guideNotice()).not.toBeNull();

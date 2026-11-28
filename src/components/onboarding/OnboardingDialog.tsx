@@ -11,17 +11,19 @@ import { useEngineAccounts } from "@/hooks/useEngineAccounts";
 import { useTelegramBot } from "@/hooks/useTelegramBot";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useLocale, type TFunction } from "@/lib/i18n";
+import type { HostPlatform } from "@/lib/onboarding/agentInstallCommands";
 import type { OnboardingMarker } from "@/lib/onboarding/marker";
 import { onboardingStepLists, ONBOARDING_OPTIONAL_STEP_IDS, ONBOARDING_STEP_IDS, type OnboardingGuideStepId, type OnboardingStepId, type OnboardingStepState } from "@/lib/onboarding/steps";
 import type { RoleEngine } from "@/lib/roles/types";
 
 import { AgentMappingTable, type EngineStatus } from "./AgentMappingTable";
-import { useAntigravityAccount } from "./AntigravityCard";
+import { useAntigravityAccount } from "./AntigravityAccount";
 import { CheckStep } from "./CheckStep";
 import { engineAccount, engineReady, EnginesStep, type CliPresence } from "./EnginesStep";
 import { MemoryStep } from "./MemoryStep";
 import { OrchestratorStep } from "./OrchestratorStep";
 import { PhoneStep, type PhoneStepOutcome } from "./PhoneStep";
+import { programInstalls, type ProgramInstalls } from "./ProgramRowParts";
 import type { CreateDraft } from "@/components/ProjectRail";
 import { ProjectStep, type GuideProject } from "./ProjectStep";
 import { RelayStep } from "./RelayStep";
@@ -30,11 +32,15 @@ import type { MemorySourceState } from "@/components/memory/MemorySourceRow";
 import { TelemetryNoticeSlot } from "@/components/telemetry/TelemetrySettings";
 import { putOnboarding, unfinishedFirstRun, useOnboarding, type OnboardingMarkerStatus, type OnboardingMode } from "./useOnboarding";
 import { VoiceStep } from "./VoiceStep";
+import { WelcomeStep } from "./WelcomeStep";
 
 /**
- * The setup guide (#1876, design §2–§3; #2166 §2.1): numbered steps, Engines,
- * Project, Reports to Telegram (optional, docs/design/orchestrator-reports.md
- * §5.6) and Orchestrator, that end on a running orchestrator.
+ * The setup guide (#1876, design §2–§3; #2166 §2.1): numbered steps, Accounts
+ * (stored id `engines`), Project, Reports to Telegram (optional,
+ * docs/design/orchestrator-reports.md §5.6) and Orchestrator, that end on a
+ * running orchestrator. A guide that opens by itself with no step settled
+ * shows its welcome first (docs/design/onboarding-v2.md §3.1): a cover that is
+ * no step and stores nothing.
  * Agents, Phone, Voice and Check stay in the same dialog under "Later, any
  * time": unnumbered, opened from the list, never part of Back or Continue.
  * Nothing is gated: every step closes by Escape, ✕ or "Close, finish later",
@@ -91,11 +97,15 @@ const DEFAULT_CHECK_MINUTES = 5;
 
 /** `/api/accounts` also says whether each engine's command resolves; the
     engine stores parse the accounts, so the step reads that one fact itself. */
-function useCliPresence(): { cli: Record<RoleEngine, CliPresence>; recheck: () => void } {
+function useCliPresence(): { cli: Record<RoleEngine, CliPresence>; installs: ProgramInstalls; answered: boolean; recheck: () => Promise<void> } {
   const [cli, setCli] = useState<Record<RoleEngine, CliPresence>>({ claude: null, codex: null, antigravity: null });
+  /* What the same check learned of each program: where its command was found and its version. */
+  const [installs, setInstalls] = useState<ProgramInstalls>({});
+  /* The first read has ended, with an answer or without one: the welcome waits for it before it says what is installed. */
+  const [answered, setAnswered] = useState(false);
   const read = useCallback((fresh: boolean) => {
     const presence = (value: unknown): CliPresence => value === "found" || value === "missing" ? value : null;
-    void fetch(fresh ? "/api/accounts/cli" : "/api/accounts")
+    return fetch(fresh ? "/api/accounts/cli" : "/api/accounts")
       .then(async (response) => response.ok ? (await response.json()) as Record<RoleEngine, unknown> : null)
       .catch(() => null)
       .then((body) => {
@@ -106,10 +116,12 @@ function useCliPresence(): { cli: Record<RoleEngine, CliPresence>; recheck: () =
           return presence(value && typeof value === "object" ? (value as { cli?: unknown }).cli : value);
         };
         setCli({ claude: read("claude"), codex: read("codex"), antigravity: read("antigravity") });
-      });
+        setInstalls(programInstalls((body as { cliInstalls?: unknown }).cliInstalls));
+      })
+      .finally(() => setAnswered(true));
   }, []);
-  useEffect(() => read(false), [read]);
-  return { cli, recheck: () => read(true) };
+  useEffect(() => { void read(false); }, [read]);
+  return { cli, installs, answered, recheck: () => read(true) };
 }
 
 function useNow(): number {
@@ -129,8 +141,12 @@ export function firstOpenStep(marker: Pick<OnboardingMarker, "steps"> | null, gu
   return guide.find((step) => marker?.steps[step] !== "done" && !(OPTIONAL.includes(step) && marker?.steps[step] === "skipped")) ?? guide[0]!;
 }
 
-export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pending", onClose, projects = [], legacyState = false, checkMinutes = DEFAULT_CHECK_MINUTES, onCreateProject }: {
+export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pending", onClose, projects = [], legacyState = false, selfOpened = false, hostPlatform = "linux", checkMinutes = DEFAULT_CHECK_MINUTES, onCreateProject }: {
   mode: OnboardingMode;
+  /** A first run opened the guide by itself: with no step settled it shows its welcome first. */
+  selfOpened?: boolean;
+  /** The system Delegatus runs on, for the Accounts step's rows. */
+  hostPlatform?: HostPlatform;
   /** Open the guide on this step (the QR popover opens it on Phone). */
   initialStep?: OnboardingStepId | null;
   marker: OnboardingMarker | null;
@@ -151,7 +167,7 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
   const isMobile = useIsMobile();
   const claude = useEngineAccounts("claude");
   const codex = useEngineAccounts("codex");
-  const { cli, recheck } = useCliPresence();
+  const { cli, installs, answered: cliAnswered, recheck } = useCliPresence();
   /* Antigravity's recorded sign-in, with one check when `agy` is installed and nothing has recorded it. */
   const antigravity = useAntigravityAccount({ autoProbe: true });
   const agyCli = cli.antigravity ?? antigravity.cli;
@@ -171,6 +187,8 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
   const [noticeStep, setNoticeStep] = useState<OnboardingGuideStepId>(lastGuide);
   /* Whether the person has moved between steps yet; until then the opening step is the guide's own choice. */
   const [moved, setMoved] = useState(false);
+  /* The cover of a guide that opened by itself with nothing settled. It is left by one of its own buttons and never comes back. */
+  const [welcome, setWelcome] = useState(() => mode === "guide" && selfOpened && !initialStep && !Object.values(marker?.steps ?? {}).some(Boolean));
   if (botConnected === null && bot.status) {
     const connected = bot.status.connected === true;
     setBotConnected(connected);
@@ -196,8 +214,10 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
   const [createAction, setCreateAction] = useState<{ disabled: boolean; run: () => void } | null>(null);
   const [projectDraft, setProjectDraft] = useState<CreateDraft>("none");
   /* The notice rides on the first guide step and on the step the guide opened
-     on, so a later step opens on its own heading. */
-  const noticeVisible = view === "guide" && legacyState && (current === GUIDE[0] || current === noticeStep);
+     on, so a later step opens on its own heading. A guide that opens on its
+     welcome shows it there: that is the first thing a person with inherited
+     state sees. */
+  const noticeVisible = view === "guide" && legacyState && (welcome || current === GUIDE[0] || current === noticeStep);
   /* Whether the notice was on screen at any point of this opening; closing
      reports it, so only a notice the person was shown is acknowledged. */
   const noticeSeen = useRef(false);
@@ -240,6 +260,8 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
       if (event.key === "Escape") {
         /* An open folder picker (the Project step's form) closes itself first. */
         if ((event.target as Partial<Element> | null)?.closest?.("[data-directory-picker=open]")) return;
+        /* So does a status dot's popover (the Accounts rows, the welcome): its own listener takes this press. */
+        if (document.querySelector("[data-settings-dot-popover]")) return;
         event.preventDefault();
         event.stopPropagation();
         dismissRef.current();
@@ -282,11 +304,14 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
      none it carries the warning its own screen shows. */
   const enginesSettled = claude.status !== "loading" && codex.status !== "loading";
   const noEngine = enginesSettled && !statuses.claude.connected && !statuses.codex.connected;
+  /* An agent account is signed in: Claude Code, Codex or Antigravity. The Accounts step's footer and its mark in the list read it. */
+  const anyAgent = statuses.claude.connected || statuses.codex.connected || statuses.antigravity.connected;
+  const noAgent = enginesSettled && !anyAgent;
   const guideStep = isGuideStep(current);
   const guideIndex = GUIDE.indexOf(guideStep ? current : lastGuide);
   useEffect(() => {
-    if (view === "guide") visited.current.add(current);
-  }, [view, current]);
+    if (view === "guide" && !welcome) visited.current.add(current);
+  }, [view, current, welcome]);
 
   /* A step changes at once; a write the server did not keep puts the step
      back as it was and says so on its row, with Retry (audit B29). */
@@ -381,16 +406,20 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
     requestOrchestratorDraft({ project: chosen.project, launch: null });
     finish("dismissed", null);
   };
-  const recheckAll = () => {
-    recheck();
-    void claude.refresh();
-    void codex.refresh();
-    void antigravity.reload();
+  const recheckAll = () => Promise.all([recheck(), claude.refresh(), codex.refresh()]);
+  /* The welcome's two ways on. "Continue with these" carries the accounts found on as they are: the Accounts step is
+     settled and the guide opens on the step after it. */
+  const leaveWelcome = (withThese: boolean) => {
+    setWelcome(false);
+    if (!withThese) { goTo("engines"); return; }
+    markDone("engines");
+    goTo(GUIDE[1]!);
   };
-  /* The mapping's sign-in / install actions land on the engine's own card: the Engines step, scrolled to it, its first control focused. */
+  /* The mapping's sign-in / install actions land on the program's own row: the Accounts step, scrolled to it, its action focused. */
   const [connectFocus, setConnectFocus] = useState<RoleEngine | null>(null);
   const onConnect = (engine: RoleEngine) => {
     setView("guide");
+    setWelcome(false);
     goTo("engines");
     setConnectFocus(engine);
   };
@@ -398,8 +427,8 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
     if (!connectFocus || current !== "engines" || view !== "guide") return;
     const card = panelRef.current?.querySelector<HTMLElement>(`[data-onboarding-engine="${connectFocus}"]`);
     if (!card) return;
-    /* The card's own action first (Check sign-in, Check again), else its first control; a card still loading has none and is tried again when it settles. */
-    const control = card.querySelector<HTMLElement>("[data-antigravity-check], [data-onboarding-recheck]") ?? card.querySelector<HTMLElement>("button:not([disabled]), a[href], input, select");
+    /* The row's own action first (Sign in, Add an account, Check sign-in), else its first control past the status dot; a row still loading has none and is tried again when it settles. */
+    const control = card.querySelector<HTMLElement>("[data-antigravity-check], [data-onboarding-row-action]:not([disabled])") ?? card.querySelector<HTMLElement>("button:not([disabled]):not([data-settings-dot]), a[href], input, select");
     if (!control) return;
     card.scrollIntoView?.({ block: "nearest" });
     control.focus({ preventScroll: true });
@@ -409,13 +438,17 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
   useEffect(() => { dismissRef.current = dismiss; });
 
   const title = view === "mapping" ? t("onboarding.mappingTitle") : view === "voice" ? t("onboarding.voiceTitle") : t("onboarding.title");
-  const heading = view === "mapping" ? null : (
+  const cover = view === "guide" && welcome;
+  /* The Accounts step draws its own heading: its one "Check again" stands on that line. */
+  const heading = view === "mapping" || cover || (view === "guide" && current === "engines") ? null : (
     <>
       <h2 className="text-title font-bold text-primary">{t(HEADING_KEY[current])}</h2>
       {LEAD_KEY[current] ? <p className="mt-2 text-body leading-[1.45] text-secondary">{t(LEAD_KEY[current]!)}</p> : null}
     </>
   );
-  const content = view === "mapping" || current === "agents" ? (
+  const content = cover ? (
+    <WelcomeStep claude={claude} codex={codex} antigravity={antigravity} cli={cli} installs={installs} cliAnswered={cliAnswered} now={now} platform={hostPlatform} onContinue={() => leaveWelcome(true)} onAccounts={() => leaveWelcome(false)} />
+  ) : view === "mapping" || current === "agents" ? (
     <>
       {view === "mapping" ? <p className="mb-4 text-body leading-[1.45] text-secondary">{t("onboarding.agents.leadStandalone")}</p> : null}
       <AgentMappingTable statuses={statuses} layout={isMobile ? "card" : "table"} onConnect={onConnect} />
@@ -458,13 +491,13 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
       newcomer={unfinishedFirstRun(marker, markerStatus)}
     />
   ) : (
-    <EnginesStep claude={claude} codex={codex} antigravity={antigravity} cli={cli} now={now} onRecheck={recheckAll} />
+    <EnginesStep claude={claude} codex={codex} antigravity={antigravity} cli={cli} installs={installs} now={now} platform={hostPlatform} onRecheck={recheckAll} />
   );
 
   const stepRow = (id: OnboardingStepId, index: number | null) => {
     const active = id === current;
     const state = steps[id];
-    const warn = id === "engines" && state === "done" && noEngine;
+    const warn = id === "engines" && state === "done" && noAgent;
     const later = index === null;
     return (
       <li key={id}>
@@ -525,7 +558,9 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
       {t("onboarding.back")}
     </button>
   );
-  const footerButtons = view !== "guide" ? null : !guideStep ? (
+  /* On Accounts the footer's button is filled once an agent account is signed in; until then it says what continuing means. */
+  const withoutAgent = current === "engines" && noAgent;
+  const footerButtons = view !== "guide" || cover ? null : !guideStep ? (
     <button type="button" data-onboarding-primary="" onClick={leaveLater} className={`${footerButton} ${stepOwnsPrimary ? bordered : filled}`}>
       {t("onboarding.laterReturn")}
     </button>
@@ -545,13 +580,13 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
           ) : null}
         </>
       ) : (
-        <button type="button" data-onboarding-primary="" onClick={next} className={`${footerButton} ${stepOwnsPrimary ? bordered : filled}`}>
-          {t("onboarding.continue")}
+        <button type="button" data-onboarding-primary="" onClick={next} className={`${footerButton} ${stepOwnsPrimary || (current === "engines" && !anyAgent) ? bordered : filled}`}>
+          {t(withoutAgent ? "onboarding.continueNoAgent" : "onboarding.continue")}
         </button>
       )}
     </>
   );
-  const headerBack = view !== "guide" ? null : !guideStep ? backToGuide : guideIndex > 0 ? () => goTo(GUIDE[guideIndex - 1]!) : null;
+  const headerBack = view !== "guide" || cover ? null : !guideStep ? backToGuide : guideIndex > 0 ? () => goTo(GUIDE[guideIndex - 1]!) : null;
 
   if (isMobile) {
     return (
@@ -562,7 +597,8 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
         aria-label={title}
         tabIndex={-1}
         data-onboarding-dialog={view}
-        data-onboarding-current={view === "guide" ? current : undefined}
+        data-onboarding-current={cover ? "welcome" : view === "guide" ? current : undefined}
+        data-settings-scroller={cover || (view === "guide" && current === "engines") ? "" : undefined}
         data-onboarding-marker={markerStatus}
         className={`fixed inset-0 ${Z.modal} flex flex-col bg-canvas outline-none`}
       >
@@ -573,7 +609,7 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
                 <ChevronLeft className="h-5 w-5" aria-hidden />
               </button>
             ) : <span className="w-3 shrink-0" />}
-            {view === "guide" ? (
+            {view === "guide" && !cover ? (
               <button type="button" data-onboarding-step-list-toggle="" aria-expanded={stepListOpen} onClick={() => setStepListOpen((value) => !value)} className="flex min-h-11 min-w-0 flex-1 items-center truncate text-left text-body font-semibold text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                 <span className="truncate">{counter} · {t(STEP_KEY[current])}</span>
               </button>
@@ -584,14 +620,14 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
               <X className="h-5 w-5" aria-hidden />
             </button>
           </div>
-          {view === "guide" ? (
+          {view === "guide" && !cover ? (
             <div className="h-0.5 bg-sunken" aria-hidden>
               <div className="h-full bg-accent" style={{ width: `${((guideIndex + 1) / GUIDE.length) * 100}%` }} />
             </div>
           ) : null}
         </header>
-        {stepListOpen ? <div className="shrink-0 border-b border-border bg-sunken p-2">{stepList}</div> : null}
-        <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto scroll-pb-6 px-4 pb-6 pt-4">
+        {stepListOpen && !cover ? <div className="shrink-0 border-b border-border bg-sunken p-2">{stepList}</div> : null}
+        <div ref={bodyRef} data-onboarding-body="" className="min-h-0 flex-1 overflow-y-auto scroll-pb-6 px-4 pb-6 pt-4">
           {stateNotice}
           {heading}
           <div className={heading ? "mt-4" : ""}>{content}</div>
@@ -615,7 +651,8 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
         aria-label={title}
         tabIndex={-1}
         data-onboarding-dialog={view}
-        data-onboarding-current={view === "guide" ? current : undefined}
+        data-onboarding-current={cover ? "welcome" : view === "guide" ? current : undefined}
+        data-settings-scroller={cover || (view === "guide" && current === "engines") ? "" : undefined}
         data-onboarding-marker={markerStatus}
         className={`flex ${checkTall ? "h-[820px]" : "h-[640px]"} max-h-[calc(100vh-96px)] w-[920px] max-w-full flex-col overflow-hidden rounded-[12px] border border-border bg-card shadow-2 outline-none`}
       >
@@ -632,13 +669,14 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
           </button>
         </header>
         <div className="flex min-h-0 flex-1">
-          {view === "guide" ? <div className="w-[200px] shrink-0 overflow-y-auto border-r border-border bg-sunken p-2">{stepList}</div> : null}
+          {view === "guide" && !cover ? <div className="w-[200px] shrink-0 overflow-y-auto border-r border-border bg-sunken p-2">{stepList}</div> : null}
           {/* scroll-pb-6: what a step scrolls into view keeps the body's own
             breathing room above the fixed footer, rather than ending flush. */}
-          <div ref={bodyRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto scroll-pb-6 bg-card p-6">
+          <div ref={bodyRef} data-onboarding-body="" className={`min-h-0 min-w-0 flex-1 overflow-y-auto scroll-pb-6 bg-card p-6 ${cover ? "flex flex-col" : ""}`}>
             {stateNotice}
             {heading}
-            <div className={heading ? "mt-4" : ""}>{content}</div>
+            {/* The cover stands in the middle of the window's height. */}
+            <div className={cover ? "my-auto" : heading ? "mt-4" : ""}>{content}</div>
           </div>
         </div>
         {/* The install notice, while it is undismissed: drawn here, it leaves the footer's buttons whole. */}
@@ -661,7 +699,7 @@ export function OnboardingHost({ projects, currentProject, onCreateProject }: {
   currentProject?: string | null;
   onCreateProject?: (name: string, root: string | null, options?: CreateProjectRequestOptions) => Promise<CreateProjectOutcome>;
 }) {
-  const { mode, step, opening, marker, markerStatus, legacyState, checkMinutes, close } = useOnboarding();
+  const { mode, step, opening, marker, markerStatus, legacyState, selfOpened, hostPlatform, checkMinutes, close } = useOnboarding();
   if (!mode) return null;
   return (
     <OnboardingDialog
@@ -671,6 +709,8 @@ export function OnboardingHost({ projects, currentProject, onCreateProject }: {
       marker={marker}
       markerStatus={markerStatus}
       legacyState={legacyState}
+      selfOpened={selfOpened}
+      hostPlatform={hostPlatform}
       onClose={close}
       projects={projects}
       currentProject={currentProject}

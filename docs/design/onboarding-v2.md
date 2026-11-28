@@ -1,8 +1,8 @@
 # Onboarding v2: a welcome, accounts with install and sign-in, roles from the accounts, the ChatGPT plan
 
 Status: design decided by the operator on 2026-11-25 (section 0.1), with a
-build plan in slices (section 12). Slice 1 (section 12.2) is built; nothing
-else here is in the product.
+build plan in slices (section 12). Slices 1 and 2 (sections 12.2 and 12.3)
+are built; nothing else here is in the product.
 
 In this tree since 2026-11-26: this document and
 [the subscription study](onboarding-v2-subscription.md). The prototype
@@ -1113,6 +1113,90 @@ step to the list and touches none of the files that pull request rewrites.
   3.2. The driver counts four program rows against the program list, one
   dot per row, and one "Check again" outside the rows.
 - **Review.** M.
+- **Built, 2026-11-26.** The step reads Accounts and keeps the id `engines`.
+  `EnginesStep.tsx` is the four rows; `ProgramRowParts.tsx` holds what a row
+  and the welcome share (the mark, the name, the state line and its dot, the
+  command to copy), and `AntigravityAccount.tsx` keeps Antigravity's read,
+  its terminal sign-in and the body the sidebar footer and the phone's
+  accounts screen draw. `EngineCardParts.tsx` and `AntigravityCard.tsx` are
+  gone. `AccountsPanel.tsx` exports the sign-in block a row embeds
+  (`AccountSignInBlock`) and the form that names a new account
+  (`AddAccountForm`); `CopilotFooterRow.tsx` needed no change, the row reads
+  its existing account hook.
+  - *The welcome* (`WelcomeStep.tsx`) is shown when `useOnboarding` opened
+    the guide itself and the marker holds no settled step. "Continue with
+    these" marks `engines` done and opens Project, the step after Accounts
+    until Roles is numbered (slice 4). A third state stands beside the
+    table's two: programs installed and nobody signed in, whose button reads
+    "Sign in to an account".
+  - *Until the install job exists* (slice 3) the nothing-found state says
+    "The next step shows the command that installs each one" where the table
+    says Delegatus can install one, and the Accounts lead leaves out the
+    sentence about installing into the home folder.
+  - *Rows.* A dot's popover holds one or two short lines: what the state
+    line leaves out, and for a signed-in account the share of its session
+    limit left with the hour it starts over. An installed, signed-out
+    program's popover names its version and the path its command was found
+    at ("Version 2.1.4 at ~/.local/bin/claude"); a signed-in one's names the
+    version and the limit left, or the version and the path when no limit
+    has been read. Both come from the check the rows already wait for: the
+    one bounded `--version` run per program that says whether the command
+    starts (`cliReport` in `src/lib/accounts/engineConnection.ts`) also
+    keeps the resolved path and the first dotted triple of a clean answer.
+    `GET /api/accounts` and the re-probe `GET /api/accounts/cli` carry them
+    as `cliInstalls`, for Copilot too. A path under the home reads from
+    `~`, so the answer carries no user name; a command found through PATH
+    alone has no path, and a `--version` that fails has no version, and
+    then the popover says the part that is known or keeps its sentence. A
+    path longer than a popover's line keeps its last folders and the file
+    behind "…". A program that is not installed never quotes either. The
+    popover is placed against the row's name and state alone, so
+    it ends before an action beside them. Under 768 px the list is about
+    300 px wide (a phone, and a window where the step list stands beside
+    it): beside "Claude Code" that leaves a popover some 130 px, which two
+    short lines do not fit. There a row's action stands under its head and
+    the dot's words open in the row itself, under the state line, where
+    they cover nothing. Words that open there stand right under the line
+    their dot leads, so they add only what that line leaves out: under
+    "12% of the session limit left" an amber account's note reads "Resets
+    at 11:35." alone. Where the words say all of it (no hour known, "needs
+    sign-in", "signing in") the dot opens nothing there. A program's own
+    line follows the same rule as an account's: under "Signing in" its dot
+    opens nothing, and neither does a sentence kept for want of a version
+    and a path when it only says the line again ("Signed in." under
+    "Connected", "No account is signed in yet." under "Installed, signed
+    out"). The
+    floating popover of a wide card keeps both sentences, and the dot's
+    label for a screen reader keeps both at every width. Escape closes an
+    open popover alone and the next
+    Escape closes the guide. The footer reads "Continue without an agent" on a border until
+    Claude Code, Codex or Antigravity has a signed-in account, and the
+    visited step's warning mark in the list follows the same rule.
+  - *This computer.* True when the page was reached at a loopback address on
+    a screen that is not a phone, the signal `/api/chatgpt-plan` already
+    reads; otherwise the sentence names the computer running Delegatus.
+  - *Windows.* `GET /api/onboarding` names the host's system. On `win32` a
+    missing row shows the vendor's PowerShell line (all three answered on
+    2026-11-26) and Codex reads "Needs WSL 2 on Windows". Antigravity's
+    line installs `%LOCALAPPDATA%\agy\bin\agy.exe` and extends the user's
+    PATH, which a Delegatus that is already running never sees, so the
+    Windows search probes that folder for `agy` by name: from
+    `LOCALAPPDATA`, then from its usual place under the home
+    (`windowsAgentBinaryCandidates` in `bin/agent-binaries.mjs`, the one
+    list the launcher and the Viewer's resolver in `src/lib/agent/cli.ts`
+    both read). "Check again" after the install finds it with no restart.
+    A missing program's popover names `AppData\Local` among the places
+    searched there.
+  - *The guide no longer carries* the provider form, the usage header or
+    "Remove": they stay on the accounts screen (A3).
+  - *Frames:* the states `welcome-*`, `engines-*` and `accounts-*` of the
+    kanban driver's guide block, at 1440, 900, 860, 645 and 390; 860 in
+    both themes, as 1440 and 390 are. The block presses every dot and
+    checks that a signed-out program's popover names its version and path,
+    a signed-in one's its version, that words opened in a narrow row
+    repeat nothing of the line above them, that they wrap inside their
+    card and scroll the step nowhere sideways, and that under 768 px the
+    dot of a program that is signing in opens nothing.
 
 ### 12.4 Slice 3: the install job and its button
 
