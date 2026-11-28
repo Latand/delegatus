@@ -739,20 +739,40 @@ test("a peer-held SQLite writer yields while a schedule acknowledgment waits", a
 
 test("a bounded reconciliation preserves another lane's CPU ticket and FIFO age", async () => {
   const { lane } = await committing();
-  const file = instanceCpuAdmissionFile();
-  expect(file.startsWith(`${path.dirname(process.env.XDG_CONFIG_HOME!)}${path.sep}`)).toBe(true);
-  const queue = instanceCpuAdmissionQueue();
-  const prefix = `stage:${crypto.createHash("sha256").update(stateDir()).digest("hex")}:`;
-  const peer = `${prefix}unselected-peer:build:1`;
-  queue.check(peer, false);
-  const db = new Database(file, { readonly: true });
+  const directory = stateDir();
+  const queueRoot = path.join(directory, "fifo-admission");
+  const previousLockDir = process.env.LLV_GATE_LOCK_DIR;
+  // The comparator gives its runner a separate admission directory. Give
+  // these synthetic stage tickets a queue owned by the pipeline fixture.
+  process.env.LLV_GATE_LOCK_DIR = queueRoot;
   try {
-    const before = db.query("SELECT seq,since FROM tickets WHERE key=?").get(peer);
-    const ports = defaultPipelinePorts();
-    await withControllerPipelineScope([lane.id], async () => { await ports.cpuAdmissionReconcile?.(ports); });
-    expect(db.query("SELECT seq,since FROM tickets WHERE key=?").get(peer)).toEqual(before);
-    expect(before).not.toBeNull();
-  } finally { db.close(); queue.cancel(peer); }
+    const file = instanceCpuAdmissionFile();
+    expect(file).toBe(path.join(queueRoot, "admission.sqlite"));
+    const prefix = `stage:${crypto.createHash("sha256").update(directory).digest("hex")}:`;
+    const peer = `${prefix}unselected-peer:build:1`;
+    const stale = `${prefix}${lane.id}:retired:1`;
+    const queue = instanceCpuAdmissionQueue();
+    queue.check(peer, false);
+    queue.check(stale, false);
+    const db = new Database(file, { readonly: true });
+    try {
+      const ticket = db.query("SELECT seq,since FROM tickets WHERE key=?");
+      const before = ticket.get(peer);
+      expect(before).not.toBeNull();
+      expect(ticket.get(stale)).not.toBeNull();
+      const ports = defaultPipelinePorts();
+      await withControllerPipelineScope([lane.id], async () => { await ports.cpuAdmissionReconcile!(ports); });
+      expect(ticket.get(stale)).toBeNull();
+      expect(ticket.get(peer)).toEqual(before);
+    } finally {
+      db.close();
+      queue.cancel(stale);
+      queue.cancel(peer);
+    }
+  } finally {
+    if (previousLockDir === undefined) delete process.env.LLV_GATE_LOCK_DIR;
+    else process.env.LLV_GATE_LOCK_DIR = previousLockDir;
+  }
 });
 
 test("a Viewer restart during a real push retains child custody and reconciles its outcome without another push", async () => {
