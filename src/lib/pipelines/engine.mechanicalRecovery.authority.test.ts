@@ -94,10 +94,10 @@ test.skipIf(process.platform === "win32")("the production authority signal cance
   const ownership = await import("./stageBranch");
   const buildReader = ownership.stageBranchOwnershipReader;
   let rejectNext = false, armed = false, rejected = 0, cancelled = 0;
-  const readerSpy = spyOn(ownership, "stageBranchOwnershipReader").mockImplementation(id => {
-    const reader = buildReader(id), read = reader.read;
+  const readerSpy = spyOn(ownership, "stageBranchOwnershipReader").mockImplementation(owner => {
+    const reader = buildReader(owner), read = reader.read;
     reader.read = async () => {
-      if (id === fixture.id && rejectNext) { rejectNext = false; rejected++; throw new Error("authority read interrupted"); }
+      if (owner.id === fixture.id && rejectNext) { rejectNext = false; rejected++; throw new Error("authority read interrupted"); }
       return read();
     };
     return reader;
