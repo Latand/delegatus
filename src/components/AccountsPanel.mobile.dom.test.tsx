@@ -220,6 +220,8 @@ test("phone next choice follows refreshed quota selection while the project stay
     }
     /* The screen also reads the install transfer's checklist rows; none here, and not the call under test. */
     if (String(input).startsWith("/api/transfer/accounts")) return Response.json({ ok: true, result: [] });
+    /* Each row with a weekly reading reads its history for the background sparkline; none here, and not the call under test. */
+    if (String(input).startsWith("/api/limits/history")) return new Response("{}", { status: 500 });
     otherCalls.push(String(input));
     return new Response(null, { status: 500 });
   }) as typeof fetch;
@@ -473,6 +475,8 @@ test("a Codex row that is not signed in opens the device sign-in, shows its code
   globalThis.fetch = (async (url: string, init?: { body?: string }) => {
     /* The screen also reads the install transfer's checklist rows; none here, and not the call under test. */
     if (String(url).startsWith("/api/transfer/accounts")) return new Response(JSON.stringify({ ok: true, result: [] }), { status: 200 });
+    /* Each row with a weekly reading reads its history for the background sparkline; not the call under test. */
+    if (String(url).startsWith("/api/limits/history")) return new Response("{}", { status: 500 });
     calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : null });
     return new Response(JSON.stringify({ account: { id: "cx-spare" }, deviceAuth: { url: "https://example.invalid/device", code: "ABCD-EFGH" } }), { status: 200, headers: { "content-type": "application/json" } });
   }) as unknown as typeof fetch;
@@ -702,7 +706,12 @@ test.each(["en", "uk"] as const)("a non-active phone row opens its own burndown 
     expect(panel).not.toBeNull();
     expect(panel?.getAttribute("aria-label")).toBe(translate(locale, "burndown.openAria", { engine: "Claude · Lab" }));
     expect(panel?.className).not.toContain("sm:absolute");
-    expect(urls).toEqual(["/api/limits/history?engine=claude&account=cl-lab"]);
+    // Each row read its own week for the sparkline behind it; the press then read the chart's.
+    expect(urls).toEqual([
+      "/api/limits/history?engine=claude&account=cl-main&backfill=stored",
+      "/api/limits/history?engine=claude&account=cl-lab&backfill=stored",
+      "/api/limits/history?engine=claude&account=cl-lab",
+    ]);
     // The chart still draws, from the row's own reading, though the history failed.
     expect(panel?.querySelector('svg[role="img"]')).not.toBeNull();
     expect(press.getAttribute("aria-expanded")).toBe("true");
@@ -800,7 +809,12 @@ test("a Claude and a Codex account that share an id each open their own chart, o
   await click(press("claude"));
   expect(document.body.querySelectorAll("[data-burndown-dialog]").length).toBe(1);
   expect(dialog()?.getAttribute("aria-label")).toContain("ClaudeShared");
+  // The four rows' sparkline reads come first; the three presses' chart reads follow, each naming the pressed engine.
   expect(urls).toEqual([
+    "/api/limits/history?engine=claude&account=other&backfill=stored",
+    "/api/limits/history?engine=claude&account=default&backfill=stored",
+    "/api/limits/history?engine=codex&account=other-cx&backfill=stored",
+    "/api/limits/history?engine=codex&account=default&backfill=stored",
     "/api/limits/history?engine=claude&account=default",
     "/api/limits/history?engine=codex&account=default",
     "/api/limits/history?engine=claude&account=default",

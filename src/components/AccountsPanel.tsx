@@ -24,6 +24,7 @@ import { tierWindowKey, type EngineLimits, type TierWindowKey } from "@/lib/type
 import { useIsMobile } from "@/hooks/useIsMobile";
 
 import { AccountRowOpening, revealRow } from "./AccountRowOpening";
+import { AccountSparkline, useWeeklySeries } from "./AccountSparkline";
 import { BurndownPanel } from "./BurndownPanel";
 import { AccountSpendCredits, paidSpendingActive, showsCreditsBlock } from "./AccountSpendCredits";
 import { AccountRemovalRefusal, liveWorkHref, refusalText } from "./AccountRemovalRefusal";
@@ -683,6 +684,9 @@ function AccountRow({ account, engine, quota, surface }: {
   const isActive = facts.status === "active";
   const nextChosen = account.nextChosen === true;
   const tint = engineTintOf(engine).color;
+  // The week behind the row: only an account that reports a weekly window and is signed in has one to draw.
+  const weekRow = account.authPresent ? facts.windows.find((row) => row.key === "weekly") ?? null : null;
+  const weekSeries = useWeeklySeries(engine, account.id, weekRow !== null);
   const open = openId === account.id;
   const toggle = () => setOpenId(open ? null : account.id);
   const removal = useArmed(() => void state.remove(account.id));
@@ -723,7 +727,7 @@ function AccountRow({ account, engine, quota, surface }: {
         data-account-next-chosen={nextChosen ? "true" : undefined}
         {...(phone ? { "data-mobile2-account": account.id, "data-mobile2-account-state": facts.status } : {})}
         aria-busy={state.removing === account.id || undefined}
-        className={`relative ${s.rowPad} ${focused ? "ring-2 ring-inset ring-accent/50" : ""} ${state.removing === account.id ? "opacity-60" : ""}`}
+        className={`relative isolate ${s.rowPad} ${focused ? "ring-2 ring-inset ring-accent/50" : ""} ${state.removing === account.id ? "opacity-60" : ""}`}
         // The default account reads as a tinted wash + hairline identity bar —
         // no boxed borders, so the list stays one quiet column.
         style={isActive ? { background: `color-mix(in srgb, ${tint} 7%, transparent)`, boxShadow: `inset 2px 0 0 ${tint}` } : undefined}
@@ -733,6 +737,7 @@ function AccountRow({ account, engine, quota, surface }: {
           if (!open && event.currentTarget.contains(event.target as Node) && !(event.target as Element).closest("button, a, input, code")) toggle();
         }}
       >
+        {weekRow ? <AccountSparkline series={weekSeries} color={limitInk(Math.max(0, Math.min(100, 100 - weekRow.window.value.usedPercent)), engine)} stale={weekRow.window.stale} active={isActive} /> : null}
         <div data-account-head className={`flex items-start ${s.head}`}>
           <AccountStatusDot
             accountId={account.id}

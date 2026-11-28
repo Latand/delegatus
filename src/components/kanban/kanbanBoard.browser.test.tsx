@@ -319,7 +319,7 @@ describe("account row", () => {
      schemes, then the keyboard and reduced motion. `LLV_ACCOUNT_ROW_OUT=<dir>` keeps the frames and `readings.json`;
      `LLV_ACCOUNT_ROW_ONLY=<substring,…>` and `LLV_ACCOUNT_ROW_WIDTHS=<px,…>` rerun a subset. */
   browserTest("the dialog's rows hold every state at every width, language and scheme, with the keyboard and reduced motion", async () => {
-    const { accountRowRoutes, captureAccountRowFrames, captureAccountRowKeyboard, captureAccountRowReveal } = await import("@/components/accountRowFrames");
+    const { accountRowRoutes, captureAccountRowFrames, captureAccountRowKeyboard, captureAccountRowReveal, captureAccountSparklineFrames } = await import("@/components/accountRowFrames");
     const out = path.resolve(process.env.LLV_ACCOUNT_ROW_OUT ?? ".artifacts/account-row", "dialog"); fs.mkdirSync(out, { recursive: true });
     const rows = accountRowRoutes();
     const server = await serveEvidenceFixture(out, undefined, rows.routes);
@@ -331,6 +331,13 @@ describe("account row", () => {
         expect(await captureAccountRowReveal({ browser, base: server.base, out, routes: rows, surface: "dialog", width: 900, height: 520 })).toEqual([]);
         return;
       }
+      // `LLV_ACCOUNT_ROW_CASE=sparkline` runs only the week behind each row (#1072).
+      if (process.env.LLV_ACCOUNT_ROW_CASE === "sparkline") {
+        const only = await captureAccountSparklineFrames({ browser, base: server.base, out, routes: rows, surface: "dialog", widths: process.env.LLV_ACCOUNT_ROW_WIDTHS?.split(",").map(Number) ?? [1440, 1280], height: 900 });
+        expect(only.failures).toEqual([]);
+        expect(only.frames).toBeGreaterThan(0);
+        return;
+      }
       const only = process.env.LLV_ACCOUNT_ROW_ONLY?.split(",");
       const { frames, failures } = await captureAccountRowFrames({ browser, base: server.base, out, routes: rows, surface: "dialog", widths: process.env.LLV_ACCOUNT_ROW_WIDTHS?.split(",").map(Number) ?? [640, 900, 1170, 1440], height: 900, only });
       expect(failures).toEqual([]);
@@ -339,6 +346,10 @@ describe("account row", () => {
         expect(await captureAccountRowKeyboard({ browser, base: server.base, out, routes: rows, surface: "dialog", width: 900, height: 900 })).toEqual([]);
         expect(await captureAccountRowReveal({ browser, base: server.base, out, routes: rows, surface: "dialog", width: 900, height: 520 })).toEqual([]);
       }
+      // The week behind each row (#1072): dimmed, inert, and no taller than the row without it, at the two widths one layout spans.
+      const sparks = await captureAccountSparklineFrames({ browser, base: server.base, out, routes: rows, surface: "dialog", widths: process.env.LLV_ACCOUNT_ROW_WIDTHS?.split(",").map(Number) ?? [1440, 1280], height: 900 });
+      expect(sparks.failures).toEqual([]);
+      expect(sparks.frames).toBeGreaterThan(0);
     } finally { await browser.close(); server.stop(); }
   }, 7_200_000);
 });

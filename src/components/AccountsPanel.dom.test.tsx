@@ -9,6 +9,7 @@ import { selectProjectAccount } from "@/lib/accounts/projectSelection";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 
 import { AccountsPanel, type ProjectAccountContext } from "./AccountsPanel";
+import { SPARKLINE_AREA_OPACITY, SPARKLINE_GUIDE_OPACITY, SPARKLINE_LINE_OPACITY, sparklineGeometry } from "./AccountSparkline";
 import { formatCheckedClock, formatQuotaAsOf, formatResetClock } from "./rateLimit";
 
 /** An archive under an invented home, composed so the `~` fold is exercised
@@ -1376,4 +1377,100 @@ test("an opened row with a stale reading says when it was read once, on the Refr
   expect(row.textContent!.split(clock)).toHaveLength(2);
   openRow(view.host, "acc");
   expect(note()?.textContent).toBe(asOfNote(observedAt));
+});
+
+/** The history route's answer for one account: a weekly series whose window began two days before `now`, falling from 100 to `left`. */
+function weekHistory(engine: "claude" | "codex", accountId: string, now: number, left: number, samples = 12) {
+  const windowStart = now - 2 * 86_400;
+  const week = {
+    windowStart, resetsAt: windowStart + 7 * 86_400, windowSeconds: 7 * 86_400,
+    samples: Array.from({ length: samples }, (_, i) => ({ t: windowStart + Math.round((2 * 86_400 * i) / Math.max(1, samples - 1)), remaining: 100 - ((100 - left) * i) / Math.max(1, samples - 1) })),
+  };
+  const series = { session: { ...week, windowSeconds: 5 * 3600, samples: [] }, weekly: week };
+  return { claude: engine === "claude" ? series : null, codex: engine === "codex" ? series : null, claudeAccountId: engine === "claude" ? accountId : null, codexAccountId: engine === "codex" ? accountId : null, historySince: null };
+}
+
+const settle = async () => { for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0)); };
+
+test.each(["claude", "codex"] as const)("a %s account row draws its week as a dimmed, inert background when a series is present and nothing when it is absent", async (engine) => {
+  const now = Math.floor(Date.now() / 1000);
+  const row = (id: string, label: string, used: number | null) => ({
+    id, label, kind: "managed" as const, authPresent: true, authHealth: "authenticated" as const,
+    loginPending: false, loginState: "authenticated" as const, deviceAuth: null,
+    limits: used === null ? null : { freshness: "fresh" as const, checkedAt: new Date(now * 1000).toISOString(), session: null, weekly: { usedPercent: used, resetsAt: now + 5 * 86_400, windowMinutes: 10_080, observedAt: now } },
+  });
+  const urls: string[] = [];
+  const saved = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    urls.push(url);
+    const account = new URL(url, "http://local").searchParams.get("account")!;
+    if (account === "with-series" || account === "active-series") return Response.json(weekHistory(engine, account, now, 62));
+    if (account === "one-sample") return Response.json(weekHistory(engine, account, now, 62, 1));
+    return new Response("{}", { status: 500 });
+  }) as typeof fetch;
+  try {
+    const view = await mount(state(login(), { engine, accounts: [row("with-series", "Has series", 38), row("one-sample", "One sample", 38), row("no-history", "No history", 38), row("no-reading", "No reading", null), row("active-series", "Active", 38)], active: "active-series" }));
+    mounted.push(view);
+    await settle();
+    const rowOf = (id: string) => view.host.querySelector(`[data-account-row="${id}"]`)!;
+    const chart = rowOf("with-series").querySelector("svg[data-account-sparkline]") as SVGElement;
+    expect(chart).not.toBeNull();
+    // Behind the row's content: the row's first child, out of flow, taking the row's box, never a target.
+    expect(rowOf("with-series").firstElementChild).toBe(chart);
+    expect(chart.getAttribute("class")).toContain("pointer-events-none");
+    expect(chart.getAttribute("class")).toContain("absolute inset-0");
+    expect(chart.getAttribute("aria-hidden")).toBe("true");
+    expect(chart.hasAttribute("width") || chart.hasAttribute("height")).toBe(false);
+    expect(rowOf("with-series").getAttribute("class")).toContain("isolate");
+    // An area, the line and the even-pace guide; the area's fill is the low opacity the design names.
+    const area = chart.querySelector("[data-sparkline-area]")!;
+    expect(Number(area.getAttribute("fill-opacity"))).toBe(SPARKLINE_AREA_OPACITY);
+    expect(chart.querySelector("[data-sparkline-line]")).not.toBeNull();
+    expect(chart.querySelector("[data-sparkline-guide]")?.getAttribute("stroke-dasharray")).toBe("3 3");
+    // The strokes are dimmed to the 8–15% band; the area is the neutral muted ink fading to nothing at "now", never the engine tint.
+    expect(Number(chart.querySelector("[data-sparkline-line]")!.getAttribute("opacity"))).toBe(SPARKLINE_LINE_OPACITY);
+    expect(Number(chart.querySelector("[data-sparkline-guide]")!.getAttribute("opacity"))).toBe(SPARKLINE_GUIDE_OPACITY);
+    for (const opacity of [SPARKLINE_LINE_OPACITY, SPARKLINE_GUIDE_OPACITY]) expect(opacity >= 0.08 && opacity <= 0.15).toBe(true);
+    const stops = [...chart.querySelectorAll("linearGradient[data-sparkline-fade] stop")];
+    expect(stops.map((stop) => stop.getAttribute("stop-color"))).toEqual(["var(--color-muted)", "var(--color-muted)"]);
+    expect(stops.map((stop) => stop.getAttribute("stop-opacity"))).toEqual(["1", "0"]);
+    expect(area.getAttribute("fill")).toBe(`url(#${chart.querySelector("linearGradient")!.getAttribute("id")})`);
+    // The row's own content is still there, unchanged.
+    expect(rowOf("with-series").querySelector('[data-account-limits="with-series"]')).not.toBeNull();
+    // The default account's row carries its own tint: its chart is the line and the guide, without the area.
+    const activeChart = rowOf("active-series").querySelector("svg[data-account-sparkline]")!;
+    expect(activeChart.querySelector("[data-sparkline-line]")).not.toBeNull();
+    expect(activeChart.querySelector("[data-sparkline-guide]")).not.toBeNull();
+    expect(activeChart.querySelector("[data-sparkline-area]")).toBeNull();
+    // Absent series: a failed read, a single reading, no weekly reading at all.
+    for (const id of ["one-sample", "no-history", "no-reading"]) expect(rowOf(id).querySelector("[data-account-sparkline]")).toBeNull();
+    // The request is the popover's, once per account that reports a week.
+    expect(urls.filter((url) => url.startsWith("/api/limits/history")).sort()).toEqual(["with-series", "one-sample", "no-history", "active-series"].sort().map((id) => `/api/limits/history?engine=${engine}&account=${id}&backfill=stored`));
+  } finally { globalThis.fetch = saved; }
+});
+
+test("the sparkline places the week on the popover's axis and reads an over-pace account below the guide", () => {
+  const start = 1_000_000;
+  const week = 7 * 86_400;
+  const series = (left: number) => ({ windowStart: start, resetsAt: start + week, windowSeconds: week, samples: [{ t: start, remaining: 100 }, { t: start + 2 * 86_400, remaining: left }] });
+  const under = sparklineGeometry(series(90))!;
+  const over = sparklineGeometry(series(20))!;
+  // The line ends where "now" is, 2/7 of the way across, and stops there.
+  expect(under.line[0]!.x).toBe(0);
+  expect(under.line[1]!.x).toBeCloseTo((2 / 7) * 100, 5);
+  // Guide: full at the start, empty at the reset, corner to corner inside the vertical inset.
+  expect(over.guide[0]!.x).toBe(0);
+  expect(over.guide[1]!.x).toBe(100);
+  expect(over.guide[0]!.y).toBeLessThan(over.guide[1]!.y);
+  const guideAtNow = over.guide[0]!.y + (over.guide[1]!.y - over.guide[0]!.y) * (2 / 7);
+  // SVG y grows downward: a larger y is lower. Under pace sits above the guide, over pace below it.
+  expect(under.line[1]!.y).toBeLessThan(guideAtNow);
+  expect(over.line[1]!.y).toBeGreaterThan(guideAtNow);
+  // Nothing to place: unknown window, unreported window, one reading, no series.
+  expect(sparklineGeometry(null)).toBeNull();
+  expect(sparklineGeometry({ ...series(50), windowStart: null })).toBeNull();
+  expect(sparklineGeometry({ ...series(50), resetsAt: null })).toBeNull();
+  expect(sparklineGeometry({ ...series(50), windowUnreported: true })).toBeNull();
+  expect(sparklineGeometry({ ...series(50), samples: [{ t: start, remaining: 100 }] })).toBeNull();
 });

@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, expect, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -21,7 +21,7 @@ const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
 const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
 const { agentRegistry } = await import("@/lib/agent/registry");
 const { recordLimitSample } = await import("./limitsHistoryStore");
-const { readAccountBurndown } = await import("./limits");
+const { readAccountBurndown, resetCodexSeriesCacheForTests } = await import("./limits");
 const historyRoute = await import("@/app/api/limits/history/route");
 const { attributeQuotaFixture } = await import("./limitsQuota.fixture");
 
@@ -57,6 +57,8 @@ beforeAll(() => {
   codexId = codex.id;
   codexSessions = codex.sessionsDir;
 });
+
+beforeEach(() => resetCodexSeriesCacheForTests());
 
 afterEach(() => {
   fetchCalls.length = 0;
@@ -109,6 +111,107 @@ test("an inactive Codex account adds its transcript backfill to the stored histo
   expect(payload!.claude).toBeNull();
   expect(payload!.codex!.weekly.samples.map((sample) => sample.remaining)).toEqual([75, 70]);
   expect(fetchCalls).toEqual([]);
+});
+
+test("opening the full Codex history twice reuses its transcript scan", async () => {
+  const account = createManagedCodexAccount("Codex Cached Panel");
+  const sessions = account.sessionsDir;
+  const original = fs.readdirSync;
+  let transcriptDirectoryReads = 0;
+  const scan = spyOn(fs, "readdirSync").mockImplementation(((...args: Parameters<typeof fs.readdirSync>) => {
+    if (String(args[0]).startsWith(sessions)) transcriptDirectoryReads++;
+    return original(...args);
+  }) as typeof fs.readdirSync);
+  try {
+    const first = await get(`?engine=codex&account=${encodeURIComponent(account.id)}`);
+    expect(first.status).toBe(200);
+    const readsAfterFirstOpen = transcriptDirectoryReads;
+    expect(readsAfterFirstOpen).toBeGreaterThan(0);
+
+    const second = await get(`?engine=codex&account=${encodeURIComponent(account.id)}`);
+    expect(second.status).toBe(200);
+    expect(transcriptDirectoryReads).toBe(readsAfterFirstOpen);
+  } finally {
+    scan.mockRestore();
+  }
+});
+
+test("reopening a stored-only Codex row history never scans transcripts", async () => {
+  const account = createManagedCodexAccount("Codex Stored Row");
+  const defaultSessions = path.join(process.env.LLV_CODEX_HOME!, "sessions");
+  const original = fs.readdirSync;
+  let accountReads = 0;
+  let defaultReads = 0;
+  const scan = spyOn(fs, "readdirSync").mockImplementation(((...args: Parameters<typeof fs.readdirSync>) => {
+    const directory = String(args[0]);
+    if (directory.startsWith(account.sessionsDir)) accountReads++;
+    if (directory.startsWith(defaultSessions)) defaultReads++;
+    return original(...args);
+  }) as typeof fs.readdirSync);
+  try {
+    const inactiveQuery = `?engine=codex&account=${encodeURIComponent(account.id)}&backfill=stored`;
+    expect((await get(inactiveQuery)).status).toBe(200);
+    expect((await get(inactiveQuery)).status).toBe(200);
+    expect(accountReads).toBe(0);
+
+    const activeQuery = "?engine=codex&account=default&backfill=stored";
+    expect((await get(activeQuery)).status).toBe(200);
+    expect((await get(activeQuery)).status).toBe(200);
+    expect(defaultReads).toBe(0);
+  } finally {
+    scan.mockRestore();
+  }
+});
+
+test("the full-history cache expires at its deterministic TTL and stays separate by account", async () => {
+  const first = createManagedCodexAccount("Codex Cache First");
+  const second = createManagedCodexAccount("Codex Cache Second");
+  const original = fs.readdirSync;
+  const reads = new Map<string, number>();
+  const scan = spyOn(fs, "readdirSync").mockImplementation(((...args: Parameters<typeof fs.readdirSync>) => {
+    const directory = String(args[0]);
+    for (const account of [first, second]) if (directory.startsWith(account.sessionsDir)) reads.set(account.id, (reads.get(account.id) ?? 0) + 1);
+    return original(...args);
+  }) as typeof fs.readdirSync);
+  const now = spyOn(Date, "now").mockReturnValue(1_000_000);
+  try {
+    await readAccountBurndown("codex", first.id);
+    await readAccountBurndown("codex", second.id);
+    await readAccountBurndown("codex", first.id);
+    expect(reads.get(first.id)).toBe(1);
+    expect(reads.get(second.id)).toBe(1);
+
+    now.mockReturnValue(1_060_001);
+    await readAccountBurndown("codex", first.id);
+    expect(reads.get(first.id)).toBe(2);
+  } finally {
+    now.mockRestore();
+    scan.mockRestore();
+  }
+});
+
+test("the full-history cache evicts the least recently used account at its bound", async () => {
+  const accounts = Array.from({ length: 33 }, (_, index) => createManagedCodexAccount(`Codex Cache Eviction ${index}`));
+  const original = fs.readdirSync;
+  let firstAccountReads = 0;
+  let secondAccountReads = 0;
+  const scan = spyOn(fs, "readdirSync").mockImplementation(((...args: Parameters<typeof fs.readdirSync>) => {
+    const directory = String(args[0]);
+    if (directory.startsWith(accounts[0]!.sessionsDir)) firstAccountReads++;
+    if (directory.startsWith(accounts[1]!.sessionsDir)) secondAccountReads++;
+    return original(...args);
+  }) as typeof fs.readdirSync);
+  try {
+    for (const account of accounts.slice(0, 32)) await readAccountBurndown("codex", account.id);
+    await readAccountBurndown("codex", accounts[0]!.id);
+    await readAccountBurndown("codex", accounts[32]!.id);
+    await readAccountBurndown("codex", accounts[0]!.id);
+    await readAccountBurndown("codex", accounts[1]!.id);
+    expect(firstAccountReads).toBe(1);
+    expect(secondAccountReads).toBe(2);
+  } finally {
+    scan.mockRestore();
+  }
 });
 
 test("an unknown or hostile id is not an account", async () => {
