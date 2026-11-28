@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { chooseSpendPlacement, clearOf, cutBy, overlapArea, settleSpendPlacement, spendCandidates, type Box } from "./spendPopoverPlacement";
+import { COMPACT_SUFFIX, chooseSpendPlacement, clearOf, cutBy, overlapArea, settleSpendPlacement, spendCandidates, type Box } from "./spendPopoverPlacement";
 
 const viewport = { width: 1440, height: 900 };
 /* A bubble that wraps taller the narrower it is: 60 000 px² of text, at most 320 wide. */
@@ -151,6 +151,23 @@ test("the card's own title and state line outrank a neighbour's body text, so th
   expect(overlapArea(at, where.anchor)).toBe(0);
 });
 
+test("where the band under the seat holds only the card's top, the bubble covers the column header and spares the card's title and state line", () => {
+  const board = box(248, 0, 1440, 900);
+  const seat = box(317, 60, 1357, 735);
+  /* A card at the window's bottom: its top at 842, its title and state line just under it, the column header above it. */
+  const cardBox = box(570, 842, 1010, 1100);
+  const where = { viewport, card: cardBox, anchor: box(930, 888, 1000, 899), bounds: board, avoid: [seat], compactable: true };
+  const found = spendCandidates(where, arranged);
+  const header = [box(580, 800, 700, 816)];
+  const ownTitle = [box(590, 855, 800, 871)];
+  const ownState = [box(590, 884, 700, 899)];
+  const picked = chooseSpendPlacement(found, { own: [], ownTitle, ownState, foreign: header, keepOut: [seat], anchor: where.anchor }, { card: cardBox, area: box(248, 735, 1432, 892) })!;
+  expect(overlapArea(inside(picked), seat)).toBe(0);
+  expect(overlapArea(inside(picked), ownTitle[0]!)).toBe(0);
+  expect(overlapArea(inside(picked), ownState[0]!)).toBe(0);
+  expect(overlapArea(inside(picked), header[0]!)).toBeGreaterThan(0);
+});
+
 test("a place that covers none of the other cards' text still wins over one that covers a neighbour's title", () => {
   const narrow = box(1142, 441, 1385, 609);
   const where = { viewport, card: narrow, anchor: box(1300, 495, 1375, 509) };
@@ -173,14 +190,57 @@ test("the seat is taken out of the board's area: a bubble clamps against its edg
   expect(found.every((c) => c.top >= 735 && c.top + c.height <= 892)).toBe(true);
 });
 
-test("a bubble taller than the room under the seat keeps inside the window and covers as little of the seat as it must", () => {
+/* The popover's two arrangements: stacked it is at most 320 wide and 190 tall; compact, its providers side by side, it is wider and 115 tall. */
+const arranged = (w: number, compact = false) => ({ width: w, height: compact ? 115 : 190 });
+const inside = (c: { left: number; top: number; width: number; height: number }) => ({ left: c.left, top: c.top, right: c.left + c.width, bottom: c.top + c.height });
+
+test("a bubble taller than the room under the seat offers the compact arrangement, which stays out of the seat and inside the board", () => {
+  const board = box(248, 0, 1440, 900);
+  /* The seat ends at 735: 157 px are left under it, and the stacked bubble is 190 tall. */
+  const seat = box(317, 60, 1357, 735);
+  const where = { viewport, card: box(570, 840, 1010, 1120), anchor: box(930, 890, 1000, 899), bounds: board, avoid: [seat], compactable: true };
+  const found = spendCandidates(where, arranged);
+  expect(found.length).toBeGreaterThan(0);
+  expect(found.every((c) => c.kind.endsWith(COMPACT_SUFFIX))).toBe(true);
+  for (const c of found) {
+    expect(overlapArea(inside(c), seat)).toBe(0);
+    expect(c.top).toBeGreaterThanOrEqual(735);
+    expect(c.top + c.height).toBeLessThanOrEqual(892);
+    expect(c.height).toBe(115);
+  }
+  /* The place the ranking picks is one of them, with no overlap with the seat. */
+  const best = chooseSpendPlacement(found, { own: [], foreign: [], keepOut: [seat] }, { card: where.card, area: box(248, 735, 1432, 892) })!;
+  expect(best.kind.endsWith(COMPACT_SUFFIX)).toBe(true);
+  expect(overlapArea(inside(best), seat)).toBe(0);
+  /* With room for the stacked bubble no compact place is offered. */
+  const roomy = spendCandidates({ ...where, avoid: [box(317, 60, 1357, 600)] }, arranged);
+  expect(roomy.some((c) => c.kind.endsWith(COMPACT_SUFFIX))).toBe(false);
+  expect(roomy.length).toBeGreaterThan(0);
+});
+
+test("a bubble with no compact arrangement and no room under the seat runs past the board's edge, never into the seat", () => {
   const board = box(248, 0, 1440, 900);
   const seat = box(317, 60, 1357, 735);
-  const found = spendCandidates({ viewport, card: box(570, 840, 1010, 1120), anchor: box(930, 890, 1000, 899), bounds: board, avoid: [seat] }, (w) => ({ width: w, height: 190 }));
-  expect(found.every((c) => c.top + c.height <= 892 && c.top >= 8)).toBe(true);
-  const overlap = (c: (typeof found)[number]) => overlapArea({ left: c.left, top: c.top, right: c.left + c.width, bottom: c.top + c.height }, seat);
-  const best = chooseSpendPlacement(found, { own: [], foreign: [], keepOut: [seat] })!;
-  expect(overlap(best)).toBe(Math.min(...found.map(overlap)));
+  const found = spendCandidates({ viewport, card: box(570, 840, 1010, 1120), anchor: box(930, 890, 1000, 899), bounds: board, avoid: [seat] }, arranged);
+  expect(found.length).toBeGreaterThan(0);
+  expect(found.every((c) => overlapArea(inside(c), seat) === 0)).toBe(true);
+  /* A seat standing below the marks gets the same: the bubble ends where the seat begins. */
+  const below = box(317, 400, 1357, 880);
+  const flipped = spendCandidates({ viewport, card: box(570, 100, 1010, 380), anchor: box(930, 120, 1000, 136), bounds: box(248, 0, 1440, 900), avoid: [below] }, (w) => ({ width: w, height: 400 }));
+  expect(flipped.every((c) => overlapArea(inside(c), below) === 0)).toBe(true);
+});
+
+test("any overlap with the seat loses to a place with none, however small the overlap and however much the free place covers elsewhere", () => {
+  const seat = box(300, 100, 1300, 700);
+  const grazes = { kind: "over", left: 600, top: 690, width: 320, height: 190, maxWidth: 320 };
+  const clear = { kind: "below", left: 600, top: 700, width: 320, height: 190, maxWidth: 320 };
+  const onSeat = { kind: "above", left: 600, top: 200, width: 320, height: 190, maxWidth: 320 };
+  /* The place that grazes the seat by 10 px is earlier and covers no text; the clear place covers a heading. */
+  const heading = box(620, 720, 800, 736);
+  expect(chooseSpendPlacement([grazes, clear], { own: [], foreign: [heading], keepOut: [seat] })!.kind).toBe("below");
+  expect(chooseSpendPlacement([onSeat, grazes, clear], { own: [], foreign: [heading], keepOut: [seat] })!.kind).toBe("below");
+  /* Overlap with the seat is a yes or no: a small graze does not beat a deep one by area. */
+  expect(chooseSpendPlacement([onSeat, grazes], { own: [], foreign: [box(620, 695, 800, 710)], keepOut: [seat] })!.kind).toBe("above");
 });
 
 test("a card at the window's bottom with room above it flips above itself instead of covering its title and state line", () => {

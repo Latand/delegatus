@@ -1,15 +1,20 @@
 /**
  * Where the card's spend popover opens. It stays inside the board (never the
  * sidebar or the seat pane) and touches its own card: over the card, beside
- * it, or above or below it. The seat's box is a keep-out: the board area the
- * bubble is clamped to ends where the seat does. The place that covers the
- * least wins, ranked: the seat, then text outside the cards (column headers,
- * other cards' titles), then the card's own title and state line, then the
- * rest of the neighbouring cards' text; a tie goes to the earlier candidate.
- * A card at the window's bottom edge therefore flips above itself instead of
- * covering its own title. A place that
- * leaves a line of the card's own text cut at its edge is widened or lowered
- * to take the whole line. The geometry is pure so a test can drive it with
+ * it, or above or below it. The seat's box is a hard exclusion: the board
+ * area the bubble is clamped to ends where the seat does, and no place that
+ * reaches into the seat is ever offered. When the room the seat leaves is
+ * shorter than the bubble, the same rows are offered in a compact
+ * arrangement, the providers side by side, which is wide and short. Among
+ * the places that keep clear of the seat the one that covers the least wins,
+ * ranked: the card's own title and state line (a place covering any of them
+ * loses to one covering none), then text outside the cards (column headers,
+ * other cards' titles), then the rest of the neighbouring cards' text; a tie
+ * goes to the earlier candidate. A card at the window's bottom edge therefore
+ * flips above itself instead of covering its own title; where the band the
+ * seat leaves holds only the card's top, the column header is what it covers.
+ * A place that leaves a line of the card's own text cut at its edge is
+ * widened or lowered to take the whole line. The geometry is pure so a test can drive it with
  * boxes; the page supplies the text boxes it measured.
  */
 
@@ -20,10 +25,12 @@ export interface SpendPlacementInput {
   anchor: Box;
   /** The board's box: a bubble stays inside it. Absent, the window is the board. */
   bounds?: Box;
-  /** Boxes a bubble stays out of (the seat pane) while any place remains that does. */
+  /** Boxes a bubble never reaches into (the seat pane). */
   avoid?: readonly Box[];
+  /** Whether the bubble has a compact arrangement to offer when its normal one is taller than the room. */
+  compactable?: boolean;
 }
-/** A place's name: «over» is the first choice, the others say how they differ. */
+/** A place's name: «over» is the first choice, the others say how they differ; a compact place ends in «-compact». */
 export type SpendKind = string;
 /** `maxWidth` is what the bubble is asked to take; `width` and `height` are what it measured at that. */
 export interface SpendCandidate { kind: SpendKind; left: number; top: number; width: number; height: number; maxWidth: number }
@@ -33,6 +40,11 @@ const GAP = 8;
 /** Narrower than this the lines wrap into a tall column; the candidate is not offered. */
 const MIN_WIDTH = 220;
 const MAX_WIDTH = 320;
+/** The compact arrangement sets the providers side by side: twice the room of one column, each at least a normal bubble's minimum. */
+const COMPACT_MIN_WIDTH = 2 * MIN_WIDTH;
+const COMPACT_MAX_WIDTH = 2 * MAX_WIDTH;
+/** What a compact place's name ends in. */
+export const COMPACT_SUFFIX = "-compact";
 
 /** Area of the overlap of two boxes. */
 export function overlapArea(a: Box, b: Box): number {
@@ -64,54 +76,79 @@ export function clearOf(board: Box, anchor: Box, avoid: readonly Box[] = []): Bo
 /**
  * The places to try, best-looking first: over the card under the marks, then
  * over it at its top or bottom edge and wider than the card, then to its
- * right, to its left, below it and above it. `sizeAt` answers how tall the
- * bubble is at a given width, since a narrower bubble wraps more.
+ * right, to its left, below it and above it. `sizeAt` answers how big the
+ * bubble is at a given width, since a narrower bubble wraps more, in its
+ * normal or its compact arrangement. A place is offered only inside the board
+ * area the seat leaves; when the bubble is too tall for that area at every
+ * normal place the compact places are offered instead, and when even they
+ * are too tall the places stay out of the seat and run past the board's edge
+ * farthest from it.
  */
-export function spendCandidates(input: SpendPlacementInput, sizeAt: (maxWidth: number) => { width: number; height: number }): SpendCandidate[] {
+export function spendCandidates(input: SpendPlacementInput, sizeAt: (maxWidth: number, compact?: boolean) => { width: number; height: number }): SpendCandidate[] {
   const { viewport, card, anchor } = input;
   const board: Box = {
     left: Math.max(EDGE, input.bounds?.left ?? EDGE), top: Math.max(EDGE, input.bounds?.top ?? EDGE),
     right: Math.min(viewport.width - EDGE, input.bounds?.right ?? Infinity), bottom: Math.min(viewport.height - EDGE, input.bounds?.bottom ?? Infinity),
   };
   const area = clearOf(board, anchor, input.avoid);
-  const out: SpendCandidate[] = [];
-  /** `anchorRight` places the bubble's right edge at `left` instead of its left edge; `above` its bottom edge at `top`. */
-  const place = (kind: SpendKind, left: number, top: number, maxWidth: number, anchorRight = false, above = false) => {
-    const { width, height } = sizeAt(maxWidth);
-    const x = anchorRight ? left - width : left;
-    const y = above ? top - height : top;
-    /* A bubble taller than the room the seat leaves cannot keep clear of it: it keeps inside the board and covers the least of the seat. */
-    const room = height <= area.bottom - area.top ? area : { ...area, top: board.top, bottom: board.bottom };
-    out.push({
-      kind,
-      left: clamp(x, area.left, area.right - width),
-      top: clamp(y, room.top, room.bottom - height),
-      width, height, maxWidth,
-    });
-  };
-  const inner = card.right - card.left - 2 * EDGE;
-  const widths = [...new Set([Math.min(MAX_WIDTH, inner), Math.min(MAX_WIDTH, area.right - area.left)].filter(w => w >= MIN_WIDTH))];
-  for (const width of widths) {
-    /* A bubble wider than the card reaches over its gutter, and over what is beyond it. */
-    const wide = width > inner + 0.5;
-    for (const align of ["left", "right"] as const) {
-      if (align === "right" && Math.abs(width - inner) < 1) continue;
-      const kind = (name: string) => !wide && align === "left" && name === "marks" ? "over" : `over-${name}${wide ? "-wide" : ""}${align === "right" ? "-right" : ""}`;
-      const x = align === "left" ? card.left + EDGE : card.right - EDGE;
-      place(kind("marks"), x, anchor.bottom + GAP, width, align === "right");
-      place(kind("top"), x, card.top, width, align === "right");
-      place(kind("bottom"), x, card.bottom, width, align === "right", true);
+  const room = area.bottom - area.top;
+  /** A seat below the marks: a too-tall bubble then ends at the room's bottom edge instead of starting at its top. */
+  const fromBottom = area.top <= board.top + 0.5 && area.bottom < board.bottom - 0.5;
+  const make = (compact: boolean): SpendCandidate[] => {
+    const out: SpendCandidate[] = [];
+    const suffix = compact ? COMPACT_SUFFIX : "";
+    const minWidth = compact ? COMPACT_MIN_WIDTH : MIN_WIDTH;
+    const maxWidth = compact ? COMPACT_MAX_WIDTH : MAX_WIDTH;
+    /** `anchorRight` places the bubble's right edge at `left` instead of its left edge; `above` its bottom edge at `top`. */
+    const place = (kind: SpendKind, left: number, top: number, wanted: number, anchorRight = false, above = false) => {
+      const { width, height } = sizeAt(wanted, compact);
+      const x = anchorRight ? left - width : left;
+      const y = above ? top - height : top;
+      const tooTall = height > room + 0.5;
+      out.push({
+        kind: `${kind}${suffix}`,
+        left: clamp(x, area.left, area.right - width),
+        /* Too tall for the room, it keeps to the seat's side of the room and runs past the board's own edge. */
+        top: tooTall ? (fromBottom ? area.bottom - height : area.top) : clamp(y, area.top, area.bottom - height),
+        width, height, maxWidth: wanted,
+      });
+    };
+    const inner = card.right - card.left - 2 * EDGE;
+    const widths = [...new Set([Math.min(maxWidth, inner), Math.min(maxWidth, area.right - area.left)].filter(w => w >= minWidth))];
+    for (const width of widths) {
+      /* A bubble wider than the card reaches over its gutter, and over what is beyond it. */
+      const wide = width > inner + 0.5;
+      for (const align of ["left", "right"] as const) {
+        if (align === "right" && Math.abs(width - inner) < 1) continue;
+        const kind = (name: string) => !wide && align === "left" && name === "marks" ? "over" : `over-${name}${wide ? "-wide" : ""}${align === "right" ? "-right" : ""}`;
+        const x = align === "left" ? card.left + EDGE : card.right - EDGE;
+        place(kind("marks"), x, anchor.bottom + GAP, width, align === "right");
+        place(kind("top"), x, card.top, width, align === "right");
+        place(kind("bottom"), x, card.bottom, width, align === "right", true);
+      }
     }
-  }
-  const right = area.right - card.right;
-  const left = card.left - area.left;
-  if (right >= MIN_WIDTH) place("right", card.right, anchor.top, Math.min(MAX_WIDTH, right));
-  if (left >= MIN_WIDTH) place("left", card.left, anchor.top, Math.min(MAX_WIDTH, left), true);
-  const wide = Math.min(MAX_WIDTH, area.right - area.left);
-  place("below", card.left, card.bottom, wide);
-  place("above", card.right, card.top, wide, true, true);
-  const kept = input.avoid?.length ? out.filter(c => input.avoid!.every(box => overlapArea(boxOf(c), box) === 0)) : out;
-  return kept.length ? kept : out;
+    const right = area.right - card.right;
+    const left = card.left - area.left;
+    if (right >= minWidth) place("right", card.right, anchor.top, Math.min(maxWidth, right));
+    if (left >= minWidth) place("left", card.left, anchor.top, Math.min(maxWidth, left), true);
+    const wide = Math.min(maxWidth, area.right - area.left);
+    if (wide >= minWidth || !compact) {
+      place("below", card.left, card.bottom, wide);
+      place("above", card.right, card.top, wide, true, true);
+    }
+    return out;
+  };
+  /** A place is kept when it stands whole inside the area and clear of every box to avoid. */
+  const clear = (c: SpendCandidate) => c.height <= room + 0.5 && (input.avoid ?? []).every(box => overlapArea(boxOf(c), box) === 0);
+  const normal = make(false);
+  const fits = normal.filter(clear);
+  if (fits.length) return fits;
+  const compact = input.compactable ? make(true) : [];
+  const compactFits = compact.filter(clear);
+  if (compactFits.length) return compactFits;
+  /* Nothing fits whole: keep out of the seat all the same, and run past the board's far edge. */
+  const rest = [...compact, ...normal].filter(c => (input.avoid ?? []).every(box => overlapArea(boxOf(c), box) === 0));
+  return rest.length ? rest : [...compact, ...normal];
 }
 
 export interface WindowText {
@@ -121,7 +158,7 @@ export interface WindowText {
   ownTitle?: readonly Box[];
   /** The words of the card's state line, which rank with its title. */
   ownState?: readonly Box[];
-  /** Boxes a place must not touch while any place remains that does (the seat). */
+  /** Boxes a place must not touch (the seat): one that does loses to any that does not. */
   keepOut?: readonly Box[];
   /** Other cards' titles and anything outside the cards (the sidebar, the seat): these must stay readable. */
   foreign: readonly Box[];
@@ -133,10 +170,8 @@ export interface WindowText {
 /** The card and the board's box, which a place widened to take a cut line stays inside. */
 export interface SpendFrame {
   card: Box;
-  /** What is left of the board outside the seat. */
+  /** What is left of the board outside the seat: a place stays inside it. */
   area: Box;
-  /** The board whole: a bubble taller than `area` keeps inside this instead. */
-  outer?: Box;
 }
 
 const within = (inner: Box, outer: Box) => inner.left >= outer.left - 0.5 && inner.right <= outer.right + 0.5 && inner.top >= outer.top - 0.5 && inner.bottom <= outer.bottom + 0.5;
@@ -156,7 +191,7 @@ export function settleSpendPlacement(candidate: SpendCandidate, text: readonly B
   let { left, top, width, height } = candidate;
   const { card } = frame;
   for (let pass = 0; pass < 6; pass += 1) {
-    const area = frame.outer && height > frame.area.bottom - frame.area.top ? frame.outer : frame.area;
+    const { area } = frame;
     const box = { left, top, right: left + width, bottom: top + height };
     const cut = cutBy(box, text);
     if (!cut.length) break;
@@ -181,10 +216,11 @@ export function settleSpendPlacement(candidate: SpendCandidate, text: readonly B
 }
 
 /**
- * The candidate that covers the least, a tie going to the earlier one. The
- * seat decides first, then other cards' titles and text outside the cards
- * (column headers), then the card's own title and state line, then the rest of
- * the neighbouring cards' text, then the marks; the card's own other text,
+ * The candidate that covers the least, a tie going to the earlier one. Any
+ * overlap with the seat loses to every place with none, however small, then
+ * any overlap with the card's own title and state line, then other cards'
+ * titles and text outside the cards (column headers), then the rest of the
+ * neighbouring cards' text, then the marks; the card's own other text,
  * which the reader is already looking at, only breaks a tie between places
  * that cover none of the others. With a frame a place first takes the whole
  * of any line of the card's text it would cut.
@@ -197,7 +233,7 @@ export function chooseSpendPlacement(candidates: SpendCandidate[], text: WindowT
     const candidate = frame ? settleSpendPlacement(raw, cuttable, frame) : raw;
     const box = boxOf(candidate);
     const covered = (boxes: readonly Box[] = []) => boxes.reduce((sum, other) => sum + overlapArea(box, other), 0);
-    const score = [covered(text.keepOut), covered(text.foreign), covered(text.ownTitle) + covered(text.ownState), covered(text.neighbours), text.anchor ? overlapArea(box, text.anchor) : 0, covered(text.own)];
+    const score = [covered(text.keepOut) > 0 ? 1 : 0, covered(text.ownTitle) + covered(text.ownState) > 0 ? 1 : 0, covered(text.foreign), covered(text.neighbours), text.anchor ? overlapArea(box, text.anchor) : 0, covered(text.own)];
     const better = score.findIndex((value, at) => value !== (bestScore[at] ?? Infinity));
     if (better >= 0 && score[better]! < (bestScore[better] ?? Infinity)) { best = candidate; bestScore = score; }
   }

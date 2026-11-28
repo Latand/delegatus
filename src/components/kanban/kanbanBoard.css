@@ -2301,6 +2301,12 @@
 /* A model id is one word: a line breaks between ids, not at a hyphen inside one. */
 :is(.spend-pop, .phone-spend) .model-id { white-space: nowrap; }
 .spend-pop .pop-title { display: block; font-weight: 600; margin-bottom: 4px; }
+/* The compact arrangement, chosen when the room under the seat is shorter than the bubble: the same rows, a provider block per column. */
+.spend-pop[data-spend-compact] [data-spend-pop] { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 14px; align-items: start; }
+.spend-pop[data-spend-compact] .pop-title { grid-column: 1 / -1; }
+.spend-pop[data-spend-compact] [data-spend-pop] > .pop-block { margin-top: 0; }
+/* Its rows sit on the line height alone: the band it is chosen for is short. */
+.spend-pop[data-spend-compact] .meter-note, .spend-pop[data-spend-compact] .meter-note[data-spend-account] { margin-top: 0; }
 .spend-pop .pop-total { font-weight: 400; color: var(--color-muted); }
 .spend-pop .pop-row { display: flex; align-items: flex-start; gap: 5px; }
 .spend-pop .pop-block { display: block; }

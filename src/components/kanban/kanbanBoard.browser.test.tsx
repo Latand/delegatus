@@ -20849,7 +20849,8 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
   }, 900_000);
 
   /* The states the estimate meets, with realistic figures (`?spend=critic`): the popover and the phone's Limits section are compact, print
-     each figure once, give a guest the share with its basis, and cover no text that is not the card's own. */
+     each figure once, give a guest the share with its basis, and stand beside their own card without covering another card's title,
+     text outside the cards (headers, sidebar), their own card's title or the seat. A neighbour card's body text is not asserted here. */
   browserTest("critic states: compact popover and Limits section, a guest's share, no covered titles, at 1440, 1000 and 390 in en and uk, light and dark", async () => {
     const out = path.resolve(process.env.TASK_SPEND_PNG_DIR ?? ".artifacts/task-spend");
     fs.mkdirSync(out, { recursive: true });
@@ -20991,8 +20992,9 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
   }, 900_000);
 
   /* A card on the window's bottom edge with the orchestrator seat open above the columns: the popover has little room, and
-     whatever it covers must be the card's own details or a neighbour's body text, never the seat, the card's title or state
-     line, or a column header. The numbers are read again from the card in the window's middle to show the content is unchanged. */
+     it never covers the seat or its controls or the card's own title or state line. Where the room under the seat is shorter than
+     the popover it takes its compact arrangement (the providers side by side) and may cover a column header; elsewhere the
+     headers stay clear too. The numbers are read again from the card in the window's middle to show the content is unchanged. */
   browserTest("a card near the window bottom with the seat open: the popover keeps clear of the seat, the card's title and state line and the column headers, at 1440, 1000 and 390", async () => {
     const out = path.resolve(process.env.TASK_SPEND_PNG_DIR ?? ".artifacts/task-spend");
     fs.mkdirSync(out, { recursive: true });
@@ -21040,6 +21042,8 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
         title: textHits(host, "h3.title"),
         state: textHits(host, ".card-state-words"),
         heads: textHits(document.body, ".col-head"),
+        compact: pop.hasAttribute("data-spend-compact"),
+        rows: [...pop.querySelectorAll<HTMLElement>(".pop-title, .pop-main, .meter-note, .pop-note")].map((el) => { const b = el.getBoundingClientRect(); return [Math.round(b.left - r.left), Math.round(b.top - r.top), Math.round(b.width), Math.round(b.height)]; }),
         inBoard: r.left >= board.left - 0.5 && r.right <= board.right + 0.5 && r.top >= board.top - 0.5 && r.bottom <= board.bottom + 0.5,
         anchorBottom: anchor.bottom,
         gap: Math.max(0, host.getBoundingClientRect().left - r.right, r.left - host.getBoundingClientRect().right, host.getBoundingClientRect().top - r.bottom, r.top - host.getBoundingClientRect().bottom),
@@ -21077,17 +21081,17 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
               const edge = await covered(page, id);
               readings.push({ label, id, middle, edge });
               const where = `${label} ${id} (marks end at ${Math.round(edge.anchorBottom)} of ${height}, bubble ${Math.round(edge.box.top)}–${Math.round(edge.box.bottom)}, seat ends ${Math.round(edge.seat?.bottom ?? 0)})`;
-              /* A seat that leaves the board a band shorter than the bubble leaves it no place that keeps clear; that state keeps the bubble in the window and is named in the readings. */
-              const crowded = edge.room !== null && edge.box.height > edge.room;
-              if (!crowded) {
-                if (edge.seatBox) failures.push(`${where}: the popover stands over the seat`);
-                if (edge.seatControls.length) failures.push(`${where}: the popover covers seat controls: ${edge.seatControls.join(" | ")}`);
-                if (edge.title.length) failures.push(`${where}: the popover covers the card's title: ${edge.title.join(" | ")}`);
-                if (edge.state.length) failures.push(`${where}: the popover covers the card's state line: ${edge.state.join(" | ")}`);
-                if (edge.heads.length) failures.push(`${where}: the popover covers a column header: ${edge.heads.join(" | ")}`);
-              }
-              /* In that state the bubble docks on the window's bottom edge, so it covers the least of the seat that the board's height allows. */
-              if (crowded && edge.box.bottom < edge.viewport.height - 8 - 1) failures.push(`${where}: the bubble does not dock at the window's bottom edge`);
+              /* The seat and its controls, and the card's own title and state words, are never covered, whatever the room. */
+              if (edge.seatBox) failures.push(`${where}: the popover stands over the seat`);
+              if (edge.seatControls.length) failures.push(`${where}: the popover covers seat controls: ${edge.seatControls.join(" | ")}`);
+              if (edge.title.length) failures.push(`${where}: the popover covers the card's title: ${edge.title.join(" | ")}`);
+              if (edge.state.length) failures.push(`${where}: the popover covers the card's state line: ${edge.state.join(" | ")}`);
+              /* The crowded case: the band the seat leaves is shorter than the popover at its stacked height (read at the window's middle).
+                 The popover then takes its compact arrangement, and the one thing it may cover is a column header. A neighbour card's text
+                 is not asserted in this block; the column headers are tolerated only here. */
+              const crowded = edge.room !== null && middle.box.height > edge.room;
+              if (crowded !== edge.compact) failures.push(`${where}: the popover is ${edge.compact ? "compact" : "stacked"} but the room under the seat is ${Math.round(edge.room ?? 0)} px for a ${Math.round(middle.box.height)} px popover`);
+              if (!crowded && edge.heads.length) failures.push(`${where}: the popover covers a column header: ${edge.heads.join(" | ")}`);
               if (!edge.inBoard) failures.push(`${where}: the popover leaves the board`);
               if (edge.box.left < 0 || edge.box.top < 0 || edge.box.right > edge.viewport.width || edge.box.bottom > edge.viewport.height) failures.push(`${where}: the popover leaves the window`);
               if (JSON.stringify(edge.lines) !== JSON.stringify(middle.lines)) failures.push(`${where}: the popover's lines changed:\n${edge.lines.join("\n")}\n≠\n${middle.lines.join("\n")}`);

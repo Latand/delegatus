@@ -9,8 +9,14 @@ import { TooltipBubble } from "@/components/TooltipBubble";
 import type { SpendBudget, SpendRange, TaskSpendAccount, TaskSpendProvider, TaskSpendSummary } from "@/lib/activity/taskLimitSpendTypes";
 import { useLocale, type Locale, type TFunction } from "@/lib/i18n";
 
-import { chooseSpendPlacement, clearOf, settleSpendPlacement, spendCandidates, windowTextBoxes, type Box, type SpendKind } from "./spendPopoverPlacement";
+import { COMPACT_SUFFIX, chooseSpendPlacement, clearOf, settleSpendPlacement, spendCandidates, windowTextBoxes, type Box, type SpendKind } from "./spendPopoverPlacement";
 import { useTaskSpend } from "./taskSpendSummaries";
+
+/** The bubble's compact arrangement (the providers side by side) is a data attribute the stylesheet reads; the placement sets it while it measures. */
+function setCompact(bubble: HTMLElement, compact: boolean) {
+  if (compact) bubble.dataset.spendCompact = "";
+  else delete bubble.dataset.spendCompact;
+}
 
 const ENGINE_NAME = { claude: "Claude", codex: "Codex" } as const;
 
@@ -249,14 +255,21 @@ export function TaskSpendMarks({ taskId, interactive }: { taskId: string; intera
             const input = {
               viewport: { width: window.innerWidth, height: window.innerHeight }, card: card.getBoundingClientRect(), anchor,
               bounds: board, avoid: seat.filter(box => box.bottom <= anchor.top + 1 || box.top >= anchor.bottom - 1),
+              /* Two providers can stand side by side; one has nothing to rearrange. */
+              compactable: summary.providers.length > 1,
             };
-            const sizeAt = (maxWidth: number) => { bubble.style.maxWidth = `${maxWidth}px`; const box = bubble.getBoundingClientRect(); return { width: box.width, height: box.height }; };
+            const sizeAt = (maxWidth: number, compact = false) => {
+              setCompact(bubble, compact);
+              bubble.style.maxWidth = `${maxWidth}px`;
+              const box = bubble.getBoundingClientRect();
+              return { width: box.width, height: box.height };
+            };
             const candidates = spendCandidates(input, sizeAt);
             const outer = {
               left: Math.max(8, board?.left ?? 8), top: Math.max(8, board?.top ?? 8),
               right: Math.min(input.viewport.width - 8, board?.right ?? Infinity), bottom: Math.min(input.viewport.height - 8, board?.bottom ?? Infinity),
             };
-            const frame = { card: input.card, area: clearOf(outer, anchor, input.avoid), outer };
+            const frame = { card: input.card, area: clearOf(outer, anchor, input.avoid) };
             /* The covered text is measured once per opening; a scroll or resize keeps that choice. */
             if (!kind.current) {
               const text = windowTextBoxes(card, bubble);
@@ -270,6 +283,7 @@ export function TaskSpendMarks({ taskId, interactive }: { taskId: string; intera
             const shift = measured ? { x: input.card.left - measured.card.left, y: input.card.top - measured.card.top } : { x: 0, y: 0 };
             const lines = (measured?.boxes ?? []).map(b => ({ left: b.left + shift.x, right: b.right + shift.x, top: b.top + shift.y, bottom: b.bottom + shift.y }));
             const chosen = settleSpendPlacement(raw, lines, frame);
+            setCompact(bubble, raw.kind.endsWith(COMPACT_SUFFIX));
             bubble.style.maxWidth = `${chosen.maxWidth}px`;
             const widened = chosen.width > raw.width + 0.5 ? chosen.width : undefined;
             const taller = chosen.height > raw.height + 0.5 ? chosen.height : undefined;
