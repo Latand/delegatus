@@ -268,10 +268,11 @@ registry reads in the call and the selected project context. It also sends
 the context of the call it continues, on a resumed call; with call memory on,
 notes from other earlier calls, which on a resumed call fill what the
 continued call leaves of the same budget, so both can travel together; the
-requests already sent to the orchestrator that still await its report and,
-when one waits for your confirmation, its instruction; the directory of known
-projects beside the selected one; and the output of any configured tool, in
-the next round of the same turn. It sends no image on this path.
+context of requests sent to the orchestrator during the call that still await
+its report; the instruction of a request that has not been sent and awaits your
+confirmation; the directory of known projects beside the selected one; and the
+output of any configured tool, in the next round of the same turn. It sends no
+image on this path.
 
 ## License
 
