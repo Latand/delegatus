@@ -3401,8 +3401,10 @@ async function adoptStructuredHostsPass(
   const orchestratorSeats = dependencies.orchestratorSeats ?? activeOrchestratorSeats;
   /* Capture hosted seat ownership before any awaited startup work can refresh
      a terminal transcript or reconcile away the predecessor host wrapper. */
+  // A predecessor can still hold the interruption journal at appointment.
+  // Let the startup retry handle contention so the serving loop stays available.
   const allInterruptions = dependencies.interruptions
-    ?? interruptionObligationStore(interruptionObligationDirectory(registry.filename));
+    ?? interruptionObligationStore(interruptionObligationDirectory(registry.filename), { tryAdmission: true });
   const interruptions = !rowRetry ? allInterruptions : new Proxy(allInterruptions, {
     get(target, property) {
       if (property === "list") return () => target.list().filter(item => startupHostInScope(registry, item.hostKey));
@@ -4643,7 +4645,7 @@ async function probeHeldRestartCutRows(
     for (const delivery of registry.pendingDeliveries(id as ViewerConversationId)) snapshot.heldDeliveries[delivery.id] = delivery;
   }
   const interruptions = dependencies.interruptions
-    ?? interruptionObligationStore(interruptionObligationDirectory(registry.filename));
+    ?? interruptionObligationStore(interruptionObligationDirectory(registry.filename), { tryAdmission: true });
   const recognition = await restartCutTargets(
     registry,
     (dependencies.orchestratorSeats ?? activeOrchestratorSeats)(),

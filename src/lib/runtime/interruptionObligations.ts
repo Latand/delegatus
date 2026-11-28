@@ -108,6 +108,13 @@ export interface InterruptionObligationStore {
   withdraw(id: string): boolean;
 }
 
+interface InterruptionObligationStoreOptions {
+  /** Runs between reading a claimed journal and deleting it. */
+  afterPendingRead?: () => void;
+  /** Let callers with their own retry schedule defer on a busy journal. */
+  tryAdmission?: boolean;
+}
+
 /** Why a review round's reviewer, cut by a restart, is owed no continuation. */
 export const REVIEWER_CUT_RESOLUTION = "a review flow reviewer: its flow relaunches the round";
 
@@ -631,10 +638,7 @@ function appendDurably(filename: string, line: string): void {
     enough that no import can still be working on it. */
 function createInterruptionObligationStore(
   directory: string,
-  hooks: {
-    /** Runs between reading a claimed journal and deleting it. */
-    afterPendingRead?: () => void;
-  } = {},
+  options: InterruptionObligationStoreOptions = {},
   admitted = false,
   guardOnly = false,
   recipientRecords?: InterruptionObligation[],
@@ -663,7 +667,8 @@ function createInterruptionObligationStore(
   };
   const transaction = <T>(operation: () => T): T => {
     if (held) return operation();
-    return withFileTransactionSync(pendingFile, "interruption obligation import is busy", () => {
+    const admit = options.tryAdmission ? withFileTransactionAttempt : withFileTransactionSync;
+    return admit(pendingFile, "interruption obligation import is busy", () => {
       held = true;
       try { return mutation(operation); } finally { held = false; }
     });
@@ -793,7 +798,7 @@ function createInterruptionObligationStore(
     const claims = transaction(() => [pendingFile, ...abandonedClaims()].flatMap((source) => claim(source) ?? []));
     if (claims.length === 0) return;
     claims.forEach(readJournal);
-    hooks.afterPendingRead?.();
+    options.afterPendingRead?.();
     /* Claim takeover, publication and withdrawal use one fence whose name
        survives every rename. No hook or awaited read holds it. */
     transaction(() => {
@@ -1077,9 +1082,9 @@ function createInterruptionObligationStore(
 
 export function interruptionObligationStore(
   directory: string,
-  hooks: { afterPendingRead?: () => void } = {},
+  options: InterruptionObligationStoreOptions = {},
 ): InterruptionObligationStore {
-  return createInterruptionObligationStore(directory, hooks);
+  return createInterruptionObligationStore(directory, options);
 }
 
 const revisionOwner = process as typeof process & { __llvGuardObligationRevisions?: Map<string, number>; __llvGuardObligationSequence?: number };
