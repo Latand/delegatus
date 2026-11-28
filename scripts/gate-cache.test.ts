@@ -37,6 +37,18 @@ test("isolated checks remove the stage Git command shim from PATH", () => {
   expect(checkEnvironment({ PATH: [guard, "/usr/bin"].join(path.delimiter) }).PATH).toBe("/usr/bin");
 });
 
+test("package cache locations reach checks without changing their reusable inputs", () => {
+  const base = { PATH: "/usr/bin", LLV_GATE_CHECK_ENV: "BUN_INSTALL_CACHE_DIR,UV_CACHE_DIR" };
+  const caches = { BUN_INSTALL_CACHE_DIR: "/fixture/cache/bun", UV_CACHE_DIR: "/fixture/cache/uv", GOMODCACHE: "/fixture/cache/go" };
+  const producer = checkEnvironment({ ...base, ...caches });
+  const publisher = checkEnvironment(base);
+  expect(producer).toMatchObject(caches);
+  expect(environmentFingerprint(producer)).toBe(environmentFingerprint(publisher));
+  expect(checkInputEnvironment(producer)).toEqual({ LLV_GATE_CHECK_ENV: base.LLV_GATE_CHECK_ENV });
+  expect(checkInputEnvironment(publisher)).toEqual(checkInputEnvironment(producer));
+  expect(checkEnvironment(caches)).toMatchObject(caches);
+});
+
 test("pre-push isolation preserves the public CPU headroom setting", () => {
   const isolated = checkEnvironment({ PATH: "/usr/bin", DELEGATUS_GATE_CPU_HEADROOM: "23" });
   expect(isolated.DELEGATUS_GATE_CPU_HEADROOM).toBe("23");

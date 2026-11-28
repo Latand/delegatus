@@ -794,7 +794,8 @@ export function antigravityTranscriptPath(antigravityHome: string, sessionId: st
 
 /** Builds the filtered, confined child environment for `agy acp`.
     Applies `withAgentConfigSandbox` (matching Claude/Codex/Copilot hosts) and
-    confines `HOME`, `XDG_CACHE_HOME`, `XDG_DATA_HOME`, and `XDG_STATE_HOME`
+    confines `HOME`, `XDG_DATA_HOME`, and `XDG_STATE_HOME`. Package caches are
+    explicitly pinned to shared roots; the launch sandbox controls their writes.
     so native `agy` state stays under Delegatus's managed directories instead
     of writing into the operator's `~/.gemini/` or XDG roots. */
 export function antigravityChildEnv(

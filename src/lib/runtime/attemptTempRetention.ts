@@ -7,10 +7,11 @@ import { statePath } from "@/lib/configDir";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { withFileTransactionAsync, FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { attemptTempJournalPath, inspectTree, mountPointsUnder, sweepStaleTempDirs, resolvePhysicalPath, type ProcessScan } from "@/lib/tempSweep";
-import { allocatedAttemptBytes, attemptReferencesClear, attemptTreeHold, attemptProcessReferencesClear, blockedSubtrees, inspectAttemptTree, measureAttemptAllocation,
+import { allocatedAttemptBytes, attemptReferencesClear, attemptTreeHold, attemptProcessReferencesClear, blockedSubtrees, inspectAttemptTree,
   privilegedCleanupUnavailable, snapshotAttemptProtection, closedAttemptProtection, removeAttemptTree, RepositoryLinkInventory, repositoryReferencesAttemptTemp, ledgerLinkedEvidence,
   type BlockedSubtree, type RetainedCheckoutReads, type AttemptNamespaceProtection, type AttemptProtection } from "./attemptTempFilesystem";
 import { AttemptTempBudgetDeferred, attemptTempDeferralCode, attemptTempFailureDetail } from "./attemptTempDiagnostics";
+import * as attemptTempFilesystem from "./attemptTempFilesystem";
 import { preserveAttemptEvidence, type AttemptEvidenceSelection } from "./attemptTempEvidence";
 import { attemptEvidenceKey } from "./attemptEvidenceBinding";
 import { recordedRootHeld, readRecorded, recordRootRetirement, expireRecordedRootHolds, type CheckRow } from "@/lib/recordedChecks/store";
@@ -30,7 +31,7 @@ import { ATTEMPT_SCRATCH_AUDIT_INTERVAL_MS, ATTEMPT_SCRATCH_EXPIRY_OFFSET_MS, at
 import type { Pipeline } from "@/lib/pipelines/types";
 
 export type AttemptTempState = "live" | "settled" | "closed" | "expired" | "orphan" | "unknown";
-export type AttemptTempAuthority = { state: AttemptTempState; expiresAt?: number | null; checkout?: string | null; revision: string; isCurrent: () => boolean };
+export type AttemptTempAuthority = { state: AttemptTempState; expiresAt?: number | null; checkout?: string | null; checkouts?: readonly string[]; revision: string; isCurrent: () => boolean };
 const authorityDisposition = (state: AttemptTempState): "live" | "held" => state === "live" ? "live" : "held";
 /** Registration and adoption write the marker right after the directory
  * exists, so a root's birth is never later than its ledger row. */
@@ -51,9 +52,9 @@ export type AttemptTempOwner = {
   retainUntilClose: boolean;
   createdAt: number;
 };
-type Row = AttemptTempOwner & { identity: string; released: number; checkedAt: number; bytes: number };
-type ScheduledRoot = Row & { expiresAt: number };
-type AllocationRoot = Row & { measuredAt: number };
+type Row = AttemptTempOwner & { identity: string; released: number; checkedAt: number; bytes: number; measuredAt?: number; allocationAttemptAt?: number };
+type ScheduledRoot = Row & { expiresAt: number; failure?: string | null };
+type AllocationRoot = Row;
 export type EvidenceCopy = { destination: string; pipelineId: string | null; launchId: string; kind: "lane" | "agent" | "unattributed";
   createdAt: number; expiresAt: number | null; checkedAt: number; bytes: number };
 export const DEFAULT_ATTEMPT_TEMP_CAP_BYTES = 100 * 1024 ** 3;
@@ -119,7 +120,7 @@ const attemptTempIndexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS roots_pipeline ON roots(pipelineId,directory)",
   "CREATE INDEX IF NOT EXISTS roots_due ON roots(checkedAt,createdAt,directory)",
   "CREATE INDEX IF NOT EXISTS roots_age ON roots(createdAt,directory)",
-  "CREATE INDEX IF NOT EXISTS roots_allocation_due ON roots(measuredAt,createdAt,directory)",
+  "CREATE INDEX IF NOT EXISTS roots_allocation_due ON roots(allocationAttemptAt,createdAt,directory)",
   "CREATE INDEX IF NOT EXISTS roots_size ON roots(bytes DESC,createdAt,directory)",
   "CREATE INDEX IF NOT EXISTS copies_due ON copies(checkedAt,destination) WHERE kind<>'unattributed'",
   "CREATE INDEX IF NOT EXISTS copies_inspection ON copies(destination) WHERE kind<>'unattributed'",
@@ -149,9 +150,15 @@ export class AttemptTempStore {
         directory TEXT PRIMARY KEY, pipelineId TEXT, launchId TEXT NOT NULL,
         retainUntilClose INTEGER NOT NULL, createdAt REAL NOT NULL,
         identity TEXT NOT NULL, released INTEGER NOT NULL DEFAULT 0,
-        checkedAt REAL NOT NULL DEFAULT 0, bytes REAL NOT NULL DEFAULT 0)`);
+        checkedAt REAL NOT NULL DEFAULT 0, bytes REAL NOT NULL DEFAULT 0,
+        allocationAttemptAt REAL NOT NULL DEFAULT 0)`);
       if (!this.db.query<{ name: string }, []>("PRAGMA table_info(roots)").all().some(column => column.name === "measuredAt"))
         this.db.exec("ALTER TABLE roots ADD COLUMN measuredAt REAL NOT NULL DEFAULT 0");
+      if (!this.db.query<{ name: string }, []>("PRAGMA table_info(roots)").all().some(column => column.name === "allocationAttemptAt")) {
+        this.db.exec("ALTER TABLE roots ADD COLUMN allocationAttemptAt REAL NOT NULL DEFAULT 0");
+        this.db.exec("UPDATE roots SET allocationAttemptAt=measuredAt");
+        this.db.exec("DROP INDEX IF EXISTS roots_allocation_due");
+      }
       this.db.exec(`CREATE TABLE IF NOT EXISTS copies (
         destination TEXT PRIMARY KEY, pipelineId TEXT, launchId TEXT NOT NULL, kind TEXT NOT NULL,
         createdAt REAL NOT NULL, expiresAt REAL, checkedAt REAL NOT NULL DEFAULT 0, bytes REAL NOT NULL DEFAULT 0)`);
@@ -302,8 +309,8 @@ export class AttemptTempStore {
       return result.changes > 0;
     }).immediate();
   }
-  recoverTrash(now: () => number, deadline: number, budgetNow: () => number, scheduledOnly = false) {
-    if (!scheduledOnly) return this.recovery.page(now, deadline, budgetNow);
+  recoverTrash(now: () => number, deadline: number, budgetNow: () => number, scheduledOnly = false, dryRun = false) {
+    if (!scheduledOnly) return this.recovery.page(now, deadline, budgetNow, undefined, dryRun);
     const discovery = attemptScratchAuditDue(this.schedulePosition().discoveryAfter, now()) && {
       unknown: (scratch: string, name: string) => {
         if (this.recoverLegacyScratch(scratch, name, now())) return "recovered attempt owner";
@@ -311,9 +318,10 @@ export class AttemptTempStore {
       },
       complete: () => this.postponeDiscovery(now() + ATTEMPT_SCRATCH_AUDIT_INTERVAL_MS),
     };
-    return this.recovery.page(now, deadline, budgetNow, discovery);
+    return this.recovery.page(now, deadline, budgetNow, discovery, dryRun);
   }
   queueTrashIntent(directory: string, identity: string) { this.recovery.queueIntent(directory, identity); }
+  clearStaleTrashIntent(directory: string, identity: string) { this.recovery.clearStaleIntent(directory, identity); }
   refreshTrashRecovery(directory: string) { this.recovery.refresh(directory); }
   clearTrashRecovery(directory: string) { this.recovery.forget(directory); }
   trashRecoveryWatches(directory: string) { return this.recovery.watches(directory); }
@@ -353,7 +361,7 @@ export class AttemptTempStore {
   }
   release(directory: string) {
     this.upgradeScratchRetention();
-    this.db.query("UPDATE roots SET released=1,checkedAt=0 WHERE directory=?").run(directory);
+    this.db.query("UPDATE roots SET released=1,checkedAt=0,measuredAt=0,allocationAttemptAt=0 WHERE directory=?").run(directory);
     const owner = this.owner(directory);
     if (owner?.pipelineId) {
       const pipeline = pipelineRecordReader(owner.pipelineId).read();
@@ -504,7 +512,7 @@ export class AttemptTempStore {
     return row ? { ...row, durationMs: Math.max(0, row.endedAt - row.startedAt) } : null;
   }
   private scheduledDue(now: number, limit: number, after?: Pick<ScheduledRoot, "expiresAt" | "directory">) {
-    return this.db.query<ScheduledRoot, [number, number, string, number, number]>(`SELECT r.*,t.expiresAt FROM root_retention t
+    return this.db.query<ScheduledRoot, [number, number, string, number, number]>(`SELECT r.*,t.expiresAt,t.failure FROM root_retention t
       JOIN roots r ON r.directory=t.directory WHERE t.expiresAt<=? AND (t.expiresAt,t.directory)>(?,?) AND r.checkedAt<=?
       ORDER BY t.expiresAt,t.directory LIMIT ?`).all(now, after?.expiresAt ?? -Number.MAX_VALUE, after?.directory ?? "", now, limit);
   }
@@ -561,10 +569,13 @@ export class AttemptTempStore {
   allocationDue(now: number, limit = 4): AllocationRoot[] {
     // A proof retry can be hours or days away. Let its zero or stale
     // allocation through without repeating the retirement proof.
-    return this.db.query<AllocationRoot, [number, number, number, number, number]>(`SELECT r.* FROM roots r WHERE measuredAt<=?
+    return this.db.query<AllocationRoot, [number, number, number, number, number]>(`SELECT r.* FROM roots r WHERE allocationAttemptAt<=?
       AND (r.bytes=0 OR r.measuredAt<=? OR r.checkedAt<=? OR NOT EXISTS (
         SELECT 1 FROM root_retention t WHERE t.directory=r.directory AND t.expiresAt<=?))
-      ORDER BY measuredAt,createdAt,directory LIMIT ?`).all(now - 60_000, now - 60 * 60_000, now, now, limit);
+      ORDER BY allocationAttemptAt,createdAt,directory LIMIT ?`).all(now - 60_000, now - 60 * 60_000, now, now, limit);
+  }
+  allocationObservationRoots(limit = 8192): AllocationRoot[] {
+    return this.db.query<AllocationRoot, [number]>("SELECT * FROM roots ORDER BY directory LIMIT ?").all(limit);
   }
   /** Subtrees of a root that this user cannot remove, as last observed. */
   recordBlocked(directory: string, blocked: { count: number; entries: BlockedSubtree[] } | null, at: number) {
@@ -606,6 +617,9 @@ export class AttemptTempStore {
   forget(directory: string) {
     forgetAttemptProtection(directory);
     this.db.transaction(() => {
+      // A root may have carried GNU du's shared-inode charge. Reassign all
+      // surviving names on the next host-wide allocation sample after unlink.
+      this.db.query("UPDATE roots SET allocationAttemptAt=0 WHERE directory<>? AND allocationAttemptAt<>0").run(directory);
       this.db.query("DELETE FROM root_retention WHERE directory=?").run(directory);
       this.db.query("DELETE FROM root_expiry_admission WHERE directory=?").run(directory);
       this.db.query("DELETE FROM root_blocked WHERE directory=?").run(directory);
@@ -746,12 +760,22 @@ export class AttemptTempStore {
   copyEligible(destination: string, eligible: boolean) {
     this.db.query("INSERT INTO copy_eligibility VALUES(?,?) ON CONFLICT(destination) DO UPDATE SET eligible=excluded.eligible").run(destination, Number(eligible));
   }
-  measure(directory: string, bytes: number, at = Date.now()) { this.db.query("UPDATE roots SET bytes=?,measuredAt=? WHERE directory=?").run(bytes, at, directory); }
-  recordAllocation(owner: AllocationRoot, bytes: number | null, at: number) {
-    this.db.query(`UPDATE roots SET measuredAt=?${bytes === null ? "" : ",bytes=?"} WHERE directory=? AND identity=?
-      AND launchId=? AND pipelineId IS ? AND createdAt=? AND retainUntilClose=? AND measuredAt=?`)
-      .run(at, ...(bytes === null ? [] : [bytes]), owner.directory, owner.identity, owner.launchId, owner.pipelineId, owner.createdAt,
-        Number(owner.retainUntilClose), owner.measuredAt);
+  measure(directory: string, bytes: number, at = Date.now()) {
+    this.db.query("UPDATE roots SET bytes=?,measuredAt=?,allocationAttemptAt=? WHERE directory=?").run(bytes, at, at, directory);
+  }
+  recordAllocation(owner: AllocationRoot, bytes: number | null, at: number, complete = true) {
+    this.db.query(`UPDATE roots SET allocationAttemptAt=?${complete ? ",measuredAt=?" : ""}${bytes === null ? "" : ",bytes=?"} WHERE directory=? AND identity=?
+      AND launchId=? AND pipelineId IS ? AND createdAt=? AND retainUntilClose=? AND released=? AND measuredAt=?`)
+      .run(at, ...(complete ? [at] : []), ...(bytes === null ? [] : [bytes]), owner.directory, owner.identity, owner.launchId, owner.pipelineId, owner.createdAt,
+        Number(owner.retainUntilClose), owner.released, owner.measuredAt ?? 0);
+  }
+  recordAllocationPage(owners: readonly AllocationRoot[], observations: ReadonlyMap<string, number>, at: number) {
+    this.db.transaction(() => {
+      for (const [index, owner] of owners.entries()) {
+        const bytes = observations.get(owner.directory);
+        this.recordAllocation(owner, bytes ?? null, at + index, bytes !== undefined);
+      }
+    })();
   }
   bytes() { return this.db.query<{ bytes: number }, []>("SELECT bytes FROM totals WHERE id=1").get()!.bytes; }
   close() { this.db.close(); this.releaseMemoryTracking?.(); this.releaseMemoryTracking = undefined; }
@@ -893,7 +917,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
     retained: options.checkoutReads, validationReuseMs: options.checkoutReads ? 5_000 : 0 });
   const recovery = options.selection
     ? { entries: 0, manifestEntries: 0, checks: 0, restored: 0, adopted: 0, recoveredDirectory: null, ledgerOwned: null, outcomes: [] }
-    : store.recoverTrash(now, deadline, budgetNow, options.scheduledOnly);
+    : store.recoverTrash(now, deadline, budgetNow, options.scheduledOnly, options.mode === "dry-run");
   let recoveredIntent: Row | null = null;
   report.adopted += recovery.adopted;
   // A claimed tree that only its ledger row names goes back to the ordinary
@@ -1000,7 +1024,6 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         outcome(owner.directory, "held", bytes, refused.reason, refused.reasonCode); return;
       }
       if (!cleaner) store.defer(owner.directory, now() + 60_000);
-      recoveredTrash = store.recoveredTrash(owner.directory);
       requiredExpiry = store.requiredRootExpiry(owner.directory);
       const stat = fs.lstatSync(owner.directory, { throwIfNoEntry: false });
       // Stable aliases are valid (including platform temp-directory aliases).
@@ -1015,6 +1038,8 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       };
       if (!pathCurrent(owner.directory)) { outcome(owner.directory, "held", bytes, "physical ancestry changed or protected", "root_ancestry_changed"); return; }
       if (stat && (!stat.isDirectory() || stat.isSymbolicLink() || `${stat.dev}:${stat.ino}` !== owner.identity)) { outcome(owner.directory, disposition, bytes, reason, reasonCode); return; }
+      if (options.mode !== "dry-run") store.clearStaleTrashIntent(owner.directory, owner.identity);
+      recoveredTrash = store.recoveredTrash(owner.directory);
       // Custody survives a missing namespace with zero allocation. A pending
       // quarantine retains its allocation projection until replay resolves.
       const pendingJournal = fs.existsSync(attemptTempJournalPath(owner.directory));
@@ -1069,15 +1094,32 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
           outcome(owner.directory, initialState === "live" ? "live" : "held", bytes, `ownership ${initialState}; allocation retained`, `owner_${initialState}`);
           return;
         }
-        const recordedOnly = owner.bytes > 0 && initialState !== null && finished(initialState)
+        // A visit can beat preparation to the root, or release may have been
+        // measured before the lane recorded the attempt's completion.
+        const needsFinalMeasurement = owner.released && owner.pipelineId
+          && (owner.measuredAt ?? 0) < (store.retentionExpiry(owner.directory) ?? 1);
+        const recordedOnly = owner.bytes > 0 && !needsFinalMeasurement && initialState !== null && finished(initialState)
           && !fs.existsSync(path.join(owner.directory, ".delegatus-keep")) && !recordedRootHeld(owner.directory)
           && ledgerLinkedEvidence(owner.directory).length === 0;
-        const measured = await measureAttemptAllocation(owner.directory, { budgetMs: remaining(), bytes: owner.bytes, recordedOnly });
+        const measured = await attemptTempFilesystem.measureAttemptAllocation(owner.directory, { budgetMs: remaining(), bytes: owner.bytes, recordedOnly });
         if (recordedOnly) recordedAllocation.add(owner.directory);
         // An unreadable walk reports only a lower bound. Losing visibility
         // cannot release pressure without a complete measurement or removal.
         bytes = measured.unreadable ? Math.max(owner.bytes, measured.bytes) : measured.bytes;
-        if (measured.unreadable) partiallyRead.add(owner.directory);
+        if (measured.unreadable) {
+          partiallyRead.add(owner.directory);
+          store.recordAllocation(owner, null, Date.now(), false);
+          const blocked = await blockedSubtrees(owner.directory).catch(() => ({ count: 0, entries: [] }));
+          if (blocked.count > 0) {
+            await holdForOperator(bytes, measured.reason ?? "cleanup namespace could not complete an allocation sample");
+            return;
+          }
+          disposition = "operator";
+          reason = "allocation sample incomplete; full post-completion sample required";
+          reasonCode = "allocation_incomplete";
+          outcome(owner.directory, disposition, bytes, reason, reasonCode);
+          return;
+        }
       } else bytes = pendingTrash ? owner.bytes : 0;
       if (!stat && !pendingTrash) store.measure(owner.directory, 0);
       if (stat) {
@@ -1188,18 +1230,35 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         [...rootWatches(directory), ...authorityWatches(), ...inventory.mutationDirectories()],
         () => retirementAuthorityCurrent(directory) && processInputsClear(directory), remaining(), ownerAuthorityCurrent);
       const scan = () => options.scan([owner.directory, currentDirectory]);
-      const observeReferences = async (directory: string, checkout?: string | null) => {
+      const observeReferences = async (directory: string, checkout?: string | null, checkouts: readonly string[] = []) => {
         try {
-          if (checkout !== undefined) {
-            const physical = checkout && resolvePhysicalPath(checkout);
+          for (const dependency of [...new Set([...(checkout == null ? [] : [checkout]), ...checkouts])]) {
+            let checkoutStat: fs.Stats | undefined;
+            try { checkoutStat = fs.lstatSync(dependency, { throwIfNoEntry: false }); }
+            catch (error) {
+              if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+                disposition = "operator";
+                reason = `open lane checkout is missing: ${dependency}`;
+                reasonCode = "checkout_unreadable";
+                return false;
+              }
+              throw error;
+            }
+            if (!checkoutStat) {
+              disposition = "operator";
+              reason = `open lane checkout is missing: ${dependency}`;
+              reasonCode = "checkout_unreadable";
+              return false;
+            }
+            const physical = dependency && resolvePhysicalPath(dependency);
             const containsCheckout = physical && [owner.directory, directory].some(candidate => {
               const target = resolvePhysicalPath(candidate);
               return physical === target || physical.startsWith(target + path.sep);
             });
-            if (!checkout || containsCheckout || await repositoryReferencesAttemptTemp(checkout, owner.directory, directory, inventory)) {
+            if (!dependency || containsCheckout || await repositoryReferencesAttemptTemp(dependency, owner.directory, directory, inventory)) {
               disposition = "live";
               reason = "open lane checkout has an unresolved scratch dependency";
-              reasonCode = !checkout ? "checkout_unknown" : "checkout_link_reference";
+              reasonCode = !dependency ? "checkout_unknown" : "checkout_link_reference";
               return false;
             }
           }
@@ -1282,6 +1341,20 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         const settled = state === "closed" || state === "expired" || state === "settled" && !owner.retainUntilClose
           || state === "orphan" && now() - owner.createdAt >= (options.maxAgeMs ?? 86400000);
         if (!settled || cleaner && !finished(state)) return false;
+        // The process scan cannot see a paused lane's durable checkout. Read
+        // its owner-bound checkout dependency before the expensive retirement
+        // proof, then repeat the same observation at the dispatch boundary.
+        if (options.authority) {
+          const admission = await options.authority(owner, inventory);
+          checkBudget();
+          if (admission.state !== state || !admission.isCurrent()) {
+            reason = "ownership changed during checkout dependency admission";
+            reasonCode = "authority_changed";
+            return false;
+          }
+          if ((admission.checkout !== undefined || admission.checkouts !== undefined)
+            && !await observeReferences(directory, admission.checkout, admission.checkouts)) return false;
+        }
         const idleHold = cleanerHold(directory);
         if (idleHold) {
           reason = idleHold;
@@ -1347,7 +1420,8 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         // Checkout state can change while evidence and producer authority are
         // awaited. Repeat every process/socket/container reference observation
         // at the last eligibility boundary before quarantine or removal.
-        if (!await observeReferences(directory, typeof authorityObservation === "string" ? undefined : authorityObservation.checkout)) return false;
+        if (!await observeReferences(directory, typeof authorityObservation === "string" ? undefined : authorityObservation.checkout,
+          typeof authorityObservation === "string" ? [] : authorityObservation.checkouts)) return false;
         checkBudget();
         // All awaited authority and consumer observations are complete.
         // Activation may revoke the observations above. Once admitted here,
@@ -1551,6 +1625,8 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       // A root still held after its retention ended steps back from the
       // expired share of the page, so the next oldest gets its visit.
       const last = report.outcomes.at(-1), ended = store.retentionExpiry(owner.directory);
+      if (last?.directory === owner.directory && last.reasonCode === "permission_budget")
+        noteFailure("permission_budget");
       if (ended !== null && ended <= now() && last?.directory === owner.directory && !options.cleaner?.overCap
         && (!options.scheduledOnly || last.disposition !== "removed")) {
         const current = store.owner(owner.directory);
@@ -1559,7 +1635,8 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
             || last.reasonCode === "root_budget" && AttemptProtectionInventory.exists(owner.directory);
           const quarantined = !fs.existsSync(owner.directory) && fs.existsSync(attemptTempJournalPath(owner.directory));
           const fullProofWithoutProgress = ["checkout_budget", "namespace_budget", "root_budget", "mutation_fence_budget"].includes(last.reasonCode);
-          const retryMs = last.disposition !== "deferred" ? EXPIRED_HOLD_RETRY_MS
+          const retryMs = !options.cleaner && ["checkout_changed", "checkout_link_reference", "permission_budget"].includes(last.reasonCode) ? 0
+            : last.disposition !== "deferred" ? EXPIRED_HOLD_RETRY_MS
             : !quarantined && !actionable && (options.scheduledOnly && !pressure || pressure && fullProofWithoutProgress)
               ? EXPIRED_PROOF_RETRY_MS : 0;
           const retryAt = retryMs ? Math.max(current.checkedAt, now() + retryMs) : current.checkedAt;
@@ -1592,7 +1669,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
     }
   } else if (!pressure && options.scheduledOnly) {
     for (const owner of store.routineDue(now(), budget)) {
-      const rootWindow = !owner.bytes || AttemptProtectionInventory.exists(owner.directory)
+      const rootWindow = !owner.bytes || owner.failure === "permission_budget" || AttemptProtectionInventory.exists(owner.directory)
         ? ATTEMPT_TEMP_LARGE_ROOT_BUDGET_MS : attemptTempRootWindow(owner.bytes);
       const window = Math.min(rootWindow, remaining());
       // Keep a root at the head of the continuation when the preceding work

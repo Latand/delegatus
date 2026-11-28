@@ -4,7 +4,7 @@ import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { statePath } from "@/lib/configDir";
 import { attemptTempEffectiveCapBytes, AttemptTempStore, sweepAttemptTemps,
   type AttemptTempAuthority, type AttemptTempOwner, type AttemptTempState, type AttemptTempSweepOptions } from "./attemptTempRetention";
-import { pipelineChangeSource, pipelineRecordReader } from "@/lib/pipelines/store";
+import { loadPipelinesForList, pipelineChangeSource, pipelineRecordReader } from "@/lib/pipelines/store";
 import { laneFinish, FINISHED_LANE_RETENTION_MS } from "@/lib/pipelines/laneFinish";
 import type { PipelineStageAttempt } from "@/lib/pipelines/types";
 import { attemptTempJournalPath, tempSweepMode } from "@/lib/tempSweep";
@@ -15,8 +15,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { RepositoryLinkInventory, type RetainedCheckoutReads } from "./attemptTempFilesystem";
+import * as attemptTempFilesystem from "./attemptTempFilesystem";
 import { attributeCopyBeforeRootRetirement, sweepEvidenceCopies } from "./attemptEvidenceCopies";
-import { measureAttemptAllocation } from "./attemptTempFilesystem";
 import { agentRegistry } from "@/lib/agent/registry";
 import { finishedAgent } from "./temporaryDataProduction";
 import { stateDatabaseBusy } from "@/lib/state/lockWait";
@@ -28,6 +28,17 @@ const checkoutReads: RetainedCheckoutReads = new Map();
 const ALLOCATION_WINDOW_MS = 5_000;
 /** Root work of one tick, shared by the expiry page and over-cap reclaim. */
 const ROOT_BUDGET_MS = 40_000;
+let openLaneCheckoutSnapshot: { stateFile: string; revision: number; paths: readonly string[] } | undefined;
+
+function openLaneCheckouts(stateFile: string, revision: number): readonly string[] {
+  if (!openLaneCheckoutSnapshot || openLaneCheckoutSnapshot.stateFile !== stateFile
+    || openLaneCheckoutSnapshot.revision !== revision) {
+    openLaneCheckoutSnapshot = { stateFile, revision, paths: loadPipelinesForList()
+      .filter(candidate => candidate.state !== "closed" && candidate.state !== "completed")
+      .map(candidate => candidate.worktreeDir).filter((value): value is string => !!value).sort() };
+  }
+  return openLaneCheckoutSnapshot.paths;
+}
 
 export async function attemptTempAuthority(owner: AttemptTempOwner, _inventory = new RepositoryLinkInventory(), now = Date.now,
   retentionMs = FINISHED_LANE_RETENTION_MS, policy: "lane" | "attempt" | "scratch" = "lane"): Promise<AttemptTempAuthority> {
@@ -50,8 +61,12 @@ export async function attemptTempAuthority(owner: AttemptTempOwner, _inventory =
         && (state !== "expired" || now() >= expiresAt!) };
   }
   const reader = pipelineRecordReader(owner.pipelineId), version = reader.version();
+  const dependencies = policy === "scratch" ? pipelineChangeSource() : null;
+  const dependencyRevision = dependencies?.revision();
+  const checkouts = dependencies ? openLaneCheckouts(statePath("state.sqlite"), dependencyRevision!) : [];
   const observed = (state: AttemptTempState, expiresAt: number | null = null): AttemptTempAuthority => ({ state, expiresAt, revision: version,
-    isCurrent: () => reader.version() === version && (state !== "expired" || expiresAt !== null && now() >= expiresAt) });
+    isCurrent: () => reader.version() === version && (!dependencies || dependencies.revision() === dependencyRevision)
+      && (state !== "expired" || expiresAt !== null && now() >= expiresAt) });
   const pipeline = reader.read();
   if (!pipeline) return observed("orphan");
   const matches = (attempt: PipelineStageAttempt) => attempt.launchId === owner.launchId
@@ -62,8 +77,7 @@ export async function attemptTempAuthority(owner: AttemptTempOwner, _inventory =
   if (attempt?.launchId === owner.launchId && attempt.state === "running") return observed("live");
   if (policy === "scratch") {
     const expiry = attemptScratchExpiry(pipeline, owner);
-    if (expiry !== null) return { ...observed(now() >= expiry ? "expired" : "closed", expiry),
-      ...(pipeline.state === "closed" || pipeline.state === "completed" ? {} : { checkout: pipeline.worktreeDir ?? pipeline.repoDir }) };
+    if (expiry !== null) return { ...observed(now() >= expiry ? "expired" : "closed", expiry), ...(checkouts.length ? { checkouts } : {}) };
     return observed(attempt || pipeline.state === "closed" || pipeline.state === "completed" ? "live" : "unknown");
   }
   if (pipeline.state === "closed" || pipeline.state === "completed") {
@@ -240,24 +254,42 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
           backfill = await backfillAttemptTempRetention(store, { audit: true, remaining: () => auditEnd - sweepMonotonicNow() });
         }
         const remaining = () => end - sweepMonotonicNow();
-        for (const owner of store.allocationDue(Date.now(), 4)) {
+        const due = store.allocationDue(Date.now(), 64), measurable: typeof due = [];
+        for (const [index, owner] of due.entries()) {
           if (remaining() <= 0) break;
-          let bytes: number | null = null;
+          if (mode === "on" && store.rebindRenumberedRoot(owner)) continue;
           try {
-            if (mode === "on" && store.rebindRenumberedRoot(owner)) continue; // Measured under its new binding next.
             const before = fs.lstatSync(owner.directory, { throwIfNoEntry: false });
             if (!before && !store.recoveredTrash(owner.directory)
-              && !fs.lstatSync(attemptTempJournalPath(owner.directory), { throwIfNoEntry: false })) bytes = 0;
-            if (before?.isDirectory() && `${before.dev}:${before.ino}` === owner.identity) {
-              const measured = await measureAttemptAllocation(owner.directory, { budgetMs: Math.max(1, remaining()) });
-              const after = fs.lstatSync(owner.directory, { throwIfNoEntry: false });
-              if (after?.isDirectory() && `${after.dev}:${after.ino}` === owner.identity)
-                bytes = measured.unreadable ? Math.max(owner.bytes, measured.bytes) : measured.bytes;
-            }
-          } catch { /* Keep the last allocation when the observation could not complete. */ }
-          // Advance even on ENOENT, a replaced inode or a refused read.
-          // Ownership and any quarantine remain available for normal replay.
-          store.recordAllocation(owner, bytes, Date.now());
+              && !fs.lstatSync(attemptTempJournalPath(owner.directory), { throwIfNoEntry: false })) {
+              store.recordAllocation(owner, 0, Date.now() + index);
+            } else if (before?.isDirectory() && `${before.dev}:${before.ino}` === owner.identity) measurable.push(owner);
+            else store.recordAllocation(owner, null, Date.now() + index, false);
+          } catch { store.recordAllocation(owner, null, Date.now() + index, false); }
+        }
+        if (measurable.length && remaining() > 0) {
+          // Every bounded tick samples the registered roots in one GNU du
+          // inode set, then updates the due identities. This keeps attribution
+          // stable even when linked names fall on different queue pages.
+          const observationRoots = store.allocationObservationRoots();
+          const observed = new Map<string, typeof observationRoots[number]>();
+          for (const owner of observationRoots) {
+            try {
+              const current = fs.lstatSync(owner.directory, { throwIfNoEntry: false });
+              if (current?.isDirectory() && !current.isSymbolicLink() && `${current.dev}:${current.ino}` === owner.identity)
+                observed.set(owner.directory, owner);
+            } catch { /* An unreadable path remains charged at its last full sample. */ }
+          }
+          const attemptedAt = Date.now();
+          try {
+            const observations = await attemptTempFilesystem.measureAttemptAllocations([...observed.keys()], { budgetMs: Math.max(1, remaining()) });
+            store.recordAllocationPage([...observed.values()], observations, attemptedAt);
+          } catch {
+            // The attempt time is separate from the last successful sample.
+            // Stagger equal-time failures so one oversized root cannot pin the
+            // head of the next page indefinitely.
+            for (const [index, owner] of measurable.entries()) store.recordAllocation(owner, null, attemptedAt + index, false);
+          }
         }
       },
       beforeRootRetirement: (directory, identity) => {

@@ -6,6 +6,7 @@ import { AttemptTempStore, DEFAULT_ATTEMPT_TEMP_CAP_BYTES, sweepAttemptTemps } f
 import { attemptTempAuthority } from "./attemptTempProduction";
 import { finishedLane } from "./attemptTempRetention.testSupport";
 import { savePipelines } from "../pipelines/store";
+import { attemptTempJournalPath } from "@/lib/tempSweep";
 
 const NOW = Date.parse("2035-01-15T00:00:00Z"), GiB = 1024 ** 3, roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -39,9 +40,9 @@ test("pressure prioritizes two largest roots across the cursor page", async () =
   for (let i = 1; i < 1029; i++) f.make(i, 4096);
   const nextLargest = f.make(1029, GiB);
   try {
-    const report = await sweepAttemptTemps(f.store, { ...f.options, capBytes: 0,
+    const report = await sweepAttemptTemps(f.store, { ...f.options, capBytes: 0, maxRoots: 2,
       availableBytes: () => 1, state: async () => "live" });
-    expect(report.outcomes.slice(0, 2).map(row => row.directory)).toEqual([largest, nextLargest]);
+    expect(report.outcomes.map(row => row.directory)).toEqual([largest, nextLargest]);
   } finally { f.store.close(); }
 });
 
@@ -60,6 +61,27 @@ test("routine scratch expiry keeps its per-tick budget below the reserve without
     expect(report).toMatchObject({ lowSpace: true, pressure: false, pass: null, rootPageLimit: 4, checked: 4, removed: 4, errors: 0 });
     expect(due.filter(directory => fs.existsSync(directory))).toHaveLength(2);
     expect(f.store.activePressurePass()).toBeNull();
+  } finally { f.store.close(); }
+});
+
+test.each(["missing", "unmoved", "replaced", "journal", "dry-run"])("recovery handles a %s trash intent without removing a root", scenario => {
+  const f = fixture();
+  fs.mkdirSync(path.join(f.root, "scratch"));
+  const directory = f.make(0, 4096);
+  try {
+    f.store.queueTrashIntent(directory, f.store.owner(directory)!.identity);
+    if (scenario === "missing") fs.rmSync(directory, { recursive: true });
+    if (scenario === "replaced") {
+      fs.renameSync(directory, directory + "-previous");
+      fs.mkdirSync(directory);
+    }
+    const journal = attemptTempJournalPath(directory);
+    if (scenario === "journal") fs.writeFileSync(journal, "unreadable journal");
+    const preview = scenario === "dry-run";
+    f.store.recoverTrash(() => NOW, NOW + 1000, () => NOW, false, preview);
+    expect(f.store.recoveredTrash(directory)).toBe(scenario !== "missing" && scenario !== "unmoved");
+    expect(fs.existsSync(directory)).toBe(scenario !== "missing");
+    expect(fs.existsSync(journal)).toBe(scenario === "journal");
   } finally { f.store.close(); }
 });
 

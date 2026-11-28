@@ -1463,7 +1463,7 @@ const kibibytes = (output: string | undefined) => {
   return Number.isFinite(value) && value >= 0 ? value * 1024 : null;
 };
 
-export async function measureAttemptAllocation(directory: string, settings: NamespaceBudget = {}): Promise<{ bytes: number; unreadable: boolean }> {
+export async function measureAttemptAllocation(directory: string, settings: NamespaceBudget = {}): Promise<{ bytes: number; unreadable: boolean; reason?: string }> {
   if (settings.recordedOnly) {
     const blocks = fs.lstatSync(directory).blocks;
     return { bytes: Math.max(settings.bytes ?? 0, Number.isFinite(blocks) ? blocks * 512 : 0), unreadable: false };
@@ -1472,17 +1472,71 @@ export async function measureAttemptAllocation(directory: string, settings: Name
   const until = performance.now() + attemptTempRemaining(Math.max(0, Math.min(30_000, settings.budgetMs ?? 30_000)));
   if (attemptTempRemaining(until - performance.now()) <= 0) throw new AttemptTempBudgetDeferred("attempt measurement time budget exhausted");
   let partial: number | null = null;
+  let reason: string | undefined;
   try {
     const bytes = kibibytes((await run("du", ["-skx", "--", directory], Math.max(1, Math.floor(attemptTempRemaining(until - performance.now()))))).stdout);
     if (bytes !== null) return { bytes, unreadable: false };
-  } catch (error) { partial = kibibytes((error as { stdout?: string }).stdout); }
-  let bytes = partial ?? fs.lstatSync(directory).blocks * 512;
-  if (process.platform === "linux" && performance.now() < until) {
-    try { bytes = Math.max(bytes, kibibytes((await containerCommand(directory, "measure", directory, undefined, false, undefined,
-      { ...settings, budgetMs: attemptTempRemaining(until - performance.now()) })).stdout) ?? 0); }
-    catch { /* Keep the readable lower bound. */ }
+  } catch (error) {
+    partial = kibibytes((error as { stdout?: string }).stdout);
+    reason = attemptTempFailureDetail(error);
   }
-  return { bytes, unreadable: true };
+  const bytes = partial ?? fs.lstatSync(directory).blocks * 512;
+  if (process.platform === "linux" && performance.now() < until) {
+    try {
+      const namespaceBytes = kibibytes((await containerCommand(directory, "measure", directory, undefined, false, undefined,
+        { ...settings, budgetMs: attemptTempRemaining(until - performance.now()) })).stdout);
+      if (namespaceBytes !== null) return { bytes: namespaceBytes, unreadable: false };
+    }
+    catch (error) { reason = attemptTempFailureDetail(error); }
+  }
+  return { bytes, unreadable: true, ...(reason ? { reason } : {}) };
+}
+
+/** Measure a bounded allocation page in one du process. GNU du tracks inode
+ * identities across all operands, so a hardlinked payload shared by two stage
+ * roots contributes once to the ledger total. A timed-out walk yields no full
+ * observations; callers keep the prior sizes and schedule another attempt. */
+export async function measureAttemptAllocations(directories: readonly string[], settings: NamespaceBudget = {}): Promise<Map<string, number>> {
+  const result = new Map<string, number>();
+  if (!directories.length) return result;
+  if (directories.length === 1 || process.platform === "win32") {
+    for (const directory of directories) {
+      const measured = await measureAttemptAllocation(directory, settings);
+      if (measured.unreadable) throw new AttemptTempBudgetDeferred("attempt allocation observation incomplete");
+      result.set(directory, measured.bytes);
+    }
+    return result;
+  }
+  const until = performance.now() + attemptTempRemaining(Math.max(0, Math.min(30_000, settings.budgetMs ?? 30_000)));
+  let stdout = "";
+  try { stdout = (await run("du", ["-skx", "--", ...directories], Math.max(1, Math.floor(attemptTempRemaining(until - performance.now()))))).stdout; }
+  catch (error) {
+    // GNU du emits completed operands before returning nonzero for an
+    // unreadable operand. Keep those observations and isolate only missing
+    // roots while the shared tick budget remains.
+    stdout = typeof (error as { stdout?: unknown }).stdout === "string" ? (error as { stdout: string }).stdout : "";
+  }
+  const byPath = new Map<string, number>();
+  for (const line of stdout.trimEnd().split("\n")) {
+    const tab = line.indexOf("\t"), kibibytes = Number(line.slice(0, tab));
+    if (tab > 0 && Number.isFinite(kibibytes) && kibibytes >= 0) byPath.set(line.slice(tab + 1), kibibytes * 1024);
+  }
+  const missing = directories.filter(directory => byPath.get(directory) === undefined);
+  const missingIndex = new Map(missing.map((directory, index) => [directory, index]));
+  for (const directory of directories) {
+    let bytes = byPath.get(directory);
+    const remaining = attemptTempRemaining(until - performance.now());
+    if (bytes === undefined && remaining > 0) {
+      try {
+        const index = missingIndex.get(directory)!;
+        const isolated = await measureAttemptAllocation(directory, { ...settings,
+          budgetMs: Math.max(1, Math.floor(remaining / Math.max(1, missing.length - index))) });
+        if (!isolated.unreadable) bytes = isolated.bytes;
+      } catch { /* Leave this root due for its own bounded retry. */ }
+    }
+    if (bytes !== undefined) result.set(directory, bytes);
+  }
+  return result;
 }
 
 export async function allocatedAttemptBytes(directory: string, settings: NamespaceBudget = {}): Promise<number> {

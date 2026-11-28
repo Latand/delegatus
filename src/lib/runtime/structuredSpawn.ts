@@ -262,6 +262,17 @@ export function materializeStructuredHostAccess(
     } : () => fs.rmSync(scratchDirectory, { recursive: true, force: true });
     if (configDirectory) baseEnv.LLV_AGENT_SANDBOX_ROOT = configDirectory;
     if (!restricted) {
+      if (owner?.pipelineId) {
+        const home = sourceEnv.HOME || os.homedir();
+        const bunRoot = sourceEnv.BUN_INSTALL || path.join(sourceEnv.XDG_CACHE_HOME || home, ".bun");
+        const uvRoot = process.platform === "win32" && sourceEnv.LOCALAPPDATA
+          ? path.join(sourceEnv.LOCALAPPDATA, "uv", "cache")
+          : path.join(sourceEnv.XDG_CACHE_HOME || path.join(home, ".cache"), "uv");
+        baseEnv.BUN_INSTALL_CACHE_DIR = sourceEnv.BUN_INSTALL_CACHE_DIR || path.join(bunRoot, "install", "cache");
+        baseEnv.UV_CACHE_DIR = sourceEnv.UV_CACHE_DIR || uvRoot;
+        const goPath = sourceEnv.GOPATH?.split(path.delimiter).find(Boolean) || path.join(home, "go");
+        baseEnv.GOMODCACHE = sourceEnv.GOMODCACHE || path.join(goPath, "pkg", "mod");
+      }
       return {
         env: {
           ...baseEnv,
@@ -277,6 +288,18 @@ export function materializeStructuredHostAccess(
         cleanup,
       };
     }
+    // Restricted stages may read the shared caches. The sandbox still denies
+    // writes outside its granted roots, so package-manager cache paths do not
+    // silently fall back beneath this attempt's isolated HOME/XDG roots.
+    const home = sourceEnv.HOME || os.homedir();
+    const bunRoot = sourceEnv.BUN_INSTALL || path.join(sourceEnv.XDG_CACHE_HOME || home, ".bun");
+    const uvRoot = process.platform === "win32" && sourceEnv.LOCALAPPDATA
+      ? path.join(sourceEnv.LOCALAPPDATA, "uv", "cache")
+      : path.join(sourceEnv.XDG_CACHE_HOME || path.join(home, ".cache"), "uv");
+    baseEnv.BUN_INSTALL_CACHE_DIR ||= path.join(bunRoot, "install", "cache");
+    baseEnv.UV_CACHE_DIR ||= uvRoot;
+    const goPath = sourceEnv.GOPATH?.split(path.delimiter).find(Boolean) || path.join(home, "go");
+    baseEnv.GOMODCACHE ||= path.join(goPath, "pkg", "mod");
     const codex = ownerRelayHandoffOnly
       ? { permissionProfile: READ_ONLY_STAGE_PERMISSION_PROFILE,
           permissionProfileConfig: `permissions.${READ_ONLY_STAGE_PERMISSION_PROFILE}={extends=":read-only",filesystem={${JSON.stringify(scratchDirectory)}="write",${JSON.stringify(evidenceDirectory)}="write"}}` }
@@ -2590,7 +2613,8 @@ export function copilotHostOptions(
     effort: profile.effort ?? undefined,
     /* The bypass mode is the only one that grants every tool up front; any
        other profile answers each permission request through attention. */
-    allowAll: !launchProfileEngineReadOnly(profile) && (profile.permissionMode ?? "bypassPermissions") === "bypassPermissions",
+    allowAll: !launchProfileEngineReadOnly(profile) && explicitLaunchProfileSandbox(profile) !== "restricted"
+      && (profile.permissionMode ?? "bypassPermissions") === "bypassPermissions",
     allowSubagents: profile.allowSubagents,
     mcpServers: profile.mcpServers,
     ...(access.host.releaseCleanup ? { releaseCleanup: access.host.releaseCleanup } : {}),
@@ -2637,7 +2661,8 @@ export async function antigravityHostOptions(
     accountId: input.account.accountId,
     model: profile.model ?? undefined,
     effort: profile.effort ?? undefined,
-    allowAll: !launchProfileEngineReadOnly(profile) && (profile.permissionMode ?? "bypassPermissions") === "bypassPermissions",
+    allowAll: !launchProfileEngineReadOnly(profile) && explicitLaunchProfileSandbox(profile) !== "restricted"
+      && (profile.permissionMode ?? "bypassPermissions") === "bypassPermissions",
     appendSystemPrompt: await learnedRulesForLaunchProfile(profile, input.receipt && input.registry
       ? { engine: "antigravity", ...memoryStartIdentity(input.registry, input.receipt.conversationId), cwd: input.spec.cwd, home: input.account.home, env: access.env }
       : undefined, onMemoryPrepared),
@@ -2655,6 +2680,9 @@ export async function startAntigravityStructuredHost(
   overrides: Partial<AntigravityAcpHostOptions> = {},
   onMemoryPrepared?: (receipt: MemoryDeliveryReceipt) => void,
 ): Promise<AntigravityAcpHost> {
+  const profile = input.spec.launchProfile ?? {} as LaunchProfile;
+  if (explicitLaunchProfileSandbox(profile) === "restricted")
+    throw new Error("Antigravity cannot enforce a restricted filesystem sandbox; refusing launch");
   const resumeSessionId = structuredResumeSessionId(input);
   const initialEventCursor = resumeSessionId
     ? startupHostSnapshot(input.registry, { engine: "antigravity", sessionId: resumeSessionId }).entries[sessionKeyId({ engine: "antigravity", sessionId: resumeSessionId })]?.structuredHost?.eventCursor
