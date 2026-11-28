@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { SweepWalkDeferred } from "./sweepWalkAdmission";
 
 import type { ListedWorktree } from "./worktreeSweep";
 
@@ -14,20 +15,21 @@ export class WorktreeSweepDiscovery {
   private saved?: { inputs: string; stamp: string; inventory: SweepInventory };
   constructor(private readonly maxEntries = 16_384, private readonly maxBytes = 4 * 1024 * 1024) {}
 
-  async read(inputs: readonly string[], continuing: boolean, load: (observe: (roots: readonly string[]) => void) => Promise<SweepInventory>): Promise<SweepInventory> {
+  async read(inputs: readonly string[], continuing: boolean, load: (observe: (roots: readonly string[]) => void) => Promise<SweepInventory>,
+    checkpoint: () => boolean = () => false): Promise<SweepInventory> {
     const key = JSON.stringify(inputs);
     if (inputs.length > this.maxEntries || Buffer.byteLength(key) > this.maxBytes) {
       this.saved = undefined;
       return load(() => {});
     }
     const saved = this.saved;
-    if (continuing && saved?.inputs === key && this.stamp(inputs, saved.inventory) === saved.stamp) return saved.inventory;
+    if (continuing && saved?.inputs === key && this.stamp(inputs, saved.inventory, checkpoint) === saved.stamp) return saved.inventory;
     this.saved = undefined;
     let before: string | null = null;
     const inventory = await load(roots => { before = this.stamp(inputs, roots.map(root => ({ root, listed: [] }))); });
     if (inventory.every(row => !row.failed) && inventory.reduce((sum, row) => sum + row.listed.length, 0) <= this.maxEntries
       && Buffer.byteLength(JSON.stringify(inventory)) <= this.maxBytes) {
-      const stamp = this.stamp(inputs, inventory);
+      const stamp = this.stamp(inputs, inventory, checkpoint);
       if (stamp !== null && stamp === before) this.saved = { inputs: key, stamp, inventory };
     }
     return inventory;
@@ -38,7 +40,7 @@ export class WorktreeSweepDiscovery {
    * Missing registration directories are stamped too (main-only repos).
    * A failed read disables reuse. Contents are never walked or watched.
    */
-  private stamp(inputs: readonly string[], inventory: SweepInventory): string | null {
+  private stamp(inputs: readonly string[], inventory: SweepInventory, checkpoint: () => boolean): string | null {
     const hash = createHash("sha256");
     let bytes = 0;
     const append = (value: string) => {
@@ -56,14 +58,19 @@ export class WorktreeSweepDiscovery {
       }
     };
     try {
-      for (const input of inputs) { stat(input); stat(path.join(input, ".git")); }
+      for (const input of inputs) {
+        if (checkpoint()) throw new SweepWalkDeferred("memory");
+        stat(input); stat(path.join(input, ".git"));
+      }
       for (const { root } of inventory) {
+        if (checkpoint()) throw new SweepWalkDeferred("memory");
         stat(path.join(root, ".git/HEAD"));
         stat(path.join(root, ".git/packed-refs"));
         const refs = [path.join(root, ".git/refs")];
         let refEntries = 0;
         while (refs.length) {
           const directory = refs.pop()!;
+          if (checkpoint()) throw new SweepWalkDeferred("memory");
           stat(directory);
           let children: fs.Dirent[];
           try { children = fs.readdirSync(directory, { withFileTypes: true }); }
@@ -72,7 +79,8 @@ export class WorktreeSweepDiscovery {
             throw error;
           }
           for (const child of children.sort((a, b) => a.name.localeCompare(b.name))) {
-            if (++refEntries > this.maxEntries) return null;
+            if (++refEntries % 256 === 0 && checkpoint()) throw new SweepWalkDeferred("memory");
+            if (refEntries > this.maxEntries) return null;
             const file = path.join(directory, child.name);
             append(child.name); stat(file);
             if (child.isDirectory()) refs.push(file);
@@ -88,12 +96,13 @@ export class WorktreeSweepDiscovery {
         }
         if (names.length > this.maxEntries) return null;
         for (const name of names) {
+          if (checkpoint()) throw new SweepWalkDeferred("memory");
           append(name);
           const directory = path.join(registrations, name);
           for (const file of ["", "HEAD", "locked", "gitdir", "commondir"]) stat(path.join(directory, file));
         }
       }
       return hash.digest("hex");
-    } catch { return null; }
+    } catch (error) { if (error instanceof SweepWalkDeferred) throw error; return null; }
   }
 }

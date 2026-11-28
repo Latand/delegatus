@@ -15,11 +15,13 @@ import { openHostTempRoots, stageHostNamespace } from "@/lib/state/hostTempViews
 import { globalCache } from "@/lib/scanner/caches";
 import { projectForCwd, recordWorktreeResolution } from "@/lib/scanner/describe";
 import { inspectTree, scanProcesses, type ProcessScan } from "@/lib/tempSweep";
+import { sweepMonotonicNow } from "@/lib/runtime/attemptTempDeadline";
 import type { FileEntry, RootKey } from "@/lib/types";
 
 import { readForgeCache, resetForgeCacheForTests, type ForgeCacheFile } from "@/lib/forge/cache";
 import { sweepForgeLinks } from "@/lib/forge/sweep";
 import type { GithubRunner } from "@/lib/monitor/githubEvidence";
+import { withSweepWalk } from "./sweepWalkAdmission";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { RunState as MergeBatchState } from "../../../scripts/merge-batch";
 
@@ -37,12 +39,14 @@ import {
   liveOrWaitingConversationCwds,
   parseWorktreeList,
   productionMergedPullRequests,
+  productionWorktreeSweepPorts,
   realGit,
   recordWorktreeSweep,
   runWorktreeSweep,
   startWorktreeSweep,
   stopWorktreeSweep,
   sweepMergedWorktrees,
+  measureKeptWorktreeAllocation,
   worktreeSweepForeign,
   worktreeSweepMode,
   worktreeSweepStatus,
@@ -52,6 +56,9 @@ import {
   type WorktreeSweepReport,
 } from "./worktreeSweep";
 import { readWorktreeProvenance, recordWorktreeProvenance, WORKTREE_PROVENANCE_FILE } from "./worktreeProvenance";
+import { WorktreeSweepCache } from "./worktreeSweepCache";
+import { archiveSettledPipelines, savePipelines } from "./store";
+import { finishedLane } from "../runtime/attemptTempRetention.testSupport";
 
 /* Every repository here is a throwaway under the test's temp root, and the
    state directory is the test's own: nothing reads or removes the operator's
@@ -137,6 +144,51 @@ function expectBackup(owner: SweptPipeline) {
 
 const NO_PROCESSES: ProcessScan = { ownNamespace: null, processes: [] };
 
+test("retained worktree accounting waits for a root change or its bounded audit", async () => {
+  const repoDir = repository();
+  const worktreeDir = lane(repoDir, path.join(caseDir, "kept"), "kept").dir;
+  const pipelines = [pipeline({ repoDir, worktreeDir, branch: "kept", state: "running" })];
+  let previous: WorktreeSweepReport | null = null;
+  let at = Date.UTC(2031, 0, 1);
+  const read = spyOn(fs.promises, "lstat");
+  const visit = async () => {
+    read.mockClear();
+    const cache = new WorktreeSweepCache(path.join(caseDir, "cache.json"));
+    try {
+      const report = await sweepMergedWorktrees(ports({ pipelines, now: () => at, previous, cache }));
+      previous = JSON.parse(JSON.stringify(report));
+      return { ...report, measured: read.mock.calls.some(([file]) => String(file).startsWith(worktreeDir + path.sep)) };
+    } finally { cache.close(); }
+  };
+  try {
+    expect(await visit()).toMatchObject({ measured: true, kept: [{ reason: "open-pipeline" }], removed: [] });
+    at += WORKTREE_SWEEP_INTERVAL_MS;
+    expect(await visit()).toMatchObject({ measured: false, kept: [{ reason: "open-pipeline" }], removed: [] });
+    fs.writeFileSync(path.join(worktreeDir, "new-entry"), "new");
+    at += WORKTREE_SWEEP_INTERVAL_MS;
+    expect((await visit()).measured).toBeTrue();
+    at += 4 * WORKTREE_SWEEP_INTERVAL_MS;
+    expect((await visit()).measured).toBeTrue();
+  } finally { read.mockRestore(); }
+});
+
+test("production worktree sweeps read archived ownership without retaining attempt history", async () => {
+  const repo = repository();
+  const closed = "2031-01-01T00:00:00Z";
+  const archived = finishedLane(repo, closed);
+  const worktree = lane(repo, archived.worktreeDir, archived.branch);
+  savePipelines([archived]);
+  expect(await archiveSettledPipelines(Date.parse("2031-02-01T00:00:00Z"))).toBe(1);
+  const production = await productionWorktreeSweepPorts("dry-run");
+  try {
+    const owner = production.pipelines.find(row => row.id === archived.id);
+    expect(owner).toMatchObject({ worktreeDir: worktree.dir, state: "completed",
+      archiveFacts: { terminalAt: Date.parse(closed), activitySettled: true, heads: new Set([archived.branch]) } });
+    expect(owner?.runs).toBeUndefined();
+    expect(production.currentPipelines?.()).toEqual([]);
+  } finally { await production.close?.(); }
+});
+
 function ports(overrides: Partial<WorktreeSweepPorts> & { prs?: MergedPullRequest[] | null }): WorktreeSweepPorts {
   const { prs = [], ...rest } = overrides;
   return {
@@ -196,6 +248,51 @@ test("a completed squash-merged lane releases its checkout and retains its local
   /* The resolution was on disk before the directory went. */
   const map = worktreeMapStore.read(path.join(process.env.LLV_STATE_DIR!, "worktree-map.json")) as Record<string, { repo: string }>;
   expect(map[dir]?.repo).toBe(fs.realpathSync(root));
+});
+
+test("memory pressure after registration Git yields discovery and the retry builds fresh removal proofs", async () => {
+  const root = repository(), { dir, tip } = lane(root, path.join(caseDir, "widgets-pressure-yield"), "pressure/yield");
+  let pressured = false, gitReads = 0;
+  const base = ports({ pipelines: [pipeline({ repoDir: root, worktreeDir: dir, branch: "pressure/yield" })],
+    prs: [merged(71, "pressure/yield", tip)] });
+  const admittedSweep = () => withSweepWalk(sweepMonotonicNow() + 60_000, () => sweepMergedWorktrees({ ...base, git: async (args, cwd) => {
+    gitReads++;
+    const result = await base.git(args, cwd);
+    pressured = true;
+    return result;
+  }, pause: () => pressured }));
+  await expect(admittedSweep()).rejects.toMatchObject({ reason: "memory" });
+  expect(gitReads).toBe(1);
+  expect(fs.existsSync(dir)).toBe(true);
+  const resumed = await withSweepWalk(sweepMonotonicNow() + 60_000, () => sweepMergedWorktrees(ports({
+    pipelines: [pipeline({ repoDir: root, worktreeDir: dir, branch: "pressure/yield" })], prs: [merged(71, "pressure/yield", tip)] })));
+  expect(resumed.removed).toEqual([expect.objectContaining({ path: dir, pr: expect.objectContaining({ number: 71 }) })]);
+  expect(fs.existsSync(dir)).toBe(false);
+});
+
+test("memory pressure inside the recursive candidate audit interrupts it and retries with fresh proofs", async () => {
+  const root = repository(), { dir, tip } = lane(root, path.join(caseDir, "widgets-pressure-inspect"), "pressure/inspect");
+  let pressured = false;
+  await expect(sweepMergedWorktrees(ports({ pipelines: [pipeline({ repoDir: root, worktreeDir: dir, branch: "pressure/inspect" })],
+    prs: [merged(72, "pressure/inspect", tip)], pause: () => pressured,
+    phase: phase => { if (phase === "candidate") pressured = true; } }))).rejects.toMatchObject({ reason: "memory" });
+  expect(fs.existsSync(dir)).toBe(true);
+  const resumed = await sweepMergedWorktrees(ports({ pipelines: [pipeline({ repoDir: root, worktreeDir: dir, branch: "pressure/inspect" })],
+    prs: [merged(72, "pressure/inspect", tip)] }));
+  expect(resumed.removed).toEqual([expect.objectContaining({ path: dir, pr: expect.objectContaining({ number: 72 }) })]);
+  expect(fs.existsSync(dir)).toBe(false);
+});
+
+test("retained-worktree accounting yields at its traversal checkpoint and can restart cleanly", async () => {
+  const directory = path.join(caseDir, "retained-accounting"); fs.mkdirSync(directory);
+  for (let index = 0; index < 2048; index++) fs.writeFileSync(path.join(directory, `entry-${index}`), "accounted bytes");
+  let checks = 0;
+  await expect(measureKeptWorktreeAllocation(directory, [], new Set(), 4096, () => {
+    if (++checks === 2) throw Object.assign(new Error("pressure"), { reason: "memory" });
+  })).rejects.toMatchObject({ reason: "memory" });
+  expect(checks).toBe(2);
+  const bytes = await measureKeptWorktreeAllocation(directory, [], new Set(), 4096, () => {});
+  expect(bytes).toBeGreaterThan(0);
 });
 
 test("the lane's PR is found by the delivered number when its head branch differs from the lane branch", async () => {

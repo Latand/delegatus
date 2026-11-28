@@ -9,7 +9,7 @@ import { reportMediaRoot } from "@/lib/reportMedia/lookup";
 import { execFile } from "node:child_process";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { attemptReferencesClear, containerMountHold, blockedSubtrees, measureAttemptAllocation, inspectAttemptTree, attemptTempUtilityImage, removeAttemptTree, repositoryReferencesAttemptTemp, RepositoryLinkInventory,
-  RETAINED_CHECKOUT_READ_MAX_AGE_MS, type RetainedCheckoutReads } from "./attemptTempFilesystem";
+  REPOSITORY_ACTIVE_BYTES_LIMIT, RETAINED_CHECKOUT_BYTES_LIMIT, RETAINED_CHECKOUT_READ_MAX_AGE_MS, type RetainedCheckoutReads } from "./attemptTempFilesystem";
 import { withAttemptTempDeadline } from "./attemptTempDeadline";
 import { AttemptTempBudgetDeferred } from "./attemptTempDiagnostics";
 import { removeTreeWithinAttemptBudget } from "./attemptTempRemoval";
@@ -451,7 +451,7 @@ esac
   }
 });
 
-test("a capture created during the final container observation is preserved before reclaim", async () => {
+test("a capture created during the final reference observation is preserved before reclaim", async () => {
   const parent = root(), directory = path.join(parent, "llv-stage-late-capture");
   fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "keep");
   const repository = path.join(parent, "checkout"); fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
@@ -460,18 +460,21 @@ test("a capture created during the final container observation is preserved befo
   const store = new AttemptTempStore(path.join(parent, "owners.sqlite"));
   store.register({ directory, pipelineId: "closed-lane", launchId: "late-capture", retainUntilClose: false, createdAt: 1 });
   store.measure(directory, 4096); store.release(directory);
-  let stateReads = 0;
+  let referenceReads = 0;
   let now = 2;
-  const sweep = () => sweepAttemptTemps(store, { now: () => now, maxRoots: 1,
-    state: async () => {
-      stateReads++;
-      if (stateReads === 2) fs.writeFileSync(path.join(directory, "frame.png"), "late frame");
-      return "closed";
-    }, references: async () => true, scan: () => ({ ownNamespace: null, processes: [] }) });
+  const sweep = () => sweepAttemptTemps(store, { now: () => now, maxRoots: 1, capBytes: 1024 ** 2,
+    availableBytes: () => Number.MAX_SAFE_INTEGER,
+    state: async () => "closed", references: async () => {
+      // The second awaited reference observation is the final dispatch window;
+      // inserting here tests the post-preservation mutation fence directly.
+      if (++referenceReads === 2) fs.writeFileSync(path.join(directory, "frame.png"), "late frame");
+      return true;
+    }, scan: () => ({ ownNamespace: null, processes: [] }) });
   try {
     const first = await sweep();
-    expect(stateReads).toBeGreaterThanOrEqual(2);
+    expect(referenceReads).toBeGreaterThanOrEqual(2);
     expect(first.removed).toBe(0);
+    expect(first.outcomes[0]?.reasonCode).toBe("evidence_changed");
     expect(fs.readFileSync(path.join(directory, "frame.png"), "utf8")).toBe("late frame");
     now += 60_001;
     expect((await sweep()).removed).toBe(1);
@@ -548,6 +551,119 @@ test("reads kept across ticks serve unchanged checkouts; a changed or aged check
   expect(fourth.walks).toHaveLength(3);
 });
 
+test("small checkout proofs coexist under the weighted byte cache bound", async () => {
+  const parent = root();
+  const retained: RetainedCheckoutReads = new Map();
+  let at = 1_000;
+  const now = () => at;
+  const first = new RepositoryLinkInventory({ now, retained });
+  const repos = Array.from({ length: 40 }, (_, index) => path.join(parent, `checkout-${index}`));
+  for (const repo of repos) {
+    fs.mkdirSync(repo);
+    fs.symlinkSync("payload", path.join(repo, "pointer"));
+    expect(await first.targets(repo)).toContain(path.join(repo, "payload"));
+  }
+  expect(retained.size).toBe(repos.length);
+  expect([...retained.values()].reduce((total, entry) => total + entry.weight, 0)).toBeLessThanOrEqual(RETAINED_CHECKOUT_BYTES_LIMIT);
+  const next = new RepositoryLinkInventory({ now, retained });
+  await next.targets(repos[0]!);
+  expect(next.walks).toEqual([]);
+  await next.targets(repos.at(-1)!);
+  expect(next.walks).toEqual([]);
+  expect(retained.has(repos[0]!)).toBeTrue();
+  at += RETAINED_CHECKOUT_READ_MAX_AGE_MS + 1;
+  const later = new RepositoryLinkInventory({ now, retained });
+  expect(retained.size).toBe(0);
+  await later.targets(repos.at(-1)!);
+  expect(retained.has(repos.at(-1)!)).toBeTrue();
+});
+
+test("a two-miss tick budget eventually proves checkouts beyond the cache cap and catches a late link", async () => {
+  const parent = root(), protectedRoot = path.join(parent, "llv-stage-protected"); fs.mkdirSync(protectedRoot);
+  const retained: RetainedCheckoutReads = new Map();
+  const repos = Array.from({ length: 35 }, (_, index) => path.join(parent, `checkout-${index}`));
+  for (const repo of repos) { fs.mkdirSync(path.join(repo, ".git"), { recursive: true }); fs.mkdirSync(path.join(repo, "work")); }
+  const proved = new Set<string>();
+  for (let tick = 0; tick < 100 && proved.size < repos.length; tick++) {
+    const inventory = new RepositoryLinkInventory({ retained, now: () => tick * 1_000 });
+    let misses = 0;
+    for (const repo of repos) {
+      await inventory.targets(repo);
+      if (inventory.walks.includes(repo)) { proved.add(repo); misses++; }
+      if (misses === 2) break;
+    }
+  }
+  expect(proved.size).toBe(repos.length);
+  expect(retained.size).toBe(repos.length);
+  const late = path.join(repos.at(-1)!, "work", "late-link");
+  fs.symlinkSync(protectedRoot, late, "dir");
+  await new Promise(resolve => setTimeout(resolve, 25));
+  const processes = repos.map((repo, index) => ({ pid: 20_000 + index, namespace: null, stamped: false, paths: [path.join(repo, "work")] }));
+  expect(await attemptReferencesClear(protectedRoot, protectedRoot, { ownNamespace: null, processes }, async () => true,
+    new RepositoryLinkInventory({ retained, now: () => 24_000 }))).toBeFalse();
+});
+
+test.skipIf(process.platform === "win32")("a large link inventory stays below its RSS high-water bound in an isolated child", async () => {
+  const parent = root(), repository = path.join(parent, "large-checkout"); fs.mkdirSync(repository);
+  let target = parent;
+  for (let index = 0; index < 16; index++) target = path.join(target, "d".repeat(190));
+  fs.mkdirSync(target, { recursive: true });
+  const source = path.resolve(import.meta.dir, "attemptTempFilesystem.ts");
+  const measured: Array<{ rss: number; peak: number; initialTargets: number; initialTargetWeight: number;
+    targets: number; targetWeight: number; walks: number; cpuMs: number }> = [];
+  for (let repetition = 0; repetition < 3; repetition++) {
+    for (let index = 0; index < 3_000; index++) {
+      const link = path.join(repository, `link-${index}`);
+      if (!fs.existsSync(link)) fs.symlinkSync(target, link, "dir");
+    }
+    const child = Bun.spawn([process.execPath, "-e", `
+    import { RepositoryLinkInventory } from ${JSON.stringify(source)};
+    import fs from "node:fs";
+    const cpu = process.cpuUsage();
+    const inventory = new RepositoryLinkInventory();
+    let deferred = "";
+    let initialTargets = 0, initialTargetWeight = 0;
+    try {
+      const initial = await inventory.targets(process.argv[1]);
+      initialTargets = initial.length;
+      initialTargetWeight = initial.reduce((total, value) => total + value.length * 2 + 32, 0);
+    } catch (error) { deferred = String(error); }
+    const directory = process.argv[1];
+    for (const name of fs.readdirSync(directory).slice(10)) fs.unlinkSync(directory + "/" + name);
+    const resumed = await new RepositoryLinkInventory().targets(directory);
+    const targetWeight = resumed.reduce((total, value) => total + value.length * 2 + 32, 0);
+    const used = process.cpuUsage(cpu);
+    console.log(JSON.stringify({ rss: process.memoryUsage.rss(), deferred, initialTargets, initialTargetWeight, targets: resumed.length, targetWeight, walks: inventory.walks.length,
+      cpuMs: (used.user + used.system) / 1000 }));
+  `, repository], { env: { ...process.env, LLV_STATE_DIR: path.join(parent, "state"), XDG_CONFIG_HOME: path.join(parent, "config"),
+      TMPDIR: path.join(parent, "tmp") }, stdout: "pipe", stderr: "pipe" });
+    const output = new Response(child.stdout).text(), errors = new Response(child.stderr).text();
+    let peak = 0;
+    try {
+      while (child.exitCode === null) {
+        try { peak = Math.max(peak, Number(fs.readFileSync(`/proc/${child.pid}/statm`, "utf8").split(/\s+/)[1]) * 4096); } catch { /* child exited between samples */ }
+        await new Promise(resolve => setTimeout(resolve, 2));
+      }
+      expect(await child.exited, await errors).toBe(0);
+      const observed = JSON.parse((await output).trim().split("\n").at(-1)!);
+      peak = Math.max(peak, observed.rss);
+      expect(peak).toBeGreaterThan(0);
+      expect(peak).toBeLessThan(224 * 1024 ** 2);
+      expect(observed.rss).toBeLessThan(224 * 1024 ** 2);
+      expect(observed.deferred).toContain("active memory bound");
+      expect(observed.initialTargets).toBe(0);
+      expect(observed.initialTargetWeight).toBe(0);
+      expect(observed.targets).toBe(20);
+      expect(observed.targetWeight).toBeLessThan(REPOSITORY_ACTIVE_BYTES_LIMIT);
+      expect(observed.walks).toBe(1);
+      measured.push({ ...observed, peak });
+      expect(fs.existsSync(repository)).toBeTrue();
+    } finally { if (child.exitCode === null) { child.kill("SIGKILL"); await child.exited; } }
+  }
+  const average = (key: "rss" | "peak" | "cpuMs") => measured.reduce((sum, row) => sum + row[key], 0) / measured.length;
+  console.info(`[attempt-temp inventory] repetitions=3 inputLinks=3000 resumedTargets=20 activeLimitMiB=${(REPOSITORY_ACTIVE_BYTES_LIMIT / 1024 ** 2).toFixed(1)} peakRssMiB=${measured.map(row => (row.peak / 1024 ** 2).toFixed(1)).join(",")} meanPeakRssMiB=${(average("peak") / 1024 ** 2).toFixed(1)} meanRetainedRssMiB=${(average("rss") / 1024 ** 2).toFixed(1)} meanCpuMs=${average("cpuMs").toFixed(1)}`);
+});
+
 test("a reused validation never answers the fence that precedes a destructive step", async () => {
   const parent = root(), directory = path.join(parent, "llv-stage-reused-validation"); fs.mkdirSync(directory);
   const processes = repositoryProcesses(parent, 2);
@@ -568,14 +684,12 @@ test("a reused validation never answers the fence that precedes a destructive st
 test("a directory changed inside the timestamp granule is listed only after the granule has passed", async () => {
   const parent = root(), repository = path.join(parent, "repository"), work = path.join(repository, "work");
   fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
-  const directoryReads = fs.promises as unknown as {
-    readdir: (target: fs.PathLike, options: { withFileTypes: true }) => Promise<fs.Dirent[]>;
-  };
-  const readdir = directoryReads.readdir.bind(directoryReads);
+  const directoryReads = fs.promises as unknown as { opendir: (target: fs.PathLike) => Promise<fs.Dir> };
+  const opendir = directoryReads.opendir.bind(directoryReads);
   const listedAt: number[] = [];
-  const observed = spyOn(directoryReads, "readdir").mockImplementation(async (target, options) => {
+  const observed = spyOn(directoryReads, "opendir").mockImplementation(async target => {
     if (String(target) === work) listedAt.push(Date.now());
-    return readdir(target, options);
+    return opendir(target);
   });
   try {
     fs.mkdirSync(work);
@@ -724,13 +838,11 @@ test("a link created between directory enumeration and metadata capture cannot b
   const repository = path.join(parent, "repository"), cwd = path.join(repository, "work");
   fs.mkdirSync(path.join(repository, ".git"), { recursive: true }); fs.mkdirSync(cwd);
   const link = path.join(cwd, "node_modules");
-  const directoryReads = fs.promises as unknown as {
-    readdir: (target: fs.PathLike, options: { withFileTypes: true }) => Promise<fs.Dirent[]>;
-  };
-  const readdir = directoryReads.readdir.bind(directoryReads);
+  const directoryReads = fs.promises as unknown as { opendir: (target: fs.PathLike) => Promise<fs.Dir> };
+  const opendir = directoryReads.opendir.bind(directoryReads);
   let injected = false;
-  const observed = spyOn(directoryReads, "readdir").mockImplementation(async (target, options) => {
-    const entries = await readdir(target, options);
+  const observed = spyOn(directoryReads, "opendir").mockImplementation(async target => {
+    const entries = await opendir(target);
     if (!injected && target === cwd) { injected = true; fs.symlinkSync(directory, link, "dir"); }
     return entries;
   });
@@ -749,13 +861,11 @@ test("a nested link added during a later directory read defers the real sweep", 
   const repository = path.join(parent, "checkout"), earlier = path.join(repository, "a"), later = path.join(repository, "b");
   fs.mkdirSync(path.join(repository, ".git"), { recursive: true }); fs.mkdirSync(earlier); fs.mkdirSync(later);
   const link = path.join(earlier, "dependency");
-  const directoryReads = fs.promises as unknown as {
-    readdir: (target: fs.PathLike, options: { withFileTypes: true }) => Promise<fs.Dirent[]>;
-  };
-  const readdir = directoryReads.readdir.bind(directoryReads);
+  const directoryReads = fs.promises as unknown as { opendir: (target: fs.PathLike) => Promise<fs.Dir> };
+  const opendir = directoryReads.opendir.bind(directoryReads);
   let injected = false;
-  const observed = spyOn(directoryReads, "readdir").mockImplementation(async (target, options) => {
-    const entries = await readdir(target, options);
+  const observed = spyOn(directoryReads, "opendir").mockImplementation(async target => {
+    const entries = await opendir(target);
     if (!injected && target === later) { injected = true; fs.symlinkSync(directory, link, "dir"); }
     return entries;
   });
@@ -835,12 +945,10 @@ test.each(["before walk", "during walk"])("an absent checkout refuses inventory 
   const parent = root(), repository = path.join(parent, "checkout"), directory = path.join(parent, "llv-stage-linked");
   fs.mkdirSync(directory);
   if (disappearance === "during walk") fs.mkdirSync(repository);
-  const directoryReads = fs.promises as unknown as {
-    readdir: (target: fs.PathLike, options: { withFileTypes: true }) => Promise<fs.Dirent[]>;
-  };
-  const readdir = directoryReads.readdir.bind(directoryReads);
-  const observed = spyOn(directoryReads, "readdir").mockImplementation(async (target, options) => {
-    const entries = await readdir(target, options);
+  const directoryReads = fs.promises as unknown as { opendir: (target: fs.PathLike) => Promise<fs.Dir> };
+  const opendir = directoryReads.opendir.bind(directoryReads);
+  const observed = spyOn(directoryReads, "opendir").mockImplementation(async target => {
+    const entries = await opendir(target);
     if (target === repository && disappearance === "during walk") fs.renameSync(repository, repository + "-previous");
     return entries;
   });

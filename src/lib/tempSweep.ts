@@ -18,6 +18,7 @@ import { attemptTempFailureDetail } from "@/lib/runtime/attemptTempDiagnostics";
 import type { ContainerMount } from "@/lib/runtime/attemptTempFilesystem";
 import { GATE_ALLOCATION_FILE, gateSandboxOwnerEnded, LOCAL_GATE_SANDBOX_NAME } from "@/lib/gateSandboxProof";
 import { identitiesInUse, mappedFileIdentity, treeHoldsIdentity } from "@/lib/processFileIdentity";
+import { SweepWalkDeferred } from "./pipelines/sweepWalkAdmission";
 
 /**
  * The bounded sweeper for temp directories Delegatus left behind (#1957).
@@ -744,7 +745,7 @@ export type TempSweepOptions = {
 };
 
 export type TreeHold = "git-checkout" | "unreadable-tree" | "entry-limit" | "mount-boundary" | "changed-during-inspection" | "evidence" | "socket";
-export type TreeInspection = { newestMs: number; entries: number; hold: TreeHold | null };
+export type TreeInspection = { newestMs: number; entries: number; hold: TreeHold | null; interrupted?: true };
 
 /** Read mount boundaries in the namespace that owns the path. Failure holds the candidate. */
 export function mountPointsUnder(directory: string, via = "", read = (file: string) => fs.readFileSync(file, "utf8")): string[] {
@@ -772,6 +773,9 @@ export function inspectTree(directory: string, options: {
   /** Hold a tree holding a Unix socket: a listener keeps its socket open as a
       descriptor that names no path, and its file's times never move. */
   sockets?: boolean;
+  /** Lets a sliced caller stop a recursive audit without treating its partial
+   * tree as evidence for retention or deletion. */
+  checkpoint?: () => boolean;
   stat?: (file: string) => fs.Stats;
 } = {}): TreeInspection {
   const result: TreeInspection = { newestMs: 0, entries: 0, hold: null };
@@ -782,6 +786,7 @@ export function inspectTree(directory: string, options: {
       || options.mounts?.length) return { ...result, hold: "mount-boundary" };
     const pending = [directory];
     while (pending.length) {
+      if (options.checkpoint?.()) return { ...result, interrupted: true };
       const current = pending.pop()!;
       const own = stat(current);
       if (++result.entries > (options.limit ?? TREE_INSPECTION_ENTRY_LIMIT)) return { ...result, hold: "entry-limit" };
@@ -805,7 +810,10 @@ export function inspectTree(directory: string, options: {
         if (options.git !== "linked" && names.includes("objects") && ["HEAD", "config", "refs"].some(name => names.includes(name)))
           return { ...result, hold: "git-checkout" };
       }
-      for (const name of names) pending.push(path.join(current, name));
+      for (let index = 0; index < names.length; index++) {
+        if (index % 256 === 0 && options.checkpoint?.()) return { ...result, interrupted: true };
+        pending.push(path.join(current, names[index]!));
+      }
     }
   } catch (error) {
     result.hold = (error as NodeJS.ErrnoException).code === "ENOENT" ? "changed-during-inspection" : "unreadable-tree";
@@ -1866,11 +1874,15 @@ export function startTempSweep(ports: {
   const arm = (delayMs: number) => {
     const timer = schedule(() => {
       running = true;
+      let deferred = false;
       void withViewerOperation("temp.sweep", sweep)
-        .catch((error) => console.error("[temp sweep] failed", error instanceof Error ? error.message : String(error)))
+        .catch((error) => {
+          if (error instanceof SweepWalkDeferred) deferred = true;
+          else console.error("[temp sweep] failed", error instanceof Error ? error.message : String(error));
+        })
         .finally(() => {
           running = false;
-          if (sweepHost.__llvTempSweepTimer === timer) arm(ports.intervalMs ?? TEMP_SWEEP_INTERVAL_MS);
+          if (sweepHost.__llvTempSweepTimer === timer) arm(deferred ? 60_000 : ports.intervalMs ?? TEMP_SWEEP_INTERVAL_MS);
         });
     }, delayMs);
     timer.unref?.();

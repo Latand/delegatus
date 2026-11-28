@@ -3,6 +3,22 @@ import { publicationApp403, publicationDeadlineKind, publicationDeadlineOnly, pu
 import { FORGE_PUSH_MINT_MARKER } from "../../../bin/forge-app-token.mjs";
 import type { Pipeline } from "./types";
 import { admissionLockWait } from "../../../scripts/cpu-admission-lock";
+import { DEFAULT_PUBLICATION_PUSH_MS, PIPELINE_PUBLICATION_PUSH_MS, RUNTIME_PUBLICATION_PUSH_MS, publicationPushBudgetMs } from "./gateBudget";
+
+test("cleanup worker runtime inputs receive the runtime publication window", () => {
+  for (const file of [
+    "src/lib/runtime/attemptTempFilesystem.ts",
+    "src/lib/cleaner/diskController.ts",
+    "src/lib/state/diskPressure.ts",
+    "src/lib/tempSweep.ts",
+    "src/lib/worktreeSweep.worker.ts",
+    "src/lib/pipelines/worktreeSweep.ts",
+    "src/lib/pipelines/worktreeSweepWorker.ts",
+    "src/lib/pipelines/sweepWalkAdmission.ts",
+  ]) expect(publicationPushBudgetMs([file])).toBe(RUNTIME_PUBLICATION_PUSH_MS);
+  expect(publicationPushBudgetMs(["src/lib/pipelines/engine.ts"])).toBe(PIPELINE_PUBLICATION_PUSH_MS);
+  expect(publicationPushBudgetMs(["src/lib/kanban/cardState.ts"])).toBe(DEFAULT_PUBLICATION_PUSH_MS);
+});
 
 test.each(["remote: fatal error in commit_refs_rules", "! [remote rejected] HEAD -> lane (pre-receive hook declined)"])(
   "a remote ref refusal retains its diagnostic: %s", async line => {

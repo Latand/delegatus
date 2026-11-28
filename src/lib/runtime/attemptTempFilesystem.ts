@@ -44,7 +44,30 @@ type RepositoryLinkRead = { at: number; targets: Promise<string[]>; directories?
 type RepositoryDiscovery = { repository: string | null; signature: string };
 /** Completed checkout reads that outlive one tick, keyed by checkout. Each is
  * used again only while every directory it lists still validates. */
-export type RetainedCheckoutReads = Map<string, { at: number; lexicalTargets: string[]; directories: RepositoryDirectoryVersion[] }>;
+export type RetainedCheckoutReads = Map<string, RepositoryLinkSnapshot & { at: number; weight: number }>;
+export const RETAINED_CHECKOUT_BYTES_LIMIT = 16 * 1024 ** 2;
+
+function retainCheckoutRead(retained: RetainedCheckoutReads, repository: string, snapshot: RepositoryLinkSnapshot, at: number) {
+  // Charge strings and per-row object/array overhead against one worker-wide
+  // cache budget. Each checkout's active retirement proof stays independent.
+  let weight = repository.length * 2 + 128;
+  for (const directory of snapshot.directories) weight += (directory.path.length + directory.identity.length) * 2 + 128;
+  for (const target of snapshot.lexicalTargets) weight += target.length * 2 + 32;
+  if (weight > RETAINED_CHECKOUT_BYTES_LIMIT) return;
+  retained.delete(repository);
+  // The byte budget is the cache bound. A separate entry count caused sorted
+  // inventories of small checkouts to rotate forever at the count boundary.
+  let total = 0;
+  for (const row of retained.values()) total += row.weight;
+  while (total + weight > RETAINED_CHECKOUT_BYTES_LIMIT && retained.size) {
+    const oldest = retained.keys().next().value;
+    if (oldest === undefined) break;
+    total -= retained.get(oldest)!.weight;
+    retained.delete(oldest);
+  }
+  if (total + weight > RETAINED_CHECKOUT_BYTES_LIMIT) return;
+  retained.set(repository, { ...snapshot, at, weight });
+}
 /** A retained read older than this is repeated in full. */
 export const RETAINED_CHECKOUT_READ_MAX_AGE_MS = 10 * 60_000;
 const sameStrings = (left: readonly string[], right: readonly string[]) =>
@@ -61,6 +84,11 @@ const allExited = (pids: readonly (number | null)[] | undefined) => process.plat
 /** `/proc` entries describe processes; none of them is a working checkout. */
 const procCwd = (cwd: string) => { const resolved = path.resolve(cwd); return resolved === "/proc" || resolved.startsWith("/proc/"); };
 const LINK_HOP_LIMIT = 256;
+const ATTEMPT_TEMP_RSS_HIGH_WATER_BYTES = 224 * 1024 ** 2;
+/** Bound each active checkout snapshot well below the worker recycle threshold.
+ * A small link count can still retain many megabytes when resolved targets are
+ * long paths, so count the strings as they are accumulated as well as RSS. */
+export const REPOSITORY_ACTIVE_BYTES_LIMIT = 4 * 1024 ** 2;
 const segments = (file: string) => file.split(path.sep).filter(Boolean);
 
 /** Walks a path the way the kernel does, one component at a time, where the
@@ -116,10 +144,24 @@ function resolveObservedPhysicalPaths(candidate: string): string[] {
 }
 /** A link target under its lexical name and under each physical one. */
 const observedTargets = (targets: readonly string[]) =>
-  targets.flatMap(target => {
+  {
+    const observed: string[] = [];
+    let weight = 0;
+    const add = (target: string) => {
+      weight += target.length * 2 + 32;
+      if (weight > REPOSITORY_ACTIVE_BYTES_LIMIT)
+        throw new AttemptTempBudgetDeferred("checkout resolved-target inventory exceeded its active memory bound");
+      observed.push(target);
+    };
+    for (const target of targets) {
     checkAttemptTempDeadline();
-    return [path.resolve(target), ...resolveObservedPhysicalPaths(target)];
-  });
+    if (process.memoryUsage.rss() >= ATTEMPT_TEMP_RSS_HIGH_WATER_BYTES)
+      throw new AttemptTempBudgetDeferred("checkout link inventory reached its RSS high-water mark");
+      add(path.resolve(target));
+      for (const physical of resolveObservedPhysicalPaths(target)) add(physical);
+    }
+    return observed;
+  };
 
 /** A relative link target, joined to the link's directory without collapsing
  * `..` across a component that may itself be a link. Leading `..` inside the
@@ -153,6 +195,11 @@ const granuleRemainingMs = (stat: fs.Stats, now: number) => {
 
 /** Directory reads in flight at once during one checkout walk. */
 const REPOSITORY_WALK_CONCURRENCY = 8;
+// A single checkout can contain thousands of long symlink targets. Bound the
+// active snapshot independently from the cross-request cache; overflow stays
+// fail-closed and can be retried after the checkout changes.
+const REPOSITORY_LINK_LIMIT = 8192;
+const REPOSITORY_PENDING_DIRECTORY_LIMIT = 4096;
 
 /** How many times a caller that tolerates a changing directory reads or waits
  * on one before it accepts the newest listing. */
@@ -170,19 +217,31 @@ async function repositoryLinks(directory: string, timeout?: number, tolerateChan
   const rootStat = fs.lstatSync(directory);
   const rootDevice = rootStat.dev;
   const links: string[] = [], directories: RepositoryDirectoryVersion[] = [];
+  let activeBytes = 0;
+  const reserve = (value: string, overhead: number) => {
+    activeBytes += value.length * 2 + overhead;
+    if (activeBytes > REPOSITORY_ACTIVE_BYTES_LIMIT)
+      throw new AttemptTempBudgetDeferred("checkout link snapshot exceeded its active memory bound");
+  };
   const checkBudget = () => {
     checkAttemptTempDeadline();
+    if (process.memoryUsage.rss() >= ATTEMPT_TEMP_RSS_HIGH_WATER_BYTES)
+      throw new AttemptTempBudgetDeferred("checkout link inventory reached its RSS high-water mark");
     if (attemptTempRemaining(deadline - performance.now()) <= 0) throw new AttemptTempBudgetDeferred("checkout link inventory exceeded its time budget");
   };
   const readEntries = async (current: string) => {
     const remaining = attemptTempRemaining(deadline - performance.now());
     if (remaining <= 0) throw new AttemptTempBudgetDeferred("checkout link inventory exceeded its time budget");
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const opening = fs.promises.opendir(current);
     try {
       return await Promise.race([
-        fs.promises.readdir(current, { withFileTypes: true }),
+        opening,
         new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new AttemptTempBudgetDeferred("checkout link inventory exceeded its time budget")), remaining); }),
       ]);
+    } catch (error) {
+      void opening.then(directory => directory.close().catch(() => undefined), () => undefined);
+      throw error;
     } finally { if (timer) clearTimeout(timer); }
   };
   /** Reads one directory and returns the subdirectories still to read. */
@@ -196,6 +255,7 @@ async function repositoryLinks(directory: string, timeout?: number, tolerateChan
     let before = fs.lstatSync(current);
     const skipMount = () => {
       if (before.dev === rootDevice) return false;
+      reserve(current, 128);
       directories.push({ path: current, identity: `${before.dev}:${before.ino}`, mtimeMs: before.mtimeMs, ctimeMs: before.ctimeMs, mount: true });
       return true;
     };
@@ -226,23 +286,46 @@ async function repositoryLinks(directory: string, timeout?: number, tolerateChan
     for (let reads = 1; !sameVersion(before, after); reads++) {
       if (!tolerateChange) throw new AttemptTempBudgetDeferred("checkout changed during link inventory; retry next tick");
       // The directory is gone or no longer a directory: it holds no link.
-      if (!after?.isDirectory() || after.isSymbolicLink()) return [];
+      if (!after?.isDirectory() || after.isSymbolicLink()) { await entries.close().catch(() => undefined); return []; }
       if (reads >= TOLERATED_DIRECTORY_READS) break;
       before = after;
+      await entries.close().catch(() => undefined);
       entries = await readEntries(current);
       checkBudget();
       after = fs.lstatSync(current, { throwIfNoEntry: false });
     }
-    if (!after?.isDirectory() || after.isSymbolicLink()) return [];
+    if (!after?.isDirectory() || after.isSymbolicLink()) {
+      await entries.close().catch(() => undefined);
+      if (current === directory || !tolerateChange) throw new AttemptTempBudgetDeferred("checkout changed during link inventory; retry next tick");
+      return [];
+    }
+    reserve(current, 128);
     directories.push({ path: current, identity: `${after.dev}:${after.ino}`, mtimeMs: after.mtimeMs, ctimeMs: after.ctimeMs });
     // The budget is read once per directory (above), not once per entry: a
     // dependency tree holds millions of plain files, and reading the clock for
     // each of them made a walk thirty times slower than the listing it performs.
+    return consumeEntries(current, entries);
+  };
+  const consumeEntries = async (current: string, entries: fs.Dir): Promise<string[]> => {
     const subdirectories: string[] = [];
-    for (const entry of entries) {
-      if (entry.isSymbolicLink()) links.push(path.join(current, entry.name));
-      else if (entry.isDirectory() && entry.name !== ".git") subdirectories.push(path.join(current, entry.name));
-    }
+    let read = 0;
+    try {
+      for await (const entry of entries) {
+        if (++read % 256 === 0) checkBudget();
+        if (entry.isSymbolicLink()) {
+          if (links.length >= REPOSITORY_LINK_LIMIT) throw new AttemptTempBudgetDeferred("checkout link inventory exceeded its active memory bound");
+          const link = path.join(current, entry.name);
+          reserve(link, 32);
+          links.push(link);
+        } else if (entry.isDirectory() && entry.name !== ".git") {
+          if (directories.length + subdirectories.length >= REPOSITORY_PENDING_DIRECTORY_LIMIT)
+            throw new AttemptTempBudgetDeferred("checkout directory inventory exceeded its active memory bound");
+          const child = path.join(current, entry.name);
+          reserve(child, 32);
+          subdirectories.push(child);
+        }
+      }
+    } finally { await entries.close().catch(() => undefined); }
     return subdirectories;
   };
   // Directory reads overlap on the thread pool; a large checkout is one walk
@@ -277,11 +360,15 @@ async function repositoryLinks(directory: string, timeout?: number, tolerateChan
 async function repositoryLinkTargets(repository: string, timeout?: number, tolerateChange = false): Promise<RepositoryLinkSnapshot> {
   const deadline = performance.now() + attemptTempRemaining(timeout ?? 15_000);
   const inventory = await repositoryLinks(repository, timeout, tolerateChange), lexicalTargets: string[] = [];
+  let lexicalBytes = 0;
   for (const link of inventory.links) {
     checkAttemptTempDeadline();
     let target: string;
     try { target = uncollapsedLinkTarget(repository, link, fs.readlinkSync(link)); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
+    lexicalBytes += target.length * 2 + 32;
+    if (lexicalBytes > REPOSITORY_ACTIVE_BYTES_LIMIT)
+      throw new AttemptTempBudgetDeferred("checkout lexical-target inventory exceeded its active memory bound");
     lexicalTargets.push(target);
   }
   // A nested directory can change after its own readdir/lstat pair while the
@@ -522,7 +609,7 @@ export class RepositoryLinkInventory {
         read.directories = result.directories;
         this.lexicalTargets.set(read, result.lexicalTargets);
         read.at = this.now();
-        this.options.retained?.set(repository, { at: read.at, lexicalTargets: result.lexicalTargets, directories: result.directories });
+        if (this.options.retained) retainCheckoutRead(this.options.retained, repository, result, read.at);
       }
     }, () => undefined);
     this.walks.push(repository);
