@@ -736,7 +736,7 @@ test.each([
     if (scenario === "released") store.release(directory);
     if (scenario === "custody") await holdFinishedRoot(directory, lane.id, "", [], launchId);
     if (scenario === "linked") nameInReport(payload);
-    if (scenario === "keep") plantKeepMarker(directory);
+    if (scenario === "keep") plantKeepMarker(path.join(directory, ".delegatus-keep"));
     if (scenario === "intent" || scenario === "vanished") {
       // Keep the recovery page busy with an earlier intent. This root must
       // reach the ordinary visit with its stale intent still in the ledger.

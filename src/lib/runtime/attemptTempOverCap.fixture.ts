@@ -19,7 +19,7 @@ Date.now = () => NOW;
 let answer: unknown;
 
 if (mode === "--seed-previous-release") {
-  // A lane whose one attempt ended `value` hours ago, holding one stage root.
+  // A lane whose one attempt ended `value` hours ago, holding an unreleased stage root.
   const completedAt = new Date(NOW - Number(value) * HOUR).toISOString(), base = finishedLane(repo!, completedAt), id = "lane-upgraded";
   savePipelines([{ ...base, ...pipelineIdentity(id, base.task, repo!), id, repoDir: repo!,
     runs: [{ stageId: "build", attempts: [{ n: 1, state: "passed", launchId: id, effectiveRole: base.stages[0]!.effectiveRole,
@@ -33,7 +33,6 @@ if (mode === "--seed-previous-release") {
   const ledger = new AttemptTempStore();
   try {
     ledger.register({ directory, pipelineId: id, launchId: id, retainUntilClose: false, createdAt: Date.parse(completedAt) - HOUR });
-    ledger.release(directory);
     ledger.measure(directory, bytes);
   } finally { ledger.close(); }
   // The previous release's ledger: every table of this one but the over-cap

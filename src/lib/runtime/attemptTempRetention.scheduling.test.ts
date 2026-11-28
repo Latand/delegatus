@@ -40,9 +40,9 @@ test("pressure prioritizes two largest roots across the cursor page", async () =
   for (let i = 1; i < 1029; i++) f.make(i, 4096);
   const nextLargest = f.make(1029, GiB);
   try {
-    const report = await sweepAttemptTemps(f.store, { ...f.options, capBytes: 0,
+    const report = await sweepAttemptTemps(f.store, { ...f.options, capBytes: 0, maxRoots: 2,
       availableBytes: () => 1, state: async () => "live" });
-    expect(report.outcomes.slice(0, 2).map(row => row.directory)).toEqual([largest, nextLargest]);
+    expect(report.outcomes.map(row => row.directory)).toEqual([largest, nextLargest]);
   } finally { f.store.close(); }
 });
 
