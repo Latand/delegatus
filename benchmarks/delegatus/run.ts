@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, existsSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { closeSync, existsSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { isAbsolute, join, relative, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -150,24 +151,18 @@ export const gateRequirements = {
   G7: ['retrospective-quarantine', 'locked-disposable-fixtures', 'reference-oracle-controls', 'blind-judge-payloads'],
 } as const;
 type Gate = keyof typeof gateRequirements;
-type GateObservation = Record<string, 'pass' | 'fail' | 'unknown'>;
+type GateProof = typeof gateRequirements[Gate][number];
 type EvidencePointer = { path: string; digest: string };
-type GateProof = { status: 'verified' | 'failed' | 'unverified'; bindingDigest: string; checkedBindingDigest: string;
-  observationId: string; sourceDigest: string; artifactDigest: string; observationsDigest: string; observations: GateObservation;
-  artifact: { schemaVersion: 1; classification: 'observed-gate-evidence' | 'harness-only'; gate: Gate; proof: string;
-    manifestDigest: string; checkedBindingDigest: string; observationId: string; sourceDigest: string;
-    observations: GateObservation; evidence: EvidencePointer } };
-type GateEvidence = { status: 'verified' | 'unresolved'; proofs?: Record<string, GateProof> };
+type TaskLinkInputs = {
+  src: string; taskIds: string[]; parentRepoDir: string;
+  packages: { task: string; repoDir: string; worktreeDir: string }[];
+};
 export type Binding = {
   classification: 'observed' | 'harness-only';
   manifestDigest: string;
-  gates?: Partial<Record<Gate, GateEvidence>>;
-  independentVerdict?: { approved: boolean; artifactDigest: string; bindingDigest: string; observationsDigest: string;
-    observations: Record<string, 'pass' | 'fail' | 'unknown'>; gateEvidenceDigests: Record<string, string>;
-    artifact: { schemaVersion: 1; classification: 'independent-gate-review' | 'harness-only'; manifestDigest: string;
-      observations: Record<string, 'pass' | 'fail' | 'unknown'>; gateEvidenceDigests: Record<string, string>; evidence: EvidencePointer } };
+  gateResults?: Partial<Record<GateProof, EvidencePointer>>;
+  taskLinks?: TaskLinkInputs;
   unresolved?: string[];
-  taskProjectLinks?: { task: string; taskProject: string; canonicalProject: string; packageProject: string; worktreeProject: string }[];
 };
 const manifestDigest = () => digest(source('./pilot-manifest.json'));
 const PINNED_MANIFEST_DIGEST = 'b033ecde6a981da6c51326b00f4ffd2d7525280054f76ffcaa508eda8b745c9f';
@@ -176,45 +171,108 @@ export function verifyManifestPin(bytes: Uint8Array, pin = PINNED_MANIFEST_DIGES
   assert(sha(pin) && digest(bytes) === pin, 'Bundled manifest differs from the reviewed pin');
 }
 
-export function gateRefusals(binding?: Binding) {
-  const links = Array.isArray(binding?.taskProjectLinks) ? binding.taskProjectLinks : [];
-  const taskKeys = new Set(links.map(link => link?.task));
-  const linksValid = links.length === design.tasks.length && taskKeys.size === design.tasks.length
-    && design.tasks.every(task => taskKeys.has(task.id))
-    && links.every(link => !!link && typeof link === 'object' && !!link.taskProject && link.taskProject === link.canonicalProject
-      && link.taskProject === link.packageProject && link.taskProject === link.worktreeProject);
-  return (Object.keys(gateRequirements) as Gate[]).flatMap(gate => {
-    const evidence = binding?.gates?.[gate];
-    const missing = gateRequirements[gate].filter(name => {
-      const proof = evidence?.proofs?.[name];
-      return binding?.classification !== 'observed' || !proof || proof.status !== 'verified' || !sha(proof.artifactDigest)
-        || !sha(proof.observationsDigest) || proof.bindingDigest !== binding?.manifestDigest
-        || !proof.observations || Object.keys(proof.observations).length === 0
-        || Object.values(proof.observations).some(value => value !== 'pass')
-        || digest(json(proof.observations)) !== proof.observationsDigest
-        || !isDeepStrictEqual(Object.keys(proof.observations).sort(), [...gateRequirements[gate]].sort())
-        || proof.artifact?.schemaVersion !== 1 || proof.artifact.classification !== 'observed-gate-evidence'
-        || proof.artifact.gate !== gate || proof.artifact.proof !== name
-        || proof.artifact.manifestDigest !== binding?.manifestDigest
-        || !sha(proof.checkedBindingDigest) || proof.artifact.checkedBindingDigest !== proof.checkedBindingDigest
-        || !proof.observationId || proof.artifact.observationId !== proof.observationId
-        || !sha(proof.sourceDigest) || proof.artifact.sourceDigest !== proof.sourceDigest
-        || !isDeepStrictEqual(proof.artifact.observations, proof.observations)
-        || !verifiedEvidenceFile(proof.artifact.evidence, gate, name, binding!.manifestDigest, proof.checkedBindingDigest,
-          proof.observationId, proof.sourceDigest, proof.observations)
-        || digest(json(proof.artifact)) !== proof.artifactDigest;
+const taskLinkProof = 'thirteen-package-and-worktree-links';
+const taskLinkControls = 'wrong-project-missing-task-controls';
+
+function scratchDirectory(value: unknown, root: string): value is string {
+  if (typeof value !== 'string' || !isAbsolute(value)) return false;
+  const child = relative(root, value);
+  return !!child && child !== '..' && !child.startsWith('..' + sep)
+    && realpathSync(value) === value && lstatSync(value).isDirectory();
+}
+
+/** Re-run the actual G6 readers. The operator selects a disposable state
+ * directory outside the binding, in the same scratch tree as the repositories. */
+async function checkTaskLinks(binding?: Binding) {
+  const manifest = binding?.manifestDigest;
+  if (!binding?.taskLinks || manifest !== PINNED_MANIFEST_DIGEST || manifestDigest() !== PINNED_MANIFEST_DIGEST) return {};
+  try {
+    const inputs = structuredClone(binding.taskLinks);
+    const root = realpathSync(tmpdir());
+    const state = process.env.LLV_STATE_DIR;
+    if (root !== tmpdir() || !scratchDirectory(state, root)
+      || !scratchDirectory(inputs.parentRepoDir, root) || typeof inputs.src !== 'string' || !inputs.src.trim()
+      || !Array.isArray(inputs.taskIds) || !inputs.taskIds.length || inputs.taskIds.some(id => typeof id !== 'string' || !id.trim())
+      || new Set(inputs.taskIds).size !== inputs.taskIds.length
+      || !Array.isArray(inputs.packages) || inputs.packages.length !== design.tasks.length) return {};
+    const expectedTasks = design.tasks.map(task => task.id).sort();
+    if (!isDeepStrictEqual(inputs.packages.map(pkg => pkg?.task).sort(), expectedTasks)) return {};
+    const dirs = [state, inputs.parentRepoDir, ...inputs.packages.flatMap(pkg => [pkg.repoDir, pkg.worktreeDir])];
+    if (new Set(dirs).size !== dirs.length || !dirs.every(dir => scratchDirectory(dir, root))) return {};
+
+    // Delay state-aware imports until the explicit scratch directory is checked.
+    const { stateDir } = await import('../../src/lib/configDir');
+    if (stateDir() !== state) return {};
+    const [
+      { loadTasksByIds, TASKS_FILE }, { projectForCwd, projectRootForCwd }, { pipelineTaskLinkError },
+      { directoryProjectId, isRepositoryProjectId, repositoryRootForPath },
+      { projectAliasSnapshot, withProjectAliasSnapshot },
+    ] = await Promise.all([
+      import('../../src/lib/tasks/store'), import('../../src/lib/scanner/describe'),
+      import('../../src/lib/pipelines/store'), import('../../src/lib/projects/identity'),
+      import('../../src/lib/projects/aliases'),
+    ]);
+    if (stateDir() !== state || TASKS_FILE !== join(state, 'tasks.json')
+      || repositoryRootForPath(inputs.parentRepoDir) !== inputs.parentRepoDir) return {};
+
+    const aliases = projectAliasSnapshot({ strict: true });
+    return withProjectAliasSnapshot(aliases, () => {
+      const missingId = 'benchmark-missing-task-control';
+      if (inputs.taskIds.includes(missingId)) return {};
+      const tasks = loadTasksByIds(new Set([...inputs.taskIds, missingId]));
+      const parentProject = projectForCwd(inputs.parentRepoDir);
+      const links = inputs.packages.map(({ task, repoDir, worktreeDir }) => {
+        const packageProject = projectForCwd(repoDir);
+        const worktreeProject = projectForCwd(worktreeDir);
+        return { task, packageProject, worktreeProject,
+          repository: repositoryRootForPath(repoDir) === repoDir,
+          worktree: lstatSync(join(worktreeDir, '.git'), { throwIfNoEntry: false })?.isFile() === true
+            && repositoryRootForPath(worktreeDir) === worktreeDir && projectRootForCwd(worktreeDir) === repoDir,
+          packageTaskError: packageProject ? pipelineTaskLinkError({ project: packageProject }, inputs.taskIds, tasks) : 'unresolved',
+          worktreeTaskError: worktreeProject ? pipelineTaskLinkError({ project: worktreeProject }, inputs.taskIds, tasks) : 'unresolved' };
+      });
+      if (!parentProject || !isRepositoryProjectId(parentProject)) return {};
+      const wrongProject = directoryProjectId(root);
+      const controls = {
+        wrongProject: pipelineTaskLinkError({ project: wrongProject }, inputs.taskIds, tasks),
+        missingTask: pipelineTaskLinkError({ project: parentProject }, [missingId], tasks),
+      };
+      const readers = [
+        ['loadTasksByIds', '../../src/lib/tasks/store.ts'],
+        ['projectForCwd/projectRootForCwd', '../../src/lib/scanner/describe.ts'],
+        ['projectAliasSnapshot', '../../src/lib/projects/aliases.ts'],
+        ['repositoryRootForPath', '../../src/lib/projects/identity.ts'],
+        ['pipelineTaskLinkError', '../../src/lib/pipelines/store.ts'],
+      ].map(([reader, file]) => ({ reader, sourceDigest: digest(source(file)) }));
+      const result = {
+        schemaVersion: 2, classification: 'non-model-gate-result', gate: 'G6',
+        manifestDigest: manifest, sourceDigest: digest(source('./run.ts')),
+        checkedInputsDigest: digest(json({ inputs, state, aliases, tasks })), readers,
+      };
+      return {
+        [taskLinkProof]: { ...result, proof: taskLinkProof, observations: { parentProject, links },
+          passed: links.every(link => link.repository && link.worktree && link.packageProject === parentProject
+            && link.worktreeProject === parentProject && link.packageTaskError === null && link.worktreeTaskError === null) },
+        [taskLinkControls]: { ...result, proof: taskLinkControls, observations: controls,
+          passed: controls.wrongProject === `task project does not match pipeline project: ${inputs.taskIds[0]}`
+            && controls.missingTask === `task not found: ${missingId}` },
+      };
     });
-    const linkProof = binding?.gates?.G6?.proofs?.['thirteen-package-and-worktree-links'];
-    const linkEvidence = gate === 'G6' && linkProof?.artifact?.evidence ? readEvidenceFile(linkProof.artifact.evidence) : null;
-    const linkedTasks = linkEvidence?.taskProjectLinks;
-    const exactLinksObserved = Array.isArray(linkedTasks) && isDeepStrictEqual(linkedTasks, binding?.taskProjectLinks);
-    if (binding?.manifestDigest !== manifestDigest() || evidence?.status !== 'verified' || missing.length
-      || (gate === 'G6' && (!linksValid || !exactLinksObserved))) {
-      return [{ gate, missing: missing.length ? missing : gate === 'G6' && !linksValid
-        ? ['thirteen exact task/project links'] : gate === 'G6' && !exactLinksObserved
-          ? ['content-addressed G6 evidence does not bind the observed task/project links'] : ['verified proof for this manifest'] }];
-    }
-    return [];
+  } catch {
+    return {};
+  }
+}
+
+export async function gateRefusals(binding?: Binding) {
+  const pointers = { ...binding?.gateResults };
+  const results: Partial<Record<GateProof, { passed: boolean }>> = binding?.classification === 'observed'
+    && (pointers[taskLinkProof] || pointers[taskLinkControls]) ? await checkTaskLinks(binding) : {};
+  return (Object.keys(gateRequirements) as Gate[]).flatMap(gate => {
+    const missing = gateRequirements[gate].filter(name => {
+      const result = results[name];
+      return !result?.passed || !isDeepStrictEqual(readEvidenceFile(pointers[name]), result);
+    });
+    return missing.length ? [{ gate, missing }] : [];
   });
 }
 
@@ -239,46 +297,12 @@ function verifiedOracleFile(pointer: EvidencePointer | undefined, taskId: string
       exitCode: 0, checks });
 }
 
-function verifiedEvidenceFile(pointer: EvidencePointer | undefined, gate: Gate, proof: string, manifest: string,
-  checkedBindingDigest: string, observationId: string, sourceDigest: string, observations: GateObservation) {
-  const record = readEvidenceFile(pointer);
-  return !!record && record.schemaVersion === 1 && record.classification === 'observed-gate-evidence'
-      && record.gate === gate && record.proof === proof && record.manifestDigest === manifest
-      && record.checkedBindingDigest === checkedBindingDigest && record.observationId === observationId
-      && record.sourceDigest === sourceDigest && isDeepStrictEqual(record.observations, observations)
-      && record.result && typeof record.result === 'object'
-      && isDeepStrictEqual(record.result, { gate, proof, manifestDigest: manifest, checkedBindingDigest, observationId, sourceDigest, outcome: 'pass' });
-}
-
-export function launchRefusal(binding?: Binding) {
+export async function launchRefusal(binding?: Binding) {
   if (Array.isArray(binding?.unresolved) && binding.unresolved.length) return `Unresolved static bindings: ${binding.unresolved.slice(0, 8).join(', ')}`;
-  const gates = gateRefusals(binding);
+  const gates = await gateRefusals(binding);
   if (gates.length) return gates.map(item => `${item.gate}: ${item.missing.join(', ')}`).join('; ').slice(0, 1000);
-  const verdict = binding?.independentVerdict;
-  const gateEvidenceDigests = Object.fromEntries((Object.keys(gateRequirements) as Gate[]).map(gate => [gate,
-    digest(json(Object.fromEntries(Object.entries(binding?.gates?.[gate]?.proofs ?? {})
-      .map(([name, proof]) => [name, proof.artifactDigest]).sort(([a], [b]) => String(a).localeCompare(String(b))))))]));
-  if (!verdict?.approved || verdict.bindingDigest !== binding?.manifestDigest || !sha(verdict.artifactDigest)
-    || !sha(verdict.observationsDigest) || !Object.keys(verdict.observations ?? {}).length
-    || Object.values(verdict.observations).some(value => value !== 'pass')
-    || !isDeepStrictEqual(Object.keys(verdict.observations).sort(), (Object.keys(gateRequirements) as Gate[]).sort())
-    || !isDeepStrictEqual(verdict.gateEvidenceDigests, gateEvidenceDigests)
-    || digest(json(verdict.observations)) !== verdict.observationsDigest || verdict.artifact?.schemaVersion !== 1
-    || verdict.artifact.classification !== 'independent-gate-review' || verdict.artifact.manifestDigest !== binding?.manifestDigest
-    || !isDeepStrictEqual(verdict.artifact.observations, verdict.observations)
-    || !isDeepStrictEqual(verdict.artifact.gateEvidenceDigests, verdict.gateEvidenceDigests)
-    || !verifiedReviewFile(verdict.artifact.evidence, binding?.manifestDigest, verdict.observations, verdict.gateEvidenceDigests)
-    || digest(json(verdict.artifact)) !== verdict.artifactDigest) return 'G1–G7: independent verification required';
-  return 'G1–G7: manifest launchAllowed is false; offline driver';
-}
-
-function verifiedReviewFile(pointer: EvidencePointer | undefined, manifest: string | undefined, observations: GateObservation, gateEvidenceDigests: Record<string, string>) {
-  const record = readEvidenceFile(pointer);
-  return !!record && record.schemaVersion === 1 && record.classification === 'independent-gate-review'
-    && record.manifestDigest === manifest && isDeepStrictEqual(record.observations, observations)
-    && isDeepStrictEqual(record.gateEvidenceDigests, gateEvidenceDigests)
-    && record.result && typeof record.result === 'object'
-    && isDeepStrictEqual(record.result, { manifestDigest: manifest, gateEvidenceDigests, observations, approved: true });
+  // The offline driver has no independently authenticated reviewer source.
+  return 'G1–G7: independent verification required; manifest launchAllowed is false; offline driver';
 }
 
 export type RequestInputs = {
@@ -1119,12 +1143,18 @@ if (import.meta.main) {
       case 'preflight':
         {
           let refusal: string;
-          try { refusal = launchRefusal(input ? read(input) : undefined); }
+          try { refusal = await launchRefusal(input ? read(input) : undefined); }
           catch { refusal = 'G1–G7: malformed gate evidence artifact'; }
           console.log(json({ allowed: false, modelLaunches: 0, refusal: refusal.slice(0, 1000) }));
         }
         process.exitCode = 2;
         break;
+      case 'check-task-links': {
+        const results = await checkTaskLinks(read(input));
+        process.stdout.write(json(results));
+        if (!Object.keys(results).length) process.exitCode = 2;
+        break;
+      }
       case 'seal':
         {
           const payload = read(extra);
@@ -1157,7 +1187,7 @@ if (import.meta.main) {
         break;
       }
       default:
-        throw new Error('Use validate [manifest], preflight [binding], seal <run> <contracts> [golds], append <run> <event>, report <run> or expand <row> <inputs> [run]');
+        throw new Error('Use validate [manifest], preflight [binding], check-task-links <binding>, seal <run> <contracts> [golds], append <run> <event>, report <run> or expand <row> <inputs> [run]');
     }
   } catch (error) {
     console.error(error instanceof Error && !('path' in error) && !(error instanceof SyntaxError) ? error.message.slice(0, 400) : 'Benchmark input or file operation failed');

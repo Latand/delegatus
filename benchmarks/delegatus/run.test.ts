@@ -81,7 +81,7 @@ test('bundled manifest is checked against an independent reviewed digest in the 
   expect(result.exitCode).not.toBe(0);
 });
 
-const verified = (): Binding => {
+const selfAttested = () => {
   const manifestDigest = digest(readFileSync(manifestFile));
   const gates = Object.fromEntries(Object.entries(gateRequirements).map(([gate, proofs]) => [
     gate, { status: 'verified', proofs: Object.fromEntries(proofs.map(p => {
@@ -103,11 +103,11 @@ const verified = (): Binding => {
         artifactDigest: digest(JSON.stringify(artifact) + '\n'), observations,
         observationsDigest: digest(JSON.stringify(observations) + '\n'), artifact }];
     })) },
-  ])) as Binding['gates'];
+  ]));
   const gateEvidenceDigests = Object.fromEntries(Object.entries(gates ?? {}).map(([gate, evidence]) => [gate,
     digest(JSON.stringify(Object.fromEntries(Object.entries(evidence?.proofs ?? {}).map(([name, p]) => [name, p.artifactDigest]).sort(([a], [b]) => a.localeCompare(b)))) + '\n')]));
   return {
-  classification: 'harness-only',
+  classification: 'harness-only' as Binding['classification'],
   manifestDigest,
   gates,
   independentVerdict: (() => { const observations = Object.fromEntries(Object.keys(gateRequirements).map(g => [g, 'pass' as const]));
@@ -123,90 +123,153 @@ const verified = (): Binding => {
   };
 };
 
-for (const gate of Object.keys(gateRequirements) as (keyof typeof gateRequirements)[]) {
-  test(`${gate} missing and malformed proof refuse in a fresh offline process`, () => {
-    const b = verified();
-    b.classification = 'observed';
-    b.gates![gate]!.proofs![gateRequirements[gate][0]]!.artifactDigest = '';
-    expect(gateRefusals(b).map(r => r.gate)).toContain(gate);
-    delete b.gates![gate];
-    const file = join(scratch(), 'binding.json');
-    writeFileSync(file, JSON.stringify(b));
-    const result = Bun.spawnSync([process.execPath, entrypoint, 'preflight', file], { timeout: 3000 });
-    expect(result.exitCode).toBe(2);
-    expect(JSON.parse(result.stdout.toString())).toEqual({ allowed: false, modelLaunches: 0, refusal: expect.stringContaining(gate) });
-    const failing = verified();
-    failing.classification = 'observed';
-    const item = gateRequirements[gate][0];
-    failing.gates![gate]!.proofs![item]!.status = 'failed';
-    expect(gateRefusals(failing).map(r => r.gate)).toContain(gate);
-    const mismatch = verified();
-    mismatch.classification = 'observed';
-    mismatch.gates![gate]!.proofs![item]!.bindingDigest = proof('other-binding');
-    expect(gateRefusals(mismatch).map(r => r.gate)).toContain(gate);
-    for (const rejected of [failing, mismatch]) {
-      const rejectedFile = join(scratch(), `${gate}-${rejected === failing ? 'failed' : 'mismatch'}.json`);
-      writeFileSync(rejectedFile, JSON.stringify(rejected));
-      const preflight = Bun.spawnSync([process.execPath, entrypoint, 'preflight', rejectedFile], { timeout: 3000 });
-      expect(preflight.exitCode).toBe(2);
-      expect(JSON.parse(preflight.stdout.toString())).toMatchObject({ allowed: false, modelLaunches: 0, refusal: expect.stringContaining(gate) });
-    }
-  });
+const missingGateResults = Object.entries(gateRequirements).map(([gate, missing]) => ({ gate, missing }));
+
+function privateJson(path: string, value: unknown) {
+  const bytes = JSON.stringify(value) + '\n';
+  writeFileSync(path, bytes, { mode: 0o600 });
+  return { path, digest: digest(bytes) };
 }
 
-test('stale manifest and unresolved private bindings keep the launch closed', () => {
-  const b = verified();
-  expect(gateRefusals(b)).toHaveLength(7);
-  expect(launchRefusal(b)).toContain('G1');
-  b.classification = 'observed';
-  expect(gateRefusals(b)).toHaveLength(0);
-  expect(launchRefusal(b)).toContain('launchAllowed is false');
-  b.unresolved = ['fixture-binding'];
-  expect(launchRefusal(b)).toContain('Unresolved static bindings');
-  b.manifestDigest = proof('stale');
-  expect(gateRefusals(b)).toHaveLength(7);
-  const wrongProject = verified();
-  wrongProject.classification = 'observed';
-  wrongProject.taskProjectLinks![0]!.taskProject = 'retained-alias';
-  expect(gateRefusals(wrongProject).map(r => r.gate)).toContain('G6');
-  const missingTask = verified();
-  missingTask.classification = 'observed';
-  missingTask.taskProjectLinks!.pop();
-  expect(gateRefusals(missingTask).map(r => r.gate)).toContain('G6');
+function preflight(file?: string, env = process.env) {
+  const result = Bun.spawnSync([process.execPath, entrypoint, 'preflight', ...(file ? [file] : [])], { env, timeout: 5000 });
+  expect(result.exitCode).toBe(2);
+  const output = JSON.parse(result.stdout.toString());
+  expect(output).toMatchObject({ allowed: false, modelLaunches: 0 });
+  return output.refusal as string;
+}
+
+test('all 24 missing results refuse across all seven gates', async () => {
+  expect(await gateRefusals()).toEqual(missingGateResults);
+  expect(missingGateResults.flatMap(row => row.missing)).toHaveLength(24);
+  const refusal = preflight();
+  for (const { gate, missing } of missingGateResults) {
+    expect(refusal).toContain(`${gate}: ${missing.join(', ')}`);
+  }
 });
 
-test('checklist-only evidence and malformed G6 artifacts refuse with a named gate', () => {
-  const checklist = verified();
-  checklist.classification = 'observed';
-  const g1 = checklist.gates!.G1!.proofs!['effective-roots']!;
-  const path = g1.artifact.evidence.path;
-  writeFileSync(path, JSON.stringify({ schemaVersion: 1, classification: 'harness-only', gate: 'G1', proof: 'effective-roots',
-    manifestDigest: checklist.manifestDigest, observations: g1.observations }) + '\n', { mode: 0o600 });
-  g1.artifact.evidence.digest = digest(readFileSync(path));
-  expect(gateRefusals(checklist).map(item => item.gate)).toContain('G1');
-  const mismatchedLink = verified();
-  mismatchedLink.classification = 'observed';
-  const linkProof = mismatchedLink.gates!.G6!.proofs!['thirteen-package-and-worktree-links']!;
-  const linkPath = linkProof.artifact.evidence.path;
-  const linkArtifact = JSON.parse(readFileSync(linkPath, 'utf8'));
-  linkArtifact.taskProjectLinks.pop();
-  writeFileSync(linkPath, JSON.stringify(linkArtifact) + '\n', { mode: 0o600 });
-  linkProof.artifact.evidence.digest = digest(readFileSync(linkPath));
-  linkProof.artifactDigest = digest(JSON.stringify(linkProof.artifact) + '\n');
-  expect(gateRefusals(mismatchedLink).map(item => item.gate)).toContain('G6');
-  const malformed = verified();
-  malformed.classification = 'observed';
-  const missingEvidence = malformed.gates!.G6!.proofs!['thirteen-package-and-worktree-links']!.artifact.evidence.path;
-  unlinkSync(missingEvidence);
-  const bindingFile = join(scratch(), 'missing-g6-evidence-binding.json');
-  writeFileSync(bindingFile, JSON.stringify(malformed));
-  const missingPreflight = Bun.spawnSync([process.execPath, entrypoint, 'preflight', bindingFile], { timeout: 3000 });
-  expect(missingPreflight.exitCode).toBe(2);
-  expect(JSON.parse(missingPreflight.stdout.toString())).toMatchObject({ allowed: false, modelLaunches: 0, refusal: expect.stringContaining('G6') });
-  (malformed.gates!.G6!.proofs!['thirteen-package-and-worktree-links'] as unknown as { artifact: null }).artifact = null;
-  expect(() => gateRefusals(malformed)).not.toThrow();
-  expect(gateRefusals(malformed).map(item => item.gate)).toContain('G6');
+test('changing only the classification of self-attested gates and review refuses', async () => {
+  const binding = selfAttested();
+  expect(await gateRefusals(binding)).toEqual(missingGateResults);
+  binding.classification = 'observed';
+  expect(await gateRefusals(binding)).toEqual(missingGateResults);
+  expect(preflight(privateJson(join(scratch(), 'binding.json'), binding).path)).toBe(await launchRefusal());
 });
+
+test('unresolved private bindings keep the launch closed', async () => {
+  expect(await launchRefusal({ classification: 'observed', manifestDigest: proof('stale'), unresolved: ['fixture-binding'] }))
+    .toContain('Unresolved static bindings');
+});
+
+test('persisted G6 receipts must match real task, namespace, and worktree reads', async () => {
+  const root = scratch();
+  const state = join(root, 'state');
+  mkdirSync(state);
+  const env = { ...process.env, TMPDIR: root, LLV_STATE_DIR: state };
+  const exec = (cmd: string[]) => {
+    const result = Bun.spawnSync(cmd, { env, timeout: 5000 });
+    if (result.exitCode !== 0) throw new Error(result.stderr.toString() || `Fixture command exit ${result.exitCode}`);
+    return result.stdout.toString();
+  };
+  const origin = 'https://example.invalid/benchmark/namespace.git';
+  const otherOrigin = 'https://example.invalid/benchmark/unrelated.git';
+  const git = (dir: string, ...args: string[]) => exec(['git', '-C', dir, '-c', 'core.hooksPath=/dev/null', ...args]);
+  const repo = (name: string, remote: string) => {
+    const dir = join(root, name);
+    mkdirSync(dir);
+    git(dir, 'init', '-q', '--initial-branch=main');
+    git(dir, 'remote', 'add', 'origin', remote);
+    return dir;
+  };
+  const parentRepoDir = repo('parent', origin);
+  const wrongRepoDir = repo('wrong-project', otherOrigin);
+  const packages = design.tasks.map(({ id }) => {
+    const repoDir = repo(id, origin);
+    const worktreeDir = join(root, `${id}-checkout`);
+    git(repoDir, '-c', 'user.name=Benchmark', '-c', 'user.email=noreply', 'commit', '--allow-empty', '-qm', 'Fixture base');
+    git(repoDir, 'worktree', 'add', '--quiet', '--detach', worktreeDir);
+    return { task: id, repoDir, worktreeDir };
+  });
+  const taskIds = ['fixture-seat-task'];
+  const seed = (dir: string, ids: string[]) => exec([process.execPath, '-e', `
+    import { projectForCwd } from './src/lib/scanner/describe';
+    import { saveTasks } from './src/lib/tasks/store';
+    const [dir, ...ids] = process.argv.slice(1);
+    const at = '2026-01-01T00:00:00.000Z';
+    saveTasks(ids.map(id => ({ id, project: projectForCwd(dir), status: 'inbox',
+      text: 'Fixture task', placement: 'unplaced', assignments: [], createdAt: at, updatedAt: at })));
+  `, dir, ...ids]);
+  seed(parentRepoDir, taskIds);
+  const binding: Binding = { classification: 'observed', manifestDigest: digest(readFileSync(manifestFile)),
+    taskLinks: { src: 'fixture-conversation', taskIds, parentRepoDir, packages } };
+  const file = join(root, 'binding.json');
+  const links = 'thirteen-package-and-worktree-links';
+  const controls = 'wrong-project-missing-task-controls';
+  const allMissing = await launchRefusal();
+  const checks = () => JSON.parse(exec([process.execPath, entrypoint, 'check-task-links', privateJson(file, binding).path]));
+  const refusal = () => preflight(privateJson(file, binding).path, env);
+  const checked = checks();
+  expect(checked[links].passed).toBe(true);
+  expect(checked[links].observations.links).toHaveLength(13);
+  expect(checked[controls]).toMatchObject({ passed: true, observations: {
+    wrongProject: 'task project does not match pipeline project: fixture-seat-task',
+    missingTask: 'task not found: benchmark-missing-task-control',
+  } });
+  const receipts = {
+    [links]: privateJson(join(root, 'links.json'), checked[links]),
+    [controls]: privateJson(join(root, 'controls.json'), checked[controls]),
+  };
+  binding.gateResults = receipts;
+  expect(refusal()).toContain('G6: current-seat-visible-lineage; G7:');
+
+  binding.classification = 'harness-only';
+  expect(refusal()).toBe(allMissing);
+  binding.classification = 'observed';
+  binding.taskLinks!.src = 'different-conversation';
+  expect(refusal()).toBe(allMissing);
+  binding.taskLinks!.src = 'fixture-conversation';
+  binding.manifestDigest = proof('stale-manifest');
+  expect(refusal()).toBe(allMissing);
+  binding.manifestDigest = digest(readFileSync(manifestFile));
+
+  const fabricated = structuredClone(checked[links]);
+  fabricated.readers = [];
+  binding.gateResults = { ...receipts, [links]: privateJson(join(root, 'lookalike.json'), fabricated) };
+  expect(refusal()).toContain(`G6: ${links}, current-seat-visible-lineage;`);
+  binding.gateResults = { ...receipts, [links]: { ...receipts[links], digest: proof('wrong-content') } };
+  expect(refusal()).toContain(`G6: ${links}, current-seat-visible-lineage;`);
+  binding.gateResults = { ...receipts, [links]: privateJson(join(root, 'control-copy.json'), checked[controls]) };
+  expect(refusal()).toContain(`G6: ${links}, current-seat-visible-lineage;`);
+  binding.gateResults = { ...receipts, [links]: undefined };
+  expect(refusal()).toContain(`G6: ${links}, current-seat-visible-lineage;`);
+  binding.gateResults = { ...receipts, 'current-seat-visible-lineage': receipts[links] };
+  expect(refusal()).toContain('G6: current-seat-visible-lineage; G7:');
+  binding.gateResults = receipts;
+
+  binding.taskLinks!.packages[0].worktreeDir = repo('same-namespace-lookalike', origin);
+  expect(checks()[links].observations.links[0]).toMatchObject({
+    worktree: false, worktreeTaskError: null,
+  });
+  expect(refusal()).toBe(allMissing);
+  binding.taskLinks!.packages[0].worktreeDir = join(root, `${task}-checkout`);
+
+  git(packages[0].repoDir, 'remote', 'set-url', 'origin', otherOrigin);
+  const failed = checks();
+  expect(failed[links].passed).toBe(false);
+  expect(failed[links].observations.links[0].packageTaskError).toBe('task project does not match pipeline project: fixture-seat-task');
+  binding.gateResults = { ...receipts, [links]: privateJson(join(root, 'failed.json'), failed[links]) };
+  expect(refusal()).toContain(`G6: ${links}, current-seat-visible-lineage;`);
+  failed[links].passed = true;
+  binding.gateResults = { ...receipts, [links]: privateJson(join(root, 'forged-pass.json'), failed[links]) };
+  expect(refusal()).toContain(`G6: ${links}, current-seat-visible-lineage;`);
+  git(packages[0].repoDir, 'remote', 'set-url', 'origin', origin);
+
+  seed(wrongRepoDir, taskIds);
+  expect(refusal()).toBe(allMissing);
+  seed(parentRepoDir, []);
+  expect(checks()[links].observations.links[0].packageTaskError).toBe('task not found: fixture-seat-task');
+  expect(refusal()).toBe(allMissing);
+}, 30_000);
 
 const requestInputs: RequestInputs = {
   repoDir: '/fixture/repo', baseRef: 'a'.repeat(40), src: '/fixture/source', taskIds: ['fixture-task'],
