@@ -356,6 +356,7 @@ test.each([
   { explicit: true, delivery: "setup-owner-change", cut: "killed-setup" },
   { explicit: true, delivery: "different-journal-failure", cut: "killed-setup" },
   { explicit: true, delivery: "waiter-permitted", cut: "killed-setup" },
+  { explicit: true, delivery: "legacy-waiter", cut: "killed-setup" },
   { explicit: true, delivery: "late-first-message", cut: "killed-setup" },
 ])
 ("MCP retry-stage reconciles a stuck replacement: %j", async ({ explicit, delivery, cut }) => {
@@ -384,7 +385,7 @@ test.each([
     const active = replacement.receipt;
     const interruptedRetirement = delivery === "retirement-interrupted" || delivery === "release-interrupted";
     const interruptedOwner = interruptedRetirement
-      || ["killed-owner", "killed-owner-starting", "live-setup-process", "setup-owner-change"].includes(delivery);
+      || ["killed-owner", "killed-owner-starting", "legacy-waiter", "live-setup-process", "setup-owner-change"].includes(delivery);
     const ownerIdentity = active.admissionOwner!;
     const preHost = ["pre-host-writer", "compacted-prehost", "native-turn"].includes(delivery);
     const failure = cut === "before-admission" ? `structured spawn interrupted before runtime admission: ${active.launchId}`
@@ -394,11 +395,14 @@ test.each([
         conversationId: active.conversationId, engine: "codex", cwd: lane.worktreeDir!, prompt: "Review" });
       if (interruptedOwner) {
         liveSetup = await interruptSetupOwner(f, active, delivery === "live-setup-process");
+        if (delivery === "legacy-waiter") f.registry.agentStateWrite(file => {
+          file.receipts[active.launchId]!.hostSetup!.phase = "executing";
+        });
       } else if (!preHost) {
         f.registry.beginStructuredHostSetup(active.launchId, ownerIdentity, Date.parse(f.h.ports.now()));
       }
       if (cut === "killed-setup" && !interruptedOwner || delivery.startsWith("waiter-")) {
-        // The setup helper has no engine exec permit.
+        // Only the waiter is recorded, even when the engine was permitted.
         const helper = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"]);
         try {
           f.registry.recordStructuredHostSetupWaiter(active.launchId, ownerIdentity, captureProcessIdentity(helper.pid));
@@ -410,7 +414,9 @@ test.each([
       f.journal.transitionOperation(active.launchId, "failed", {
         reason: delivery === "different-journal-failure" ? "native session setup failed" : failure,
       });
-      if (!preHost && !["cleanup-unproven", "waiter-unconfirmed"].includes(delivery) && !interruptedOwner) f.registry.confirmStructuredHostSetupCleanup(active.launchId, ownerIdentity);
+      if (!preHost && !["cleanup-unproven", "waiter-unconfirmed"].includes(delivery) && !interruptedOwner) {
+        expect(f.registry.confirmStructuredHostSetupCleanup(active.launchId, ownerIdentity)).toBe(delivery !== "waiter-permitted");
+      }
     }
     const starting = interruptedRetirement || ["pending-reservation", "unbound-reservation", "killed-owner-starting"].includes(delivery);
     if (!starting) await f.registry.failStructuredSpawnOffLoop(active.launchId, failure);
@@ -533,6 +539,16 @@ test.each([
         if (delivery === "setup-owner-change") expect(f.registry.spawnReceipt(active.launchId)?.hostSetup?.cleanupConfirmed).toBeUndefined();
       } else expect(f.registry.spawnReceipt(active.launchId)?.retryClaim).toBeUndefined();
       expect(f.tries()).toBe(1);
+      if (delivery === "waiter-permitted") {
+        if (cut === "killed-setup") expect(JSON.stringify(answer)).toContain("admission owner");
+        expect(f.registry.spawnReceipt(active.launchId)?.hostSetup?.cleanupConfirmed).toBeUndefined();
+        expect(f.registry.spawnReceipt(active.launchId)?.admissionOwner).toEqual(ownerIdentity);
+      }
+      if (delivery === "legacy-waiter") {
+        expect(JSON.stringify(answer)).toContain("native setup process cleanup is unconfirmed");
+        expect(f.registry.spawnReceipt(active.launchId)?.hostSetup?.cleanupConfirmed).toBeUndefined();
+        expect(f.registry.spawnReceipt(active.launchId)?.admissionOwner).not.toBeNull();
+      }
       if (delivery === "cleanup-unproven") expect(JSON.stringify(answer)).toContain("admission owner");
       if (delivery === "live-setup-process") {
         expect(JSON.stringify(answer)).toContain("native setup process cleanup is unconfirmed");
