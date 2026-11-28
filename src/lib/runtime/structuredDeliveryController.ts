@@ -3104,12 +3104,24 @@ export interface DemotionInterruptionOptions {
   seats?: () => readonly Pick<OrchestratorSeat, "project" | "seatEpoch" | "conversationId">[];
   /** Optional cache reader for bounded custody recovery; production uses the shared cache. */
   backgroundWorkCache?: VerifiedBackgroundWorkCache;
+  /** Startup-owned handoffs inherit the startup read's cancellation and bound. */
+  signal?: AbortSignal;
+  deadline?: number;
+  assertActive?: () => void;
 }
 
 /* A journal lock admission can itself wait five seconds. Leave enough of the
    demotion grace window for a later admission after one bounded refusal. */
 const DEMOTION_HANDOFF_WAIT_MS = 15_000;
 const DEMOTION_HANDOFF_WRITE = { label: "registry.demotion-handoff" };
+
+function assertDemotionAdmissionActive(options: DemotionInterruptionOptions): void {
+  options.assertActive?.();
+  if (options.signal?.aborted) throw options.signal.reason ?? new Error("startup authority was cancelled");
+  if (options.deadline !== undefined && performance.now() >= options.deadline) {
+    throw new Error("demotion handoff deadline exceeded");
+  }
+}
 
 async function admitDemotionRecord<T>(
   registry: AgentRegistry,
@@ -3118,14 +3130,33 @@ async function admitDemotionRecord<T>(
   record: (store: InterruptionObligationStore, evidence: T) => boolean,
 ): Promise<boolean> {
   if (options.store) {
+    assertDemotionAdmissionActive(options);
     const store = options.store;
     const evidence = readEvidence();
+    assertDemotionAdmissionActive(options);
     return registry.deliveryWriteOrBusy(DEMOTION_HANDOFF_WRITE, () => record(store, evidence));
   }
 
-  const deadline = performance.now() + DEMOTION_HANDOFF_WAIT_MS;
+  const deadline = Math.min(options.deadline ?? Infinity, performance.now() + DEMOTION_HANDOFF_WAIT_MS);
   const directory = interruptionObligationDirectory(registry.filename);
+  let lastJournalBusy: InterruptionJournalBusyError | undefined;
+  const pause = (ms: number) => new Promise<void>((resolve, reject) => {
+    const finish = () => { options.signal?.removeEventListener("abort", abort); resolve(); };
+    const timer = setTimeout(finish, ms);
+    const abort = () => {
+      clearTimeout(timer);
+      options.signal?.removeEventListener("abort", abort);
+      reject(options.signal?.reason ?? new Error("startup authority was cancelled"));
+    };
+    options.signal?.addEventListener("abort", abort, { once: true });
+    if (options.signal?.aborted) abort();
+  });
   for (;;) {
+    assertDemotionAdmissionActive(options);
+    if (performance.now() >= deadline) {
+      if (lastJournalBusy) throw lastJournalBusy;
+      throw new RegistryWriterBusyError(DEMOTION_HANDOFF_WRITE.label);
+    }
     // The successor also uses this FIFO journal. Try the registry once
     // inside it and return the journal before any wait for the writer.
     let result: { acquired: true; value: boolean } | { acquired: false };
@@ -3133,23 +3164,23 @@ async function admitDemotionRecord<T>(
       result = await withInterruptionObligationAdmission(directory, store => {
         const evidence = readEvidence();
         return registry.deliveryWriteNow(DEMOTION_HANDOFF_WRITE, () => record(store, evidence));
-      }, { deadline });
+      }, { deadline, signal: options.signal });
     } catch (error) {
       if (!(error instanceof InterruptionJournalBusyError)) throw error;
+      lastJournalBusy = error;
       const remaining = deadline - performance.now();
-      if (remaining <= 0) throw new RegistryWriterBusyError(DEMOTION_HANDOFF_WRITE.label);
-      await new Promise(resolve => setTimeout(resolve, Math.min(50, remaining)));
+      if (remaining <= 0) throw error;
+      await pause(Math.min(50, remaining));
       continue;
     }
     if (result.acquired) return result.value;
     const remaining = deadline - performance.now();
-    if (remaining <= 0) throw new RegistryWriterBusyError(DEMOTION_HANDOFF_WRITE.label);
-    // Wait outside the journal. The next attempt revalidates the host and turn.
-    try {
-      await registry.deliveryWriteOrBusy({ ...DEMOTION_HANDOFF_WRITE, waitDeadlineAt: Date.now() + remaining }, () => {});
-    } catch (error) {
-      if (!(error instanceof RegistryWriterBusyError)) throw error;
+    if (remaining <= 0) {
+      if (lastJournalBusy) throw lastJournalBusy;
+      throw new RegistryWriterBusyError(DEMOTION_HANDOFF_WRITE.label);
     }
+    // Wait outside the journal. The next attempt revalidates the host and turn.
+    await pause(Math.min(50, remaining));
   }
 }
 
@@ -3218,12 +3249,16 @@ export async function recordDemotionInterruption(
     }
   };
   return admitDemotionRecord(registry, options, readSeat, (store, seat) => {
+    assertDemotionAdmissionActive(options);
     // Seat discovery can observe a completion. Validate all the evidence
     // under the registry writer before marking custody and recording the cut.
     const fresh = startupHostSnapshot(registry, key);
     const currentEntry = fresh.entries[hostKey];
     const currentConversation = fresh.conversations[conversation.id];
     if (!currentEntry || !currentConversation || custody(currentEntry, currentConversation) !== expected || !evidenceStands()) return false;
+    // Authority and evidence are checked inside journal admission immediately
+    // before this durable cut is published.
+    assertDemotionAdmissionActive(options);
     const { obligation, created } = store.record({
       conversationId,
       engine,
@@ -3378,6 +3413,7 @@ export async function handOverHostForDemotion(
   const observed = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
   let marked = false;
   const markHandoff = () => {
+    assertDemotionAdmissionActive(options);
     if (marked) return;
     const latest = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
     if (!latest || latest.claimOwner !== observed?.claimOwner || latest.claimEpoch !== observed?.claimEpoch
@@ -3414,6 +3450,7 @@ export async function handOverHostForDemotion(
       registry, key, current, options, idle.backgroundTasks, idle.selfStartedWork,
       () => {
         if (!evidenceStands() || !idle.evidenceStands()) return false;
+        assertDemotionAdmissionActive(options);
         markHandoff();
         return true;
       },
@@ -3422,6 +3459,7 @@ export async function handOverHostForDemotion(
       // A conversation with no owed continuation still needs its handoff.
       const published = await registry.deliveryWriteOrBusy(DEMOTION_HANDOFF_WRITE, () => {
         if (!evidenceStands() || !idle.evidenceStands()) return false;
+        assertDemotionAdmissionActive(options);
         markHandoff();
         return true;
       });

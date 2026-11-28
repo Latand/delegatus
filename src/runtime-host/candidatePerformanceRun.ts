@@ -1066,32 +1066,59 @@ async function startupProbeMain(): Promise<void> {
 
 /** Focused refusal control: exercise the runner's real report assembly
  * against an independently served startup endpoint without the full gate. */
-async function browserRefusalProbeMain(): Promise<void> {
-  const baseUrl = option("--probe-browser-refusal");
-  const excerptFile = option("--stderr-excerpt");
-  if (!baseUrl || !excerptFile || !fs.existsSync(excerptFile)) {
-    throw new Error("browser refusal probe needs an endpoint and a captured stderr excerpt");
-  }
-  const startup = await waitForServerStartup(baseUrl, 3_000);
-  if (startup.state === "ready") throw new Error("browser refusal probe reached ready");
-  const error = new CandidateBrowserStartupError({
-    ...startup,
-    stderr: fs.readFileSync(excerptFile, "utf8"),
+async function browserRefusalProbeMain(): Promise<{
+  report: CandidatePerformanceEvidence;
+  browserStartupError: CandidateBrowserStartupError;
+}> {
+  const mode = option("--probe-browser-refusal");
+  if (mode !== "terminal" && mode !== "terminal-interrupted") throw new Error("browser refusal probe needs a terminal startup fixture");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "candidate-browser-startup-probe-"));
+  fs.mkdirSync(path.join(root, "home"), { recursive: true });
+  const gateFile = path.join(root, "emit-stderr");
+  const writtenFile = path.join(root, "stderr-written");
+  const server = spawn(process.execPath, ["run", path.join(import.meta.dir, "candidateStartupServer.fixture.ts"), mode, gateFile, writtenFile], {
+    cwd: process.cwd(), env: sandboxEnvironment(root), stdio: ["ignore", "pipe", "pipe"],
   });
-  const report = finalizeCandidatePerformanceReport({
-    checkedAt: new Date().toISOString(),
-    runtime: `bun ${Bun.version}`,
-    bounds: CANDIDATE_PERFORMANCE_BOUNDS,
-    measurements: null,
-    breaches: [],
-    ok: false,
-    detail: error.message,
-    log: [],
-  }, error);
-  console.log(CANDIDATE_PERFORMANCE_REPORT_PREFIX + JSON.stringify(report));
+  const exit = new AbortController();
+  server.once("error", () => exit.abort());
+  server.once("close", () => exit.abort());
+  const startupStderr = captureBrowserStartupStderr(server.stderr!);
+  let stdout = "";
+  try {
+    const baseUrl = await new Promise<string>((resolve, reject) => {
+      server.stdout!.setEncoding("utf8").on("data", (chunk: string) => {
+        stdout += chunk;
+        const newline = stdout.indexOf("\n");
+        if (newline >= 0) resolve(stdout.slice(0, newline).trim());
+      });
+      server.once("error", reject);
+      server.once("exit", code => reject(new Error(`startup fixture exited (${code}): ${stdout}`)));
+    });
+    fs.writeFileSync(gateFile, "1");
+    const deadline = performance.now() + 2_000;
+    while (!fs.existsSync(writtenFile) && performance.now() < deadline) await Bun.sleep(5);
+    if (!fs.existsSync(writtenFile)) throw new Error("startup fixture did not emit diagnostics");
+    await Bun.sleep(10);
+    const startup = await waitForServerStartup(baseUrl, 3_000, exit.signal);
+    if (startup.state === "ready") throw new Error("browser refusal probe unexpectedly reached ready");
+    const error = new CandidateBrowserStartupError({ ...startup, stderr: startupStderr() });
+    const report = {
+      checkedAt: new Date().toISOString(), runtime: `bun ${Bun.version}`, bounds: CANDIDATE_PERFORMANCE_BOUNDS,
+      measurements: null, breaches: [], ok: false, detail: error.message, log: [],
+    };
+    return { report, browserStartupError: error };
+  } finally {
+    if (server.exitCode === null && server.signalCode === null) server.kill("SIGTERM");
+    await new Promise<void>(resolve => server.exitCode !== null || server.signalCode !== null
+      ? resolve() : server.once("exit", () => resolve()));
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 }
 
-async function gateMain(): Promise<CandidatePerformanceEvidence> {
+async function candidateGateBody(): Promise<{
+  report: CandidatePerformanceEvidence;
+  browserStartupError?: CandidateBrowserStartupError;
+}> {
   const checkedAt = new Date().toISOString();
   const runtime = `bun ${Bun.version}`;
   const scale = Number(option("--scale") ?? "1");
@@ -1567,18 +1594,20 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
       ...(breaches.length ? { detail: breaches[0] } : {}),
       log,
     };
-    return finalizeCandidatePerformanceReport(report, browserStartupError);
+    return { report, browserStartupError };
   } catch (error) {
     return {
-      checkedAt,
-      runtime,
-      bounds: CANDIDATE_PERFORMANCE_BOUNDS,
-      measurements: null,
-      breaches: [],
-      ...inducedFields,
-      ok: false,
-      detail: `the candidate performance gate could not run: ${error instanceof Error ? error.message : String(error)}`,
-      log,
+      report: {
+        checkedAt,
+        runtime,
+        bounds: CANDIDATE_PERFORMANCE_BOUNDS,
+        measurements: null,
+        breaches: [],
+        ...inducedFields,
+        ok: false,
+        detail: `the candidate performance gate could not run: ${error instanceof Error ? error.message : String(error)}`,
+        log,
+      },
     };
   } finally {
     /* Every process this run started, by the pid it recorded. Workers and
@@ -1588,6 +1617,15 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
     await runtimeHost?.stop().catch(() => undefined);
     fs.rmSync(root, { recursive: true, force: true });
   }
+}
+
+/** Both the full gate and its isolated startup refusal control pass through
+ * the same report attachment used by the deployment gate. */
+async function gateMain(): Promise<CandidatePerformanceEvidence> {
+  const result = option("--probe-browser-refusal")
+    ? await browserRefusalProbeMain()
+    : await candidateGateBody();
+  return finalizeCandidatePerformanceReport(result.report, result.browserStartupError);
 }
 
 async function curatorMain(): Promise<void> {
@@ -1612,10 +1650,6 @@ if (import.meta.main && option("--seed-census")) {
   previousReleaseSchema(dataset.filename);
   console.log(JSON.stringify({ rows: dataset.rows, receipts: dataset.receipts, payloadBytes: dataset.payloadBytes }));
   process.exit(0);
-}
-if (import.meta.main && process.argv.includes("--probe-browser-refusal")) {
-  await browserRefusalProbeMain();
-  process.exit(1);
 }
 if (import.meta.main && process.argv.includes("--probe-startup")) {
   await startupProbeMain();

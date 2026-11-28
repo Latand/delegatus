@@ -1,5 +1,5 @@
 import { classifyStructuredHostStartupError } from "@/lib/viewerInstrumentation";
-import { journalTickets, startJournalPeer, until } from "./startup.interruptionAdmission.fixture";
+import { journalHolderPid, journalTickets, startJournalPeer, until } from "./startup.interruptionAdmission.fixture";
 import fs from "node:fs";
 import { Database } from "bun:sqlite";
 import { injectStateWriteFaultForTests } from "@/lib/state/sqliteStateStore";
@@ -9,7 +9,7 @@ import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { drainHeldDeliveries } from "@/lib/accounts/migration/coordinator";
-import { AgentRegistry, setAgentRegistryForTests, type ProcessIdentity } from "@/lib/agent/registry";
+import { AgentRegistry, RegistryWriterBusyError, setAgentRegistryForTests, type ProcessIdentity } from "@/lib/agent/registry";
 import { defaultRegistrySqliteFilename } from "@/lib/agent/registryBackendIdentity";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { procBackend } from "@/lib/proc";
@@ -25,7 +25,7 @@ import { durableRuntimeEventTailSeq, FileRuntimeEventStore, readHostTurnRecord }
 import { createFakeDeliveryLedger, FakeEngineHost, type FakeDeliveryLedger } from "./fixtures/fakeEngineHost";
 import { bindClaudeHostPersistence, type StructuredHostAdoptionFilter } from "./registry";
 import type { ClaudeStreamBrokerHost } from "./claudeStreamBrokerHost";
-import { interruptionObligationDirectory, interruptionObligationStore, initializeRecipientInterruptionIndex } from "./interruptionObligations";
+import { InterruptionJournalBusyError, interruptionObligationDirectory, interruptionObligationStore, initializeRecipientInterruptionIndex } from "./interruptionObligations";
 import { INTERRUPTED_CODEX_CONTINUATION_TEXT } from "./recoveryNotices";
 import { recoverDeadStructuredConversation, StructuredRecoveryHeldForUpdateError } from "./structuredRecovery";
 import {
@@ -36,7 +36,9 @@ import {
 } from "./startup";
 import {
   bindStructuredDeliveryQueue,
+  handOverHostForDemotion,
   recordDemotionInterruption,
+  releaseClaudeHostForDemotion,
   releaseStructuredDeliveryHostsForDemotion,
   releaseStructuredDeliveryHost,
 } from "./structuredDeliveryController";
@@ -520,44 +522,56 @@ test("demotion and successor startup share journal admission without holding up 
     host: hostFor(createFakeDeliveryLedger(), item === cut ? {
       status: "active", pid: owner.pid, processStartIdentity: owner.startIdentity, activeTurnRef: CUT_TURN,
     } : {}, async () => {
-      if (item === cut) expect(obligationsFor(cut.registryFile)).toMatchObject([{ hostKey: cut.hostKey }]);
+      if (item === cut) expect(obligationsFor(cut.registryFile)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ hostKey: cut.hostKey, reason: "viewer-release" }),
+      ]));
       released.push(item.hostKey);
     }),
   })), { registry, client: journalClient(journal) });
   // Hold beyond one five-second journal admission so demotion must make a
   // fresh admission before the peer releases the shared journal.
-  const importer = startJournalPeer(cuts, path.join(directory, "incumbent-import"), { maxHoldMs: 12_000 });
+  const importer = startJournalPeer(cuts, path.join(directory, "incumbent-import"), { maxHoldMs: 30_000 });
   let demotion: Promise<void> | undefined;
   let successorProcess: ReturnType<typeof Bun.spawn> | undefined;
   let exitCode: number | null = null;
+  let busyProbe = false;
+  const writeNow = registry.deliveryWriteNow.bind(registry);
+  registry.deliveryWriteNow = ((correlation, write) => {
+    const result = writeNow(correlation, write);
+    if (correlation.label === "registry.demotion-handoff" && !result.acquired) busyProbe = true;
+    return result;
+  }) as typeof registry.deliveryWriteNow;
   try {
     await importer.ready();
     expect(importer.held()).toBe(true);
-    demotion = completeViewerReleaseDemotion(async () => {}, code => { exitCode = code; }, () => {}, () =>
-      releaseStructuredDeliveryHostsForDemotion({ boundary: "viewer-release:contended", seats: () => [] }));
-    await until(() => journalTickets(cuts) === 2 && released.includes(idle.hostKey));
-    expect(importer.held()).toBe(true);
-    expect(registry.deliveryWriteNow({ label: "fixture independent writer" }, () => true)).toEqual({ acquired: true, value: true });
-    expect(exitCode).toBeNull();
     const startedFile = path.join(directory, "successor-started");
+    const progressFile = path.join(directory, "successor-journal-progress");
     const resultFile = path.join(directory, "successor-result.json");
     successorProcess = Bun.spawn([process.execPath, "run", path.join(import.meta.dir, "releaseInterruption.successor.fixture.ts"),
-      cut.registryFile, path.join(directory, "runtime.sqlite"), startedFile, resultFile], {
+      cut.registryFile, path.join(directory, "runtime.sqlite"), startedFile, progressFile, resultFile], {
       cwd: path.resolve(import.meta.dir, "../../.."),
       env: { ...process.env },
       stdout: "ignore",
       stderr: "pipe",
     });
     const successorStderr = new Response(successorProcess.stderr).text();
-    await until(() => fs.existsSync(startedFile) && journalTickets(cuts) >= 3);
+    await until(() => fs.existsSync(startedFile));
+    demotion = completeViewerReleaseDemotion(async () => {}, code => { exitCode = code; }, () => {}, () =>
+      releaseStructuredDeliveryHostsForDemotion({ boundary: "viewer-release:contended", seats: () => [] }));
+    await until(() => journalTickets(cuts, process.pid) > 0
+      && successorProcess?.pid !== undefined && journalTickets(cuts, successorProcess.pid) > 0);
+    // Keep the registry writer held across both contenders' journal progress.
+    writer.exec("BEGIN IMMEDIATE");
     await Bun.sleep(5_500);
     expect(importer.held()).toBe(true);
     expect(exitCode).toBeNull();
-    writer.exec("BEGIN IMMEDIATE");
-    expect(importer.held()).toBe(true);
-    expect(exitCode).toBeNull();
     importer.release();
-    expect(fs.existsSync(startedFile)).toBe(true);
+    let successorJournalProgress = false;
+    await until(() => {
+      if (successorProcess?.pid !== undefined && journalHolderPid(cuts) === successorProcess.pid) successorJournalProgress = true;
+      return busyProbe && successorJournalProgress;
+    }, 20_000);
+    expect(exitCode).toBeNull();
     writer.exec("COMMIT");
     await demotion;
     expect(exitCode).toBe(0);
@@ -566,10 +580,14 @@ test("demotion and successor startup share journal admission without holding up 
     if (childExit !== 0) throw new Error(`successor startup process failed: ${fs.existsSync(resultFile) ? fs.readFileSync(resultFile, "utf8") : "no result"}; ${(await successorStderr).slice(-2_000)}`);
     const startupResult = JSON.parse(fs.readFileSync(resultFile, "utf8")) as { adopted?: string[]; error?: string };
     expect(startupResult.error).toBeUndefined();
+    expect(fs.existsSync(progressFile)).toBe(true);
     expect(startupResult.adopted).toContain(cut.hostKey);
-    expect(obligationsFor(cut.registryFile)).toMatchObject([{ hostKey: cut.hostKey }]);
+    expect(obligationsFor(cut.registryFile)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ hostKey: cut.hostKey, reason: "viewer-release" }),
+    ]));
     expect(journalTickets(cuts)).toBe(0);
   } finally {
+    registry.deliveryWriteNow = writeNow;
     writer.close();
     await importer.stop();
     if (successorProcess && successorProcess.exitCode === null) successorProcess.kill("SIGKILL");
@@ -589,6 +607,7 @@ test("demotion keeps a contended host protected when its retry window expires", 
   const cuts = interruptionObligationDirectory(cut.registryFile);
   await initializeRecipientInterruptionIndex(cuts);
   const released: string[] = [];
+  let demotionError: unknown;
   await bindStructuredDeliveryQueue([{
     key: { engine: cut.engine, sessionId: cut.sessionId },
     host: hostFor(createFakeDeliveryLedger(), {
@@ -600,13 +619,17 @@ test("demotion keeps a contended host protected when its retry window expires", 
   let demotion: Promise<void> | undefined;
   try {
     await importer.ready();
-    demotion = completeViewerReleaseDemotion(async () => {}, code => { exitCode = code; }, () => {}, () =>
+    demotion = completeViewerReleaseDemotion(async () => {}, code => { exitCode = code; }, (_message, error) => { demotionError = error; }, () =>
       releaseStructuredDeliveryHostsForDemotion({ boundary: "viewer-release:exhausted", seats: () => [] }));
     await demotion;
     expect(exitCode).toBe(1);
     expect(released).toEqual([]);
     expect(obligationsFor(cut.registryFile)).toEqual([]);
     expect(importer.held()).toBe(true);
+    const causes = demotionError instanceof AggregateError ? demotionError.errors : [];
+    expect(causes).toHaveLength(1);
+    expect(causes[0]).toBeInstanceOf(InterruptionJournalBusyError);
+    expect(causes[0]).not.toBeInstanceOf(RegistryWriterBusyError);
   } finally {
     importer.release();
     await importer.stop();
@@ -616,6 +639,78 @@ test("demotion keeps a contended host protected when its retry window expires", 
     journal.close();
   }
 }, 25_000);
+
+test("registry-only handoff exhaustion reports the registry refusal", async () => {
+  const owner = deadEngine(2_000_001_310);
+  const cut = incumbentConversation("codex", cutSessionId(310), owner);
+  const registry = new AgentRegistry(cut.registryFile, undefined, undefined, { sqliteMode: "sqlite" });
+  const cuts = interruptionObligationDirectory(cut.registryFile);
+  await initializeRecipientInterruptionIndex(cuts);
+  const original = registry.deliveryWriteOrBusy.bind(registry);
+  registry.deliveryWriteOrBusy = (async () => { throw new RegistryWriterBusyError("registry.demotion-handoff"); }) as typeof registry.deliveryWriteOrBusy;
+  let failure: unknown;
+  try {
+    const key = { engine: cut.engine, sessionId: cut.sessionId } as const;
+    const current = await hostFor(createFakeDeliveryLedger(), {
+      status: "active", pid: owner.pid, processStartIdentity: owner.startIdentity, activeTurnRef: CUT_TURN,
+    }).health();
+    try {
+      await handOverHostForDemotion(registry, key, current, {
+        boundary: "viewer-release:registry-only", seats: () => [], store: interruptionObligationStore(cuts),
+      }, async () => current);
+    } catch (error) { failure = error; }
+    expect(failure).toBeInstanceOf(RegistryWriterBusyError);
+    expect(failure).not.toBeInstanceOf(InterruptionJournalBusyError);
+    expect(obligationsFor(cut.registryFile)).toEqual([]);
+  } finally {
+    registry.deliveryWriteOrBusy = original;
+    registry.close();
+  }
+}, 8_000);
+
+test("cancelled retained startup authority cannot publish a queued Claude handoff", async () => {
+  const owner = deadEngine(2_000_001_309);
+  const cut = incumbentConversation("claude", cutSessionId(309), owner);
+  const registry = new AgentRegistry(cut.registryFile, undefined, undefined, { sqliteMode: "sqlite" });
+  const cuts = interruptionObligationDirectory(cut.registryFile);
+  await initializeRecipientInterruptionIndex(cuts);
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const ledger = createFakeDeliveryLedger();
+  let released = false;
+  const key = { engine: cut.engine, sessionId: cut.sessionId } as const;
+  const host = hostFor(ledger, {
+    status: "active", pid: owner.pid, processStartIdentity: owner.startIdentity, activeTurnRef: CUT_TURN,
+  }, async () => { released = true; });
+  await bindStructuredDeliveryQueue([{ key, host }], { registry, client: journalClient(journal) });
+  const before = registry.readOnlySnapshot().entries[cut.hostKey];
+  const importer = startJournalPeer(cuts, path.join(directory, "cancelled-startup-import"), { maxHoldMs: 5_000 });
+  const authority = new AbortController();
+  let handoff: Promise<void> | undefined;
+  try {
+    await importer.ready();
+    handoff = releaseClaudeHostForDemotion(registry, key, host, {
+      signal: authority.signal,
+      deadline: performance.now() + 8_000,
+      assertActive: () => { if (authority.signal.aborted) throw authority.signal.reason; },
+    }, async () => { released = true; });
+    await until(() => journalTickets(cuts, process.pid) > 0);
+    authority.abort(new Error("startup authority retired"));
+    await expect(handoff).rejects.toThrow("startup authority retired");
+    importer.release();
+    await importer.stop();
+    expect(obligationsFor(cut.registryFile)).toEqual([]);
+    expect(registry.readOnlySnapshot().entries[cut.hostKey]).toEqual(before);
+    expect(released).toBe(false);
+  } finally {
+    authority.abort();
+    importer.release();
+    await importer.stop();
+    await Promise.allSettled([handoff]);
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    registry.close();
+    journal.close();
+  }
+}, 12_000);
 
 test("failed demotion cleanup keeps the obligation, and a surviving owner keeps it owed until adoption takes the row", async () => {
   const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });

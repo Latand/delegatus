@@ -9,8 +9,8 @@ import { bindStructuredDeliveryQueue } from "./structuredDeliveryController";
 import { adoptStructuredHostsAtStartup, type StructuredHostAdoptionFilter } from "./startup";
 import type { RuntimeHostClient } from "./client";
 
-const [registryFile, runtimeFile, startedFile, resultFile] = process.argv.slice(2);
-if (!registryFile || !runtimeFile || !startedFile || !resultFile) throw new Error("missing isolated successor fixture paths");
+const [registryFile, runtimeFile, startedFile, progressFile, resultFile] = process.argv.slice(2);
+if (!registryFile || !runtimeFile || !startedFile || !progressFile || !resultFile) throw new Error("missing isolated successor fixture paths");
 const journal = new RuntimeJournal(runtimeFile, { structuredHosts: true });
 const registry = new AgentRegistry(registryFile, undefined, undefined, { sqliteMode: "sqlite" });
 const ledger = createFakeDeliveryLedger();
@@ -28,6 +28,7 @@ const client: RuntimeHostClient = {
 };
 
 async function adopt(engine: "codex" | "claude", received: AgentRegistry, shouldAdopt: StructuredHostAdoptionFilter) {
+  fs.writeFileSync(progressFile, "journal-admitted");
   return Object.values(received.readOnlySnapshot().entries).flatMap(entry => {
     if (entry.key.engine !== engine || !entry.structuredHost || !shouldAdopt(entry)) return [];
     const claimed = received.claimStructuredHost(entry.key, successor, { allowUnhosted: true });

@@ -29,7 +29,7 @@ import { stripVTControlCharacters } from "node:util";
 
 import { redactMonitorText } from "@/lib/monitor/redact";
 import { redactStructuredText } from "@/lib/reviewHistory/redaction";
-import { startupStderrExcerpt, STDERR_READ_BYTES } from "@/lib/runtime/startupStderr";
+import { startupStderrExcerpt, STDERR_READ_BYTES, withoutUnterminatedSecret } from "@/lib/runtime/startupStderr";
 import { hasViewerDeploymentCapability, viewerDeploymentStructuredHostStartup } from "./deploymentHealth";
 
 const READY_TIMEOUT_MS = 60_000;
@@ -249,7 +249,8 @@ export function captureBrowserStartupStderr(stderr: Readable): () => string {
     try {
       return startupStderrExcerpt(bytes.subarray(0, used), clipped, 2048, text =>
         redactStructuredText(stripVTControlCharacters(text), prose =>
-          redactMonitorText(prose.replace(/https?:\/\/[^\s<>"'\\]+/gi, "[redacted-url]"))));
+          redactMonitorText(withoutUnterminatedSecret(stripVTControlCharacters(prose))
+            .replace(/https?:\/\/[^\s<>"'\\]+/gi, "[redacted-url]"))));
     } catch {
       return "[stderr redacted]";
     }

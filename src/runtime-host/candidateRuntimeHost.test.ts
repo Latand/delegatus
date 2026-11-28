@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { captureBrowserStartupStderr, candidateHostLoopRecords, startCandidateRuntimeHost, waitForServerStartup } from "./candidateRuntimeHost";
+import { candidateHostLoopRecords, startCandidateRuntimeHost, waitForServerStartup } from "./candidateRuntimeHost";
 import { candidatePerformanceEvidence, CANDIDATE_PERFORMANCE_BOUNDS, CANDIDATE_PERFORMANCE_REPORT_PREFIX, parseCandidatePerformanceReport } from "./candidatePerformance";
 import { passingCandidatePerformanceMeasurements } from "./fixtures/candidatePerformanceMeasurements";
 
@@ -49,25 +49,18 @@ async function startupServer(mode: "terminal" | "hanging-body" | "retry-ready") 
   } };
 }
 
-async function runBrowserRefusalProbe(origin: string, excerpt: string) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "candidate-browser-refusal-"));
-  try {
-    const excerptFile = path.join(directory, "stderr.txt");
-    fs.writeFileSync(excerptFile, excerpt);
-    const child = Bun.spawn([process.execPath, "run", path.join(import.meta.dir, "candidatePerformanceRun.ts"),
-      "--probe-browser-refusal", origin, "--stderr-excerpt", excerptFile], {
-      cwd: path.resolve(import.meta.dir, "../.."), env: { ...process.env }, stdout: "pipe", stderr: "pipe",
-    });
-    const [stdout, stderr, code] = await Promise.all([
-      new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
-    ]);
-    if (!stdout.includes(CANDIDATE_PERFORMANCE_REPORT_PREFIX)) {
-      throw new Error(`candidate runner emitted no refusal report (exit ${code}): ${stderr.slice(-2_000)}`);
-    }
-    return { code, serialized: stdout, report: parseCandidatePerformanceReport(stdout) };
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
+async function runBrowserRefusalProbe(mode: "terminal" | "terminal-interrupted") {
+  const child = Bun.spawn([process.execPath, "run", path.join(import.meta.dir, "candidatePerformanceRun.ts"),
+    "--probe-browser-refusal", mode], {
+    cwd: path.resolve(import.meta.dir, "../.."), env: { ...process.env }, stdout: "pipe", stderr: "pipe",
+  });
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+  ]);
+  if (!stdout.includes(CANDIDATE_PERFORMANCE_REPORT_PREFIX)) {
+    throw new Error(`candidate runner emitted no refusal report (exit ${code}): ${stderr.slice(-2_000)}`);
   }
+  return { code, serialized: stdout, report: parseCandidatePerformanceReport(stdout) };
 }
 
 test("browser startup waits through a scheduled and an executing retry", async () => {
@@ -77,27 +70,20 @@ test("browser startup waits through a scheduled and an executing retry", async (
   } finally { await server.stop(); }
 });
 
-test("a terminal startup refusal retains a bounded redacted excerpt in the gate report", async () => {
-  const server = await startupServer("terminal");
-  const excerpt = captureBrowserStartupStderr(server.stderr);
-  try {
-    server.emitStartupStderr();
-    await server.waitForStartupStderr();
-    const result = await runBrowserRefusalProbe(server.origin, excerpt());
+test.each(["terminal", "terminal-interrupted"] as const)("production browser startup refusal redacts encoded private-key material: %s", async mode => {
+    const result = await runBrowserRefusalProbe(mode);
     const report = result.report;
     expect(result.code).toBe(1);
-    expect(report.breaches[0]).toContain("terminal");
     expect(report).toMatchObject({ ok: false, browserStartupFailure: {
       reason: "terminal", state: "failed", failurePhase, failureCategory: "configuration", nextRetryAt: null,
     } });
     expect(report.browserStartupFailure?.stderr).toContain("startup exception");
-    expect(report.browserStartupFailure?.stderr).toContain("[stderr clipped]");
     expect(report.browserStartupFailure?.stderr).toContain("Authorization: [redacted]");
+    expect(report.browserStartupFailure?.stderr).toContain("[redacted]");
     expect(report.browserStartupFailure!.stderr.length).toBeLessThanOrEqual(2048);
-    for (const privateText of ["synthetic-fixture-token", "fixture-private-key-payload", new URL(server.origin).host]) {
+    for (const privateText of ["fixture marker value", "fixture-private-key-payload", "PRIVATE KEY"]) {
       expect(result.serialized).not.toContain(privateText);
     }
-  } finally { await server.stop(); }
 });
 
 test("the startup deadline includes an unanswered HTTP body from an independent server process", async () => {

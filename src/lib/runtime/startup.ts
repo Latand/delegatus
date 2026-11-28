@@ -332,7 +332,10 @@ async function revalidateRetainedStartupHosts(
         forgetReleasedStartupHost(item.host);
       });
       if (item.key.engine === "claude" && stillOwns) {
-        await releaseClaudeHostForDemotion(registry, item.key, item.host, {}, release, assertStartupReadActive);
+        const budget = startupReadBudget.getStore();
+        await releaseClaudeHostForDemotion(registry, item.key, item.host, {
+          signal: budget?.signal, deadline: budget?.deadline, assertActive: assertStartupReadActive,
+        }, release, assertStartupReadActive);
       }
       else await release();
     }, assertStartupReadActive);

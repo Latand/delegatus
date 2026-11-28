@@ -9,9 +9,18 @@ export async function until(condition: () => boolean, ms = 2_000): Promise<void>
   }
 }
 
-export function journalTickets(directory: string): number {
+export function journalTickets(directory: string, pid?: number): number {
   const queue = `${directory}.pending.jsonl.write-locks`;
-  return fs.existsSync(queue) ? fs.readdirSync(queue).filter(name => name.endsWith(".json")).length : 0;
+  if (!fs.existsSync(queue)) return 0;
+  return fs.readdirSync(queue).filter(name => name.endsWith(".json") && (pid === undefined
+    || Number((JSON.parse(fs.readFileSync(path.join(queue, name), "utf8")) as { pid?: number }).pid) === pid)).length;
+}
+
+export function journalHolderPid(directory: string): number | null {
+  try {
+    const holder = JSON.parse(fs.readFileSync(`${directory}.pending.jsonl.write-lock`, "utf8")) as { pid?: unknown };
+    return typeof holder.pid === "number" ? holder.pid : null;
+  } catch { return null; }
 }
 
 export function journalClaims(directory: string): string[] {
