@@ -261,6 +261,12 @@ usage endpoint requires **Direct Anthropic API calls with my subscription** unde
 **Settings → Privacy**. It starts off on new installs;
 existing installations with recorded direct usage keep it on.
 
+Voice Delegatus can run its text turns on a connected ChatGPT plan. Connecting
+is optional and the owner does it in the Keys section. For an eligible turn the
+backend sends ChatGPT the call's transcript text, the results of earlier
+registry reads in the call and the selected project context. It sends no image
+on this path.
+
 ## License
 
 MIT

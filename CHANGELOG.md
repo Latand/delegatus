@@ -15,23 +15,30 @@ compatibility raises the major version.
   the task's tokens, an estimated share of the plan's limit and what the same
   tokens would cost at API prices. Most tasks used to read "unknown" because a
   day's measured rate was erased about two days later and every figure was
-  marked as a lower bound. Rates are now kept, the Claude 20× tier is told apart
-  from the 5× tier, a lost plan falls back to the data file, and "≥" appears
-  only for days before counting began ([#4427]).
+  marked as a lower bound. Rates are now kept and the Claude 20× tier is told
+  apart from the 5× tier. With no current plan report, a task uses the last plan
+  recorded in the account's history, and with no known plan it shows no share.
+  A known plan whose measured days do not cover a task falls back to the plan's
+  budget table for the rest, and "≥" appears only on a task that started before
+  counting began ([#4427]).
 - **Sign in with ChatGPT for Voice Delegatus.** The owner can connect a ChatGPT
   plan from the Keys section, and eligible text turns of the voice backend run
-  on the plan instead of an API key, with the API key as an in-call fallback and
-  a visible reason when the plan cannot be used. It stays off until the
-  installation owner configures a client ID, and it is not available on Windows
-  ([#4416]).
+  on the plan instead of an API key. When the plan call fails for a reason other
+  than a policy denial or an ineligible plan, the turn continues on the API key
+  and shows why. A policy denial or an ineligible plan stops the request with a
+  blocked reply before any key call, so nothing is billed to the key. It stays
+  off until the installation owner configures a client ID, and it is not
+  available on Windows ([#4416]).
 - **An agent's HTML evidence report opens in the preview.** The report renders
   in the sandboxed frame, scripts and stylesheets stay denied, and source and
   download controls are hidden for it ([#4466]).
 - **The Telegram relay understands more of a conversation.** A verified direct
-  message from the owner, or from a requester trusted for the project, creates
-  one board task and replies with a button that opens the card; an ambiguous
-  request offers expiring project choices. This needs the paired relay service
-  to support it ([#4521]). Prompts show sticker messages with their emoji and
+  message from the owner, or from a requester trusted for the project, that asks
+  for a task (the `/task` command, a request to create or file a task, or
+  project work such as "fix …") creates one board task. The confirmation links to
+  the card, with an open button on relays that support rich replies; an
+  ambiguous request offers expiring project choices. Ordinary conversation
+  creates no task. This needs the paired relay service to support it ([#4521]). Prompts show sticker messages with their emoji and
   description ([#4503]) and the quoted part of a reply together with external
   reply context, marked as untrusted ([#4515]).
 - **Codex CLI 0.171.0 and 0.172.0 are supported.** The supported window is
@@ -92,8 +99,10 @@ compatibility raises the major version.
   migration left running ([#4546]).
 - **The Telegram file confirmation page names the missing step** (no team, not
   the owner, no relay pairing, no linked Telegram, another linked account, or a
-  session not signed in through Telegram) in English and Ukrainian and offers it
-  in place, instead of sending the owner round a sign-in loop ([#4484]).
+  session not signed in through Telegram) in English and Ukrainian instead of
+  sending the owner round a sign-in loop. Each state explains the gap and offers
+  Telegram linking or sign-in in place, or a button to the team or sign-in page;
+  a missing relay pairing shows directions only ([#4484]).
 
 ### Maintainer notes
 - **Secret input, slices 1 and 2.** The destination rules, the metadata-only
@@ -5937,8 +5946,8 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 - Implement→review flows with fresh headless reviewer rounds.
 - Remote access over Tailscale behind a token gate.
 
-[Unreleased]: https://github.com/Latand/delegatus/compare/v2.5.0...HEAD
-[2.5.0]: https://github.com/Latand/delegatus/compare/v2.4.0...v2.5.0
+[Unreleased]: https://github.com/Latand/delegatus/compare/d77a75c2a94267f88d3438472559cf495e8ebd72...HEAD
+[2.5.0]: https://github.com/Latand/delegatus/compare/9ca90b0e18a402d35cee267ae61e3b00b4b71fab...d77a75c2a94267f88d3438472559cf495e8ebd72
 [2.4.0]: https://github.com/Latand/delegatus/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/Latand/delegatus/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/Latand/delegatus/compare/v2.1.0...v2.2.0

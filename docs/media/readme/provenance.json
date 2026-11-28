@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "classification": "synthetic",
   "generator": "scripts/capture-readme-media.ts",
-  "generatorSha256": "917b760e578c07d2a48d840ec30ae676c04b1cb79e6f2b7c9417d270f04514f5",
+  "generatorSha256": "e9ed406a88f08dccf578863aa28f2d68d28718d9c0fa54066b68ad7f5ccca382",
   "seed": "scripts/readme-demo-state.ts",
   "seedSha256": "19650ca24e809736702ef4cf1e2f3be32e761139070b8de4404092d0d289a714",
   "command": "bun run build && bun scripts/capture-readme-media.ts",
@@ -103,24 +103,24 @@
       "path": "card-menu.svg",
       "description": "A task card's ⋯ menu: the columns in a row, icon actions with what hiding leaves running, the priorities, and the sections that open in place.",
       "viewport": {
-        "width": 1728,
+        "width": 2560,
         "height": 944
       },
       "crop": {
-        "x": 562,
+        "x": 706,
         "y": 106,
-        "width": 837,
+        "width": 936,
         "height": 418
       },
       "colorScheme": "dark",
       "rasterTiles": 21,
       "renderBack": {
-        "worstTileMean": 4.934,
+        "worstTileMean": 4.588,
         "changedTileShare": 0,
-        "meanDifference": 0.299,
+        "meanDifference": 0.284,
         "ringsClipped": 0
       },
-      "sha256": "816bb5afdc6b155b5af0771b6ba3b0223f4c43103e5bbd8a9396c9f115a0f0b6"
+      "sha256": "c335437b7f811827d1e8581d90ee7654bdf12daf3044a01c6ca5219aa8293551"
     },
     {
       "path": "accounts.svg",
