@@ -20861,6 +20861,10 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
     const STATES = {
       "t-upload": "plan-share", "t-search": "mixed-models", "t-export": "unknown-model", "t-disk": "plan-unreported", "t-interrupt": "large-floor",
     } as const;
+    /* States whose popover covers a neighbouring card's body text, and why: no place beside the card clears the card's own title and state line and a neighbour's text, and the ranking takes the neighbour's body text over the card's own title. */
+    const NEIGHBOUR_TEXT: Record<string, string> = {
+      "t-interrupt@1440": "the card is short and the card above it in the Done column fills the room beside it, so every place covers the card's own title or state line, another card's title, or the card above's body text; the ranking takes the body text",
+    };
     const shape = (page: Page, scope: string) => page.evaluate((scope) => {
       const root = document.querySelector<HTMLElement>(scope)!;
       const rows = [...root.querySelectorAll<HTMLElement>("[data-spend-account]")].map((el) => {
@@ -20915,6 +20919,9 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
               readings.push({ label, id, name, popover: pop, shape: got });
               judge(label, id, got, false);
               if (pop.foreign.length) failures.push(`${label} ${id}: the popover covers another card's title or text outside the cards: ${pop.foreign.join(" | ")}`);
+              /* A neighbour's body text is covered only in a state NEIGHBOUR_TEXT names; its title, a column header and the seat are asserted clear above for every state. */
+              if (pop.foreignCards.length && !(`${id}@${width}` in NEIGHBOUR_TEXT)) failures.push(`${label} ${id}: the popover covers text of a neighbouring card: ${pop.foreignCards.join(" | ")}`);
+              if (!pop.foreignCards.length && `${id}@${width}` in NEIGHBOUR_TEXT && lang === "en" && theme === "light") failures.push(`${label} ${id}: ${id}@${width} is named as covering a neighbour's body text and covers none; remove it from NEIGHBOUR_TEXT`);
               /* The card's own title and state line rank before a neighbour's body text: a short card in a tall column leaves a place over a neighbour's details or over its own title, and the title stays readable. */
               if (pop.overlapsTitle) failures.push(`${label} ${id}: the popover covers its own card's title`);
               if (pop.gap === null || pop.gap > 1) failures.push(`${label} ${id}: the popover stands ${pop.gap}px from its own card`);
@@ -20992,9 +20999,9 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
   }, 900_000);
 
   /* A card on the window's bottom edge with the orchestrator seat open above the columns: the popover has little room, and
-     it never covers the seat or its controls or the card's own title or state line. Where the room under the seat is shorter than
-     the popover it takes its compact arrangement (the providers side by side) and may cover a column header; elsewhere the
-     headers stay clear too. The numbers are read again from the card in the window's middle to show the content is unchanged. */
+     it never covers the seat or its controls, the card's own title or state line, or the board's tab row. Where the room under the
+     seat is shorter than the popover it takes its compact arrangement (the providers side by side) and may cover a column header
+     or a neighbour's text; elsewhere the headers stay clear too. The numbers are read again from the card in the window's middle to show the content is unchanged. */
   browserTest("a card near the window bottom with the seat open: the popover keeps clear of the seat, the card's title and state line and the column headers, at 1440, 1000 and 390", async () => {
     const out = path.resolve(process.env.TASK_SPEND_PNG_DIR ?? ".artifacts/task-spend");
     fs.mkdirSync(out, { recursive: true });
@@ -21026,6 +21033,16 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
       const seat = document.querySelector<HTMLElement>("[data-kanban-seat]");
       const seatBox = seat?.getBoundingClientRect();
       const board = host.closest("[data-kanban-board]")!.getBoundingClientRect();
+      /* Text of the board's own chrome: outside every card, the column headers and the seat (the tab row that jumps between columns), by text range. */
+      const chrome: string[] = [];
+      const piece = document.createRange();
+      const chromeWalker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      for (let node = chromeWalker.nextNode(); node; node = chromeWalker.nextNode()) {
+        const parent = node.parentElement;
+        if (!parent || !node.nodeValue?.trim() || pop.contains(node) || parent.closest("[data-kanban-card], .col-head, [data-kanban-seat], script, style")) continue;
+        piece.selectNodeContents(node);
+        if ([...piece.getClientRects()].some(hit)) chrome.push(node.nodeValue.trim().slice(0, 40));
+      }
       const anchor = host.querySelector<HTMLElement>(`[data-spend="${id}"]`)!.getBoundingClientRect();
       return {
         box: { left: r.left, top: r.top, right: r.right, bottom: r.bottom, height: r.height },
@@ -21042,6 +21059,8 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
         title: textHits(host, "h3.title"),
         state: textHits(host, ".card-state-words"),
         heads: textHits(document.body, ".col-head"),
+        chrome,
+        tabButtons: [...document.querySelectorAll<HTMLElement>(".tabs-nav button")].filter((el) => hit(el.getBoundingClientRect())).map((el) => el.textContent?.trim().slice(0, 30) ?? ""),
         compact: pop.hasAttribute("data-spend-compact"),
         rows: [...pop.querySelectorAll<HTMLElement>(".pop-title, .pop-main, .meter-note, .pop-note")].map((el) => { const b = el.getBoundingClientRect(); return [Math.round(b.left - r.left), Math.round(b.top - r.top), Math.round(b.width), Math.round(b.height)]; }),
         inBoard: r.left >= board.left - 0.5 && r.right <= board.right + 0.5 && r.top >= board.top - 0.5 && r.bottom <= board.bottom + 0.5,
@@ -21086,9 +21105,13 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
               if (edge.seatControls.length) failures.push(`${where}: the popover covers seat controls: ${edge.seatControls.join(" | ")}`);
               if (edge.title.length) failures.push(`${where}: the popover covers the card's title: ${edge.title.join(" | ")}`);
               if (edge.state.length) failures.push(`${where}: the popover covers the card's state line: ${edge.state.join(" | ")}`);
+              /* The board's own chrome (the tab row, its text and its buttons) is never covered, whatever the room. */
+              if (edge.chrome.length) failures.push(`${where}: the popover covers text of the board's chrome: ${edge.chrome.join(" | ")}`);
+              if (edge.tabButtons.length) failures.push(`${where}: the popover covers a tab button: ${edge.tabButtons.join(" | ")}`);
               /* The crowded case: the band the seat leaves is shorter than the popover at its stacked height (read at the window's middle).
-                 The popover then takes its compact arrangement, and the one thing it may cover is a column header. A neighbour card's text
-                 is not asserted in this block; the column headers are tolerated only here. */
+                 The popover then takes its compact arrangement, and the only things it may cover are a column header and a neighbour card's
+                 text; the seat, its controls, the card's own title and state line and the board's chrome are asserted clear above. The column
+                 headers are tolerated only here. */
               const crowded = edge.room !== null && middle.box.height > edge.room;
               if (crowded !== edge.compact) failures.push(`${where}: the popover is ${edge.compact ? "compact" : "stacked"} but the room under the seat is ${Math.round(edge.room ?? 0)} px for a ${Math.round(middle.box.height)} px popover`);
               if (!crowded && edge.heads.length) failures.push(`${where}: the popover covers a column header: ${edge.heads.join(" | ")}`);

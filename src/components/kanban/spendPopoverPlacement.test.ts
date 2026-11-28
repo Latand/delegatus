@@ -22,7 +22,9 @@ test("a wide card offers its own area first, then each side, below and above", (
   const found = spendCandidates({ viewport, card, anchor }, sizeAt);
   const names = kinds(found);
   expect(names[0]).toBe("over");
-  expect(names.slice(-4)).toEqual(["right", "left", "below", "above"]);
+  expect(names.filter((name) => !name.includes("-at-")).slice(-4)).toEqual(["right", "left", "below", "above"]);
+  /* The place above is also offered slid along the card, after the five. */
+  expect(names.filter((name) => name.includes("-at-")).length).toBeGreaterThan(0);
   const over = found[0]!;
   expect(over.left).toBe(card.left + 8);
   expect(over.top).toBe(anchor.bottom + 8);
@@ -158,7 +160,7 @@ test("where the band under the seat holds only the card's top, the bubble covers
   const cardBox = box(570, 842, 1010, 1100);
   const where = { viewport, card: cardBox, anchor: box(930, 888, 1000, 899), bounds: board, avoid: [seat], compactable: true };
   const found = spendCandidates(where, arranged);
-  const header = [box(580, 800, 700, 816)];
+  const header = [box(580, 800, 1000, 816)];
   const ownTitle = [box(590, 855, 800, 871)];
   const ownState = [box(590, 884, 700, 899)];
   const picked = chooseSpendPlacement(found, { own: [], ownTitle, ownState, foreign: header, keepOut: [seat], anchor: where.anchor }, { card: cardBox, area: box(248, 735, 1432, 892) })!;
@@ -166,6 +168,49 @@ test("where the band under the seat holds only the card's top, the bubble covers
   expect(overlapArea(inside(picked), ownTitle[0]!)).toBe(0);
   expect(overlapArea(inside(picked), ownState[0]!)).toBe(0);
   expect(overlapArea(inside(picked), header[0]!)).toBeGreaterThan(0);
+});
+
+/* The card at the window's bottom with the tab row between the seat and the columns: the compact bubble is 467 wide, 115 tall. */
+const crowded = () => {
+  const board = box(248, 0, 1440, 900);
+  const seat = box(317, 60, 1357, 735);
+  const cardBox = box(570, 842, 1010, 1100);
+  const where = { viewport, card: cardBox, anchor: box(930, 888, 1000, 899), bounds: board, avoid: [seat], compactable: true };
+  const found = spendCandidates(where, (w, compact = false) => ({ width: compact ? Math.min(w, 467) : w, height: compact ? 115 : 190 }));
+  return {
+    seat, where, found,
+    tabs: [box(277, 753, 317, 767), box(345, 753, 407, 767), box(444, 753, 480, 767), box(522, 753, 548, 767), box(552, 753, 566, 767)],
+    header: [box(580, 805, 1000, 821)],
+    ownTitle: [box(590, 855, 800, 871)],
+    ownState: [box(590, 884, 700, 899)],
+    frame: { card: cardBox, area: box(248, 735, 1432, 892) },
+  };
+};
+
+test("under a short seat band the bubble stands beside the tab row, not over it, and covers the column header instead", () => {
+  const { seat, where, found, tabs, header, ownTitle, ownState, frame } = crowded();
+  const picked = chooseSpendPlacement(found, { own: [], ownTitle, ownState, chrome: tabs, foreign: header, keepOut: [seat], anchor: where.anchor }, frame)!;
+  const at = inside(picked);
+  expect(overlapArea(at, seat)).toBe(0);
+  for (const text of [...ownTitle, ...ownState, ...tabs]) expect(overlapArea(at, text)).toBe(0);
+  expect(overlapArea(at, header[0]!)).toBeGreaterThan(0);
+  /* It still touches its own card. */
+  expect(overlapArea(at, where.card) + (at.bottom >= where.card.top ? 1 : 0)).toBeGreaterThan(0);
+  /* Without the slid places every candidate that keeps off the title stands over the tabs. */
+  const unslid = found.filter((c) => !c.kind.includes("-at-"));
+  const best = chooseSpendPlacement(unslid, { own: [], ownTitle, ownState, chrome: tabs, foreign: header, keepOut: [seat], anchor: where.anchor }, frame)!;
+  expect(tabs.some((text) => overlapArea(inside(best), text) > 0)).toBe(true);
+});
+
+test("the board's chrome outranks a column header and a neighbour's text, and ranks after the card's own title", () => {
+  const at = (kind: string, left: number): ReturnType<typeof spendCandidates>[number] => ({ kind, left, top: 100, width: 100, height: 50, maxWidth: 100 });
+  const [onChrome, onHeader, onTitle, onNeighbour] = [at("a", 0), at("b", 200), at("c", 400), at("d", 600)];
+  const text = { own: [], chrome: [box(10, 110, 50, 120)], foreign: [box(210, 110, 250, 120)], ownTitle: [box(410, 110, 450, 120)], neighbours: [box(610, 110, 650, 120)] };
+  /* A header or a neighbour's text is covered before the chrome is. */
+  expect(chooseSpendPlacement([onChrome, onHeader], text)!.kind).toBe("b");
+  expect(chooseSpendPlacement([onChrome, onNeighbour], text)!.kind).toBe("d");
+  /* The chrome is covered before the card's own title is. */
+  expect(chooseSpendPlacement([onTitle, onChrome], text)!.kind).toBe("a");
 });
 
 test("a place that covers none of the other cards' text still wins over one that covers a neighbour's title", () => {

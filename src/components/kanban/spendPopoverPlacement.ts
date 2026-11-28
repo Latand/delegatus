@@ -8,9 +8,12 @@
  * arrangement, the providers side by side, which is wide and short. Among
  * the places that keep clear of the seat the one that covers the least wins,
  * ranked: the card's own title and state line (a place covering any of them
- * loses to one covering none), then text outside the cards (column headers,
- * other cards' titles), then the rest of the neighbouring cards' text; a tie
- * goes to the earlier candidate. A card at the window's bottom edge therefore
+ * loses to one covering none), then the board's own chrome (the tab row that
+ * jumps between columns), then column headers and other cards' titles, then
+ * the rest of the neighbouring cards' text; a tie goes to the earlier
+ * candidate. The place above the card is also offered at several offsets
+ * along the card, so a short band can keep clear of the chrome by standing
+ * beside it instead of over it. A card at the window's bottom edge therefore
  * flips above itself instead of covering its own title; where the band the
  * seat leaves holds only the card's top, the column header is what it covers.
  * A place that leaves a line of the card's own text cut at its edge is
@@ -43,6 +46,9 @@ const MAX_WIDTH = 320;
 /** The compact arrangement sets the providers side by side: twice the room of one column, each at least a normal bubble's minimum. */
 const COMPACT_MIN_WIDTH = 2 * MIN_WIDTH;
 const COMPACT_MAX_WIDTH = 2 * MAX_WIDTH;
+/** How far the place above the card slides along it, in steps, and the least of the card its bubble keeps under it. */
+const SWEEP_STEPS = 12;
+const TOUCH = 5 * EDGE;
 /** What a compact place's name ends in. */
 export const COMPACT_SUFFIX = "-compact";
 
@@ -84,8 +90,16 @@ export function clearOf(board: Box, anchor: Box, avoid: readonly Box[] = []): Bo
  * are too tall the places stay out of the seat and run past the board's edge
  * farthest from it.
  */
-export function spendCandidates(input: SpendPlacementInput, sizeAt: (maxWidth: number, compact?: boolean) => { width: number; height: number }): SpendCandidate[] {
+export function spendCandidates(input: SpendPlacementInput, measure: (maxWidth: number, compact?: boolean) => { width: number; height: number }): SpendCandidate[] {
   const { viewport, card, anchor } = input;
+  /* The same width is asked for by several places: the bubble is measured once for each. */
+  const sizes = new Map<string, { width: number; height: number }>();
+  const sizeAt = (maxWidth: number, compact = false) => {
+    const key = `${compact ? 1 : 0}:${maxWidth}`;
+    let size = sizes.get(key);
+    if (!size) { size = measure(maxWidth, compact); sizes.set(key, size); }
+    return size;
+  };
   const board: Box = {
     left: Math.max(EDGE, input.bounds?.left ?? EDGE), top: Math.max(EDGE, input.bounds?.top ?? EDGE),
     right: Math.min(viewport.width - EDGE, input.bounds?.right ?? Infinity), bottom: Math.min(viewport.height - EDGE, input.bounds?.bottom ?? Infinity),
@@ -135,6 +149,13 @@ export function spendCandidates(input: SpendPlacementInput, sizeAt: (maxWidth: n
     if (wide >= minWidth || !compact) {
       place("below", card.left, card.bottom, wide);
       place("above", card.right, card.top, wide, true, true);
+      /* The place above the card, slid along it: the bubble still touches the card, and what it covers changes with where it stands. */
+      const { width } = sizeAt(wide, compact);
+      for (let step = 0; step <= SWEEP_STEPS; step += 1) {
+        const from = card.left - width + TOUCH;
+        const to = card.right - TOUCH;
+        place(`above-at-${step}`, from + ((to - from) * step) / SWEEP_STEPS, card.top, wide, false, true);
+      }
     }
     return out;
   };
@@ -160,7 +181,9 @@ export interface WindowText {
   ownState?: readonly Box[];
   /** Boxes a place must not touch (the seat): one that does loses to any that does not. */
   keepOut?: readonly Box[];
-  /** Other cards' titles and anything outside the cards (the sidebar, the seat): these must stay readable. */
+  /** The board's chrome outside the cards and its column headers (the tab row that jumps between columns): ranks before the headers. */
+  chrome?: readonly Box[];
+  /** Other cards' titles and column headers: these must stay readable. */
   foreign: readonly Box[];
   /** The rest of the neighbouring cards' text. */
   neighbours?: readonly Box[];
@@ -218,8 +241,8 @@ export function settleSpendPlacement(candidate: SpendCandidate, text: readonly B
 /**
  * The candidate that covers the least, a tie going to the earlier one. Any
  * overlap with the seat loses to every place with none, however small, then
- * any overlap with the card's own title and state line, then other cards'
- * titles and text outside the cards (column headers), then the rest of the
+ * any overlap with the card's own title and state line, then the board's
+ * chrome (the tab row), then other cards' titles and column headers, then the rest of the
  * neighbouring cards' text, then the marks; the card's own other text,
  * which the reader is already looking at, only breaks a tie between places
  * that cover none of the others. With a frame a place first takes the whole
@@ -233,7 +256,7 @@ export function chooseSpendPlacement(candidates: SpendCandidate[], text: WindowT
     const candidate = frame ? settleSpendPlacement(raw, cuttable, frame) : raw;
     const box = boxOf(candidate);
     const covered = (boxes: readonly Box[] = []) => boxes.reduce((sum, other) => sum + overlapArea(box, other), 0);
-    const score = [covered(text.keepOut) > 0 ? 1 : 0, covered(text.ownTitle) + covered(text.ownState) > 0 ? 1 : 0, covered(text.foreign), covered(text.neighbours), text.anchor ? overlapArea(box, text.anchor) : 0, covered(text.own)];
+    const score = [covered(text.keepOut) > 0 ? 1 : 0, covered(text.ownTitle) + covered(text.ownState) > 0 ? 1 : 0, covered(text.chrome), covered(text.foreign), covered(text.neighbours), text.anchor ? overlapArea(box, text.anchor) : 0, covered(text.own)];
     const better = score.findIndex((value, at) => value !== (bestScore[at] ?? Infinity));
     if (better >= 0 && score[better]! < (bestScore[better] ?? Infinity)) { best = candidate; bestScore = score; }
   }
@@ -261,9 +284,10 @@ export function shownPart(from: Element, rect: DOMRect, clips: Map<Element, Box 
   return box;
 }
 
-/** The window's text boxes, split into the card's own title, the words of its state line, every other card's title with everything outside the cards, the card's own other text, and the neighbouring cards' other text, as many nodes as `limit`. */
-export function windowTextBoxes(card: Element, skip: Element, limit = 8000): { own: Box[]; ownTitle: Box[]; ownState: Box[]; foreign: Box[]; neighbours: Box[] } {
+/** The window's text boxes, split into the card's own title, the words of its state line, text outside the cards that is not a column header (the tab row, the sidebar), every other card's title with the column headers, the card's own other text, and the neighbouring cards' other text, as many nodes as `limit`. */
+export function windowTextBoxes(card: Element, skip: Element, limit = 8000): { own: Box[]; ownTitle: Box[]; ownState: Box[]; chrome: Box[]; foreign: Box[]; neighbours: Box[] } {
   const own: Box[] = [];
+  const chrome: Box[] = [];
   const ownTitle: Box[] = [];
   const ownState: Box[] = [];
   const foreign: Box[] = [];
@@ -283,12 +307,13 @@ export function windowTextBoxes(card: Element, skip: Element, limit = 8000): { o
         if (!shown) continue;
         if (card.contains(node) && parent.closest(".title, h3")) ownTitle.push(shown);
         else if (card.contains(node) && parent.closest(".card-state-words")) ownState.push(shown);
-        else if (parent.closest(".title, h3") || !parent.closest("[data-kanban-card]")) foreign.push(shown);
+        else if (parent.closest(".col-head, .title, h3")) foreign.push(shown);
+        else if (!parent.closest("[data-kanban-card]")) chrome.push(shown);
         else if (card.contains(node)) own.push(shown);
         else neighbours.push(shown);
       }
     }
   }
   range.detach();
-  return { own, ownTitle, ownState, foreign, neighbours };
+  return { own, ownTitle, ownState, chrome, foreign, neighbours };
 }
