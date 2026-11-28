@@ -201,11 +201,17 @@ test.each([
     fs.writeFileSync(path.join(box.repo, ".gitignore"), `${ignore}\n`);
     fs.writeFileSync(path.join(box.repo, "package.json"), "{}\n");
     fs.mkdirSync(path.join(box.repo, "scripts"));
-    fs.writeFileSync(path.join(box.repo, "scripts/lint.ts"), 'import { ESLint } from "eslint";\nconst results = await new ESLint().lintFiles(["evidence/draft/output.ts"]);\nif (results.some(result => result.errorCount)) process.exit(1);\n');
-    fs.copyFileSync(path.resolve("eslint.config.mjs"), path.join(box.repo, "eslint.config.mjs"));
+    // The provisioning tests above already run ESLint. This matrix needs a
+    // real package import so copies and missing installs affect the hook result.
+    const tools = path.join(box.root, "installed-tools");
+    const tool = path.join(tools, "fixture-lint");
+    fs.mkdirSync(tool, { recursive: true });
+    fs.writeFileSync(path.join(tool, "package.json"), JSON.stringify({ name: "fixture-lint", main: "index.js" }));
+    fs.writeFileSync(path.join(tool, "index.js"), 'exports.check = (file) => require("node:fs").readFileSync(file, "utf8") === "export const value = 1;\\n";\n');
+    fs.writeFileSync(path.join(box.repo, "scripts/lint.ts"), 'import { check } from "fixture-lint";\nif (!check("evidence/draft/output.ts")) process.exit(1);\n');
     box.run("add", ".");
     box.run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "toolchain configuration");
-    if (toolchain !== "fixed-on-retry") fs.symlinkSync(path.resolve("node_modules"), path.join(box.repo, "node_modules"), "dir");
+    if (toolchain !== "fixed-on-retry") fs.symlinkSync(tools, path.join(box.repo, "node_modules"), "dir");
     const worktree = path.join(box.root, "lane");
     box.run("worktree", "add", "-b", "lane", worktree);
     box.subject.worktreeDir = worktree;
@@ -224,7 +230,7 @@ test.each([
       const privateTools = path.join(worktree, "node_modules");
       expect(fs.lstatSync(privateTools).isDirectory()).toBe(true);
       fs.rmSync(privateTools, { recursive: true });
-      fs.symlinkSync(path.resolve("node_modules"), path.join(box.repo, "node_modules"), "dir");
+      fs.symlinkSync(tools, path.join(box.repo, "node_modules"), "dir");
     }
     const receipt = path.join(box.root, "stage-commit.json");
     if (toolchain === "recovered") {
@@ -245,7 +251,7 @@ test.each([
       expect(fs.lstatSync(localTools).isDirectory()).toBe(true);
       expect(fs.realpathSync(localTools)).not.toBe(fs.realpathSync(path.join(box.repo, "node_modules")));
     }
-    expect(fs.readlinkSync(path.join(box.repo, "node_modules"))).toBe(path.resolve("node_modules"));
+    expect(fs.readlinkSync(path.join(box.repo, "node_modules"))).toBe(tools);
     const head = await box.exec("git", ["show", "--format=", "--name-only", "HEAD"], worktree);
     expect(head.stdout.trim()).toBe("evidence/draft/output.ts");
     expect(fs.readFileSync(path.join(box.repo, ".git/hook-checks"), "utf8")).toBe("checked\n");

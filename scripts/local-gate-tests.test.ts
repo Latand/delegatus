@@ -413,6 +413,8 @@ test("gate harness selections limit nested workers while ordinary head and basel
   const publication = [
     "scripts/merge-batch.refresh.test.ts", "scripts/merge-batch.sampling.test.ts", "scripts/merge-batch.landing.test.ts",
     "src/lib/pipelines/stageAttemptPush.rehost.test.ts", "src/lib/pipelines/publicationRecovery.producer.test.ts",
+    "src/lib/pipelines/git.test.ts", "src/lib/pipelines/parkedPublication.test.ts", "src/lib/git/agentHistoryGuard.test.ts",
+    "src/lib/pipelines/stageCommitRepair.git.test.ts", "src/lib/pipelines/stagePublicationRepair.custody.test.ts",
   ];
   expect(comparisonFileWorkers(regular, 8)).toBe(8);
   expect(comparisonFileWorkers(regular, 3)).toBe(3);

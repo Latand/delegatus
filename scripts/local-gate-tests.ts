@@ -57,11 +57,12 @@ export function comparisonPhaseBudgetMs(fileCount: number): number {
 const nestedComparisonFile = (file: string): boolean => {
   const relative = file.split(path.sep).join("/");
   return /^scripts\/(?:local-gate(?:-tests)?(?:\.|$)|gate-slot\.|owned-runner\.|compiler-admission\.|check-worker-broker\.|merge-batch\.|privacy-)/.test(relative)
-    || /^src\/lib\/pipelines\/(?:publicationRecovery|stageAttemptPush)\./.test(relative);
+    || /^src\/lib\/pipelines\/(?:git|parkedPublication|publicationRecovery|stageAttemptPush|stageCommitRepair|stagePublicationRepair)\./.test(relative)
+    || relative === "src/lib/git/agentHistoryGuard.test.ts";
 };
 
-/** Multiple gate fixtures can exhaust a service's task limit. Limit that
- * class while letting ordinary source tests use the remaining file workers. */
+/** Limit fixtures that run their own test runners or repeatedly launch Git
+ * and its hooks. Ordinary files can still use the remaining workers. */
 export function comparisonFileWorkers(files: readonly string[], ceiling: number, sharedPortable = false): number {
   const nested = files.filter(nestedComparisonFile).length;
   if (nested && sharedPortable) return 1;
