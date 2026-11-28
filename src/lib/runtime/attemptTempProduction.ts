@@ -77,7 +77,7 @@ export async function attemptTempAuthority(owner: AttemptTempOwner, _inventory =
   if (attempt?.launchId === owner.launchId && attempt.state === "running") return observed("live");
   if (policy === "scratch") {
     const expiry = attemptScratchExpiry(pipeline, owner);
-    if (expiry !== null) return { ...observed(now() >= expiry ? "expired" : "closed", expiry), checkouts };
+    if (expiry !== null) return { ...observed(now() >= expiry ? "expired" : "closed", expiry), ...(checkouts.length ? { checkouts } : {}) };
     return observed(attempt || pipeline.state === "closed" || pipeline.state === "completed" ? "live" : "unknown");
   }
   if (pipeline.state === "closed" || pipeline.state === "completed") {

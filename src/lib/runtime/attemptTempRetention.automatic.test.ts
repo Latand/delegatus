@@ -24,6 +24,7 @@ test.skipIf(process.platform !== "linux")("the ordinary automatic owner retires 
   const running = (id: string, launchId: string) => {
     const lane = finishedLane(root, "2020-01-01T00:00:00Z");
     lane.id = id; Object.assign(lane, pipelineIdentity(id, lane.task, lane.repoDir)); lane.state = "running"; lane.closedAt = null;
+    fs.mkdirSync(path.join(lane.worktreeDir!, ".git"), { recursive: true });
     lane.cursor = { stageId: "build", state: "running", input: null, activatedBy: null };
     lane.runs[0]!.attempts.push({ n: 1, state: "running", launchId, effectiveRole: lane.stages[0]!.effectiveRole,
       conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
@@ -143,7 +144,7 @@ test.skipIf(process.platform !== "linux")("24h boundaries upgrade legacy schedul
     const { recordedRootHeld } = await import("../recordedChecks/store"); expect(recordedRootHeld(directories[2]!)).toBeTrue();
     const reopened = await attemptScratchAuthority(store.owner(directories[1]!)!, undefined, () => NOW + 1);
     fs.unlinkSync(path.join(directories[1]!, ".delegatus-keep"));
-    lane.state = "paused"; lane.closedAt = null; savePipelines([lane]);
+    lane.state = "paused"; lane.closedAt = null; fs.mkdirSync(path.join(lane.worktreeDir!, ".git"), { recursive: true }); savePipelines([lane]);
     expect(reopened.isCurrent()).toBeFalse();
     expect((await attemptScratchAuthority(store.owner(directories[1]!)!, undefined, () => NOW + 1)).state).toBe("unknown");
     const resumed = await realParentPass(true); expect(resumed.removed).toBe(0);

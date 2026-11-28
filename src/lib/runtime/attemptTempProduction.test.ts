@@ -1454,7 +1454,7 @@ test.each([false, true])("a process first seen by the quarantine scan reports it
       },
     }, workMode);
     expect(injected).toBeTrue();
-    expect(quarantineReads).toBe(replay ? 6 : 3);
+    expect(quarantineReads).toBe(replay ? 4 : 2);
     expect(fs.readFileSync(path.join(trash ?? directory!, "payload"), "utf8")).toBe("fixture");
     expect(report).toMatchObject({ removed: 0, errors: 0, liveHeld: 1, outcomes: [expect.objectContaining({
       directory, disposition: "live", reasonCode: "process_reference",

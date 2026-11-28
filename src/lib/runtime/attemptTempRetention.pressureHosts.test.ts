@@ -96,6 +96,7 @@ test("real parent and restarted helper reclaim a thousand-root inventory five ti
     const live = buildPipeline({ id: "pressure-live", task: "Live pressure fixture", project: "fixture", repoDir: root,
       stages: [{ id: "build", kind: "run", prompt: "Fixture", next: null, effectiveRole: ended.stages[0]!.effectiveRole }],
       srcPath: null, srcConversationId: null, now: "2030-01-19T00:00:00Z" });
+    fs.mkdirSync(path.join(live.worktreeDir!, ".git"), { recursive: true });
     live.runs = [{ stageId: "build", attempts: [{ n: 1, state: "running", launchId: "retention-launch", effectiveRole: live.stages[0]!.effectiveRole,
       conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
       startedAt: "2030-01-19T00:00:00Z", completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null }] }];
