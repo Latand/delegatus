@@ -5,7 +5,7 @@ type Group = keyof typeof groups;
 export type Requirement = { id: string; group: Group; critical: boolean };
 export type Checks = Record<string, 'pass' | 'fail' | 'missing' | 'waived'>;
 type Rating = [number, number, number];
-export type Judgment = { session: string; rating: Rating; coverage: string[]; truncated?: boolean };
+export type Judgment = { session: string; artifactDigest: string; terminalReceipt: string; cleanupReceipt: string; rating: Rating; coverage: string[]; truncated?: boolean };
 type Resources = { units: number; activeSeconds: number; queueSeconds: number; sessions: number };
 type HumanEvent = {
   id: string;
@@ -26,8 +26,9 @@ type Action = { outcome: Outcome; evidence: string; at: number; priorCorrection?
 export type Observation = {
   status: 'delivered' | 'timeout' | 'infrastructure_failure' | 'blocked' | 'not_run_after_stop' | 'undelivered';
   reason?: string;
-  first?: { timely: boolean; tree: string; checks: Checks };
-  final?: { timely: boolean; tree: string; commit?: string; checks: Checks };
+  first?: { timely: boolean; tree: string; captureReceipt: string; valid: boolean; checks: Checks };
+  final?: { timely: boolean; tree: string; commit?: string; captureReceipt: string; valid: boolean; checks: Checks };
+  predecessorOracles?: Record<string, { treeDigest: string; evidenceDigest: string; checks: Checks }>;
   terminalReceipt?: string;
   cleanupReceipt?: string;
   usage?: Resources;
@@ -35,11 +36,12 @@ export type Observation = {
   invalid?: boolean;
   judgments?: (Judgment | null)[];
   human?: HumanEvent[];
-  findings?: { defect: string; verdict: 'true' | 'false' | 'unknown' }[];
+  findings?: { defect: string; verdict: 'true' | 'false' | 'unknown'; checkpoint: string; evidence: string; severity: 'critical' | 'high' | 'medium' | 'low'; disposition: 'accepted' | 'rejected' | 'unknown' }[];
   census?: { defects: string[]; complete: boolean };
   escapes?: { critical: number; other: number };
   regressions?: number;
   fixRounds?: number;
+  workflow?: { reviewers: { checkpoint: string; evidenceDigest: string; completedAt: number }[]; fixes: { checkpoint: string; evidenceDigest: string; completedAt: number }[]; reReviews: { checkpoint: string; evidenceDigest: string; completedAt: number }[] };
   correctiveMinutes?: number;
   actions?: Record<string, Action>;
 };
@@ -49,6 +51,7 @@ export function assert(condition: unknown, reason: string): asserts condition {
 }
 
 const count = (n: unknown) => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0;
+const sha256 = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const rating = (value: unknown): value is Rating =>
   Array.isArray(value) && value.length === 3 && value.every(n => count(n) && n <= 3);
 
@@ -83,10 +86,12 @@ function behavior(requirements: Requirement[], checks: Checks = {}) {
 export type Calibration = {
   judge: 'J1' | 'J2';
   gold: string;
+  artifactDigest: string;
   session: string;
   rating: Rating;
   detected: string[];
   usage: Resources;
+  terminalReceipt: string;
   cleanupReceipt: string;
 };
 
@@ -101,7 +106,7 @@ export function calibrationPassed(golds: Record<string, string[]>, rows: Calibra
       const matches = own.filter(x => x.gold === gold);
       if (matches.length !== 1) return false;
       const row = matches[0];
-      if (!rating(row.rating) || !row.session || !row.cleanupReceipt || !judgeUsageCovered(row.usage)) return false;
+      if (!rating(row.rating) || !row.session || !sha256(row.artifactDigest) || !row.terminalReceipt || !row.cleanupReceipt || !judgeUsageCovered(row.usage)) return false;
       if (gold === 'complete') return true;
       const defects = golds[gold];
       return !!defects && defects.every(id => row.detected.includes(id))
@@ -141,7 +146,9 @@ export function judgeUsageCovered(usage?: Resources) {
 export function score(row: Observation, requirements: Requirement[], residuals: string[], maxSessions: number, learn: boolean, calibrated: boolean) {
   const first = behavior(requirements, row.first?.checks);
   const final = behavior(requirements, row.final?.checks);
-  const delivered = row.status === 'delivered' && Boolean(row.final?.tree && row.final.timely);
+  const firstValid = row.first?.valid === true && Boolean(sha256(row.first.captureReceipt) && sha256(row.first.tree) && row.first.timely);
+  const finalValid = row.final?.valid === true && Boolean(sha256(row.final.captureReceipt) && sha256(row.final.tree) && row.final.timely);
+  const delivered = row.status === 'delivered' && finalValid && row.invalid === false;
   const usage = row.usage;
   const curator = row.curatorUsage;
   const knownUsage = validUsage(usage) && (!learn || (!!curator && [curator.units, curator.activeSeconds, curator.sessions].every(count)));
@@ -156,7 +163,8 @@ export function score(row: Observation, requirements: Requirement[], residuals: 
   const judges = (row.judgments ?? []).slice(0, 2);
   const ratings = [0, 1].map(i => {
     const j = judges[i];
-    return j?.session && j.session !== judges[1 - i]?.session && !j.truncated && rating(j.rating) && Array.isArray(j.coverage)
+    return j?.session && j.session !== judges[1 - i]?.session && sha256(j.artifactDigest) && j.terminalReceipt && j.cleanupReceipt
+      && !j.truncated && rating(j.rating) && Array.isArray(j.coverage)
       && residuals.every(id => j.coverage.includes(id)) ? j.rating : null;
   });
   const [a, b] = ratings;
@@ -176,6 +184,11 @@ export function score(row: Observation, requirements: Requirement[], residuals: 
     noContaminationOrProtocolInvalidity: row.invalid === false,
     calibrationPassed: calibrated,
     bothJudgmentsIndependentParseableAndCompleteCoverage: independent,
+    observedReviewFixFloor: !!row.workflow && row.workflow.reviewers.length >= 1
+      && row.workflow.fixes.length >= (row.fixRounds ?? 0)
+      && row.workflow.reReviews.length >= (row.fixRounds ?? 0)
+      && [...row.workflow.reviewers, ...row.workflow.fixes, ...row.workflow.reReviews]
+        .every(event => !!event.checkpoint && sha256(event.evidenceDigest) && count(event.completedAt)),
     noUnresolvedDispute: !dispute && !!a && !!b,
   }, ratings);
 
@@ -192,7 +205,7 @@ export function score(row: Observation, requirements: Requirement[], residuals: 
       && !['technical-prescription', 'manual-repair'].includes(e.category));
   return {
     fullyAccepted: accepted,
-    firstFunctionalAccepted: Boolean(row.first?.timely && row.first.tree && first.allPassed),
+    firstFunctionalAccepted: row.invalid === false && firstValid && first.allPassed,
     finalFunctionalAccepted: delivered && final.allPassed,
     autonomousAccepted: autonomous,
     strictGoalOnlyAccepted: autonomous && human.every(e => e.category === 'goal-only'),
@@ -207,6 +220,7 @@ export function score(row: Observation, requirements: Requirement[], residuals: 
 function reviewerMeasures(row: Observation) {
   const verdicts = new Map<string, string>();
   for (const finding of row.findings ?? []) {
+    assert(finding.checkpoint && sha256(finding.evidence) && finding.severity && finding.disposition, 'Reviewer finding lacks checkpoint, evidence, severity or disposition');
     const previous = verdicts.get(finding.defect);
     verdicts.set(finding.defect, previous && previous !== finding.verdict ? 'unknown' : finding.verdict);
   }
@@ -222,7 +236,8 @@ function reviewerMeasures(row: Observation) {
     precision: confirmed + falseFindings ? confirmed / (confirmed + falseFindings) : null,
     precisionBounds: verdicts.size ? [confirmed / verdicts.size, (confirmed + unknown) / verdicts.size] : null,
     detected, census: census.size, censusComplete: row.census?.complete === true,
-    recallBounds: census.size && row.census?.complete ? [detected / census.size, (detected + uncertain) / census.size] : null,
+    recallBounds: census.size ? [detected / census.size, (detected + uncertain) / census.size] : null,
+    recallCoverage: census.size ? (row.census?.complete ? 'complete-census' : 'coverage-limited-census') : 'unknown',
   };
 }
 

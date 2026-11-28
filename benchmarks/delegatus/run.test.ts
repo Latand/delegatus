@@ -1,13 +1,13 @@
 import { afterEach, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import design from './pilot-manifest.json';
 import {
-  appendRun, checkBlock, digest, expandRequest, expandSealedRequest, gateRefusals, gateRequirements, launchRefusal,
-  reportRun, sampleDelivery, sealRun, validateManifest, type Binding, type RequestInputs,
+  appendRun, campaignChronologyValid, checkBlock, digest, expandRequest, expandSealedRequest, gateRefusals, gateRequirements, launchRefusal,
+  reportRun, sampleDelivery, sealRun, validateManifest, verifyManifestPin, type Binding, type RequestInputs,
 } from './run';
 import { calibrationPassed, oracleControls, score, violationRates, type Calibration, type Checks, type Observation, type Requirement } from './score';
 
@@ -16,6 +16,7 @@ const manifestFile = new URL('./pilot-manifest.json', import.meta.url);
 const task = design.tasks[0].id;
 const solver = design.cells[0].id;
 const proof = (label: string) => digest(`harness-only:${label}`);
+const BINDING = proof('sealed-binding');
 const roots = new Set<string>();
 afterEach(() => {
   for (const root of roots) rmSync(root, { recursive: true });
@@ -43,6 +44,7 @@ test('validates the exact plan and registered denominators', () => {
     ['workflows', m => { m.workflows.team.reviewFailEdge.maxRounds = 2; }],
     ['plannedTotals', m => { m.plannedTotals.solverSessionsMax++; }],
     ['scoring', m => { m.scoring.primaryDenominator--; }],
+    ['scoring', m => { m.scoring.fullyAccepted.requiredTrue.pop(); }],
     ['retrospectiveEvidence', m => { m.retrospectiveEvidence.schema.required.pop(); }],
     ['processMeasurement', m => { m.processMeasurement.sharedOpportunityViolations.boundaryCases.arms.MA.primary.denominator--; }],
     ['humanAssistance', m => { m.humanAssistance.categories.pop(); }],
@@ -54,18 +56,48 @@ test('validates the exact plan and registered denominators', () => {
   }
 });
 
-const verified = (): Binding => ({
-  manifestDigest: digest(readFileSync(manifestFile)),
-  gates: Object.fromEntries(Object.entries(gateRequirements).map(([gate, proofs]) => [
-    gate, { status: 'verified', proofs: Object.fromEntries(proofs.map(p => [p, proof(p)])) },
-  ])),
-  independentVerdict: { approved: true, evidenceDigest: proof('synthetic-verdict') },
+test('bundled manifest is checked against an independent reviewed digest in the normal CLI', () => {
+  const bytes = readFileSync(manifestFile);
+  verifyManifestPin(bytes);
+  expect(() => verifyManifestPin(Buffer.from(bytes.toString().replace('"solverOrder": "', '"solverOrder": "mutated-')))).toThrow('reviewed pin');
+  const copy = scratch();
+  mkdirSync(join(copy, 'benchmarks/delegatus'), { recursive: true });
+  symlinkSync(new URL('../../node_modules', import.meta.url).pathname, join(copy, 'node_modules'));
+  copyFileSync(new URL('./run.ts', import.meta.url), join(copy, 'benchmarks/delegatus/run.ts'));
+  copyFileSync(new URL('./score.ts', import.meta.url), join(copy, 'benchmarks/delegatus/score.ts'));
+  writeFileSync(join(copy, 'benchmarks/delegatus/pilot-manifest.json'), bytes.toString().replace('"solverOrder": "', '"solverOrder": "mutated-'));
+  const result = Bun.spawnSync([process.execPath, join(copy, 'benchmarks/delegatus/run.ts'), 'validate'], { timeout: 3000 });
+  expect(result.exitCode).not.toBe(0);
 });
+
+const verified = (): Binding => {
+  const manifestDigest = digest(readFileSync(manifestFile));
+  return {
+  classification: 'harness-only',
+  manifestDigest,
+  gates: Object.fromEntries(Object.entries(gateRequirements).map(([gate, proofs]) => [
+    gate, { status: 'verified', proofs: Object.fromEntries(proofs.map(p => {
+      const observations = { [p]: 'pass' as const };
+      const artifact = { schemaVersion: 1 as const, classification: 'observed-gate-evidence' as const, gate: gate as keyof typeof gateRequirements,
+        proof: p, manifestDigest, observations, sourceDigest: proof(`${gate}:${p}:source`) };
+      return [p, { status: 'verified' as const, bindingDigest: manifestDigest, artifactDigest: digest(JSON.stringify(artifact) + '\n'),
+        observations, observationsDigest: digest(JSON.stringify(observations) + '\n'), artifact }];
+    })) },
+  ])),
+  independentVerdict: (() => { const observations = { report: 'pass' as const };
+    const artifact = { schemaVersion: 1 as const, classification: 'independent-gate-review' as const, manifestDigest, observations, sourceDigest: proof('review-source') };
+    return { approved: true, artifactDigest: digest(JSON.stringify(artifact) + '\n'), bindingDigest: manifestDigest,
+      observations, observationsDigest: digest(JSON.stringify(observations) + '\n'), artifact };
+  })(),
+  taskProjectLinks: design.tasks.map(task => ({ task: task.id, taskProject: 'canonical', canonicalProject: 'canonical', packageProject: 'canonical', worktreeProject: 'canonical' })),
+  };
+};
 
 for (const gate of Object.keys(gateRequirements) as (keyof typeof gateRequirements)[]) {
   test(`${gate} missing and malformed proof refuse in a fresh offline process`, () => {
     const b = verified();
-    b.gates![gate]!.proofs![gateRequirements[gate][0]] = '';
+    b.classification = 'observed';
+    b.gates![gate]!.proofs![gateRequirements[gate][0]]!.artifactDigest = '';
     expect(gateRefusals(b).map(r => r.gate)).toEqual([gate]);
     delete b.gates![gate];
     const file = join(scratch(), 'binding.json');
@@ -73,22 +105,57 @@ for (const gate of Object.keys(gateRequirements) as (keyof typeof gateRequiremen
     const result = Bun.spawnSync([process.execPath, entrypoint, 'preflight', file], { timeout: 3000 });
     expect(result.exitCode).toBe(2);
     expect(JSON.parse(result.stdout.toString())).toEqual({ allowed: false, modelLaunches: 0, refusal: expect.stringContaining(gate) });
+    const failing = verified();
+    failing.classification = 'observed';
+    const item = gateRequirements[gate][0];
+    failing.gates![gate]!.proofs![item]!.status = 'failed';
+    expect(gateRefusals(failing).map(r => r.gate)).toContain(gate);
+    const mismatch = verified();
+    mismatch.classification = 'observed';
+    mismatch.gates![gate]!.proofs![item]!.bindingDigest = proof('other-binding');
+    expect(gateRefusals(mismatch).map(r => r.gate)).toContain(gate);
+    for (const rejected of [failing, mismatch]) {
+      const rejectedFile = join(scratch(), `${gate}-${rejected === failing ? 'failed' : 'mismatch'}.json`);
+      writeFileSync(rejectedFile, JSON.stringify(rejected));
+      const preflight = Bun.spawnSync([process.execPath, entrypoint, 'preflight', rejectedFile], { timeout: 3000 });
+      expect(preflight.exitCode).toBe(2);
+      expect(JSON.parse(preflight.stdout.toString())).toMatchObject({ allowed: false, modelLaunches: 0, refusal: expect.stringContaining(gate) });
+    }
   });
 }
 
 test('stale manifest and unresolved private bindings keep the launch closed', () => {
   const b = verified();
+  expect(gateRefusals(b)).toHaveLength(7);
+  expect(launchRefusal(b)).toContain('G1');
+  b.classification = 'observed';
+  expect(gateRefusals(b)).toHaveLength(0);
   expect(launchRefusal(b)).toContain('launchAllowed is false');
   b.unresolved = ['fixture-binding'];
   expect(launchRefusal(b)).toContain('unresolved static bindings');
   b.manifestDigest = proof('stale');
   expect(gateRefusals(b)).toHaveLength(7);
+  const wrongProject = verified();
+  wrongProject.classification = 'observed';
+  wrongProject.taskProjectLinks![0]!.taskProject = 'retained-alias';
+  expect(gateRefusals(wrongProject).map(r => r.gate)).toEqual(['G6']);
+  const missingTask = verified();
+  missingTask.classification = 'observed';
+  missingTask.taskProjectLinks!.pop();
+  expect(gateRefusals(missingTask).map(r => r.gate)).toEqual(['G6']);
 });
 
 const requestInputs: RequestInputs = {
   repoDir: '/fixture/repo', baseRef: 'a'.repeat(40), src: '/fixture/source', taskIds: ['fixture-task'],
   brief: 'Visible requirements', planner: 'Plan the current task', review: 'Review the submitted tree', fix: 'Apply reviewed findings',
+  fixtureDigest: proof('fixture'), promptDigest: proof('prompt'), taskDigest: proof('task'), runtimeDigest: proof('runtime'), dependencyDigest: proof('dependencies'), bindingDigest: BINDING,
 };
+const requestBinding = (inputs: RequestInputs) => digest(JSON.stringify(inputs) + '\n');
+const bindings = (overrides: Record<string, RequestInputs> = {}) => Object.fromEntries([
+  ...design.cells.map(c => [c.id, overrides[c.id] ?? requestInputs]),
+  ...design.curationCells.map(c => [c.id, overrides[c.id] ?? requestInputs]),
+  ...design.judgingCells.map(c => [c.id, overrides[c.id] ?? requestInputs]),
+].map(([id, inputs]) => [id, requestBinding(inputs as RequestInputs)]));
 
 test('renders deterministic supported requests with a bounded review graph and no model fallback', () => {
   const request = expandRequest(solver, requestInputs);
@@ -99,7 +166,9 @@ test('renders deterministic supported requests with a bounded review graph and n
   expect(request).not.toHaveProperty('env');
   const routed = design.cells.find(c => c.arm === 'HA')!;
   expect(() => expandRequest(routed.id, requestInputs)).toThrow('Missing counted planner route');
-  const assigned = expandRequest(routed.id, { ...requestInputs, route: { solve: 'H', fix: 'M' } });
+  const route = { solve: 'H' as const, fix: 'M' as const, plannerCellId: routed.id, plannerPipelineId: 'planner-pipeline', plannerSessionId: 'planner-session', outputDigest: proof('planner-output'), completed: true };
+  expect(() => expandRequest(routed.id, { ...requestInputs, route: { ...route, completed: false } })).toThrow('planner route receipt');
+  const assigned = expandRequest(routed.id, { ...requestInputs, route });
   expect(assigned.stages.map(s => s.engine)).toEqual(['codex', 'claude', 'codex', 'codex']);
   expect(() => expandRequest(design.cells[1].id, requestInputs)).toThrow('Unbound product runtime');
   expect(expandRequest(design.curationCells[0].id, requestInputs).stages[0].role.roleId).toBe('curator');
@@ -156,10 +225,11 @@ const pass: Checks = Object.fromEntries(reqs.map(r => [r.id, 'pass']));
 const residuals = ['evidence'];
 const usage = { units: 400, activeSeconds: 20, queueSeconds: 1, sessions: 2 };
 const good = (): Observation => ({
-  status: 'delivered', first: { timely: true, tree: 'first-tree', checks: { ...pass, core: 'fail' } },
-  final: { timely: true, tree: 'final-tree', checks: pass },
+  status: 'delivered', first: { timely: true, tree: proof('first-tree'), captureReceipt: proof('first-capture'), valid: true, checks: { ...pass, core: 'fail' } },
+  final: { timely: true, tree: proof('final-tree'), captureReceipt: proof('final-capture'), valid: true, checks: pass },
   terminalReceipt: 'terminal', cleanupReceipt: 'clean', usage, invalid: false, fixRounds: 1,
-  judgments: [{ session: 'blind-a', rating: [3, 3, 2], coverage: residuals }, { session: 'blind-b', rating: [3, 3, 2], coverage: residuals }],
+  workflow: { reviewers: [{ checkpoint: 'review-1', evidenceDigest: proof('review'), completedAt: 2 }], fixes: [{ checkpoint: 'fix-1', evidenceDigest: proof('fix'), completedAt: 3 }], reReviews: [{ checkpoint: 'review-2', evidenceDigest: proof('rereview'), completedAt: 4 }] },
+  judgments: [{ session: 'blind-a', artifactDigest: proof('final-tree'), terminalReceipt: 'judge-terminal-a', cleanupReceipt: 'judge-clean-a', rating: [3, 3, 2], coverage: residuals }, { session: 'blind-b', artifactDigest: proof('final-tree'), terminalReceipt: 'judge-terminal-b', cleanupReceipt: 'judge-clean-b', rating: [3, 3, 2], coverage: residuals }],
   human: [],
 });
 const scoreRow = (observation: Observation) => score(observation, reqs, residuals, 4, false, true);
@@ -171,7 +241,10 @@ test('scores first and final separately, retains conservative judge bounds and e
   expect(scoreRow({ ...good(), usage: undefined }).fullyAccepted).toBe(false);
   expect(scoreRow({ ...good(), status: 'timeout' }).Q).toBe(0);
   expect(scoreRow({ ...good(), usage: { ...usage, units: 128001 } }).Q).toBe(0);
-  expect(scoreRow({ ...good(), final: { timely: true, tree: 'x', checks: { ...pass, securityPrivacy: 'fail' } } }).Q).toBe(0);
+  expect(scoreRow({ ...good(), final: { timely: true, tree: proof('x'), captureReceipt: proof('capture'), valid: true, checks: { ...pass, securityPrivacy: 'fail' } } }).Q).toBe(0);
+  expect(scoreRow({ ...good(), status: 'timeout', first: { timely: true, tree: proof('first-tree'), captureReceipt: proof('first'), valid: false, checks: pass } }).firstFunctionalAccepted).toBe(false);
+  expect(scoreRow({ ...good(), final: { ...good().final!, valid: false } }).finalFunctionalAccepted).toBe(false);
+  expect(scoreRow({ ...good(), workflow: undefined }).fullyAccepted).toBe(false);
   const truncated = good();
   truncated.judgments![1]!.truncated = true;
   const limited = scoreRow(truncated);
@@ -187,23 +260,33 @@ test('necessary clarification preserves autonomy and deduplicated defects preser
   const input = good();
   input.human = [{ id: 'h', at: 1, actor: 'human', category: 'business-clarification', necessity: 'necessary-business-fact',
     fact: 'batch policy', script: 'sealed-fact', reason: 'requested', minutes: 2, artifact: 'first-tree' }];
-  input.findings = [{ defect: 'defect-a', verdict: 'true' }, { defect: 'defect-a', verdict: 'true' }, { defect: 'defect-b', verdict: 'unknown' }];
+  input.findings = [
+    { defect: 'defect-a', verdict: 'true', checkpoint: 'review', evidence: proof('evidence-a'), severity: 'high', disposition: 'accepted' },
+    { defect: 'defect-a', verdict: 'true', checkpoint: 'review', evidence: proof('evidence-a'), severity: 'high', disposition: 'accepted' },
+    { defect: 'defect-b', verdict: 'unknown', checkpoint: 'review', evidence: proof('evidence-b'), severity: 'medium', disposition: 'unknown' },
+  ];
   input.census = { defects: ['defect-a', 'defect-b'], complete: true };
   expect(scoreRow(input)).toMatchObject({ autonomousAccepted: true, strictGoalOnlyAccepted: false,
     reviewer: { confirmed: 1, unknown: 1, precisionBounds: [0.5, 1], recallBounds: [0.5, 1] } });
+  input.census!.complete = false;
+  expect(scoreRow(input).reviewer).toMatchObject({ recallCoverage: 'coverage-limited-census', recallBounds: [0.5, 1] });
   input.human[0].script = null;
   expect(() => scoreRow(input)).toThrow('Unbound clarification');
+  input.human[0].script = 'sealed-fact';
   input.human[0].category = 'manual-repair';
   expect(scoreRow(input).autonomousAccepted).toBe(false);
+  input.human[0].category = 'business-clarification';
   input.human = undefined;
   expect(scoreRow(input).autonomousAccepted).toBe(false);
+  input.findings![0]!.evidence = 'missing-evidence';
+  expect(() => scoreRow(input)).toThrow('Reviewer finding lacks');
 });
 
 test('calibration rejects red gold promotion and oracle controls require their intended failures', () => {
   const golds = Object.fromEntries(design.judgingCells.filter(j => j.kind === 'calibration').map(j => [j.gold!, j.gold === 'complete' ? [] : ['defect']]));
   const judgments: Calibration[] = design.judgingCells.filter(j => j.kind === 'calibration').map(j => ({
-    gold: j.gold!, judge: j.judge as Calibration['judge'], session: j.id, rating: j.gold === 'complete' ? [3, 3, 3] : [2, 2, 2],
-    detected: golds[j.gold!], usage: { ...usage, sessions: 1 }, cleanupReceipt: 'stopped',
+    gold: j.gold!, artifactDigest: proof(`gold:${j.gold}`), judge: j.judge as Calibration['judge'], session: j.id, rating: j.gold === 'complete' ? [3, 3, 3] : [2, 2, 2],
+    detected: golds[j.gold!], usage: { ...usage, sessions: 1 }, terminalReceipt: `terminal-${j.id}`, cleanupReceipt: 'stopped',
   }));
   expect(calibrationPassed(golds, judgments)).toBe(true);
   judgments[7].rating = [3, 3, 3];
@@ -226,8 +309,16 @@ function preflights(id: string) {
         ...(cellId.endsWith('-S-r1') ? {} : { planner: proof('planner-baseline') }),
       },
     });
+    const runtimeBindings = (roles: Record<string, string>) => Object.fromEntries(Object.keys(roles).map(role => [role,
+      { declared: 'M' as const, requested: { engine: design.runtimePool.M.engine, model: design.runtimePool.M.model, effort: design.runtimePool.M.effort },
+        resolved: { engine: design.runtimePool.M.engine, model: design.runtimePool.M.model, effort: design.runtimePool.M.effort } },
+    ]));
+    const before = snap(i * 1000, 4 - i);
+    const after = snap(i * 1000 + 200, 3 - i);
+    before.runtimeBindings = runtimeBindings(before.roles);
+    after.runtimeBindings = runtimeBindings(after.roles);
     const checkpoint = Object.fromEntries(design.ordering.instrumentationCheckpoint.continueOnlyAfter.map(key => [key, proof(key)]));
-    return { id: cellId, before: snap(i * 1000, 4 - i), firstModelWork: i * 1000 + 100, after: snap(i * 1000 + 200, 3 - i), checkpoint };
+    return { id: cellId, before, firstModelWork: i * 1000 + 100, after, checkpoint };
   });
 }
 
@@ -239,7 +330,7 @@ test('O and P/S admission guards retain unknown and invalid comparisons', () => 
     [r => { r[0].before.capacityBudgets = 3; }, 'capacity'],
     [r => { r[1].after.quotaEnd++; }, 'Quota'],
     [r => { r[1].before.providerRevision = ''; }, 'Provider'],
-    [r => { r[1].after.roles.review = proof('fallback-model'); }, 'Role runtime'],
+    [r => { r[1].after.runtimeBindings!.review!.resolved.model = 'fallback-model'; }, 'runtime differs'],
     [r => { r[1].after.sharedInputs = proof('changed-inputs'); }, 'Shared inputs'],
     [r => { r[1].checkpoint = {}; }, 'instrumentation checkpoint'],
     [r => { [r[1], r[2]] = [r[2], r[1]]; }, 'Interleaved'],
@@ -256,36 +347,98 @@ test('O and P/S admission guards retain unknown and invalid comparisons', () => 
   expect(checkBlock('PS-archive', pair)).toMatchObject({ eligible: false, stop: true, reason: 'Block exceeded first-model-work separation' });
 });
 
+test('campaign chronology rejects an interleaved solver and unresolved runtime fallback', () => {
+  const ids = [...design.ordering.orchestrationBlocks, ...design.ordering.productPairedBlocks].flatMap(b => b.orderedCells)
+    .sort((a, b) => design.cells.find(c => c.id === a)!.ordinal - design.cells.find(c => c.id === b)!.ordinal);
+  expect(campaignChronologyValid(ids.map(id => ({ id })))).toBe(true);
+  const interleaved = ids.map(id => ({ id }));
+  interleaved.splice(1, 0, { id: 'outside-solver' });
+  expect(campaignChronologyValid(interleaved)).toBe(false);
+  const rows = preflights('O-export');
+  rows[0].before.runtimeBindings!.solve!.resolved = { engine: 'codex', model: 'fallback', effort: 'high' };
+  expect(checkBlock('O-export', rows)).toMatchObject({ eligible: false, stop: true, reason: expect.stringContaining('declared model binding') });
+});
+
+test('E cumulative oracle rejects a later tree that regresses an earlier operation', () => {
+  const dir = join(scratch(), 'e-run');
+  sealRun(dir, 'harness-only', contracts, {}, BINDING, bindings());
+  const c2 = design.cells.find(c => c.task === 'E1-C2' && c.arm === 'EA')!;
+  const requestKey = `${design.campaign}:${c2.id}`;
+  appendRun(dir, { ...event('e2-receipt'), rowId: c2.id, kind: 'receipt', status: 'accepted', requestKey, pipelineId: 'e2' });
+  const regressed = { ...good(), predecessorOracles: {
+    'E1-C0': { treeDigest: digest(proof('final-tree')), evidenceDigest: proof('c0-tests'), checks: { core: 'fail' } },
+    'E1-C1': { treeDigest: digest(proof('final-tree')), evidenceDigest: proof('c1-tests'), checks: pass },
+  } };
+  expect(() => appendRun(dir, { ...event('e2-result'), rowId: c2.id, kind: 'solver', observation: regressed })).toThrow('E predecessor oracle regressed');
+  const passing = { ...good(), predecessorOracles: {
+    'E1-C0': { treeDigest: digest(proof('final-tree')), evidenceDigest: proof('c0-tests'), checks: pass },
+    'E1-C1': { treeDigest: digest(proof('final-tree')), evidenceDigest: proof('c1-tests'), checks: pass },
+  } };
+  expect(() => appendRun(dir, { ...event('e2-result-pass'), rowId: c2.id, kind: 'solver', observation: passing })).not.toThrow();
+});
+
+test('curator completion requires the registered learner, delivery and original queue deadline; judges cannot reuse calibration sessions', () => {
+  const dir = join(scratch(), 'curator-run');
+  sealRun(dir, 'harness-only', contracts, {}, BINDING, bindings());
+  const curator = design.curationCells[0]!;
+  const learn = curator.afterCell;
+  appendRun(dir, { ...event('learn-receipt'), rowId: learn, kind: 'receipt', status: 'accepted', requestKey: `${design.campaign}:${learn}`, pipelineId: 'learn' });
+  appendRun(dir, { ...event('learn-result'), rowId: learn, kind: 'solver', observation: good() });
+  const missingCurator = reportRun(dir).solvers.find(row => row.cell.id === learn)!;
+  expect(missingCurator.metrics).toMatchObject({ fullyAccepted: false, curatorResources: null });
+  expect(() => appendRun(dir, { ...event('curator-late'), rowId: curator.id, kind: 'curator', status: 'completed', packDigest: proof('pack'),
+    usage: { units: 1, activeSeconds: 1, queueSeconds: 1, sessions: 1 }, queuedAt: 1, deadlineAt: 5, completedAt: 6, deliveredArtifactDigest: digest(proof('final-tree')) })).toThrow('queue deadline');
+  const golds = Object.fromEntries(design.judgingCells.filter(j => j.kind === 'calibration').map(j => [j.gold!, j.gold === 'complete' ? [] : ['defect']]));
+  const judgeRun = join(scratch(), 'judge-run');
+  sealRun(judgeRun, 'harness-only', contracts, golds, BINDING, bindings());
+  const calibrationRows = design.judgingCells.filter(j => j.kind === 'calibration').slice(0, 2);
+  const first = calibrationRows[0]!;
+  appendRun(judgeRun, { ...event('calibration-one'), rowId: first.id, kind: 'judge', status: 'completed', calibration: {
+    gold: first.gold!, artifactDigest: proof(`gold:${first.gold}`), judge: first.judge as 'J1'|'J2', session: 'reused-session', rating: [3,3,3], detected: [], usage: { ...usage, sessions: 1 }, terminalReceipt: 'terminal', cleanupReceipt: 'cleanup',
+  } });
+  const second = calibrationRows[1]!;
+  expect(() => appendRun(judgeRun, { ...event('calibration-two'), rowId: second.id, kind: 'judge', status: 'completed', calibration: {
+    gold: second.gold!, artifactDigest: proof(`gold:${second.gold}`), judge: second.judge as 'J1'|'J2', session: 'reused-session', rating: [2,2,2], detected: ['defect'], usage: { ...usage, sessions: 1 }, terminalReceipt: 'terminal', cleanupReceipt: 'cleanup',
+  } })).toThrow('Judge session reused');
+});
+
 const contracts = Object.fromEntries(design.tasks.map(t => [t.id, {
   requirements: reqs, residuals, opportunities: [{ id: t.id, task: t.id, principle: 'boundary', applicability: 'applicable' as const, proof: proof(t.id), version: '1' }],
+  ...(t.id === 'E1-C1' ? { predecessors: ['E1-C0'] } : t.id === 'E1-C2' ? { predecessors: ['E1-C0', 'E1-C1'] } : {}),
 }]));
 const event = (id: string) => ({ id, rowId: solver, evidenceDigest: proof(id) });
 
 test('both held-out requests require the same immutable curator output', () => {
   const dir = join(scratch(), 'run');
-  sealRun(dir, 'harness-only', contracts);
   const heldOut = design.cells.filter(c => c.memory === 'Q1-MA-after-L2');
-  const curator = design.curationCells.find(c => c.memoryOutput === heldOut[0].memory)!;
-  const rowId = curator.id;
   const bytes = 'synthetic frozen pack';
   const memory = { id: heldOut[0].memory, bytes, digest: digest(bytes) };
-  expect(() => expandSealedRequest(dir, heldOut[0].id, { ...requestInputs, memory })).toThrow('ledger seal');
+  const inputs = { ...requestInputs, memory };
+  sealRun(dir, 'harness-only', contracts, {}, BINDING, bindings(Object.fromEntries(heldOut.map(c => [c.id, inputs]))));
+  expect(expandSealedRequest(dir, solver, requestInputs).clientRequestId).toBe(`${design.campaign}:${solver}`);
+  expect(() => expandSealedRequest(dir, solver, { ...requestInputs, brief: 'changed brief' })).toThrow('treatment inputs');
+  expect(() => expandSealedRequest(dir, solver, { ...requestInputs, baseRef: 'b'.repeat(40) })).toThrow('treatment inputs');
+  const curator = design.curationCells.find(c => c.memoryOutput === heldOut[0].memory)!;
+  const rowId = curator.id;
+  expect(() => expandSealedRequest(dir, heldOut[0].id, inputs)).toThrow('ledger seal');
   expect(() => appendRun(dir, { ...event('pack'), rowId, kind: 'curator', status: 'completed', packDigest: memory.digest }))
-    .toThrow('Missing completed learn artifact');
+    .toThrow('queue deadline');
   const requestKey = `${design.campaign}:${curator.afterCell}`;
   appendRun(dir, { ...event('learn-receipt'), rowId: curator.afterCell, kind: 'receipt', status: 'accepted', requestKey, pipelineId: 'learn-pipeline' });
   appendRun(dir, { ...event('learn-artifact'), rowId: curator.afterCell, kind: 'solver', observation: good() });
-  appendRun(dir, { ...event('pack'), rowId, kind: 'curator', status: 'completed', packDigest: memory.digest });
-  for (const cell of heldOut) expect(expandSealedRequest(dir, cell.id, { ...requestInputs, memory }).stages[1].prompt).toContain(bytes);
+  appendRun(dir, { ...event('pack'), rowId, kind: 'curator', status: 'completed', packDigest: memory.digest,
+    usage: { units: 20, activeSeconds: 10, queueSeconds: 2, sessions: 1 }, queuedAt: 10, deadlineAt: 100, completedAt: 20,
+    deliveredArtifactDigest: digest(proof('final-tree')) });
+  for (const cell of heldOut) expect(expandSealedRequest(dir, cell.id, inputs).stages[1].prompt).toContain(bytes);
   const replacement = { ...memory, bytes: 'fresh data', digest: digest('fresh data') };
-  expect(() => expandSealedRequest(dir, heldOut[1].id, { ...requestInputs, memory: replacement })).toThrow('ledger seal');
+  expect(() => expandSealedRequest(dir, heldOut[1].id, { ...inputs, memory: replacement })).toThrow('treatment inputs');
 });
 
 test('sealed run survives process restart, retains every failed row and allows durable delivery reconciliation only', () => {
   const root = scratch();
   const dir = join(root, 'run');
-  sealRun(dir, 'harness-only', contracts);
-  expect(() => sealRun(dir, 'harness-only', contracts)).toThrow();
+  sealRun(dir, 'harness-only', contracts, {}, BINDING, bindings());
+  expect(() => sealRun(dir, 'harness-only', contracts, {}, BINDING, bindings())).toThrow();
   const requestKey = expandRequest(solver, requestInputs).clientRequestId;
   appendRun(dir, { ...event('lost'), kind: 'receipt', status: 'unknown', requestKey });
   expect(() => appendRun(dir, { ...event('retry'), kind: 'receipt', status: 'accepted', requestKey, pipelineId: 'fixture' })).toThrow('reconciliation');
@@ -303,8 +456,8 @@ test('sealed run survives process restart, retains every failed row and allows d
   expect(report.endpoints.O.S).toMatchObject({ intended: 2, accepted: 0, unitsPerAccepted: null });
   expect(report.endpoints['M-held-out'].MR.primaryViolations).toMatchObject({ denominator: 4, unknown: 4, bounds: [0, 1] });
   expect(report.prefixes[2].prefixes[2].arms.EA.intended).toBe(3);
-  unlinkSync(join(dir, '000002.json'));
-  expect(() => reportRun(dir)).toThrow('Ledger sequence gap');
+  unlinkSync(join(dir, '000004.json'));
+  expect(() => reportRun(dir)).toThrow('Ledger checkpoint count mismatch');
 });
 
 test('common opportunities retain missing outcomes independently from own-correction recurrence', () => {

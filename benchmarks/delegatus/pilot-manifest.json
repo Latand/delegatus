@@ -2051,7 +2051,8 @@
         "noContaminationOrProtocolInvalidity",
         "calibrationPassed",
         "bothJudgmentsIndependentParseableAndCompleteCoverage",
-        "noUnresolvedDispute"
+        "noUnresolvedDispute",
+        "observedReviewFixFloor"
       ],
       "bothJudgesRequired": {
         "completeness": {
@@ -2304,6 +2305,24 @@
           "id": "refuse-noUnresolvedDispute",
           "allOtherRequiredFlags": true,
           "falseFlag": "noUnresolvedDispute",
+          "judgeRatings": [
+            [
+              3,
+              3,
+              3
+            ],
+            [
+              3,
+              3,
+              3
+            ]
+          ],
+          "fullyAccepted": false
+        },
+        {
+          "id": "refuse-observedReviewFixFloor",
+          "allOtherRequiredFlags": true,
+          "falseFlag": "observedReviewFixFloor",
           "judgeRatings": [
             [
               3,
