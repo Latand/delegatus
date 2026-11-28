@@ -301,22 +301,21 @@ test('calibration rejects red gold promotion and oracle controls require their i
 
 function preflights(id: string) {
   const block = [...design.ordering.orchestrationBlocks, ...design.ordering.productPairedBlocks].find(b => b.id === id)!;
+  const runtimeBindings = (roles: Record<string, string>) => Object.fromEntries(Object.keys(roles).map(role => [role,
+    { declared: 'M' as const, requested: { engine: design.runtimePool.M.engine, model: design.runtimePool.M.model, effort: design.runtimePool.M.effort },
+      resolved: { engine: design.runtimePool.M.engine, model: design.runtimePool.M.model, effort: design.runtimePool.M.effort } },
+  ]));
   return block.orderedCells.map((cellId, i) => {
-    const snap = (at: number, capacityBudgets: number) => ({
-      at, capacityBudgets, quotaStart: 0, quotaEnd: 18000, providerRevision: 'provider-1',
-      sharedInputs: proof('sealed-inputs'), roles: {
+    const snap = (at: number, capacityBudgets: number) => {
+      const roles = {
         review: proof('review-baseline'), solve: proof('solve-baseline'), fix: proof('fix-baseline'),
         ...(cellId.endsWith('-S-r1') ? {} : { planner: proof('planner-baseline') }),
-      },
-    });
-    const runtimeBindings = (roles: Record<string, string>) => Object.fromEntries(Object.keys(roles).map(role => [role,
-      { declared: 'M' as const, requested: { engine: design.runtimePool.M.engine, model: design.runtimePool.M.model, effort: design.runtimePool.M.effort },
-        resolved: { engine: design.runtimePool.M.engine, model: design.runtimePool.M.model, effort: design.runtimePool.M.effort } },
-    ]));
+      };
+      return { at, capacityBudgets, quotaStart: 0, quotaEnd: 18000, providerRevision: 'provider-1',
+        sharedInputs: proof('sealed-inputs'), roles, runtimeBindings: runtimeBindings(roles) };
+    };
     const before = snap(i * 1000, 4 - i);
     const after = snap(i * 1000 + 200, 3 - i);
-    before.runtimeBindings = runtimeBindings(before.roles);
-    after.runtimeBindings = runtimeBindings(after.roles);
     const checkpoint = Object.fromEntries(design.ordering.instrumentationCheckpoint.continueOnlyAfter.map(key => [key, proof(key)]));
     return { id: cellId, before, firstModelWork: i * 1000 + 100, after, checkpoint };
   });
@@ -365,8 +364,8 @@ test('E cumulative oracle rejects a later tree that regresses an earlier operati
   const c2 = design.cells.find(c => c.task === 'E1-C2' && c.arm === 'EA')!;
   const requestKey = `${design.campaign}:${c2.id}`;
   appendRun(dir, { ...event('e2-receipt'), rowId: c2.id, kind: 'receipt', status: 'accepted', requestKey, pipelineId: 'e2' });
-  const regressed = { ...good(), predecessorOracles: {
-    'E1-C0': { treeDigest: digest(proof('final-tree')), evidenceDigest: proof('c0-tests'), checks: { core: 'fail' } },
+  const regressed: Observation = { ...good(), predecessorOracles: {
+    'E1-C0': { treeDigest: digest(proof('final-tree')), evidenceDigest: proof('c0-tests'), checks: { core: 'fail' } as Checks },
     'E1-C1': { treeDigest: digest(proof('final-tree')), evidenceDigest: proof('c1-tests'), checks: pass },
   } };
   expect(() => appendRun(dir, { ...event('e2-result'), rowId: c2.id, kind: 'solver', observation: regressed })).toThrow('E predecessor oracle regressed');
