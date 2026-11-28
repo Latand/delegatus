@@ -184,6 +184,63 @@ test("a keyed SQLite mutation reads only the targeted row payload", () => {
   expect(store.snapshot().file.receipts["row-read-1000"]?.error).toBe("updated");
 });
 
+test("cwd protection lookup uses its index and reads only matching rows as unrelated registry rows grow", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-cwd-index-"));
+  const filename = path.join(directory, "agent-registry.json"), sqliteFilename = path.join(directory, "agent-registry.sqlite");
+  const seed = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename });
+  for (let index = 0; index < 400; index++) {
+    seed.upsert({ key: { engine: "codex", sessionId: `cwd-unrelated-${String(index).padStart(4, "0")}` },
+      artifactPath: path.join(directory, `conversation-${index}.jsonl`), cwd: `/unrelated/${index}`, accountId: null,
+      status: "live", host: null, claimEpoch: 1, claimOwner: null, pendingAction: null, structuredHost: null });
+  }
+  seed.upsert({ key: { engine: "codex", sessionId: "cwd-index-target" }, artifactPath: path.join(directory, "target.jsonl"),
+    cwd: "/worktree/target/child", accountId: null, status: "live", host: null, claimEpoch: 1, claimOwner: null, pendingAction: null, structuredHost: null });
+  const initialSnapshot = seed.snapshot();
+  seed.close();
+  const reads = new Map<string, number>();
+  const queries = new Map<string, { sql: string; bindings: readonly (string | null)[] }>();
+  const onWorktreeProtectionQuery = (collection: "entries" | "conversations", sql: string, bindings: readonly (string | null)[]) => {
+    if (bindings.length) queries.set(collection, { sql, bindings });
+  };
+  let store = new SqliteAgentRegistryStore(sqliteFilename, { initialSnapshot, normalize: normalizeRegistry,
+    onRowPayloadRead: (collection, count) => reads.set(collection, (reads.get(collection) ?? 0) + count), onWorktreeProtectionQuery });
+  const scratchNamespaces = ["/worktree/target", "/stage-config/target"];
+  try {
+    reads.clear();
+    const snapshot = store.worktreeProtectionSnapshot(scratchNamespaces);
+    expect(Object.values(snapshot.entries)).toHaveLength(1);
+    expect(reads.get("entries")).toBeLessThanOrEqual(1);
+    expect(reads.get("conversations") ?? 0).toBe(0);
+    await store.prepareWorktreeProtectionIndexes();
+    reads.clear();
+    expect(Object.values(store.worktreeProtectionSnapshot([]).entries)).toHaveLength(0);
+    expect(reads.get("entries") ?? 0).toBe(0);
+    store.close();
+    const existingDb = new Database(sqliteFilename, { readwrite: true });
+    existingDb.exec("DROP INDEX registry_entries_cwd; DROP INDEX registry_conversations_launch_cwd; "
+      + "DROP INDEX registry_archive_entries_cwd; DROP INDEX registry_archive_conversations_launch_cwd");
+    existingDb.close();
+    store = new SqliteAgentRegistryStore(sqliteFilename, { initialSnapshot, normalize: normalizeRegistry,
+      onRowPayloadRead: (collection, count) => reads.set(collection, (reads.get(collection) ?? 0) + count), onWorktreeProtectionQuery });
+    reads.clear();
+    expect(Object.values(store.worktreeProtectionSnapshot(scratchNamespaces).entries)).toHaveLength(1);
+    expect(reads.get("entries")).toBeLessThanOrEqual(1);
+    await store.prepareWorktreeProtectionIndexes();
+
+    const db = new Database(sqliteFilename, { readonly: true });
+    try {
+      const entryLookup = queries.get("entries")!;
+      const plan = db.query<{ detail: string }, (string | null)[]>(`EXPLAIN QUERY PLAN ${entryLookup.sql}`).all(...entryLookup.bindings);
+      expect(plan.some(row => row.detail.includes("registry_entries_cwd") && row.detail.includes("<expr>")), JSON.stringify(plan)).toBeTrue();
+      const conversationLookup = queries.get("conversations")!;
+      const conversationPlan = db.query<{ detail: string }, (string | null)[]>(`EXPLAIN QUERY PLAN ${conversationLookup.sql}`).all(...conversationLookup.bindings);
+      expect(conversationPlan.some(row => row.detail.includes("registry_conversations_launch_cwd") && row.detail.includes("<expr>")), JSON.stringify(conversationPlan)).toBeTrue();
+      expect(conversationPlan.some(row => row.detail.includes("registry_archive_conversations_launch_cwd") && row.detail.includes("<expr>")), JSON.stringify(conversationPlan)).toBeTrue();
+      expect(db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='index' AND name='registry_entries_cwd'").get()).toBeTruthy();
+    } finally { db.close(); }
+  } finally { store.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
 test("a compact spawn lookup reads only requested receipts and their alias chain", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-sqlite-spawn-lookup-"));
   const filename = path.join(directory, "agent-registry.json");

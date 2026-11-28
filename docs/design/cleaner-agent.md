@@ -22,10 +22,14 @@ three classes:
   retirement claim, identity checks and existing native remover. A lane's
   completion or a standalone host's proved termination establishes ownership.
   The owner's canonical project must match the pass at selection and at
-  dispatch. The minute worker continues its ordinary scratch expiry schedule.
+  dispatch. The minute worker continues its ordinary scratch expiry schedule,
+  and applies this same rule to every project when the ledger is over its cap
+  ([over-cap reclaim](attempt-temp-pressure.md#over-cap-reclaim)).
   The tree must have been idle for three hours. Open and parked lanes,
   checkout links, live process and container references, keep markers,
-  preservation records and unknown identities keep their data.
+  preservation records and unknown identities keep their data. A lane or live
+  conversation working inside a root, or in the scratch directory itself, holds
+  it; one working further up, such as in the home directory, does not.
 - The checkout install's release owner can remove a registered, verified
   release beyond the newest 15. Serving, rollback, in-flight, locked or
   dirty releases and revisions without a surviving Git ref are kept.
@@ -40,7 +44,10 @@ three classes:
   original audit and seat report can settle.
 
 The cleaner runs removal inside the leased retention workers and leaves
-unverifiable trees in place. A durable journal under `state/disk-cleaner`
+unverifiable trees in place. A candidate kept on purpose, such as one with a
+keep marker, a link inside its tree or a changed identity, is listed with that
+reason; the pass's error count covers failures, including a removal that was
+interrupted and cannot finish. A durable journal under `state/disk-cleaner`
 records path, allocated bytes, class and proof before removal, followed by
 its observed outcome. An interrupted intent is reported as uncertain. The
 project's disk card and seat wake include the free-space readings, reclaimed

@@ -53,6 +53,108 @@ test("compact evidence validates changed rows across raw writes, deletion, rollb
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test("pipeline upserts record only authority changes and identify the changed field", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "stage-authority-progress-"));
+  const filename = path.join(root, "state.sqlite");
+  const payload = JSON.stringify({
+    id: "pipeline-one", repoDir: "/repo", worktreeDir: "/repo/worktrees/one", branch: "main", state: "running",
+    delivery: { target: { repository: "owner/repo", branch: "refs/heads/main" }, active: true, ownerId: "owner", epoch: 1, publish: "enabled", disposition: "owner" },
+    progress: 0, retained: "x".repeat(20_000),
+  });
+  const seed = { collection: "pipelines", schemaVersion: 1, migrationId: "one", key: (row: { id: string }) => row.id,
+    loadRecords: () => [JSON.parse(payload)] };
+  try {
+    initializeStateCollections(filename, [seed]);
+    const db = new Database(filename);
+    try {
+      const witnesses = () => db.query<{ key: string; revision: number; lane_id: string; operation: string; fields: string | null }, []>(
+        "SELECT key,revision,lane_id,operation,fields FROM pipeline_stage_authority ORDER BY key",
+      ).all();
+      const clock = () => db.query<{ revision: number }, []>("SELECT revision FROM pipeline_authority_clock WHERE id=1").get()!.revision;
+      const beforeRows = witnesses();
+      const beforeClock = clock();
+      const laneKey = JSON.stringify(["lane", "pipeline-one"]);
+      expect(beforeRows.find(row => row.key === laneKey)).toMatchObject({ revision: beforeClock, operation: "insert" });
+      const upsert = db.query(`INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active)
+        VALUES ('pipelines','pipeline-one',?,0,2,1)
+        ON CONFLICT(collection,row_key) DO UPDATE SET value_json=excluded.value_json,row_revision=excluded.row_revision`);
+      const update = (field: string, value: unknown, from = payload) => {
+        const next = db.query<{ payload: string }, [string, string, string]>("SELECT json_set(?, ?, json(?)) AS payload")
+          .get(from, `$.${field}`, JSON.stringify(value))!.payload;
+        upsert.run(next);
+        return next;
+      };
+      let progress = update("progress", 1);
+      expect(clock()).toBe(beforeClock);
+      expect(witnesses()).toEqual(beforeRows);
+      for (const state of ["draft", "provisioning", "running", "needs_decision", "needs_review", "paused", "running"]) {
+        progress = update("state", state, progress);
+        expect(clock()).toBe(beforeClock);
+        expect(witnesses()).toEqual(beforeRows);
+      }
+      const expectChange = (field: string, value: unknown, from = payload) => {
+        const before = clock();
+        const next = update(field, value, from);
+        expect(clock()).toBe(before + 1);
+        expect(witnesses().find(row => row.key === laneKey)).toMatchObject({
+          revision: before + 1, lane_id: "pipeline-one", operation: "update", fields: field,
+        });
+        return next;
+      };
+      const completed = expectChange("state", "completed");
+      const terminalRows = witnesses(), terminalClock = clock();
+      const closed = update("state", "closed", completed);
+      expect(clock()).toBe(terminalClock);
+      expect(witnesses()).toEqual(terminalRows);
+      expectChange("state", "running", closed);
+      const invalid = expectChange("state", null);
+      expectChange("state", 1, invalid);
+
+      for (const [field, value] of [
+        ["id", "pipeline-two"], ["repoDir", "/other"], ["worktreeDir", "/repo/worktrees/two"], ["branch", "release"],
+        ["delivery.target", { repository: "other/repo", branch: "refs/heads/other" }],
+        ["delivery.active", false], ["delivery.ownerId", "another-owner"], ["delivery.epoch", 2],
+        ["delivery.publish", "disabled"], ["delivery.disposition", "comparison"],
+      ] as const) {
+        upsert.run(payload);
+        expectChange(field, value);
+      }
+      expect(witnesses().find(row => row.key === JSON.stringify(["branch-name", "release"]))).toMatchObject({ fields: "branch" });
+      const withoutDelivery = JSON.stringify({ id: "pipeline-one", repoDir: "/repo", worktreeDir: "/repo/worktrees/one", branch: "main", state: "running" });
+      upsert.run(withoutDelivery);
+      expectChange("delivery", null, withoutDelivery);
+      expect(db.query("SELECT count(*) AS count FROM pipeline_stage_authority WHERE key LIKE '%replaced%'").get()).toEqual({ count: 0 });
+    } finally { db.close(); }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("batched authority extraction retains escaped strings and numeric spelling", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "stage-authority-raw-values-"));
+  const filename = path.join(root, "state.sqlite");
+  const payload = JSON.stringify({ id: "pipeline-one", repoDir: "/repo", worktreeDir: "/repo/worktrees/one", branch: "main",
+    state: "running", delivery: { target: { repository: "owner/repo", branch: "refs/heads/main" }, active: true,
+      ownerId: "owner", epoch: 1, publish: "enabled" } });
+  const seed = { collection: "pipelines", schemaVersion: 1, migrationId: "one", key: (row: { id: string }) => row.id,
+    loadRecords: () => [JSON.parse(payload)] };
+  try {
+    initializeStateCollections(filename, [seed]);
+    const db = new Database(filename);
+    try {
+      const write = db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key='pipeline-one'");
+      const revision = () => db.query<{ revision: number }, []>("SELECT revision FROM pipeline_authority_clock WHERE id=1").get()!.revision;
+      let before = revision();
+      write.run(payload.replace('"branch":"main"', '"branch":"\\ud800"'));
+      expect(revision()).toBeGreaterThan(before);
+      before = revision();
+      write.run(payload.replace('"branch":"main"', '"branch":"\\ud801"'));
+      expect(revision()).toBeGreaterThan(before);
+      before = revision();
+      write.run(payload.replace('"epoch":1', '"epoch":1.0'));
+      expect(revision()).toBeGreaterThan(before);
+    } finally { db.close(); }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 /* Each startup admission asks for the revision two or three times. Opening
    the state database and checking the index schema cost about 16 ms each on a
    production copy; the schema check now runs once per schema version, and the

@@ -271,7 +271,7 @@ export class MemoryIndex {
     return result;
   }
 
-  async search(input: { query: string; project?: string; kind?: MemoryKind; limit?: number; maxBytes?: number }) {
+  async search(input: { query: string; project?: string; reader?: "legatus"; kind?: MemoryKind; limit?: number; maxBytes?: number }) {
     const terms = input.query.match(/[\p{L}\p{N}_]+/gu)?.slice(0, 16) ?? [];
     if (!terms.length) return { items: [], truncated: false };
     const db = this.database();
@@ -285,7 +285,7 @@ export class MemoryIndex {
     `).all(terms.map(term => `"${term}"`).join(" AND "), scope, scope, input.kind ?? null, input.kind ?? null, Math.max(1, Math.min(20, input.limit ?? 10)));
     const limit = Math.max(1, Math.min(20, input.limit ?? 10));
     const roleItems = !input.kind || input.kind === "instruction"
-      ? searchRoleRules({ terms: terms.map(term => term.toLowerCase()), project: input.project, limit: limit + 1 }) : [];
+      ? searchRoleRules({ terms: terms.map(term => term.toLowerCase()), project: input.project, reader: input.reader, limit: limit + 1 }) : [];
     const combined = [...roleItems, ...items];
     const page = { items: [] as Array<Omit<MemoryItem, "body" | "flags"> & { flags: string[] }>, truncated: combined.length > limit };
     for (const item of combined.slice(0, limit)) {
@@ -303,7 +303,14 @@ export class MemoryIndex {
     return page;
   }
 
-  async open(id: string, requestId: string, conversationId: string | null, project?: string, maxBytes = MEMORY_RESPONSE_BYTES) {
+  openedLegatusRule(id: string, conversationId: string, hash: string): boolean {
+    if (!fsSync.existsSync(statePath("memory-index.sqlite"))) return false;
+    return !!this.database().query(`SELECT 1 FROM memory_offers
+      WHERE memory_id=? AND conversation_id=? AND channel='search' AND outcome='opened'
+        AND request_id GLOB ? LIMIT 1`).get(id, conversationId, `legatus:${hash}:*`);
+  }
+
+  async open(id: string, requestId: string, conversationId: string | null, project?: string, maxBytes = MEMORY_RESPONSE_BYTES, reader?: "legatus") {
     const db = this.database();
     this.normalizeProjects(db);
     const scope = project ? JSON.stringify([...this.scopeKeys(project)]) : null;
@@ -318,17 +325,21 @@ export class MemoryIndex {
       resolvedId = resolution.value;
     }
     const item = /^r_[a-f0-9]{16}$/i.test(id)
-      ? searchRoleRules({ id: id.toLowerCase(), project, limit: 1 })[0]
+      ? searchRoleRules({ id: id.toLowerCase(), project, reader, limit: 1 })[0]
       : db.query<MemoryItem, [string, string | null, string | null]>("SELECT * FROM memory_entries WHERE id = ? AND (? IS NULL OR project IN (SELECT value FROM json_each(?)) OR scope = 'global')").get(resolvedId, scope, scope);
     if (!item) return null;
     resolvedId = item.id;
-    const ledgerKey = crypto.createHash("sha256").update(`${conversationId ?? ""}\0${requestId}`).digest("hex");
+    const key = crypto.createHash("sha256").update(`${conversationId ?? ""}\0${requestId}`).digest("hex");
+    const ledgerKey = reader === "legatus" && item.sourceKind === "role_rule"
+      ? `legatus:${crypto.createHash("sha256").update(item.body).digest("hex")}:${key}`
+      : key;
     const recordOpened = () => {
       const at = new Date().toISOString();
       db.query("INSERT OR IGNORE INTO memory_offers VALUES (?, ?, ?, ?, 'search', NULL, 'opened', ?)").run(resolvedId, ledgerKey, conversationId, at, at);
       db.query("UPDATE memory_offers SET outcome = 'opened', outcome_at = ? WHERE memory_id = ? AND conversation_id = ? AND channel = 'inject' AND outcome IS NULL").run(at, resolvedId, conversationId);
     };
     const opened = { ...item, sourcePath: displayPath(item.sourcePath), flags: parseSqliteJson(item.flags, this.database()) as string[] };
+    const citationRequiresWholeBody = reader === "legatus" && item.sourceKind === "role_rule";
     const budget = Math.min(MEMORY_RESPONSE_BYTES, maxBytes);
     if (Buffer.byteLength(JSON.stringify({ item: opened })) <= budget) {
       recordOpened();
@@ -358,7 +369,9 @@ export class MemoryIndex {
       }
       truncated[field] = best;
       if (Buffer.byteLength(JSON.stringify({ item: truncated })) <= budget) {
-        recordOpened();
+        // A short response can help retrieval, but it cannot authorize a
+        // citation to the omitted wording of an active role rule.
+        if (!citationRequiresWholeBody || truncated.body === opened.body) recordOpened();
         return truncated;
       }
     }

@@ -655,6 +655,8 @@ export function productionDeps(env: Readonly<Record<string, string | undefined>>
       dispatchVersion: () => createHash("sha256")
         .update(JSON.stringify([...registryAdmissionEvidence(agentRegistry().readOnlySnapshot()), flowPipelineController().idle(), seatTickIdle()]))
         .digest("hex"),
+      launchSetupBlocker: () => agentRegistry().launchSetupBlocker(),
+      reconcileLaunchSetup: (deadlineAt) => agentRegistry().reconcileFailedLaunchSetup(deadlineAt),
       runtimeSnapshot: async () => {
         const client = runtimeHostClient();
         if (!client) throw new Error("runtime host is unavailable");

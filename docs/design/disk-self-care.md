@@ -641,8 +641,10 @@ lock:
   canonical-path admission (a real directory directly under the real scratch
   root, never reached through a link, never under backups or evidence), and no
   `.delegatus-keep` marker, nested Git checkout, linked report picture, recorded
-  custody, mount or open lane holds it. The last proofs are repeated
-  synchronously before the rename.
+  custody, mount or open lane holds it. A lane or live conversation holds a root
+  when it works at the root, inside it or in the scratch directory itself; one
+  working further up, such as in the home directory, holds none. The last proofs
+  are repeated synchronously before the rename.
 - **On a busy host the proof stays within the tick.** The pass takes one
   process scan, renewed after a second before a removal, rather than two per
   root. It reads the container inventory once; a container whose mount is an

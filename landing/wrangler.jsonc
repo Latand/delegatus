@@ -1,22 +1,22 @@
 {
   "name": "delegatus-landing",
-  "main": "worker.ts",
+  "main": "entry.ts",
   "compatibility_date": "2026-09-01",
   "assets": {
     "directory": "./site/dist",
     "binding": "ASSETS",
     "not_found_handling": "404-page",
-    "run_worker_first": ["/api/*", "/stats", "/stats/"]
+    "run_worker_first": ["/api/*", "/stats", "/stats/*"]
   },
   "vars": {
-    "STATS_ACCESS_TEAM_DOMAIN": "broad-mode-e974.cloudflareaccess.com",
-    "STATS_ACCESS_AUD": "ce8974c131a01a375dc143cca486f02e9394c66e86195bce0eca6770bfd7a657"
+    "STATS_ORIGIN": "https://delegatus.org",
+    "STATS_RP_ID": "delegatus.org"
   },
-  "analytics_engine_datasets": [
-    { "binding": "SITE_EVENTS", "dataset": "site_events" },
-    { "binding": "INSTALLS", "dataset": "installs" },
-    { "binding": "SWARM_USAGE", "dataset": "swarm_usage" }
-  ],
+  "durable_objects": {
+    "bindings": [{ "name": "STATS", "class_name": "StatsStore" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["StatsStore"] }],
+  "version_metadata": { "binding": "STATS_VERSION" },
   "routes": [
     { "pattern": "delegatus.org", "custom_domain": true },
     { "pattern": "www.delegatus.org", "custom_domain": true }

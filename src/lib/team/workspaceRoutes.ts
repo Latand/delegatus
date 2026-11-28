@@ -76,6 +76,8 @@ export const WORKSPACE_ROUTES = {
   "/api/keys/[id]/reveal": "owner",
   "/api/keys/export": "owner",
   "/api/keys/import": "owner",
+  "/api/secret-requests/[id]/value": "owner",
+  "/api/secret-requests/[id]/decline": "owner",
   "/api/lifecycle/reaper": "owner",
   "/api/limits": "owner",
   "/api/limits/history": "owner",

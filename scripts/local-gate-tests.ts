@@ -2,7 +2,7 @@ import { hasActiveGateSandbox, recordGateSandbox, releaseGateSandbox } from "./g
 import { gateTaskDiagnostics } from "./gate-tasks";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, realpathSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { decodeXML } from "entities";
 import { gateInputSnapshot, gateTemporaryRoot, ISOLATED_DIRECTORY_KEYS, isolatedEnvironment, SUPERVISOR_MARGIN_MS } from "./local-gate";
@@ -74,11 +74,15 @@ export function comparisonPhaseBudgetMs(fileCount: number): number {
   return Math.min(COMPARISON_BUDGET_MS, MIN_PHASE_BUDGET_MS + Math.ceil(Math.max(0, fileCount - 30) / 4) * 60_000);
 }
 
-const nestedComparisonFile = (file: string): boolean =>
-  /^scripts\/(?:local-gate(?:-tests)?(?:\.|$)|gate-slot\.|owned-runner\.|compiler-admission\.|check-worker-broker\.|privacy-)/.test(file.split(path.sep).join("/"));
+const nestedComparisonFile = (file: string): boolean => {
+  const relative = file.split(path.sep).join("/");
+  return /^scripts\/(?:local-gate(?:-tests)?(?:\.|$)|gate-slot\.|owned-runner\.|compiler-admission\.|check-worker-broker\.|merge-batch\.|privacy-)/.test(relative)
+    || /^src\/lib\/pipelines\/(?:git|parkedPublication|publicationRecovery|stageAttemptPush|stageCommitRepair|stagePublicationRepair)\./.test(relative)
+    || relative === "src/lib/git/agentHistoryGuard.test.ts";
+};
 
-/** Multiple gate fixtures can exhaust a service's task limit. Limit that
- * class while letting ordinary source tests use the remaining file workers. */
+/** Limit fixtures that run their own test runners or repeatedly launch Git
+ * and its hooks. Ordinary files can still use the remaining workers. */
 export function comparisonFileWorkers(files: readonly string[], ceiling: number, sharedPortable = false): number {
   const nested = files.filter(nestedComparisonFile).length;
   if (nested && sharedPortable) return 1;
@@ -525,7 +529,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     const filter = filtered ? testNameFilter(sites) : [];
     const selection = filtered ? selectionFor(sites) : "full";
     selections[file] = selection;
-    const privateRoot = mkdtempSync(path.join(sandbox, "test-"));
+    const privateRoot = recordGateSandbox(mkdtempSync(path.join(sandbox, "test-")));
     const env = isolatedEnvironment(privateRoot, inherited);
     // HOME is private before this Bun process starts. The preload verifies it
     // against os.homedir(); binding it avoids a second owned service with an
@@ -617,7 +621,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
       // A caller's TMPDIR may sit inside its checkout. Normalize the report
       // sandbox before replacing that checkout prefix on only the head side.
       failures.push({ file, suite: "", name: `${RUNNER_ERROR}${message.replace(privateTestRoot, "<sandbox>").split(root).join("<checkout>")}`, kind: "error", selection });
-    } finally { rmSync(privateRoot, { recursive: true, force: true }); }
+    } finally { releaseGateSandbox(privateRoot); }
     const elapsedMs = performance.now() - fileStarted;
     const hint = label === "head" && elapsedMs > budgets.fileMs / 2
       ? `; over half the ${budgets.fileMs / 1000} s file budget; split it` : "";

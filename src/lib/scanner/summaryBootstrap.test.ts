@@ -118,3 +118,13 @@ test("the writer refuses unhealthy or non-summary bodies and mismatched ETags", 
   }
   await expect(writeSummaryBootstrap(root, saved.body, '"' + "0".repeat(40) + '"')).rejects.toThrow();
 });
+
+test("an owner board cannot replace the shared bootstrap with secret request notices", async () => {
+  const root = await directory();
+  const saved = summary();
+  await writeSummaryBootstrap(root, saved.body, saved.etag);
+  const body = JSON.stringify({ ...JSON.parse(saved.body), secretRequestNotices: [{ id: "fixture", project: "project-a" }] });
+  const etag = `"${createHash("sha1").update(body).digest("hex")}"`;
+  await expect(writeSummaryBootstrap(root, body, etag)).rejects.toThrow();
+  expect((await readSummaryBootstrap(root))?.etag).toBe(saved.etag);
+});

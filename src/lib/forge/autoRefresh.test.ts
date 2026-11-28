@@ -9,12 +9,15 @@ import type { RefreshOptions } from "./autoRefresh";
 import type { BaseUpdatePush, BaseUpdateRequest } from "./baseUpdate";
 import { createHash } from "node:crypto";
 import type { MergeOnReviewSetting } from "@/lib/projects/settings";
+import { COMMIT_ACCOUNT_REFUSAL } from "@/lib/git/forgeCommitAccount";
+import { seedForgeCommitAccount } from "@/test-helpers/forgeCommitAccount";
 
 /* The merge runner (#2187 §4.3-§4.4) against a fake `gh` and clock: invented
    repositories, heads and checks, no network. The stores resolve their state
    directory at import, so a sandbox is pinned before the first store read. */
 const sandbox = process.env.REFRESH_LIFECYCLE_STATE ?? fs.mkdtempSync(path.join(os.tmpdir(), "llv-auto-refresh-"));
 fs.mkdirSync(sandbox, { recursive: true });
+seedForgeCommitAccount(sandbox);
 const previousStateDir = process.env.LLV_STATE_DIR;
 process.env.LLV_STATE_DIR = sandbox;
 
@@ -1236,13 +1239,15 @@ function behindQueue(count: number, options: { strict?: boolean; refreshConcurre
   if (options.refreshConcurrency) Object.assign(h.ports, { refreshConcurrency: options.refreshConcurrency });
   const plans: BaseUpdateRequest[] = [];
   const pushes: Array<BaseUpdatePush & { mergesBefore: number }> = [];
-  const git = { conflict: false, pushFailure: null as string | null, landed: (pr: PullRequest) => { pr.checks = [green("ci")]; }, moveHead: null as string | null,
+  const git = { conflict: false, identityResolved: true, pushFailure: null as string | null,
+    landed: (pr: PullRequest) => { pr.checks = [green("ci")]; }, moveHead: null as string | null,
     planned: null as (() => void) | null };
   Object.assign(h.ports, { updateBase: {
     plan: async (request: BaseUpdateRequest) => {
       plans.push(structuredClone(request));
       git.planned?.();
       if (git.conflict) return { kind: "conflict" as const };
+      if (!git.identityResolved) return { kind: "refused" as const, reason: COMMIT_ACCOUNT_REFUSAL };
       return { kind: "commit" as const, commit: createHash("sha1").update(`${request.head}:${request.base}:${request.at}`).digest("hex") };
     },
     push: async (request: BaseUpdatePush) => {
@@ -1256,6 +1261,15 @@ function behindQueue(count: number, options: { strict?: boolean; refreshConcurre
   } });
   return { h, plans, pushes, git };
 }
+
+test("an unresolved GitHub account blocks a base update without reserving or pushing a commit", async () => {
+  const { h, git, plans, pushes } = behindQueue(1);
+  git.identityResolved = false;
+  await h.sweep();
+  expect(plans).toHaveLength(1);
+  expect(h.merge("queued-0")).toMatchObject({ state: "blocked", reason: COMMIT_ACCOUNT_REFUSAL, updates: [] });
+  expect([pushes.length, h.creates.length, h.merges().length]).toEqual([0, 0, 0]);
+});
 
 function unknownQueue(count = 1, options: { resume?: UpdateSnapshot; current?: boolean; slots?: number } = {}) {
   const queue = behindQueue(count, { strict: false, resume: options.resume, refreshConcurrency: options.slots,
@@ -1631,19 +1645,28 @@ test.each([
   expect([plans.length, pushes.length, h.creates.length, h.merges().length]).toEqual([0, 0, 1, 0]);
 });
 
-for (const landed of [false, true]) {
-  const name = `outdated red uncertain push recovers the same tuple after restart, landed=${landed}`;
+for (const outcome of ["unlanded", "landed", "unresolved account"] as const) {
+  const name = outcome === "unresolved account" ? "outdated red uncertain push blocks when account resolution is lost after restart"
+    : `outdated red uncertain push recovers the same tuple after restart, landed=${outcome === "landed"}`;
   test(name, async () => {
     const fixture = process.env.BASE_UPDATE_QUEUE_FIXTURE;
     if (fixture) {
       const saved = JSON.parse(fs.readFileSync(fixture, "utf8")) as UpdateSnapshot;
-      const { h, plans, pushes } = behindQueue(1, { resume: saved, mergeBase: "0".repeat(40) });
+      const { h, git, plans, pushes } = behindQueue(1, { resume: saved, mergeBase: "0".repeat(40) });
       const expected = h.merge("queued-0")!.updates[0]!.commit!;
       h.advance(MERGE_POLL_MS);
+      if (outcome === "unresolved account") {
+        git.identityResolved = false;
+        await h.run(10 * MERGE_POLL_MS, () => h.merge("queued-0")?.state === "blocked");
+        expect(h.merge("queued-0")).toMatchObject({ state: "blocked", reason: COMMIT_ACCOUNT_REFUSAL, updates: [] });
+        expect(plans.map(plan => plan.at)).toEqual([iso(T0)]);
+        expect([pushes.length, h.creates.length, h.merges().length]).toEqual([0, 0, 0]);
+        return;
+      }
       await h.run(10 * MERGE_POLL_MS, () => h.merges().length === 1);
       expect(h.merge("queued-0")!.updates).toHaveLength(1);
-      expect(plans.map(plan => plan.at)).toEqual(landed ? [] : [iso(T0)]);
-      expect(pushes.map(push => push.commit)).toEqual(landed ? [] : [expected]);
+      expect(plans.map(plan => plan.at)).toEqual(outcome === "landed" ? [] : [iso(T0)]);
+      expect(pushes.map(push => push.commit)).toEqual(outcome === "landed" ? [] : [expected]);
       expect(h.merges().map(args => args.at(-1))).toEqual([expected]);
       expect(h.creates).toEqual([]);
       return;
@@ -1653,7 +1676,7 @@ for (const landed of [false, true]) {
     await h.sweep();
     expect(h.merge("queued-0")).toMatchObject({ state: "updating", readFailures: 1 });
     expect(pushes).toHaveLength(1);
-    if (landed) Object.assign(h.prs.get(11)!, { head: pushes[0]!.commit, checks: [green("ci")], mergeStateStatus: "CLEAN" });
+    if (outcome === "landed") Object.assign(h.prs.get(11)!, { head: pushes[0]!.commit, checks: [green("ci")], mergeStateStatus: "CLEAN" });
     await restartBehindQueue(name, h);
   });
 }

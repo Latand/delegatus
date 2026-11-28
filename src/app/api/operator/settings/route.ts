@@ -7,6 +7,7 @@ import {
   updateOperatorSettings,
   type OperatorSettings,
 } from "@/lib/operator/settings";
+import { forgeCommitAccountStatus, resolveForgeCommitAccount, type CommitAccountStatus } from "@/lib/git/forgeCommitAccount";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 
 export const runtime = "nodejs";
@@ -17,10 +18,14 @@ const headers = { "Cache-Control": "no-store" };
     (docs/design/orchestrator-reports.md §4.2). */
 export interface OperatorSettingsResponse extends OperatorSettings {
   ok: true;
+  commitAccount: CommitAccountStatus;
 }
 
-export async function GET(): Promise<NextResponse> {
-  return NextResponse.json({ ok: true, ...readOperatorSettings() } satisfies OperatorSettingsResponse, { headers });
+export async function GET(request: Request): Promise<NextResponse> {
+  if (new URL(request.url).searchParams.get("refreshCommitAccount") === "1") {
+    await resolveForgeCommitAccount({ forceRefresh: true });
+  }
+  return NextResponse.json({ ok: true, ...readOperatorSettings(), commitAccount: forgeCommitAccountStatus() } satisfies OperatorSettingsResponse, { headers });
 }
 
 /** The client's write: the toggle sends `{ locale, source: "chosen" }`, a
@@ -40,21 +45,24 @@ export async function PUT(request: NextRequest): Promise<NextResponse> {
   const locale = record?.locale;
   const source = record?.source;
   const timeZone = record?.timeZone;
+  const commitAttribution = record?.commitAttribution;
   const shapeOk = !!record
     && (locale === undefined || isOperatorLocale(locale))
     && (source === undefined || source === "chosen" || source === "detected")
     && (timeZone === undefined || isTimeZone(timeZone))
-    && (locale !== undefined || timeZone !== undefined);
+    && (commitAttribution === undefined || typeof commitAttribution === "boolean")
+    && (locale !== undefined || timeZone !== undefined || commitAttribution !== undefined);
   if (!shapeOk) {
-    return NextResponse.json({ error: "INVALID_REQUEST", message: "locale (en or uk) with an optional source (chosen or detected), or a timeZone, is required" }, { status: 400, headers });
+    return NextResponse.json({ error: "INVALID_REQUEST", message: "locale (en or uk) with an optional source (chosen or detected), a timeZone, or a boolean commitAttribution is required" }, { status: 400, headers });
   }
   const updated = updateOperatorSettings({
     ...(isOperatorLocale(locale) ? { locale } : {}),
     ...(source === "chosen" || source === "detected" ? { source } : {}),
     ...(typeof timeZone === "string" ? { timeZone } : {}),
+    ...(typeof commitAttribution === "boolean" ? { commitAttribution } : {}),
   });
   if (!updated) {
     return NextResponse.json({ error: "INTERNAL_ERROR", message: "could not persist the setting" }, { status: 500, headers });
   }
-  return NextResponse.json({ ok: true, ...updated } satisfies OperatorSettingsResponse, { headers });
+  return NextResponse.json({ ok: true, ...updated, commitAccount: forgeCommitAccountStatus() } satisfies OperatorSettingsResponse, { headers });
 }

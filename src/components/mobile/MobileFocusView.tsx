@@ -1,5 +1,6 @@
 "use client";
 
+import { GLOBAL_RUNTIME_GATES } from "@/hooks/runtimeSubscriptions";
 import { ScrollText } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -10,7 +11,7 @@ import { useAccountName } from "@/hooks/useEngineAccounts";
 import { useBoardState } from "@/hooks/useBoardState";
 import { useKeyboardInset } from "@/hooks/useComposer";
 import { useNowSeconds } from "@/hooks/useNowSeconds";
-import { useRuntimeBusState, useRuntimeSessionForConversation } from "@/hooks/useRuntime";
+import { useRuntimeSelector, useRuntimeSessionForConversation } from "@/hooks/useRuntime";
 import { selectionInOrder, viewBus } from "@/hooks/viewPresenceBus";
 import { projectDisplayName } from "@/lib/displayNames";
 import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
@@ -220,8 +221,7 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
   const navState = useMobileNav();
   /* Offline is screen-level (§4.2): every conversation shows the last state
      received and the bar's meta line says so. */
-  const runtime = useRuntimeBusState();
-  const offline = runtime.enabled && runtime.connection === "offline";
+  const offline = useRuntimeSelector(state => state.enabled && state.connection === "offline", false, Object.is, true, GLOBAL_RUNTIME_GATES);
   const favoritesApi = useFavorites();
   /* The pinned pane, tagged with the project it belongs to. A project switch
      re-reads that project's remembered focus DURING the render that changes

@@ -13,7 +13,7 @@
    for R6b, this Viewer's own identity and the session keys it holds a host for. */
 import { identityAlive, type LivenessProbe } from "@/lib/agent/accountLiveness";
 import type { AgentRegistryEntry, RegistryFile, SpawnReceipt } from "@/lib/agent/registry";
-import { resolveConversationAlias, structuredClaimIdentity } from "@/lib/agent/registry";
+import { launchSetupIdentities, resolveConversationAlias, structuredClaimIdentity } from "@/lib/agent/registry";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
 import { registryRowProjection } from "@/lib/agent/sqliteRegistryStore";
 import type { Flow, Round } from "@/lib/flows/types";
@@ -172,12 +172,12 @@ const entryPath = {
 };
 
 const receiptOwnership = {
-  id: "owner-census.receipt.v1",
+  id: "owner-census.receipt.v2",
   collection: "receipts" as const,
   project: (row: SpawnReceipt) => ({
     launchId: row.launchId, conversationId: row.conversationId, engine: row.engine,
     key: row.key, artifactPath: row.artifactPath, cwd: row.cwd, state: row.state,
-    admissionOwner: row.admissionOwner, queuedPinnedSpawn: Boolean(row.queuedPinnedSpawn),
+    setupIdentities: launchSetupIdentities(row), queuedPinnedSpawn: Boolean(row.queuedPinnedSpawn),
     agent: row.verifiedHost?.agent, panePid: row.pane?.panePid,
   }),
 };
@@ -304,10 +304,10 @@ function collectOwners(registry: CensusRegistry, flows: readonly Flow[], probe: 
       binding: canonical(registry, receipt.conversationId), engine: receipt.engine, cwd: receipt.cwd,
     };
     const kind = "structured" as const;
-    if (open && usable(receipt.admissionOwner)) {
-      const admission = receipt.admissionOwner;
+    if (receipt.setupIdentities.length) {
+      const admission = receipt.setupIdentities[0]!;
       owners.push({ ...base, id: `admission:${receipt.launchId}:${admission.pid}:${admission.startIdentity}`, role: "setup", kind,
-        pid: admission.pid, identities: [admission] });
+        pid: admission.pid, identities: receipt.setupIdentities });
     } else if (open && !receipt.queuedPinnedSpawn) {
       /* A launch queued for account capacity has released its admission and
          started nothing, so it holds nothing (R2). */

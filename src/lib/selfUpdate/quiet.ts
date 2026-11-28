@@ -36,6 +36,8 @@ function stageNames(pipeline: Pipeline, stageId: string): Pick<BlockingStage, "p
 }
 export interface QuietBlockers {
   busyReason?: BusyReason | null;
+  /** Setup owners must settle before restart, including an explicit deploy-now. */
+  launchSetup?: true;
   turnList?: BlockingTurn[];
   stageList?: BlockingStage[];
   /** Journal rows that claim an open turn while every owner they name is released. */
@@ -154,6 +156,9 @@ export interface OwnerCensusReading {
 export type OwnerRead = <T>(reference: OwnerReference, read: () => Promise<T>) => Promise<T>;
 
 export interface QuietPorts {
+  /** Fresh registry custody for an operator update about to stop the Viewer. */
+  launchSetupBlocker?(): string | null;
+  reconcileLaunchSetup?(deadlineAt: number): Promise<void>;
   /** Admission identities, excluding completion and controller activity. */
   admissionStarts?(): readonly string[];
   /** Synchronous durable admission/start evidence; changing it invalidates an awaited probe. */
@@ -479,6 +484,7 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
       if (verdict === "released") proven.delete(owner.id);
       else if (verdict === "holds" && owner.role === "host" && !proven.has(owner.id)) proven.set(owner.id, reason);
       if (verdict === "released") continue;
+      if (owner.role === "setup") blockers.launchSetup = true;
       const kept = reason === "turn-unread" ? proven.get(owner.id) : undefined;
       if (kept) {
         holding.set(owner.id, { item: owner, reason: kept, unresolved: false });
@@ -555,10 +561,11 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
     if (controller && !blockers.busyReason) { blockers.busy = true; blockers.busyReason = controller; }
     const latest = ports.presence(now).filter((session) => now - session.lastInteractionAt < blockers.operatorWindowMs!).sort((a, b) => b.lastInteractionAt - a.lastInteractionAt)[0];
     blockers.operatorActiveAt = latest ? new Date(latest.lastInteractionAt).toISOString() : null;
+    if (!blockers.launchSetup && ports.launchSetupBlocker?.()) blockers.launchSetup = true;
   } catch (error) {
     blockers.unreadable = error instanceof Error ? error.message : String(error);
   }
-  return { quiet: !blockers.turns && !blockers.stages && !(turnPolicy === "live" && blockers.unresolvedBlocking) && !blockers.operatorActiveAt && !blockers.busy && !blockers.unreadable && blockers.memoryMb === null, blockers, work };
+  return { quiet: !blockers.turns && !blockers.stages && !blockers.launchSetup && !(turnPolicy === "live" && blockers.unresolvedBlocking) && !blockers.operatorActiveAt && !blockers.busy && !blockers.unreadable && blockers.memoryMb === null, blockers, work };
 }
 
 /**
@@ -574,6 +581,7 @@ export function registryAdmissionEvidence(registry: RegistryFile): [records: Non
   const receiptOwners = Object.values(registry.receipts).map((receipt) => [
     receipt.launchId, receipt.conversationId, receipt.state, receipt.artifactPath,
     receipt.admissionOwner, receipt.verifiedHost?.agent, receipt.pane?.panePid,
+    receipt.hostSetup,
   ]).sort((left, right) => String(left[0]).localeCompare(String(right[0])));
   return [records, receiptOwners];
 }

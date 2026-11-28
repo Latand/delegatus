@@ -8,7 +8,7 @@ import { Database } from "bun:sqlite";
 import { buildPipeline, savePipelines, findPipelineRecord, loadPipelines, pipelineIdentity } from "@/lib/pipelines/store";
 import type { PipelineStageAttempt } from "@/lib/pipelines/types";
 import { materializeOwnedStructuredHostAccess, materializeStructuredHostAccess, tempOwnerForConversation } from "./structuredSpawn";
-import { AgentRegistry } from "@/lib/agent/registry";
+import { AgentRegistry, closeAgentRegistryForTests } from "@/lib/agent/registry";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
 import { withAgentConfigSandbox } from "./agentConfigSandbox";
@@ -635,7 +635,9 @@ function isolateState(root: string): void {
   process.env.LLV_STATE_DIR = path.join(root, "state");
   stateRestores.push(() => { if (prior === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = prior; });
 }
-afterEach(() => { removeKeepMarkers(); for (const restore of stateRestores.splice(0).reverse()) restore(); savePipelines([]); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
+// The shared registry handle belongs to one test's state directory: a tick that
+// reclaims over the cap opens it, and the next test must open its own.
+afterEach(() => { removeKeepMarkers(); closeAgentRegistryForTests(); for (const restore of stateRestores.splice(0).reverse()) restore(); savePipelines([]); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 const modeledBytesPerHour = (removedBytes: number, elapsedMs: number) => removedBytes * 3600000 / (60000 + elapsedMs);
 
 test("hourly reclaim model includes sweep duration before the scheduler's minute wait", () => {

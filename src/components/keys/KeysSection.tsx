@@ -7,6 +7,7 @@ import { copyText } from "@/components/feed/CopyButton";
 import { OpenAiServicesList, type ServiceFeature } from "@/components/keys/OpenAiServices";
 import { CHATGPT_SETTINGS_URL, PLAN_USAGE_URL, type PlanStatus } from "@/lib/chatgptPlan/public";
 import { KEYS_CHANGED_EVENT } from "@/components/keys/openKeys";
+import { ValueField } from "@/components/keys/ValueField";
 import { useCoarsePointer } from "@/hooks/useCoarsePointer";
 import { useLocale } from "@/lib/i18n";
 import {
@@ -340,7 +341,7 @@ function RowMenu({ anchor, items, onClose, full }: { anchor: HTMLElement; items:
  * never filled from a saved key. `onSave` answers the refusal to show while
  * the field stays open, or null once the row has taken the save over.
  */
-function ValueField({ entry, size, initialError, onSave, onCancel }: {
+function KeyValueEditor({ entry, size, initialError, onSave, onCancel }: {
   entry: KeyEntry; size: Size; initialError: WriteFailure | null;
   onSave: (value: string) => Promise<WriteFailure | null>; onCancel: () => void;
 }) {
@@ -367,8 +368,8 @@ function ValueField({ entry, size, initialError, onSave, onCancel }: {
     <div data-keys-field={entry.id} className="flex w-full flex-col gap-1">
       {/* In the 232 px panel the field takes the whole line and its buttons go under it. */}
       <form className={`flex w-full gap-1 ${size === "menu" ? "flex-wrap items-center" : ""}`} onSubmit={(event) => { event.preventDefault(); void save(); }}>
-        <input ref={input} type="password" autoComplete="off" spellCheck={false} maxLength={4096} aria-label={t("keys.fieldAria", { name })} disabled={busy}
-          placeholder={placeholder} data-1p-ignore="" data-lpignore="true"
+        <ValueField ref={input} maxLength={4096} aria-label={t("keys.fieldAria", { name })} disabled={busy}
+          placeholder={placeholder}
           onChange={(event) => { setHas(Boolean(event.target.value.trim())); setError(null); }}
           onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); onCancel(); } }}
           className={`${control} min-w-0 flex-1 ${size === "menu" ? "basis-full" : ""} rounded-control border bg-canvas px-2 font-mono text-primary placeholder:text-muted ${FOCUS} ${error ? "border-danger" : "border-border"}`} />
@@ -573,7 +574,7 @@ function KeyRow({ entry, size, staging, owner, focus, focusSeq, optimism }: { en
           <span className={`text-muted ${sheet ? "text-label" : "text-[10.5px]"}`}>{t("keys.revealHides")}</span>
         </div>
       ) : null}
-      {actions.editing ? <ValueField entry={entry} size={size} initialError={actions.editError} onSave={actions.save} onCancel={actions.cancelEdit} /> : null}
+      {actions.editing ? <KeyValueEditor entry={entry} size={size} initialError={actions.editError} onSave={actions.save} onCancel={actions.cancelEdit} /> : null}
       {actions.removal ? <RemoveQuestion size={size} busy={actions.removal === "busy"} failed={actions.removal === "failed"} onRemove={() => void actions.remove()} onCancel={actions.cancelRemove} /> : null}
     </div>
   );

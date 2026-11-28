@@ -1,20 +1,18 @@
 "use client";
 
-import { ChevronDown, ChevronRight, MessageCircleQuestionMark, GalleryHorizontalEnd, PanelRight, PictureInPicture2, TriangleAlert, Undo2, X } from "lucide-react";
+import { ChevronDown, ChevronRight, KeyRound, MessageCircleQuestionMark, GalleryHorizontalEnd, PanelRight, PictureInPicture2, TriangleAlert, Undo2, X } from "lucide-react";
 import { useCallback, useState, type ReactNode } from "react";
 
 import { projectTitle } from "@/lib/displayNames";
 import { useLocale } from "@/lib/i18n";
-import type { DoneItemV1 } from "@/lib/done/types";
 import type { Pipeline } from "@/lib/pipelines/types";
 
+import { SecretTarget } from "../decisions/SecretTarget";
 import { AutoDrainDecision } from "../selfUpdate/AutoDrainDecision";
 import { RoleTag } from "../RoleFrameMark";
 import { fmtAge } from "../utils";
 import type { MobileAttentionEntry } from "./attentionQueue";
 import { sendDismissal, type DismissalRequestOutcome } from "./dismissalOverlay";
-import { DoneSection } from "./DoneSection";
-import type { acknowledgeDone } from "./doneItems";
 import {
   isFocusedNeedsYouEntry,
   needsYouDismissal,
@@ -22,6 +20,7 @@ import {
   needsYouEntryRole,
   needsYouEntrySince,
   needsYouRowText,
+  formRowAsk,
   needsYouSections,
 } from "./needsYouPanel";
 import { NeedsYouAskText } from "./NeedsYouAskText";
@@ -47,10 +46,11 @@ import { PermissionActions } from "./PermissionActions";
  * `docked`: a column beside the board, whose head lines up with the board's
  * bar. `overlay`: the same list under the header control, over the board.
  *
- * «Готово» (docs/design/done-section.md) is pinned under the head, above the
- * decisions: the finished work waiting to be accepted, newest first, which the
- * title counts with the decisions until it is accepted. «Dismiss all» still
- * counts what it clears.
+ * «Needs you» (docs/design/legatus/build-plan.md, slice 1) holds the decision
+ * forms that wait for the operator and the waits no seat answers yet, and the
+ * head counts exactly those rows. Finished work («Готово») is not drawn here:
+ * it lives on the cards and in the orchestrator's reports. A form has no
+ * «Dismiss»: it is answered or withdrawn in the Decisions column.
  */
 
 export type AttentionPanelPlacement = "docked" | "overlay";
@@ -75,15 +75,9 @@ export interface AttentionPanelProps {
   focus?: { path: string | null; laneId: string | null };
   /** Rows pinned above the sections (the current project's crowned conversations). */
   pinned?: ReactNode;
-  /** «Готово»: finished work still waiting to be accepted, every project's. */
-  done?: readonly DoneItemV1[];
   /** Test seam. */
   dismiss?: Dismiss;
-  /** Test seam. */
-  acknowledgeDone?: typeof acknowledgeDone;
 }
-
-const NO_DONE: readonly DoneItemV1[] = [];
 
 const FOLD_KEY = "llvNeedsYouFolds";
 
@@ -126,9 +120,7 @@ export function AttentionPanel({
   onOpen,
   focus = { path: null, laneId: null },
   pinned,
-  done = NO_DONE,
   dismiss = sendDismissal,
-  acknowledgeDone,
 }: AttentionPanelProps) {
   const { t } = useLocale();
   const sections = needsYouSections(queue, current, order);
@@ -167,7 +159,8 @@ export function AttentionPanel({
 
   const docked = placement === "docked";
   const dismissible = needsYouDismissibleCount(queue);
-  const title = t("attention.panelTitle", { count: queue.length + done.length });
+  /* At zero the head carries the name alone, as the header button does. */
+  const title = queue.length ? t("attention.panelTitle", { count: queue.length }) : t("attention.panelAria");
   const head = (
     <div className={`flex shrink-0 items-center gap-1 border-b border-border pl-3 pr-1.5 ${docked ? "h-12" : "h-10"}`}>
       <h2 className="min-w-0 flex-1 truncate text-ui font-semibold text-secondary" data-needs-you-title="">{title}</h2>
@@ -211,7 +204,7 @@ export function AttentionPanel({
     <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-1.5" data-needs-you-body="">
       {pinned}
       {error ? <p className="px-2.5 py-1.5 text-[11px] text-danger" role="status" data-needs-you-error="">{error}</p> : null}
-      {sections.length === 0 && done.length === 0 ? (
+      {sections.length === 0 ? (
         <p className="px-2.5 py-3 text-[12px] text-muted" data-needs-you-empty="">{t("attention.empty")}</p>
       ) : null}
       {sections.map((section, index) => {
@@ -258,15 +251,10 @@ export function AttentionPanel({
       })}
     </div>
   );
-  /* «Готово» is pinned under the head, above the scrolling decisions, in a
-     band of its own that scrolls inside itself. */
-  const doneSection = <DoneSection items={done} current={current} projectNames={projectNames} surface="desktop" place="needs-you" band="max-h-[42vh]" {...(acknowledgeDone ? { acknowledge: acknowledgeDone } : {})} />;
-
   if (docked) {
     return (
       <aside className="flex h-full w-[320px] shrink-0 flex-col border-l border-border bg-card" aria-label={t("attention.panelAria")} data-needs-you-panel="docked">
         {head}
-        {doneSection}
         {body}
       </aside>
     );
@@ -279,7 +267,6 @@ export function AttentionPanel({
       className="absolute right-0 top-[calc(100%+6px)] z-50 flex max-h-[75vh] w-[360px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-[10px] border border-border bg-card shadow-1"
     >
       {head}
-      {doneSection}
       {body}
     </div>
   );
@@ -303,6 +290,7 @@ function NeedsYouRow({ entry, pipelines, focused, onOpen, onDismiss }: {
   const { t } = useLocale();
   if (entry.kind === "update") return <AutoDrainDecision key={entry.decision.id} decision={entry.decision} />;
   if (entry.kind === "prototype") return <PrototypeRow entry={entry} onOpen={onOpen} />;
+  if (entry.kind === "secret-request") return <SecretRow entry={entry} onOpen={onOpen} />;
   const role = needsYouEntryRole(entry, pipelines);
   const since = needsYouEntrySince(entry);
   const { title, line, question, options, recommended } = needsYouRowText(t, entry);
@@ -354,6 +342,31 @@ function NeedsYouRow({ entry, pipelines, focused, onOpen, onDismiss }: {
   );
 }
 
+/** A secret request waits in Decisions: one line with its kind, what it
+    writes to and its age. The entry there takes it off the list, so it has
+    no «Dismiss». */
+function SecretRow({ entry, onOpen }: { entry: Extract<MobileAttentionEntry, { kind: "secret-request" }>; onOpen: () => void }) {
+  const { t } = useLocale();
+  const since = needsYouEntrySince(entry);
+  const { title, label } = needsYouRowText(t, entry);
+  return (
+    <div className="rounded-[8px]" data-needs-you-row={entry.id} data-needs-you-kind={entry.kind} data-needs-you-since={since ?? undefined}>
+      <button
+        type="button"
+        className="flex min-h-9 w-full min-w-0 items-center gap-1.5 rounded-[8px] px-2.5 py-1.5 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        data-attention-secret={entry.id}
+        aria-label={t("decisions.expandAria", { title: t("secretRequest.titleFor", { target: title }) })}
+        onClick={onOpen}
+      >
+        <KeyRound className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden />
+        <span className="shrink-0 text-[10.5px] font-semibold text-accent">{label}</span>
+        <SecretTarget target={title} className="flex-1 text-[12px] font-semibold text-primary" data-needs-you-title-line="" />
+        {since !== null ? <span data-attention-age className="shrink-0 text-[10.5px] text-muted">{fmtAge(since)}</span> : null}
+      </button>
+    </div>
+  );
+}
+
 /** A prototype review that waits: the row opens the task's review, and the
     choice saved there is what takes it off the list, so it has no «Dismiss».
     A decision whose message keeps failing waits the same way until it lands. */
@@ -378,7 +391,7 @@ function PrototypeRow({ entry, onOpen }: { entry: Extract<MobileAttentionEntry, 
           {since !== null ? <span data-attention-age className="shrink-0 font-normal text-muted">· {fmtAge(since)}</span> : null}
         </span>
         <span className="line-clamp-2 w-full text-[12px] font-semibold text-primary [overflow-wrap:anywhere]" data-needs-you-title-line="">{entry.notice.title}</span>
-        <NeedsYouAskText ask={{ question, options, recommended, sentence: undelivered ? t("proto.notice.open") : line }} />
+        <NeedsYouAskText ask={formRowAsk({ question, options, recommended, sentence: undelivered ? t("proto.notice.open") : line }, entry.notice)} />
       </button>
     </div>
   );

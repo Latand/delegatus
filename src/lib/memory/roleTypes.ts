@@ -71,7 +71,7 @@ export interface StageRuleSource {
 export interface SeatRuleSource {
   origin: "seat";
   project: string;
-  roleId: "orchestrator";
+  roleId: "orchestrator" | "legatus";
   fixRound: false;
   conversationId: string;
 }
@@ -103,7 +103,17 @@ export interface OperatorRuleSource {
   fixRound: false;
   conversationId: string;
 }
-export type RuleSource = StageRuleSource | SeatRuleSource | ImportRuleSource | OperatorRuleSource | ConversationRuleSource;
+export type DecisionAuthor = "typed" | "voice" | "clicked";
+
+export type DecisionRuleSource = {
+  origin: "decision";
+  project: string;
+  author: DecisionAuthor;
+  roleId: null;
+  fixRound: false;
+} & ({ reviewId: string; messageRef?: never } | { messageRef: string; reviewId?: never });
+
+export type RuleSource = StageRuleSource | SeatRuleSource | ImportRuleSource | OperatorRuleSource | ConversationRuleSource | DecisionRuleSource;
 
 /** One time a rule left the injected text, as it was then. Appended, never
     rewritten or removed, so a later restore, curation or re-archive leaves
@@ -139,6 +149,8 @@ export interface RoleMemoryRule {
   versionOf?: string;
   versions?: string[];
   revisedBy?: RuleRevision;
+  /** Provenance of the current wording; metadata-only moves never change it. */
+  wordingRevision?: RuleRevision;
   curatedAt?: string;
   keptByOperatorAt?: string;
   note?: string;
@@ -260,6 +272,7 @@ export interface RuleView {
   roleId: string | null;
   fixRound: boolean;
   stageId: string;
+  decisionAuthor?: DecisionAuthor;
   importSource?: Pick<ImportRuleSource, "candidate" | "occurrences" | "engine" | "sha256" | "importId">;
   /** Left within the last day, as the server read it. */
   fresh: boolean;
@@ -276,7 +289,7 @@ export interface RuleView {
   mergedFrom?: string[];
   movedFrom?: string;
   splitFrom?: string;
-  versions?: { id: string; rule: string; why: string; hints: RulePrivacyHint[]; createdAt: string; revisedBy?: RuleRevisionView }[];
+  versions?: { id: string; rule: string; why: string; hints: RulePrivacyHint[]; createdAt: string; decisionAuthor?: DecisionAuthor; revisedBy?: RuleRevisionView }[];
 }
 
 export interface ScopeView {

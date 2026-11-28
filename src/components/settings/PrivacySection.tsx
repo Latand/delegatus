@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import type { OperatorSettingsResponse } from "@/app/api/operator/settings/route";
 import { useLocale } from "@/lib/i18n";
 
 import { telemetryNotice } from "../../../bin/telemetry-notice.mjs";
@@ -15,6 +16,105 @@ async function readConsent(): Promise<boolean> {
   const body = await response.json();
   if (typeof body.enabled !== "boolean") throw Error();
   return body.enabled;
+}
+
+type AttributionStatus = Pick<OperatorSettingsResponse, "commitAttribution" | "commitAccount">;
+
+async function attributionStatus(signal: AbortSignal, enabled?: boolean, refreshAccount = false): Promise<AttributionStatus> {
+  const response = await fetch(`/api/operator/settings${refreshAccount ? "?refreshCommitAccount=1" : ""}`, {
+    cache: "no-store",
+    signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
+    ...(enabled === undefined ? {} : {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ commitAttribution: enabled }),
+    }),
+  });
+  if (!response.ok) throw new Error();
+  const value = await response.json() as AttributionStatus;
+  if ((value.commitAttribution !== null && typeof value.commitAttribution?.value !== "boolean")
+    || (value.commitAccount?.state !== "unresolved"
+      && !(value.commitAccount?.state === "resolved" && typeof value.commitAccount.login === "string"))) throw new Error();
+  return value;
+}
+
+function CommitAttributionRow() {
+  const { t } = useLocale();
+  const [status, setStatus] = useState<AttributionStatus | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [busy, setBusy] = useState(true);
+  const lifetime = useRef<AbortController | null>(null);
+  const pending = useRef(false);
+
+  const load = useCallback(async (signal: AbortSignal, enabled?: boolean) => {
+    if (pending.current || signal.aborted) return;
+    pending.current = true;
+    try {
+      const next = await attributionStatus(signal, enabled, enabled === undefined);
+      if (!signal.aborted) setStatus(next);
+    } catch {
+      if (signal.aborted) return;
+      setFailed(true);
+      // A write may have persisted before its reply was lost.
+      try {
+        const stored = enabled === undefined ? null : await attributionStatus(signal, undefined, true);
+        if (!signal.aborted) setStatus(stored);
+      } catch { if (!signal.aborted) setStatus(null); }
+    } finally {
+      if (!signal.aborted) {
+        pending.current = false;
+        setBusy(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    lifetime.current = controller;
+    pending.current = true;
+    void attributionStatus(controller.signal, undefined, true).then(
+      next => { if (!controller.signal.aborted) setStatus(next); },
+      () => { if (!controller.signal.aborted) setFailed(true); },
+    ).finally(() => {
+      if (!controller.signal.aborted) {
+        pending.current = false;
+        setBusy(false);
+      }
+    });
+    return () => controller.abort();
+  }, []);
+
+  const request = (enabled?: boolean) => {
+    const signal = lifetime.current?.signal;
+    if (!signal || signal.aborted || pending.current) return;
+    setBusy(true);
+    setFailed(false);
+    void load(signal, enabled);
+  };
+  const enabled = status?.commitAttribution?.value !== false;
+  const account = status?.commitAccount;
+  return (
+    <SwitchRow
+      attrs={{ "data-commit-attribution": "" }}
+      label={t("settings.privacy.commitAttribution")}
+      hint={t("settings.privacy.commitAttributionHint")}
+      enabled={status !== null && enabled}
+      disabled={busy || status === null}
+      onToggle={() => request(!enabled)}
+    >
+      {account ? (
+        <TextRow tone="muted" attrs={{ "data-commit-account": account.state }}>
+          {account.state === "resolved"
+            ? t("settings.privacy.commitAccountResolved", { login: account.login })
+            : t("settings.privacy.commitAccountUnresolved")}
+        </TextRow>
+      ) : null}
+      {failed ? <RefusalLine>{t("settings.privacy.commitAttributionError")}</RefusalLine> : null}
+      {(!status && failed) || account?.state === "unresolved" ? (
+        <BlockRow><button type="button" className={BUTTON} disabled={busy} onClick={() => request()}>{t("settings.privacy.retry")}</button></BlockRow>
+      ) : null}
+    </SwitchRow>
+  );
 }
 
 /**
@@ -125,6 +225,7 @@ export function PrivacySection() {
             {failed === "swarm" ? <RefusalLine>{t("telemetry.error")}</RefusalLine> : null}
           </SwitchRow>
         ) : null}
+        <CommitAttributionRow />
         <SectionHead title={t("settings.privacy.leaves")} />
         <TextRow>{t("settings.privacy.leavesLine")}</TextRow>
         <DetailsRow lines={[

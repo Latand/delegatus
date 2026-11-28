@@ -320,7 +320,8 @@ export function versionedRule(tx: RuleTransaction, current: RoleMemoryRule, text
   delete prior.versions;
   delete prior.mergedInto;
   tx.put(prior);
-  const updated = { ...current, rule: text.rule, why: text.why, hints: text.hints, changedAt: revisedBy.at, revisedBy, versions: [...(current.versions ?? []), version] };
+  const updated = { ...current, rule: text.rule, why: text.why, hints: text.hints, changedAt: revisedBy.at,
+    revisedBy, wordingRevision: revisedBy, versions: [...(current.versions ?? []), version] };
   tx.put(updated);
   return { updated, version };
 }
@@ -630,16 +631,21 @@ function view(row: RoleMemoryRule, now: number, byId: ReadonlyMap<string, RoleMe
   const earlier = (row.versions ?? []).flatMap(id => {
     const prior = byId.get(id);
     return prior && !(prior.rule === row.rule && prior.why === row.why)
-      ? [{ id: prior.id, rule: prior.rule, why: prior.why, hints: prior.hints, createdAt: prior.createdAt, ...(prior.revisedBy ? { revisedBy: revisionView(prior.revisedBy) } : {}) }] : [];
+      ? [{ id: prior.id, rule: prior.rule, why: prior.why, hints: prior.hints, createdAt: prior.createdAt,
+        ...(prior.source.origin === "decision" && !prior.wordingRevision && prior.revisedBy?.by !== "agent" ? { decisionAuthor: prior.source.author } : {}),
+        ...((prior.source.origin === "decision" ? prior.wordingRevision ?? prior.revisedBy : prior.revisedBy)
+          ? { revisedBy: revisionView(prior.source.origin === "decision" ? prior.wordingRevision ?? prior.revisedBy! : prior.revisedBy!) } : {}) }] : [];
   });
   return {
     id: row.id, rule: row.rule, why: row.why, state: row.state, hints: row.hints, tasks,
     ...(row.operatorCorrection ? { operatorCorrection: true as const } : {}),
     ...(row.reason ? { reason: row.reason } : {}), ...(row.mergedInto ? { mergedInto: row.mergedInto } : {}),
-    roleId: row.source.roleId, fixRound: row.source.fixRound, stageId: row.source.origin === "seat" ? "seat" : row.source.origin === "operator" ? "operator" : row.source.origin === "import" ? "import" : row.source.origin === "conversation" ? "conversation" : row.source.stageId,
+    roleId: row.source.roleId, fixRound: row.source.fixRound, stageId: row.source.origin === "seat" ? "seat" : row.source.origin === "operator" ? "operator" : row.source.origin === "import" ? "import" : row.source.origin === "conversation" ? "conversation" : row.source.origin === "decision" ? "decision" : row.source.stageId,
+    ...(row.source.origin === "decision" && !row.wordingRevision && row.revisedBy?.by !== "agent" ? { decisionAuthor: row.source.author } : {}),
     ...(row.source.origin === "import" ? { importSource: { candidate: row.source.candidate, occurrences: row.source.occurrences, engine: row.source.engine, sha256: row.source.sha256, importId: row.source.importId } } : {}),
     fresh: now - Date.parse(row.createdAt) < DAY_MS, createdAt: row.createdAt, changedAt: row.changedAt,
-    ...(row.revisedBy ? { revisedBy: revisionView(row.revisedBy) } : {}),
+    ...((row.source.origin === "decision" ? row.wordingRevision ?? row.revisedBy : row.revisedBy)
+      ? { revisedBy: revisionView(row.source.origin === "decision" ? row.wordingRevision ?? row.revisedBy! : row.revisedBy!) } : {}),
     ...(row.curatedAt ? { curatedAt: row.curatedAt } : {}),
     awaitingCuration: !!awaitingCuration,
     ...(row.keptByOperatorAt ? { keptByOperatorAt: row.keptByOperatorAt } : {}),

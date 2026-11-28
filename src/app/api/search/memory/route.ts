@@ -1,3 +1,4 @@
+import { callerConversationId } from "@/lib/agent/operatorAuthority";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { searchUnavailable } from "@/lib/search/unavailable";
 import { canonicalProject } from "@/lib/projects/aliases";
@@ -25,7 +26,7 @@ export async function GET(request: Request): Promise<Response> {
   const parsedLimit = Number(params.get("limit"));
   const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.max(1, Math.min(20, Math.trunc(parsedLimit))) : 10;
   try {
-    return Response.json(await withViewerOperation("memory.search", () => memoryIndex().search({ query, project: project ? canonicalProject(project) : undefined, kind: kind as MemoryKind | undefined, limit, maxBytes: responseBudget })));
+    return Response.json(await withViewerOperation("memory.search", () => memoryIndex().search({ query, project: project ? canonicalProject(project) : undefined, kind: kind as MemoryKind | undefined, reader: params.get("reader") === "legatus" ? "legatus" : undefined, limit, maxBytes: responseBudget })));
   } catch (error) {
     return searchUnavailable("memory", error);
   }
@@ -42,8 +43,12 @@ export async function POST(request: Request): Promise<Response> {
     || (body.conversationId != null && (typeof body.conversationId !== "string" || body.conversationId.length > 256))) {
     return Response.json({ error: "id and bounded requestId are required; project and conversationId must be bounded strings" }, { status: 400 });
   }
+  const reader = body.reader === "legatus" ? "legatus" : undefined;
+  if (reader && (!body.project || !body.conversationId || callerConversationId(request) !== body.conversationId)) {
+    return Response.json({ error: "the Legatus conversation must open the rule itself" }, { status: 403 });
+  }
   try {
-    const item = await withViewerOperation("memory.open", () => memoryIndex().open(body.id, body.requestId, body.conversationId ?? null, body.project ? canonicalProject(body.project.trim()) : undefined, body.maxBytes ?? 16_000));
+    const item = await withViewerOperation("memory.open", () => memoryIndex().open(body.id, body.requestId, body.conversationId ?? null, body.project ? canonicalProject(body.project.trim()) : undefined, body.maxBytes ?? 16_000, reader));
     return item ? Response.json({ item }) : Response.json({ error: "memory entry not found" }, { status: 404 });
   } catch (error) {
     if (error instanceof MemoryIdAmbiguousError) return Response.json({ error: error.message, code: "short_id_ambiguous" }, { status: 409 });
