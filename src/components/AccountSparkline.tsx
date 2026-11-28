@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 
 import { burndownForAccount, idealRemaining } from "@/lib/burndown";
 import type { BurndownPayload, BurndownSeries } from "@/lib/types";
@@ -34,9 +34,14 @@ const at = (p: Point) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`;
 /** The area's fill opacity. The muted ink of a row's limit lines is 5.1:1 on the card in both themes, so a fill over 7% (the engine tint, amber or red) takes it under the 4.5:1 floor; this is the strongest that keeps every inactive row's text above it. */
 export const SPARKLINE_AREA_OPACITY = 0.07;
 
-/** An account's week behind its row: the area under the remaining-quota line, the line, and the dashed even-pace guide from corner to corner. Area above the guide means under pace. The default account's row already carries a 7% tint of its engine, which leaves its muted text near the floor, so it draws the line and the guide without the area. It is a picture only: no pointer events, hidden from assistive technology, and it takes the box it is put in, so the row's size never changes. */
+/** The strokes' own opacity, inside the 8–15% the design names: the slope reads between the glyphs and never strikes through a name, a figure or a date. The guide is the fainter of the two. */
+export const SPARKLINE_LINE_OPACITY = 0.15;
+export const SPARKLINE_GUIDE_OPACITY = 0.12;
+
+/** An account's week behind its row: the area under the remaining-quota line, the line, and the dashed even-pace guide from corner to corner. Area above the guide means under pace. The area is the muted ink, never the engine tint, so no other row can pass for the default account's wash (a 7% tint of its engine); it fades to nothing at "now", so no edge crosses a word and a fresh week is a soft wedge, not a block. The default row's wash leaves its muted text near the floor, so it draws the line and the guide without the area. It is a picture only: no pointer events, hidden from assistive technology, and it takes the box it is put in, so the row's size never changes. */
 export function AccountSparkline({ series, color, stale = false, active = false }: { series: BurndownSeries | null; color: string; stale?: boolean; active?: boolean }) {
   const shape = sparklineGeometry(series);
+  const fade = `spark-fade-${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
   if (!shape) return null;
   const floor = 100 - INSET;
   const first = shape.line[0]!;
@@ -52,9 +57,15 @@ export function AccountSparkline({ series, color, stale = false, active = false 
       className="pointer-events-none absolute inset-0 -z-10 h-full w-full"
       style={stale ? { opacity: 0.6 } : undefined}
     >
-      <path data-sparkline-guide="" d={`M ${at(shape.guide[0])} L ${at(shape.guide[1])}`} fill="none" stroke="var(--color-muted)" strokeWidth={1} strokeDasharray="3 3" vectorEffect="non-scaling-stroke" opacity={0.35} />
-      {active ? null : <path data-sparkline-area="" d={area} fill={color} fillOpacity={SPARKLINE_AREA_OPACITY} stroke="none" />}
-      <path data-sparkline-line="" d={`M ${shape.line.map(at).join(" L ")}`} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" vectorEffect="non-scaling-stroke" opacity={0.5} />
+      <defs>
+        <linearGradient id={fade} data-sparkline-fade="" x1="0" x2="1" y1="0" y2="0">
+          <stop offset="0" stopColor="var(--color-muted)" stopOpacity={1} />
+          <stop offset="1" stopColor="var(--color-muted)" stopOpacity={0} />
+        </linearGradient>
+      </defs>
+      <path data-sparkline-guide="" d={`M ${at(shape.guide[0])} L ${at(shape.guide[1])}`} fill="none" stroke="var(--color-muted)" strokeWidth={1} strokeDasharray="3 3" vectorEffect="non-scaling-stroke" opacity={SPARKLINE_GUIDE_OPACITY} />
+      {active ? null : <path data-sparkline-area="" d={area} fill={`url(#${fade})`} fillOpacity={SPARKLINE_AREA_OPACITY} stroke="none" />}
+      <path data-sparkline-line="" d={`M ${shape.line.map(at).join(" L ")}`} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" vectorEffect="non-scaling-stroke" opacity={SPARKLINE_LINE_OPACITY} />
     </svg>
   );
 }

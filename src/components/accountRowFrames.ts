@@ -719,7 +719,12 @@ type SparkRow = {
     pointerEvents: string;
     ariaHidden: string | null;
     areaOpacity: number;
+    /** The strokes' opacity as painted: their own times the chart's (a stale reading dims the whole chart). */
     lineOpacity: number;
+    guideOpacity: number;
+    /** The area's fill reference and the last stop of its horizontal fade (null when the area is flat). */
+    areaFill: string;
+    fadeEnd: number | null;
     hasGuide: boolean;
     guideDash: string | null;
     last: { x: number; y: number };
@@ -760,13 +765,19 @@ function readSparklines(): SparkRow[] {
         pointerEvents: getComputedStyle(svg).pointerEvents,
         ariaHidden: svg.getAttribute("aria-hidden"),
         areaOpacity: area ? Number(getComputedStyle(area).fillOpacity) : 0,
-        lineOpacity: Number(getComputedStyle(line).opacity),
+        lineOpacity: Number(getComputedStyle(line).opacity) * Number(getComputedStyle(svg).opacity),
+        guideOpacity: guide ? Number(getComputedStyle(guide).opacity) * Number(getComputedStyle(svg).opacity) : 0,
+        areaFill: area?.getAttribute("fill") ?? "",
+        fadeEnd: (() => {
+          const stops = svg.querySelectorAll("linearGradient[data-sparkline-fade] stop");
+          return stops.length ? Number(stops[stops.length - 1]!.getAttribute("stop-opacity")) : null;
+        })(),
         hasGuide: guide !== null,
         guideDash: guide?.getAttribute("stroke-dasharray") ?? null,
         last: { x: last[0], y: last[1] },
         guideAtLast,
         hit: centre !== null && !svg.contains(centre),
-        primary: { fg: getComputedStyle(name).color, backgrounds, wash: area ? getComputedStyle(area).fill : "", washOpacity: area ? Number(getComputedStyle(area).fillOpacity) : 0 },
+        primary: { fg: getComputedStyle(name).color, backgrounds, wash: area ? (svg.querySelector("linearGradient[data-sparkline-fade] stop") ? getComputedStyle(svg.querySelector("linearGradient[data-sparkline-fade] stop")!).stopColor : getComputedStyle(area).fill) : "", washOpacity: area ? Number(getComputedStyle(area).fillOpacity) : 0 },
         muted: { fg: getComputedStyle(mutedLine).color },
       },
     };
@@ -801,7 +812,7 @@ const ratio = (a: { r: number; g: number; b: number }, b: { r: number; g: number
  * the burndown popover reads. For each engine, width, language and scheme the panel is read twice, once with the
  * history route answering and once with it failing. It fails when a row with a series lacks the chart or a row
  * without one has it; when the chart is not inert, aria-hidden and exactly the row's box; when its fill opacity
- * leaves the one 7% the muted ink's contrast allows (none on the default row); when an over-pace row's line ends above its guide (or an under-pace row's below); when any row's
+ * leaves the one 7% the muted ink's contrast allows (none on the default row), when the area ends in an edge at "now" or matches the default row's wash, or when the line or the guide is painted over 15%; when an over-pace row's line ends above its guide (or an under-pace row's below); when any row's
  * height differs from the no-chart baseline; or when the name or the muted limit text falls under 4.5:1 over the painted
  * stack (the row's own tint included).
  */
@@ -844,6 +855,8 @@ export async function captureAccountSparklineFrames(options: Pick<FrameOptions, 
     const drawn = withChart.rows.filter((row) => row.spark).map((row) => `${row.engine ?? engine}:${row.id}`).sort();
     if (drawn.join(",") !== [...withChart.expected].sort().join(",")) failures.push(`${key}: charts on [${drawn}], the series are for [${[...withChart.expected].sort()}]`);
     if (withChart.rows.length < 2 || !withChart.rows.some((row) => !row.spark)) failures.push(`${key}: the scene has no row without a series`);
+    const defaultWash = new Map<string, { r: number; g: number; b: number }>();
+    const areaPaint: { id: string; engine: string; painted: { r: number; g: number; b: number } }[] = [];
     for (const row of withChart.rows) {
       const before = base0.rows.find((candidate) => candidate.id === row.id);
       if (!before) { failures.push(`${key}: ${row.id} is missing from the baseline`); continue; }
@@ -857,6 +870,11 @@ export async function captureAccountSparklineFrames(options: Pick<FrameOptions, 
       // The default account's row draws no area (its own tint is already behind its text); every other row draws it at the one low opacity.
       if (isDefault.has(`${row.engine ?? engine}:${row.id}`) ? spark.areaOpacity !== 0 : Math.abs(spark.areaOpacity - 0.07) > 0.001) failures.push(`${key}: ${row.id}'s area opacity is ${spark.areaOpacity}`);
       if (!spark.hasGuide || spark.guideDash !== "3 3") failures.push(`${key}: ${row.id} has no dashed even-pace guide`);
+      // The strokes sit in the dimmed 8–15% band as painted, so neither strikes through a name, a figure or a date.
+      if (!(spark.lineOpacity >= 0.04 && spark.lineOpacity <= 0.15 + 1e-9)) failures.push(`${key}: ${row.id}'s line is painted at ${spark.lineOpacity} opacity`);
+      if (!(spark.guideOpacity >= 0.04 && spark.guideOpacity <= 0.15 + 1e-9)) failures.push(`${key}: ${row.id}'s guide is painted at ${spark.guideOpacity} opacity`);
+      // The area fades to nothing at "now": no edge of it crosses a word.
+      if (spark.areaOpacity > 0 && spark.fadeEnd !== 0) failures.push(`${key}: ${row.id}'s area ends in an edge at "now" (last stop opacity ${spark.fadeEnd})`);
       if (!(spark.last.x > 0 && spark.last.x < 100)) failures.push(`${key}: ${row.id}'s line ends at x=${spark.last.x}, not at "now"`);
       if (OVER_PACE.has(row.id) && !(spark.last.y > spark.guideAtLast)) failures.push(`${key}: ${row.id} is over pace but its line ends above the guide (${spark.last.y} vs ${spark.guideAtLast})`);
       if (UNDER_PACE.has(row.id) && !(spark.last.y < spark.guideAtLast)) failures.push(`${key}: ${row.id} is under pace but its line ends below the guide (${spark.last.y} vs ${spark.guideAtLast})`);
@@ -870,9 +888,16 @@ export async function captureAccountSparklineFrames(options: Pick<FrameOptions, 
       let today: { r: number; g: number; b: number } = stack[opaque]!;
       for (let i = opaque - 1; i >= 0; i -= 1) if (stack[i] && stack[i]!.a > 0) today = over(today, stack[i]!);
       const painted = wash ? over(today, { ...wash, a: spark.areaOpacity }) : today;
+      if (isDefault.has(`${row.engine ?? engine}:${row.id}`)) defaultWash.set(row.engine ?? engine, today);
+      else if (wash) areaPaint.push({ id: row.id, engine: row.engine ?? engine, painted });
       for (const [what, ink] of [["name", fg], ["muted text", mutedFg]] as const) {
         if (ratio(ink, painted) < 4.5) failures.push(`${key}: ${row.id}'s ${what} is ${ratio(ink, painted).toFixed(2)}:1 over the chart, ${ratio(ink, today).toFixed(2)}:1 without it`);
       }
+    }
+    // The default row is the only one painted in its engine's wash: another row's area, at its strongest, differs from it.
+    for (const paint of areaPaint) {
+      const wash = defaultWash.get(paint.engine);
+      if (wash && Math.max(Math.abs(paint.painted.r - wash.r), Math.abs(paint.painted.g - wash.g), Math.abs(paint.painted.b - wash.b)) < 3) failures.push(`${key}: ${paint.id}'s area is painted in the default row's wash`);
     }
   }
   fs.writeFileSync(path.join(out, "sparkline.json"), JSON.stringify({ at: new Date().toISOString(), surface, frames, failures }, null, 1));

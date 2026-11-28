@@ -9,7 +9,7 @@ import { selectProjectAccount } from "@/lib/accounts/projectSelection";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 
 import { AccountsPanel, type ProjectAccountContext } from "./AccountsPanel";
-import { SPARKLINE_AREA_OPACITY, sparklineGeometry } from "./AccountSparkline";
+import { SPARKLINE_AREA_OPACITY, SPARKLINE_GUIDE_OPACITY, SPARKLINE_LINE_OPACITY, sparklineGeometry } from "./AccountSparkline";
 import { formatCheckedClock, formatQuotaAsOf, formatResetClock } from "./rateLimit";
 
 /** An archive under an invented home, composed so the `~` fold is exercised
@@ -1428,6 +1428,14 @@ test.each(["claude", "codex"] as const)("a %s account row draws its week as a di
     expect(Number(area.getAttribute("fill-opacity"))).toBe(SPARKLINE_AREA_OPACITY);
     expect(chart.querySelector("[data-sparkline-line]")).not.toBeNull();
     expect(chart.querySelector("[data-sparkline-guide]")?.getAttribute("stroke-dasharray")).toBe("3 3");
+    // The strokes are dimmed to the 8–15% band; the area is the neutral muted ink fading to nothing at "now", never the engine tint.
+    expect(Number(chart.querySelector("[data-sparkline-line]")!.getAttribute("opacity"))).toBe(SPARKLINE_LINE_OPACITY);
+    expect(Number(chart.querySelector("[data-sparkline-guide]")!.getAttribute("opacity"))).toBe(SPARKLINE_GUIDE_OPACITY);
+    for (const opacity of [SPARKLINE_LINE_OPACITY, SPARKLINE_GUIDE_OPACITY]) expect(opacity >= 0.08 && opacity <= 0.15).toBe(true);
+    const stops = [...chart.querySelectorAll("linearGradient[data-sparkline-fade] stop")];
+    expect(stops.map((stop) => stop.getAttribute("stop-color"))).toEqual(["var(--color-muted)", "var(--color-muted)"]);
+    expect(stops.map((stop) => stop.getAttribute("stop-opacity"))).toEqual(["1", "0"]);
+    expect(area.getAttribute("fill")).toBe(`url(#${chart.querySelector("linearGradient")!.getAttribute("id")})`);
     // The row's own content is still there, unchanged.
     expect(rowOf("with-series").querySelector('[data-account-limits="with-series"]')).not.toBeNull();
     // The default account's row carries its own tint: its chart is the line and the guide, without the area.
