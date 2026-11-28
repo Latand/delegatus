@@ -23,6 +23,8 @@ const STILL_LONG_DAYS = DONE_TASK_BOARD_RETENTION_MS / 86_400_000;
 const BACK_WIDTH = 104;
 /** The room a flag's head needs to the right of its pole. */
 const FLAG_HEAD = 6;
+// The phone's due words keep the label's own inset from the screen edge.
+const DUE_INSET = 12;
 const chipState = (attempt: TimelineAttempt): StageChipState => attempt.state === "spawning" || attempt.stopped
   || !attempt.live && ["running", "reviewing", "committing"].includes(attempt.state) ? "pending" : attempt.state;
 // Offsets inside a row, from its top, where no text line is cut in two.
@@ -133,7 +135,7 @@ export function BoardTimeline({ project, cards, pipelines, members, nowMs, prefe
   const fitRows = useCallback(() => {
     const measured = measureRows();
     if (!measured) return;
-    const { element, axis, scrollbar, available, heights, offsets } = measured;
+    const { element, available, heights, offsets } = measured;
     gesture.current.placed = false;
     const atEnd = element.scrollTop > 0 && element.scrollTop + element.clientHeight >= element.scrollHeight - 1;
     let first = offsets.findIndex(offset => offset >= element.scrollTop - 1);
@@ -146,14 +148,14 @@ export function BoardTimeline({ project, cards, pipelines, members, nowMs, prefe
     } else {
       for (let index = first; index < heights.length && used + heights[index]! <= available; index++) used += heights[index]!;
     }
+    // The scroller always fills the section. The part of the viewport that holds no whole row is covered by the sticky curtain
+    // (`.bt-rest`), so a finger on that strip still scrolls the list, and the list's height never changes during a gesture.
     if (!used || first >= heights.length) {
-      element.style.flex = "";
-      element.style.height = "";
+      element.style.setProperty("--bt-rest", "0px");
       previousTop.current = element.scrollTop;
       return;
     }
-    element.style.flex = "0 0 auto";
-    element.style.height = `${axis + used + scrollbar}px`;
+    element.style.setProperty("--bt-rest", `${Math.max(0, available - used)}px`);
     element.scrollTop = offsets[first]!;
     previousTop.current = element.scrollTop;
   }, [measureRows]);
@@ -173,13 +175,13 @@ export function BoardTimeline({ project, cards, pipelines, members, nowMs, prefe
     const pending = state.pending; state.pending = "";
     if (pending === "force" || pending === "soft" && !state.placed) fitRows();
   }, [fitRows]);
-  // The movement is over 200 ms after the last scroll or input event with
-  // nothing held down; a held finger or button keeps it going, up to 8 s of silence.
+  // The movement is over 200 ms after the last scroll or input event with nothing held down. A held finger or button
+  // has no deadline: a rest of any length is still a gesture, and only a release event ends it.
   const keepGesture = useCallback(() => {
     const state = gesture.current;
     state.active = true;
     if (state.timer) clearTimeout(state.timer);
-    state.timer = setTimeout(endGesture, state.held ? 8000 : 200);
+    state.timer = state.held ? 0 : setTimeout(endGesture, 200);
   }, [endGesture]);
   const press = useCallback(() => { gesture.current.held = true; gesture.current.moved = false; keepGesture(); }, [keepGesture]);
   const keyStep = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
@@ -206,11 +208,37 @@ export function BoardTimeline({ project, cards, pipelines, members, nowMs, prefe
     };
     const events = ["pointerup", "pointercancel", "touchend", "touchcancel", "mouseup", "blur"] as const;
     for (const type of events) window.addEventListener(type, release, { passive: true });
+    // A page that goes to the background releases whatever was held, as its touch events may never arrive.
+    const hidden = (event: Event) => { if (document.visibilityState === "hidden") release(event); };
+    document.addEventListener("visibilitychange", hidden, { passive: true });
     return () => {
       for (const type of events) window.removeEventListener(type, release);
+      document.removeEventListener("visibilitychange", hidden);
       if (state.timer) clearTimeout(state.timer);
     };
   }, [keepGesture, endGesture]);
+  // With the seat's panel open the chart sits in the scrolling page (`.kb-page`) and keeps its minimum height, so the wheel over its rows
+  // scrolls the page down first, until the chart's bottom is in view, and the list after that. Scrolling up never chains to the page
+  // (`overscroll-behavior-y: contain` stays). The listener is native because React registers `onWheel` as passive.
+  useEffect(() => {
+    const list = scroll.current, container = root.current;
+    if (!list || !container) return;
+    const onWheel = (event: WheelEvent) => {
+      if (event.defaultPrevented || event.ctrlKey || event.deltaY <= 0 || Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+      const page = container.closest<HTMLElement>(".kb-page");
+      if (!page) return;
+      const room = page.scrollHeight - page.clientHeight - page.scrollTop;
+      const need = container.getBoundingClientRect().bottom - page.getBoundingClientRect().bottom;
+      if (need <= 0.5 || room <= 0.5) return;
+      const delta = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaMode === 2 ? event.deltaY * page.clientHeight : event.deltaY;
+      const step = Math.min(delta, need, room);
+      event.preventDefault();
+      page.scrollTop += step;
+      if (delta - step > 0) { keepGesture(); list.scrollTop += delta - step; }
+    };
+    list.addEventListener("wheel", onWheel, { passive: false });
+    return () => list.removeEventListener("wheel", onWheel);
+  }, [hasRows, keepGesture]);
   useLayoutEffect(() => {
     const element = root.current;
     if (!element) return;
@@ -334,7 +362,7 @@ export function BoardTimeline({ project, cards, pipelines, members, nowMs, prefe
     // In the window they hang from the flag, shifted left by the share of their width the flag stands across the lane.
     if (mark.place === "in") return <>
       <div className="bt-due-slot"><span className="bt-due-words text-label" data-timeline-due={tone} title={title}
-        style={{ marginLeft: mark.x, transform: `translateX(-${anchorShift(mark.x, laneWidth)}%)` }}>{words}</span></div>
+        style={{ marginLeft: phone ? mark.x * (laneWidth - 2 * DUE_INSET) / laneWidth : mark.x, transform: `translateX(-${anchorShift(mark.x, laneWidth)}%)` }}>{words}</span></div>
       <i className="bt-flag" data-timeline-flag={tone} data-flag-head={mark.x > laneWidth - FLAG_HEAD - 1 ? "left" : undefined}
         style={{ left: Math.min(Math.max(1, mark.x), laneWidth - 1) }} aria-hidden />
     </>;
@@ -535,6 +563,7 @@ export function BoardTimeline({ project, cards, pipelines, members, nowMs, prefe
             {longOpen ? stillLong.map(taskRow) : null}
           </> : null}
         </> : null}
+        <div className="bt-rest" aria-hidden data-timeline-rest="" />
       </div>
     </div>}
   </section>;

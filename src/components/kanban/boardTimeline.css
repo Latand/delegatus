@@ -3,7 +3,8 @@
 .bt-zoom { display: flex; align-items: center; gap: 6px; }
 .bt-zoom button:disabled { opacity: .4; }
 .bt-zoom button:focus-visible, .bt-disclosure:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
-.bt-scroll { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior-y: contain; scrollbar-gutter: stable; }
+.bt-scroll { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior-y: contain; scrollbar-gutter: stable; scroll-padding-bottom: var(--bt-rest, 0px); }
+.bt-rest { position: sticky; bottom: 0; z-index: 7; height: var(--bt-rest, 0px); background: var(--color-canvas); }
 .bt-axis { position: sticky; top: 0; z-index: 8; display: flex; height: var(--bt-axis); background: var(--color-canvas); border-bottom: 1px solid var(--color-border); }
 .bt-axis-label { position: sticky; left: 0; z-index: 9; display: flex; align-items: center; width: var(--bt-label); flex-shrink: 0; padding: 0 12px; background: var(--color-canvas); border-right: 1px solid var(--color-border); }
 .bt-axis-lane { position: relative; flex-shrink: 0; }
@@ -26,8 +27,8 @@
 .bt-label > .bt-meta > span { max-width: 100%; }
 .bt-stage .bt-label { align-items: center; padding-left: 31px; }
 .bt-stage-name { display: flex; align-items: center; gap: 6px; line-height: 18px; }
-/* On a desktop the name and the runtime keep their own lines, so every stage row is the same height whatever its figures say. */
-.board-timeline[data-phone="0"] .bt-stage-name, .board-timeline[data-phone="0"] .bt-stage .bt-runtime { flex-basis: 100%; }
+/* On a desktop the name, the calendar span and the runtime keep their own lines, so every stage row is the same height whatever its figures say. */
+.board-timeline[data-phone="0"] .bt-stage-name, .board-timeline[data-phone="0"] .bt-stage .bt-runtime, .board-timeline[data-phone="0"] .bt-stage [data-timeline-wall] { flex-basis: 100%; }
 .bt-runtime { line-height: 16px; }
 .bt-lane { position: relative; flex-shrink: 0; min-height: 34px; padding-bottom: 18px; overflow: hidden; background-image: linear-gradient(to right, var(--bt-grid) 1px, transparent 1px); }
 .bt-stage-bar { position: absolute; top: 5px; bottom: 5px; border-radius: 4px; }
@@ -94,7 +95,7 @@
 .board-timeline[data-phone="1"] .bt-line { top: 3px; }
 .board-timeline[data-phone="1"] .bt-line::before, .board-timeline[data-phone="1"] .bt-line::after { top: -3px; height: 8px; }
 .board-timeline[data-phone="1"] .bt-flag { bottom: 0; height: 12px; }
-.board-timeline[data-phone="1"] .bt-due-slot { padding-top: 1px; }
+.board-timeline[data-phone="1"] .bt-due-slot { padding: 1px 12px 0; }
 .board-timeline[data-phone="1"] .bt-group { min-height: 44px; }
 .board-timeline[data-phone="1"] .bt-group .bt-label { padding-top: 0; padding-bottom: 0; }
 .board-timeline[data-phone="1"] .bt-stage[data-earlier="1"] .bt-lane { height: 44px; min-height: 44px; }
