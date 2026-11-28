@@ -176,9 +176,11 @@ function PlainDot({ tone, note, label }: { tone: DotTone; note: string; label: s
   );
 }
 
-/** Where a narrow card's dot opens its words: last in the block the dot belongs to. */
+/** Where a narrow card's dot opens its words: last in the block the dot belongs to. It takes that block's width and
+    adds nothing to it (`w-0 min-w-full`): on a phone the block is as wide as its own lines, and a note longer than
+    them wraps under the state line where it would otherwise push the row out of the card. */
 export function DotNotePlace() {
-  return <span data-program-dot-note="" className="block empty:hidden" />;
+  return <span data-program-dot-note="" className="block w-0 min-w-full empty:hidden" />;
 }
 
 /**

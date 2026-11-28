@@ -1194,8 +1194,9 @@ step to the list and touches none of the files that pull request rewrites.
     both themes, as 1440 and 390 are. The block presses every dot and
     checks that a signed-out program's popover names its version and path,
     a signed-in one's its version, that words opened in a narrow row
-    repeat nothing of the line above them, and that under 768 px the dot
-    of a program that is signing in opens nothing.
+    repeat nothing of the line above them, that they wrap inside their
+    card and scroll the step nowhere sideways, and that under 768 px the
+    dot of a program that is signing in opens nothing.
 
 ### 12.4 Slice 3: the install job and its button
 

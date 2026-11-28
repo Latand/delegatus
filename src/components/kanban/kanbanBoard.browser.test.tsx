@@ -46275,6 +46275,12 @@ describe("first-run guide: variant 1 on the real components", () => {
       above: popover.hasAttribute("data-program-dot-inline") ? lineAbove : "",
       lines,
       inline: popover.hasAttribute("data-program-dot-inline"),
+      /* How far the opened words pushed anything they stand in sideways: a note wider than its card scrolls the step to show itself. */
+      sideways: (() => {
+        let most = 0;
+        for (let node = popover.parentElement; node; node = node.parentElement) most = Math.max(most, Math.abs(node.scrollLeft), node === dialog || dialog.contains(node) ? (getComputedStyle(node).overflowX === "visible" ? 0 : node.scrollWidth - node.clientWidth) : 0);
+        return Math.round(most);
+      })(),
       inWindow: box.left >= 0 && box.top >= 0 && box.right <= innerWidth + 0.5 && box.bottom <= innerHeight + 0.5,
       inGuide: box.left >= frame.left - 0.5 && box.top >= frame.top - 0.5 && box.right <= frame.right + 0.5 && box.bottom <= frame.bottom + 0.5,
       covered,
@@ -46604,9 +46610,10 @@ describe("first-run guide: variant 1 on the real components", () => {
             const plain = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}%]+/gu, " ").trim();
             const signedOutWords = translate(lang, "onboarding.engines.signedOut").replaceAll("\u00a0", " ");
             const connectedWords = translate(lang, "onboarding.engines.connectedNoPlan").replaceAll("\u00a0", " ");
-            /* The frames that keep a popover on screen: the amber account among several, a program that is not installed, the
-               welcome's first row, and Claude Code's row signed out (version and path) and signed in (version and limit). */
-            const kept = spec.token === "accounts-several" ? 2 : ["engines-no-cli", "welcome-found", "engines-signed-out", "engines-claude-only"].includes(spec.token) ? 0 : -1;
+            /* The frames that keep a popover on screen: the amber account among several, a program that is not installed (and
+               on Windows, where more places are searched), the welcome's first row, and Claude Code's row signed out (version
+               and path) and signed in (version and limit). */
+            const kept = spec.token === "accounts-several" ? 2 : ["engines-no-cli", "welcome-found", "engines-signed-out", "engines-claude-only", "accounts-windows"].includes(spec.token) ? 0 : -1;
             for (let index = 0; index < await dots.count(); index += 1) {
               const dot = dots.nth(index);
               await dot.scrollIntoViewIfNeeded();
@@ -46622,7 +46629,7 @@ describe("first-run guide: variant 1 on the real components", () => {
               const where = `${name}: the popover of dot ${index + 1}`;
               if (!popover) failures.push(`${where} did not open`);
               else {
-                popovers.push({ dot: index + 1, program: owner.program, account: owner.account, words: owner.words, text: popover.text, lines: popover.lines, inline: popover.inline });
+                popovers.push({ dot: index + 1, program: owner.program, account: owner.account, words: owner.words, text: popover.text, lines: popover.lines, inline: popover.inline, sideways: popover.sideways });
                 /* Design §3.2: an installed, signed-out program's popover holds its version and path, a signed-in one's its
                    version. Copilot's signed-in popover keeps saying what Copilot runs. */
                 const install = FIRST_RUN_INSTALLED[owner.program];
@@ -46641,6 +46648,7 @@ describe("first-run guide: variant 1 on the real components", () => {
                 if (popover.inline !== width < 768) failures.push(`${where} ${popover.inline ? "opens in the row" : "floats"} at ${width} px`);
                 if (!popover.text.trim()) failures.push(`${where} is empty`);
                 if (!popover.inWindow || !popover.inGuide) failures.push(`${where} leaves the ${popover.inWindow ? "guide" : "window"}`);
+                if (popover.inline && popover.sideways > 1) failures.push(`${where} is wider than its card: the step scrolls sideways by ${popover.sideways}px`);
                 if (popover.lines > 2) failures.push(`${where} takes ${popover.lines} lines`);
                 if (popover.covered.length) failures.push(`${where} stands over words: ${popover.covered.join(" | ")}`);
                 if (lang === "uk") for (const piece of popover.text.split(/[\s·,;:()?!«»"—]+/)) {
