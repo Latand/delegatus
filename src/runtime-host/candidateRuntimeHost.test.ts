@@ -17,12 +17,9 @@ const capability = (state: "pending" | "failed", failureCategory: string | null,
     state, phase: failurePhase, completedHosts: 0, totalHosts: null,
     failurePhase, failureCategory, nextRetryAt: retryAt,
   } });
-async function startupServer(mode: "terminal" | "hanging-body" | "retry-ready") {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "candidate-startup-server-"));
-  const stderrGateFile = path.join(directory, "write-stderr");
-  const stderrWrittenFile = path.join(directory, "stderr-written");
-  const child = spawn(process.execPath, ["run", path.join(import.meta.dir, "candidateStartupServer.fixture.ts"), mode, stderrGateFile, stderrWrittenFile], {
-    cwd: path.resolve(import.meta.dir, "../.."), env: process.env, stdio: ["ignore", "pipe", "pipe"],
+async function startupServer(mode: "hanging-body" | "retry-ready" | "retry-cancelled" | "retry-interrupted") {
+  const child = spawn(process.execPath, ["run", path.join(import.meta.dir, "candidateStartupServer.fixture.ts"), mode], {
+    cwd: path.resolve(import.meta.dir, "../.."), env: process.env, stdio: ["ignore", "pipe", "inherit"],
   });
   let stdout = "";
   const origin = await new Promise<string>((resolve, reject) => {
@@ -35,17 +32,11 @@ async function startupServer(mode: "terminal" | "hanging-body" | "retry-ready") 
     child.once("exit", code => reject(new Error(`startup fixture exited before listening (${code}): ${stdout}`)));
   });
   if (!origin.startsWith("http://127.0.0.1:")) throw new Error("startup fixture did not publish its port");
-  return { origin, stderr: child.stderr!, emitStartupStderr() { fs.writeFileSync(stderrGateFile, "1"); },
-    async waitForStartupStderr() {
-      const deadline = performance.now() + 2_000;
-      while (!fs.existsSync(stderrWrittenFile) && performance.now() < deadline) await Bun.sleep(5);
-      if (!fs.existsSync(stderrWrittenFile)) throw new Error("startup fixture did not write stderr");
-      await Bun.sleep(10);
-    },
-    async stop() {
+  return { origin, async stop() {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    const exited = new Promise<void>(resolve => child.once("exit", () => resolve()));
     child.kill("SIGTERM");
-    await new Promise<void>(resolve => child.once("exit", () => resolve()));
-    fs.rmSync(directory, { recursive: true, force: true });
+    await exited;
   } };
 }
 
@@ -67,6 +58,15 @@ test("browser startup waits through a scheduled and an executing retry", async (
   const server = await startupServer("retry-ready");
   try {
     expect(await waitForServerStartup(server.origin, 3_000)).toMatchObject({ state: "ready" });
+  } finally { await server.stop(); }
+});
+
+test.each(["retry-cancelled", "retry-interrupted"] as const)("browser startup refuses a stopped Viewer retry: %s", async mode => {
+  const server = await startupServer(mode);
+  try {
+    expect(await waitForServerStartup(server.origin, 2_000)).toMatchObject({
+      reason: "terminal", state: "failed", failureCategory: "runtime-host-unavailable", nextRetryAt: null,
+    });
   } finally { await server.stop(); }
 });
 

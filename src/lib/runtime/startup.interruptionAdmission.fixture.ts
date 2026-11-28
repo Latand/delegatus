@@ -11,16 +11,21 @@ export async function until(condition: () => boolean, ms = 2_000): Promise<void>
 
 export function journalTickets(directory: string, pid?: number): number {
   const queue = `${directory}.pending.jsonl.write-locks`;
-  if (!fs.existsSync(queue)) return 0;
-  return fs.readdirSync(queue).filter(name => name.endsWith(".json") && (pid === undefined
-    || Number((JSON.parse(fs.readFileSync(path.join(queue, name), "utf8")) as { pid?: number }).pid) === pid)).length;
-}
-
-export function journalHolderPid(directory: string): number | null {
-  try {
-    const holder = JSON.parse(fs.readFileSync(`${directory}.pending.jsonl.write-lock`, "utf8")) as { pid?: unknown };
-    return typeof holder.pid === "number" ? holder.pid : null;
-  } catch { return null; }
+  let names: string[];
+  try { names = fs.readdirSync(queue); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+    throw error;
+  }
+  return names.filter(name => {
+    if (!name.endsWith(".json")) return false;
+    if (pid === undefined) return true;
+    try { return JSON.parse(fs.readFileSync(path.join(queue, name), "utf8")).pid === pid; }
+    catch (error) {
+      if (error instanceof SyntaxError || (error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+  }).length;
 }
 
 export function journalClaims(directory: string): string[] {

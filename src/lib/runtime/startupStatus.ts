@@ -50,6 +50,7 @@ export interface StructuredHostStartupStatus extends StructuredHostStartupProgre
   deadline: string | null;
   hostKey: string | null;
   nextRetryAt: string | null;
+  retryDisposition: "scheduled" | "executing" | "stopped" | null;
 }
 
 function pendingStatus(): StructuredHostStartupStatus {
@@ -62,6 +63,7 @@ function pendingStatus(): StructuredHostStartupStatus {
     deadline: null,
     hostKey: null,
     nextRetryAt: null,
+    retryDisposition: null,
     updatedAt: new Date().toISOString(),
   };
 }
@@ -108,6 +110,7 @@ function setStatus(
     deadline: state === "ready" ? null : previous?.deadline ?? null,
     hostKey: state === "ready" ? null : previous?.hostKey ?? null,
     nextRetryAt: state === "ready" ? null : previous?.nextRetryAt ?? null,
+    retryDisposition: state === "ready" ? null : previous?.retryDisposition ?? null,
   };
 }
 
@@ -127,6 +130,7 @@ export function markStructuredHostStartupFailed(
     deadline: details?.deadline ?? null,
     hostKey: details?.hostKey ?? null,
     nextRetryAt: details?.nextRetryAt ?? null,
+    retryDisposition: details?.nextRetryAt ? "scheduled" : "stopped",
     ...(category ? { failureCategory: category } : {}),
   });
 }
@@ -134,7 +138,10 @@ export function markStructuredHostStartupFailed(
 export function markStructuredHostStartupRetryStarted(): void {
   markStructuredHostStartupProgress({ phase: "probing runtime host generation", completedHosts: 0, totalHosts: null });
   const status = startupStore.__llvStructuredHostStartupProgress;
-  if (status) status.nextRetryAt = null;
+  if (status?.state === "failed") {
+    status.nextRetryAt = null;
+    status.retryDisposition = "executing";
+  }
 }
 
 export function markStructuredHostStartupReady(): void {

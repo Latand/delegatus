@@ -98,7 +98,7 @@ export type InterruptionObligationInput = Omit<InterruptionObligation,
 
 export interface InterruptionObligationStore {
   list(): InterruptionObligation[];
-  record(input: InterruptionObligationInput): { obligation: InterruptionObligation; created: boolean };
+  record(input: InterruptionObligationInput, options?: { importPending?: boolean }): { obligation: InterruptionObligation; created: boolean };
   update(id: string, patch: Partial<Pick<InterruptionObligation,
     "state" | "operationId" | "attempts" | "resolvedAt" | "resolution">>,
     isCurrent?: (record: InterruptionObligation) => boolean): InterruptionObligation | null;
@@ -797,11 +797,13 @@ function createInterruptionObligationStore(
     }
     return { records, damaged, unreadable: false };
   };
-  const readJournal = (filename: string): InterruptionObligation[] => {
-    const { records, damaged, unreadable } = parseJournal(filename);
+  const journalReader = (validate: (value: unknown) => value is InterruptionObligation) => (filename: string): InterruptionObligation[] => {
+    const { records, damaged, unreadable } = parseJournal(filename, validate);
     if (damaged || unreadable) healthy = journalReadable = false;
     return records;
   };
+  const readJournal = journalReader(isObligation);
+  const readCompleteJournal = journalReader(completeObligation);
   const retireClaim = (claimed: string, damaged: boolean) => {
     if (!damaged) { fs.rmSync(claimed, { force: true }); return; }
     const artifact = `${pendingFile}.damaged-${path.basename(claimed).slice(claimPrefix.length)}`;
@@ -978,7 +980,9 @@ function createInterruptionObligationStore(
       const now = Date.now();
       const obligations: InterruptionObligation[] = [];
       const canonicalIds = new Set<string>();
-      const pending = [...readPending(), ...activeClaims().flatMap(readJournal)];
+      // Duplicate detection without an import uses the queued reader's
+      // validation so a damaged fragment cannot stand in for a cut.
+      const pending = [pendingFile, ...activeClaims()].flatMap(imported ? readCompleteJournal : readJournal);
       // Include claimed or unimportable journal cuts in the same cursor order.
       const indexedNames = page?.names ?? (guardOnly ? [...new Set([...names, ...pending.filter(item => item.reason === "account-guard"
         && interruptionObligationUnresolved(item)).map(item => `${item.id}.json`)])] : names);
@@ -1072,7 +1076,7 @@ function createInterruptionObligationStore(
       return records.filter(record => record.conversationId === conversationId);
     },
     conversationDirectory,
-    record(input: InterruptionObligationInput) {
+    record(input: InterruptionObligationInput, options?: { importPending?: boolean }) {
       return transaction(() => {
         const id = interruptionObligationId(input);
         /* The id is the cut: a record already under it is this cut's, in
@@ -1080,7 +1084,7 @@ function createInterruptionObligationStore(
         const covering = guardOnly
           ? read(fileFor(id)) ?? indexedCut(input)
             ?? [...readPending(), ...activeClaims().flatMap(readJournal)].find(existing => existing.id === id)
-          : list().find(existing => existing.id === id || coversSameCut(existing, input));
+          : list(undefined, options?.importPending === false).find(existing => existing.id === id || coversSameCut(existing, input));
         if (covering) {
           /* A restart record found standing again after its engine wrote more
              says when it was last seen: the stage controller counts a cut only

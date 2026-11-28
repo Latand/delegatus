@@ -1017,7 +1017,12 @@ export async function runStructuredHostStartup(
     if (finished) return;
     markStructuredHostStartupFailed();
     // An executing attempt must settle before retirement can checkpoint.
-    if (retryPending) rejectReady?.(options.signal?.reason);
+    if (retryPending) {
+      retryPending = false;
+      finished = true;
+      options.signal?.removeEventListener("abort", aborted);
+      rejectReady?.(options.signal?.reason);
+    }
   };
   options.signal?.addEventListener("abort", aborted, { once: true });
 

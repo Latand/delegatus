@@ -3139,7 +3139,8 @@ async function admitDemotionRecord<T>(
 
   const deadline = Math.min(options.deadline ?? Infinity, performance.now() + DEMOTION_HANDOFF_WAIT_MS);
   const directory = interruptionObligationDirectory(registry.filename);
-  let lastJournalBusy: InterruptionJournalBusyError | undefined;
+  const registryBusy = new RegistryWriterBusyError(DEMOTION_HANDOFF_WRITE.label);
+  let lastBusy: InterruptionJournalBusyError | RegistryWriterBusyError | undefined;
   const pause = (ms: number) => new Promise<void>((resolve, reject) => {
     const finish = () => { options.signal?.removeEventListener("abort", abort); resolve(); };
     const timer = setTimeout(finish, ms);
@@ -3153,34 +3154,24 @@ async function admitDemotionRecord<T>(
   });
   for (;;) {
     assertDemotionAdmissionActive(options);
-    if (performance.now() >= deadline) {
-      if (lastJournalBusy) throw lastJournalBusy;
-      throw new RegistryWriterBusyError(DEMOTION_HANDOFF_WRITE.label);
-    }
+    if (performance.now() >= deadline) throw lastBusy ?? registryBusy;
     // The successor also uses this FIFO journal. Try the registry once
     // inside it and return the journal before any wait for the writer.
-    let result: { acquired: true; value: boolean } | { acquired: false };
     try {
-      result = await withInterruptionObligationAdmission(directory, store => {
+      const result = await withInterruptionObligationAdmission(directory, store => {
         const evidence = readEvidence();
         return registry.deliveryWriteNow(DEMOTION_HANDOFF_WRITE, () => record(store, evidence));
       }, { deadline, signal: options.signal });
+      if (result.acquired) return result.value;
+      lastBusy = registryBusy;
     } catch (error) {
       if (!(error instanceof InterruptionJournalBusyError)) throw error;
-      lastJournalBusy = error;
-      const remaining = deadline - performance.now();
-      if (remaining <= 0) throw error;
-      await pause(Math.min(50, remaining));
-      continue;
+      lastBusy = error;
     }
-    if (result.acquired) return result.value;
     const remaining = deadline - performance.now();
-    if (remaining <= 0) {
-      if (lastJournalBusy) throw lastJournalBusy;
-      throw new RegistryWriterBusyError(DEMOTION_HANDOFF_WRITE.label);
-    }
+    if (remaining <= 0) throw lastBusy;
     // Wait outside the journal. The next attempt revalidates the host and turn.
-    await pause(Math.min(50, remaining));
+    await pause(Math.ceil(Math.min(50, remaining)));
   }
 }
 
@@ -3219,6 +3210,7 @@ export async function recordDemotionInterruption(
   /** Whether the evidence the cut was decided from still stands, asked after
       the last awaited read and before the record is written. */
   evidenceStands: () => boolean = () => true,
+  publishCut: (write: () => void) => void = write => write(),
 ): Promise<boolean> {
   const snapshot = startupHostSnapshot(registry, key);
   const hostKey = sessionKeyId(key);
@@ -3251,39 +3243,40 @@ export async function recordDemotionInterruption(
   return admitDemotionRecord(registry, options, readSeat, (store, seat) => {
     assertDemotionAdmissionActive(options);
     // Seat discovery can observe a completion. Validate all the evidence
-    // under the registry writer before marking custody and recording the cut.
+    // under the registry writer before publishing the handoff.
     const fresh = startupHostSnapshot(registry, key);
     const currentEntry = fresh.entries[hostKey];
     const currentConversation = fresh.conversations[conversation.id];
     if (!currentEntry || !currentConversation || custody(currentEntry, currentConversation) !== expected || !evidenceStands()) return false;
-    // Authority and evidence are checked inside journal admission immediately
-    // before this durable cut is published.
-    assertDemotionAdmissionActive(options);
-    const { obligation, created } = store.record({
-      conversationId,
-      engine,
-      hostKey,
-      path: generation.path,
-      owner: current.pid === null ? null : { pid: current.pid, startIdentity: current.processStartIdentity },
-      claimEpoch: entry.claimEpoch,
-      turnRef,
-      boundary: options.boundary ?? "viewer-release",
-      reason: "viewer-release",
-      checkpoint: {
-        lastEventKind: transcript?.lastWork?.kind ?? null,
-        lastEventAt: transcript?.lastWork?.at ?? null,
-        ...(backgroundTasks.length > 0 ? { backgroundTasks: [...backgroundTasks] } : {}),
-      },
-      seat,
-      /* Still owed: the stage stays held until the successor boots and hands
-         the cut to the stage's controller instead of continuing it. */
-      stage: interruptionStageOf(fresh.memberships, conversationId),
+    publishCut(() => {
+      assertDemotionAdmissionActive(options);
+      // The queued reader owns import and damaged-claim recovery.
+      const { obligation, created } = store.record({
+        conversationId,
+        engine,
+        hostKey,
+        path: generation.path,
+        owner: current.pid === null ? null : { pid: current.pid, startIdentity: current.processStartIdentity },
+        claimEpoch: entry.claimEpoch,
+        turnRef,
+        boundary: options.boundary ?? "viewer-release",
+        reason: "viewer-release",
+        checkpoint: {
+          lastEventKind: transcript?.lastWork?.kind ?? null,
+          lastEventAt: transcript?.lastWork?.at ?? null,
+          ...(backgroundTasks.length > 0 ? { backgroundTasks: [...backgroundTasks] } : {}),
+        },
+        seat,
+        /* Still owed: the stage stays held until the successor boots and hands
+           the cut to the stage's controller instead of continuing it. */
+        stage: interruptionStageOf(fresh.memberships, conversationId),
+      }, { importPending: false });
+      if (created) {
+        controllerDiagnosticError("[viewer release] recorded an interrupted turn owed one continuation", {
+          conversationId, hostKey, turnRef, obligation: obligation.id,
+        });
+      }
     });
-    if (created) {
-      controllerDiagnosticError("[viewer release] recorded an interrupted turn owed one continuation", {
-        conversationId, hostKey, turnRef, obligation: obligation.id,
-      });
-    }
     return true;
   });
 }
@@ -3412,7 +3405,7 @@ export async function handOverHostForDemotion(
   const owner = captureProcessIdentity(current.pid, undefined, current.processStartIdentity);
   const observed = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
   let marked = false;
-  const markHandoff = () => {
+  const markHandoff = (publishCut?: () => void) => {
     assertDemotionAdmissionActive(options);
     if (marked) return;
     const latest = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
@@ -3420,7 +3413,7 @@ export async function handOverHostForDemotion(
       || latest.structuredHost?.writerClaimEpoch !== observed?.structuredHost?.writerClaimEpoch) {
       throw new Error(`structured host ${sessionKeyId(key)} changed before Viewer demotion`);
     }
-    if (!registry.markStructuredHostHandoff(key, owner)) {
+    if (!registry.markStructuredHostHandoff(key, owner, publishCut)) {
       throw new Error(`structured host ${sessionKeyId(key)} changed before Viewer demotion`);
     }
     marked = true;
@@ -3448,12 +3441,7 @@ export async function handOverHostForDemotion(
     if (!inFlight && idle.backgroundTasks.length === 0 && !idle.selfStartedWork) return marked;
     if (await recordDemotionInterruption(
       registry, key, current, options, idle.backgroundTasks, idle.selfStartedWork,
-      () => {
-        if (!evidenceStands() || !idle.evidenceStands()) return false;
-        assertDemotionAdmissionActive(options);
-        markHandoff();
-        return true;
-      },
+      () => evidenceStands() && idle.evidenceStands(), markHandoff,
     )) {
       if (marked) return true;
       // A conversation with no owed continuation still needs its handoff.

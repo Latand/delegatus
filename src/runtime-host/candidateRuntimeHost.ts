@@ -274,12 +274,13 @@ export async function waitForServerStartup(
       if (progress) {
         if (response.ok && progress.state === "ready") return { state: "ready" };
         if (progress.state !== "ready") {
-          const { state, phase, failurePhase, failureCategory, nextRetryAt } = progress;
+          const { state, phase, failurePhase, failureCategory, nextRetryAt, retryDisposition } = progress;
           last = { state, reason: "deadline", failurePhase: failurePhase ?? phase, failureCategory: failureCategory ?? null, nextRetryAt: nextRetryAt ?? null };
-          // While a recoverable retry executes the Viewer clears nextRetryAt
-          // and keeps its failure category until startup reaches ready.
+          // Older Viewers report retries through their category and timetable.
           const terminal = failureCategory === "configuration" || failureCategory === "data-corruption";
-          if (state === "failed" && !nextRetryAt && (terminal || !failureCategory)) return { ...last, reason: "terminal" };
+          const stopped = retryDisposition === "stopped"
+            || (retryDisposition === undefined && !nextRetryAt && (terminal || !failureCategory));
+          if (state === "failed" && stopped) return { ...last, reason: "terminal" };
         }
       } else if (hasViewerDeploymentCapability(response.status, body) && JSON.parse(body).structuredHostStartup === null) {
         return { state: "disabled", reason: "terminal", failurePhase: null, failureCategory: null, nextRetryAt: null };

@@ -4,18 +4,28 @@ import { procBackend } from "@/lib/proc";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import { createFakeDeliveryLedger, FakeEngineHost } from "./fixtures/fakeEngineHost";
-import { InterruptionJournalBusyError } from "./interruptionObligations";
+import { InterruptionJournalBusyError, interruptionObligationDirectory } from "./interruptionObligations";
+import type { StructuredHostAdoptionFilter } from "./registry";
 import { bindStructuredDeliveryQueue } from "./structuredDeliveryController";
-import { adoptStructuredHostsAtStartup, type StructuredHostAdoptionFilter } from "./startup";
+import { adoptStructuredHostsAtStartup } from "./startup";
+import { journalTickets, until } from "./startup.interruptionAdmission.fixture";
 import type { RuntimeHostClient } from "./client";
 
-const [registryFile, runtimeFile, startedFile, progressFile, resultFile] = process.argv.slice(2);
-if (!registryFile || !runtimeFile || !startedFile || !progressFile || !resultFile) throw new Error("missing isolated successor fixture paths");
+const [registryFile, runtimeFile, milestones, hostKey, incumbentPid] = process.argv.slice(2);
+if (!registryFile || !runtimeFile || !milestones || !hostKey || !incumbentPid) throw new Error("missing isolated successor fixture paths");
+const milestone = (name: string) => `${milestones}/${name}`;
+const cuts = interruptionObligationDirectory(registryFile);
 const journal = new RuntimeJournal(runtimeFile, { structuredHosts: true });
 const registry = new AgentRegistry(registryFile, undefined, undefined, { sqliteMode: "sqlite" });
 const ledger = createFakeDeliveryLedger();
 const successor: ProcessIdentity = { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) };
-const client: RuntimeHostClient = {
+const refused = new Error("the incumbent still owns the fixture host");
+const watch = setInterval(() => {
+  for (const [pid, name] of [[process.pid, "successor-queued"], [Number(incumbentPid), "incumbent-queued"]] as const) {
+    if (!fs.existsSync(milestone(name)) && journalTickets(cuts, pid) > 0) fs.writeFileSync(milestone(name), "");
+  }
+}, 5);
+const client = {
   snapshot: async () => journal.snapshot(),
   readSession: async identity => journal.readSession(identity),
   append: async event => journal.append(event),
@@ -24,13 +34,26 @@ const client: RuntimeHostClient = {
   retryOperation: async (id, key, options) => journal.retryOperation(id, key, options),
   effectBatch: async (kinds, afterEventSeq) => journal.effectBatch(100, kinds, afterEventSeq),
   transitionOperation: async (id, status, details) => journal.transitionOperation(id, status, details),
-  startupGeneration: async () => 1,
-};
+  startupGeneration: async () => "fixture-generation",
+} as RuntimeHostClient;
 
 async function adopt(engine: "codex" | "claude", received: AgentRegistry, shouldAdopt: StructuredHostAdoptionFilter) {
-  fs.writeFileSync(progressFile, "journal-admitted");
+  if (engine !== "codex") return [];
+  fs.writeFileSync(milestone("journal-admitted"), "");
+  if (!fs.existsSync(milestone("incumbent-released"))) {
+    await until(() => fs.existsSync(milestone("cut-ready")), 15_000);
+    const entry = received.readOnlySnapshot().entries[hostKey];
+    if (!entry) throw new Error("missing incumbent fixture host");
+    const decision = { refusal: null };
+    if (received.claimStructuredHost(entry.key, successor, { allowUnhosted: true, decision })) {
+      throw new Error("successor took custody before incumbent release");
+    }
+    fs.writeFileSync(milestone("claim-refused.tmp"), String(decision.refusal));
+    fs.renameSync(milestone("claim-refused.tmp"), milestone("claim-refused"));
+    throw refused;
+  }
   return Object.values(received.readOnlySnapshot().entries).flatMap(entry => {
-    if (entry.key.engine !== engine || !entry.structuredHost || !shouldAdopt(entry)) return [];
+    if (sessionKeyId(entry.key) !== hostKey || !entry.structuredHost || !shouldAdopt(entry)) return [];
     const claimed = received.claimStructuredHost(entry.key, successor, { allowUnhosted: true });
     if (!claimed?.structuredHost || !claimed.claimOwner) return [];
     if (!received.setStructuredHostClaimed(entry.key, {
@@ -48,7 +71,6 @@ async function adopt(engine: "codex" | "claude", received: AgentRegistry, should
   });
 }
 
-fs.writeFileSync(startedFile, "admission-started");
 try {
   await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true });
   let adopted: string[] = [];
@@ -67,15 +89,17 @@ try {
       adopted = hosts.map(host => sessionKeyId(host.key));
       break;
     } catch (error) {
-      if (!(error instanceof InterruptionJournalBusyError) || attempt === 7) throw error;
+      if (attempt === 7 || (error !== refused && !(error instanceof InterruptionJournalBusyError))) throw error;
+      if (error === refused) await until(() => fs.existsSync(milestone("incumbent-released")), 5_000);
       await Bun.sleep(100);
     }
   }
-  fs.writeFileSync(resultFile, JSON.stringify({ adopted }));
+  fs.writeFileSync(milestone("result"), JSON.stringify({ adopted }));
 } catch (error) {
-  fs.writeFileSync(resultFile, JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+  fs.writeFileSync(milestone("result"), JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
   process.exitCode = 1;
 } finally {
+  clearInterval(watch);
   await bindStructuredDeliveryQueue([], { registry, client: null });
   registry.close();
   journal.close();

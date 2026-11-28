@@ -3,6 +3,7 @@ import type {
   ViewerHealthProbeObservation,
   ViewerHealthReadiness,
 } from "@/lib/runtime/contracts";
+import type { StructuredHostStartupStatus } from "@/lib/runtime/startupStatus";
 import { MEMBER_REQUIRED_CODE } from "@/lib/team/contract";
 import { redactMonitorText } from "@/lib/monitor/redact";
 
@@ -129,6 +130,7 @@ export interface ViewerStructuredHostStartupProgress {
   failureCategory?: string | null;
   failurePhase?: string;
   nextRetryAt?: string;
+  retryDisposition?: NonNullable<StructuredHostStartupStatus["retryDisposition"]>;
   recovery?: { examined: number; total: number; completed: number; deferred: number };
 }
 
@@ -147,6 +149,7 @@ export function viewerDeploymentStructuredHostStartup(
     const phase = candidate.phase;
     const completedHosts = candidate.completedHosts;
     const totalHosts = candidate.totalHosts;
+    const retryDisposition = candidate.retryDisposition;
     if ((state !== "pending" && state !== "failed" && state !== "ready")
       || typeof phase !== "string"
       || !/^[A-Za-z0-9 -]{1,80}$/.test(phase)
@@ -172,6 +175,8 @@ export function viewerDeploymentStructuredHostStartup(
       ...(typeof candidate.nextRetryAt === "string"
         && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(candidate.nextRetryAt)
         && Number.isFinite(Date.parse(candidate.nextRetryAt)) ? { nextRetryAt: candidate.nextRetryAt } : {}),
+      ...(retryDisposition === "scheduled" || retryDisposition === "executing" || retryDisposition === "stopped"
+        ? { retryDisposition } : {}),
     };
   } catch {
     return null;
