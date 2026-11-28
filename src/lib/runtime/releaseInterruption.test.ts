@@ -1,3 +1,5 @@
+import { classifyStructuredHostStartupError } from "@/lib/viewerInstrumentation";
+import { startJournalPeer } from "./startup.interruptionAdmission.fixture";
 import fs from "node:fs";
 import { Database } from "bun:sqlite";
 import { injectStateWriteFaultForTests } from "@/lib/state/sqliteStateStore";
@@ -284,6 +286,7 @@ async function successorBoot(
     /** The host ledger reader, for a case whose ledger moves under the read. */
     readHostTurnRecord?: typeof readHostTurnRecord;
     beforeDelivery?: () => Promise<void>;
+    client?: RuntimeHostClient;
   } = {},
 ): Promise<{ adopted: string[]; error: unknown }> {
   const registry = options.registry ?? new AgentRegistry(registryFile);
@@ -352,7 +355,7 @@ async function successorBoot(
   try {
     await adoptStructuredHostsAtStartup({
       registry,
-      client: journal ? journalClient(journal) : null,
+      client: options.client ?? (journal ? journalClient(journal) : null),
       orchestratorSeats: options.seats ?? (() => []),
       schedule: (callback, delayMs) => {
         scheduledProbes.push({ callback, delayMs });
@@ -446,6 +449,50 @@ test("a cut turn stays owed while runtime-host succession lags past three minute
     journal.close();
   }
 });
+
+
+test("an admitted continuation keeps one reservation when its interruption journal update times out", async () => {
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  let peer: ReturnType<typeof startJournalPeer> | undefined;
+  let registry: AgentRegistry | undefined;
+  try {
+    const cut = incumbentConversation("claude", cutSessionId(305), deadEngine(2_000_001_305));
+    await releaseIncumbent([cut], journal, () => deadEngine(2_000_001_305));
+    const [owed] = obligationsFor(cut.registryFile);
+    expect(owed?.state).toBe("owed");
+    registry = new AgentRegistry(cut.registryFile);
+    const ledger = createFakeDeliveryLedger();
+    const client = journalClient(journal);
+    const command = client.command.bind(client);
+    client.command = async (...args) => {
+      const result = await command(...args);
+      if (!peer && args[0].idempotencyKey === owed!.id) {
+        peer = startJournalPeer(interruptionObligationDirectory(cut.registryFile), path.join(directory, "continuation-writer"));
+        await peer.ready();
+      }
+      return result;
+    };
+    const first = await successorBoot(cut.registryFile, journal, ledger, { registry, client });
+    expect(peer?.held()).toBe(true);
+    expect(classifyStructuredHostStartupError(first.error).category).toBe("registry-contention");
+    const reservations = () => Object.values(registry!.readOnlySnapshot().heldDeliveries).filter(row => row.clientMessageId === owed!.id);
+    const [reservation] = reservations();
+    expect(reservations()).toHaveLength(1);
+    expect(await peer?.stop()).toBe(0);
+
+    const retry = await successorBoot(cut.registryFile, journal, ledger, { registry, client });
+    expect(retry.error).toBeNull();
+    await settle(() => ledger.writes.length > 0);
+    expect(continuationsIn(ledger)).toHaveLength(1);
+    expect(reservations()).toHaveLength(1);
+    expect(reservations()[0]?.command.operationId).toBe(reservation!.command.operationId);
+    expect(obligationsFor(cut.registryFile)).toMatchObject([{ id: owed!.id, operationId: reservation!.command.operationId }]);
+  } finally {
+    await peer?.stop();
+    registry?.close();
+    journal.close();
+  }
+}, 25_000);
 
 test("failed demotion cleanup keeps the obligation, and a surviving owner keeps it owed until adoption takes the row", async () => {
   const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
@@ -1122,7 +1169,7 @@ test("the pipeline engine reads a continuation the successor submitted as arrive
     /* What the stage tick reads: arrived, at the reservation's delivery. */
     setAgentRegistryForTests(registry);
     try {
-      expect(defaultPipelinePorts().conversationInterruption!(cut.conversationId)).toEqual({
+      expect(await defaultPipelinePorts().conversationInterruption!(cut.conversationId)).toEqual({
         state: "delivered",
         recordedAt: obligation!.recordedAt,
         resolvedAt: reservation!.deliveredAt,
@@ -1294,8 +1341,8 @@ test("a pipeline stage a restart cut gets no continuation: its cut is recorded f
     const registry = new AgentRegistry(cut.registryFile);
     setAgentRegistryForTests(registry);
     try {
-      expect(defaultPipelinePorts().conversationRestartCut!(cut.conversationId)).toEqual({ recordedAt: record!.recordedAt });
-      expect(defaultPipelinePorts().conversationInterruption!(cut.conversationId)?.state).toBe("discharged");
+      expect(await defaultPipelinePorts().conversationRestartCut!(cut.conversationId)).toEqual({ recordedAt: record!.recordedAt });
+      expect((await defaultPipelinePorts().conversationInterruption!(cut.conversationId))?.state).toBe("discharged");
     } finally {
       setAgentRegistryForTests(null);
     }
@@ -1547,7 +1594,7 @@ test("an orderly release of a pipeline stage leaves its cut to the stage control
     const registry = new AgentRegistry(cut.registryFile);
     setAgentRegistryForTests(registry);
     try {
-      expect(defaultPipelinePorts().conversationRestartCut!(cut.conversationId)).toEqual({ recordedAt: record!.recordedAt });
+      expect(await defaultPipelinePorts().conversationRestartCut!(cut.conversationId)).toEqual({ recordedAt: record!.recordedAt });
     } finally {
       setAgentRegistryForTests(null);
     }
@@ -1765,7 +1812,7 @@ test.each([
     const registry = new AgentRegistry(cut.registryFile);
     setAgentRegistryForTests(registry);
     try {
-      expect(defaultPipelinePorts().conversationRestartCut!(cut.conversationId)).toBeNull();
+      expect(await defaultPipelinePorts().conversationRestartCut!(cut.conversationId)).toBeNull();
     } finally {
       setAgentRegistryForTests(null);
     }
@@ -2042,7 +2089,7 @@ test.each([
     if (member === "stage") {
       setAgentRegistryForTests(new AgentRegistry(cut.registryFile));
       try {
-        expect(defaultPipelinePorts().conversationRestartCut!(cut.conversationId)).not.toBeNull();
+        expect(await defaultPipelinePorts().conversationRestartCut!(cut.conversationId)).not.toBeNull();
       } finally {
         setAgentRegistryForTests(null);
       }
@@ -2422,7 +2469,7 @@ test("a late echo of the turn a witness names leaves one record that follows the
     expect(Date.parse(moved!.recordedAt)).toBeGreaterThanOrEqual(echoAt);
     setAgentRegistryForTests(new AgentRegistry(cut.registryFile));
     try {
-      expect(Date.parse(defaultPipelinePorts().conversationRestartCut!(cut.conversationId)!.recordedAt)).toBeGreaterThanOrEqual(echoAt);
+      expect(Date.parse((await defaultPipelinePorts().conversationRestartCut!(cut.conversationId))!.recordedAt)).toBeGreaterThanOrEqual(echoAt);
     } finally {
       setAgentRegistryForTests(null);
     }
@@ -2912,7 +2959,7 @@ test.each([
     expect(structuredStartupDeferral()).toBeNull();
     setAgentRegistryForTests(new AgentRegistry(cut.registryFile));
     try {
-      expect(defaultPipelinePorts().conversationRestartCut!(cut.conversationId)).toBeNull();
+      expect(await defaultPipelinePorts().conversationRestartCut!(cut.conversationId)).toBeNull();
     } finally {
       setAgentRegistryForTests(null);
     }
@@ -3062,15 +3109,15 @@ test.each(["agent", "stage"] as const)("%s: a proposal the pending journal holds
     expect((await successorBoot(cut.registryFile, journal, ledger, { viewer: OTHER_VIEWER(244) })).error).toBeNull();
     await settle(() => ledger.writes.length > 0, 150);
     expect(restartCuts(cut.registryFile)).toEqual([]);
-    const restartCutOf = () => {
+    const restartCutOf = async () => {
       setAgentRegistryForTests(new AgentRegistry(cut.registryFile));
       try {
-        return defaultPipelinePorts().conversationRestartCut!(cut.conversationId);
+        return await defaultPipelinePorts().conversationRestartCut!(cut.conversationId);
       } finally {
         setAgentRegistryForTests(null);
       }
     };
-    expect(restartCutOf()).toBeNull();
+    expect(await restartCutOf()).toBeNull();
 
     injectStateWriteFaultForTests(null);
     expect(restartCuts(cut.registryFile)).toEqual([]);
@@ -3078,7 +3125,7 @@ test.each(["agent", "stage"] as const)("%s: a proposal the pending journal holds
     expect((await successorBoot(cut.registryFile, journal, ledger, { viewer: OTHER_VIEWER(245) })).error).toBeNull();
     await settle(() => ledger.writes.length > 0, 150);
     expect(restartCuts(cut.registryFile)).toEqual([]);
-    expect(restartCutOf()).toBeNull();
+    expect(await restartCutOf()).toBeNull();
     expect(continuationsIn(ledger)).toEqual([]);
   });
 });
@@ -3180,7 +3227,7 @@ test.each(["agent", "stage"] as const)("a live pending import cannot hide a comp
       expect(obligationsFor(cut.registryFile)).toEqual([]);
       setAgentRegistryForTests(new AgentRegistry(cut.registryFile));
       try {
-        expect(defaultPipelinePorts().conversationRestartCut!(cut.conversationId)).toBeNull();
+        expect(await defaultPipelinePorts().conversationRestartCut!(cut.conversationId)).toBeNull();
       } finally {
         setAgentRegistryForTests(null);
       }
