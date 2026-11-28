@@ -399,7 +399,7 @@ export interface PipelinePorts {
   recoverStagedLaunch?(launchId: string, eligible: () => boolean): Promise<void>;
   /** Confirms both original runtime operations still belong to this launch.
       The eligibility callback is checked after each read, outside the pipeline lease. */
-  originalLaunchOperations?(launchId: string, conversationId: string, eligible: () => boolean): Promise<"matched" | "rejected" | "conflict" | "unknown">;
+  originalLaunchOperations?(launchId: string, conversationId: string, eligible: () => boolean): Promise<"matched" | "delivered" | "rejected" | "conflict" | "unknown">;
   failStageLaunch?(launchId: string, conversationId: string, reason: string): boolean;
   /** After identity-confirmed termination, fence the original first delivery. */
   failStoppedStageLaunch?(launchId: string, conversationId: string, reason: string, eligible: () => boolean,
@@ -2275,8 +2275,9 @@ export function defaultPipelinePorts(
           || operation.receipt.conversationId !== conversationId);
       if (conflict(launch, launchId) || conflict(message, `spawn_message_${launchId}`)) return "conflict";
       if (!launch || !message || launch.receipt.kind !== "spawn" || message.receipt.kind !== "send") return "unknown";
-      if (message.receipt.status === "rejected" || message.receipt.status === "failed") return "rejected";
-      return eligible() ? "matched" : "unknown";
+      if (message.receipt.status === "rejected" || message.receipt.status === "failed" && !message.receipt.deliveryUnverified) return "rejected";
+      if (!eligible()) return "unknown";
+      return message.receipt.status === "delivered" || message.receipt.status === "turn-started" ? "delivered" : "matched";
     }),
     failStageLaunch: (launchId, conversationId, reason) => {
       // Refresh at the write boundary: a receipt that published meanwhile wins.
@@ -3833,7 +3834,10 @@ function providerAccountRecovered(pipeline: Pipeline, attempt: PipelineStageAtte
 }
 
 function reportTurnFinished(attempt: PipelineStageAttempt, durable: StageTurnEvidence | null | undefined): boolean {
-  return Boolean(attempt.report && durable?.turn === "terminal"
+  const reportAt = Date.parse(attempt.report?.at ?? "");
+  const crossedCut = (attempt.runtimeSwitches ?? []).some(record => record.cutAt && Date.parse(record.cutAt) > reportAt);
+  return Boolean(attempt.report && !crossedCut
+    && durable?.turn === "terminal"
     && (durable.lastRecordAt ?? durable.terminalProviderMessage?.ts ?? durable.message?.ts ?? 0) >= unixMs(attempt.report.at));
 }
 
@@ -9628,6 +9632,14 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
           const live = pipelines.find(item => item.id === pipeline.id);
           const current = live && runFor(live, stage.id)?.attempts.find(item => item.n === attempt.n);
           if (!live || !current || activationFence(live) !== fence || JSON.stringify(current) !== expectedAttempt) throw new RuntimeSwitchSuperseded();
+          if (parked && record.inPlace && record.phase === "committed" && !record.cutAt && !record.continuationDispatch) {
+            const generation = ports.conversationGeneration?.(record.from.conversationId);
+            const allowed = ports.allowedAccountIds?.(pipeline.project, record.to.engine);
+            if (!generation || generation.sessionId !== record.from.sessionId || generation.agentPath !== record.from.agentPath
+              || !runtimeTargetsEqual(generation, { ...record.to,
+                serviceTier: record.appliedServiceTier === undefined ? record.to.serviceTier : record.appliedServiceTier })
+              || allowed && (!generation.accountId || !allowed.includes(generation.accountId))) throw new RuntimeSwitchSuperseded();
+          }
           if (record.retry && JSON.stringify(attempt) === expectedAttempt && live.state === pipeline.state && live.stateDetail === pipeline.stateDetail) return;
           for (const key of Object.keys(current)) if (!(key in attempt)) Reflect.deleteProperty(current, key);
           Object.assign(current, structuredClone(attempt));
@@ -9791,7 +9803,14 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
       };
       let switchFailed = false;
       if (parked && record.phase !== "cutting" && record.phase !== "requested") {
-        if (record.mode === "fork") {
+        if (record.inPlace && !record.cutAt && !record.continuationDispatch) {
+          const cut = await ports.runtimeSwitchTierCut?.(record.from.conversationId, switchOperationKey(record, "tier"), record.cutTurnId);
+          if (cut !== "turn-ended" && cut !== "cancelled") continue;
+          const generation = ports.conversationGeneration?.(record.from.conversationId);
+          if (!generation || generation.sessionId !== record.from.sessionId || generation.agentPath !== record.from.agentPath
+            || !runtimeTargetsEqual(generation, { ...record.to,
+            serviceTier: record.appliedServiceTier === undefined ? record.to.serviceTier : record.appliedServiceTier })) continue;
+        } else if (record.mode === "fork") {
           const outcome = await runtimeSwitchReconfigureOutcome(record, ports);
           const delivery = record.continuationDispatch
             ? await ports.runtimeSwitchDelivery?.(record.from.conversationId, record.continuationDispatch.key)
@@ -12309,8 +12328,13 @@ async function deliveredAttemptPath(pipeline: Pipeline, attempt: PipelineStageAt
   return (await attemptTurnTranscript(pipeline, currentStage(pipeline)!.id, attempt, ports))?.pathname ?? null;
 }
 
+function stagedDeliveryPathPending(receipt: PipelineSpawnReceipt | null, pathname: string): boolean {
+  return receipt?.staged === true && receipt.currentGeneration === true
+    && pathname === receipt.stagedTranscript && absentStagedTranscriptAllowed(pathname);
+}
+
 /** The attempt's own transcript, once it holds a native turn this attempt
-    started. Its launch receipt names it before the receipt completes. */
+    started or the journal confirms its first send. */
 async function attemptTurnTranscript(
   pipeline: Pipeline, stageId: string, attempt: PipelineStageAttempt, ports: PipelinePorts, claimedRetryClaimId?: string,
   checkNonExecution = !!attempt.roleMemoryDispatchWait,
@@ -12320,18 +12344,21 @@ async function attemptTurnTranscript(
   const recovery = stagedLaunchRecovery(receipt);
   const claimedGenerationMatches = (candidate: PipelineSpawnReceipt | null) => !!candidate && !!claimedRetryClaimId
     && candidate.staged === true && candidate.generationMatches === true && candidate.retryClaimId === claimedRetryClaimId;
-  if (receipt && (receipt.conversationId !== attempt.conversationId || receipt.currentGeneration === false && !claimedGenerationMatches(receipt)
+  if (receipt && (receipt.launchId !== attempt.launchId || receipt.conversationId !== attempt.conversationId || receipt.currentGeneration === false && !claimedGenerationMatches(receipt)
     || recovery?.stopped && !recovery.reason.startsWith(STAGED_RECOVERY_EXHAUSTED))) return null;
   const pathname = attempt.agentPath ?? ports.pathForConversation(attempt.conversationId)
     ?? receipt?.transcript ?? receipt?.stagedTranscript;
   if (!pathname) return null;
   if (receipt?.currentGeneration !== undefined && pathname !== receipt.stagedTranscript && pathname !== receipt.transcript) return null;
+  const deliveryPark = deliveryUnverifiedAttempt(pipeline, attempt);
+  const pathAllowed = ports.sourcePathAllowed(pathname);
+  const deliveryPathPending = !pathAllowed && deliveryPark && stagedDeliveryPathPending(receipt, pathname);
   const beforeRead = checkNonExecution ? stageArtifactStamp(pathname) : null;
   const ownAbsentArtifact = checkNonExecution && beforeRead === null
     && receipt?.state === "failed" && receipt.staged === true && receipt.generationMatches === true
     && pathname === receipt.stagedTranscript;
-  if (!ports.sourcePathAllowed(pathname) && !(ownAbsentArtifact && absentStagedTranscriptAllowed(pathname))) return null;
-  const evidence = await ports.durableTurnEvidence(attempt.effectiveRole.engine, pathname);
+  if (!pathAllowed && !deliveryPathPending && !(ownAbsentArtifact && absentStagedTranscriptAllowed(pathname))) return null;
+  const evidence = deliveryPathPending ? null : await ports.durableTurnEvidence(attempt.effectiveRole.engine, pathname);
   // An unstarted host may never create its staged transcript. Only its own
   // artifact, proven absent across the read, can supply that missing no-turn
   // proof; unreadable or partial artifacts keep the original launch fenced.
@@ -12345,10 +12372,12 @@ async function attemptTurnTranscript(
       && (current.currentGeneration !== false || claimedGenerationMatches(current))
       && current.stagedTranscript === receipt.stagedTranscript && current.state === receipt.state && current.error === receipt.error };
   }
-  // Metadata alone proves no prompt delivery. Require a native turn from this attempt.
+  // The native turn or the original send's delivered journal entry proves arrival.
   const nativeWorkAt = Math.max(evidence?.turnStartedAt ?? 0, evidence?.lastAgentEventAt ?? 0);
-  if (!evidence || evidence.launchOnly || evidence.turn === "unknown"
-    || nativeWorkAt < unixMs(attemptEvidenceFloor(attempt))) return null;
+  const nativeTurn = !!evidence && !evidence.launchOnly && evidence.turn !== "unknown"
+    && nativeWorkAt >= unixMs(attemptEvidenceFloor(attempt));
+  if (!nativeTurn && !deliveryPark) return null;
+  if (!nativeTurn && (!receipt || pathname !== receipt.transcript && pathname !== receipt.stagedTranscript)) return null;
   const stillCurrent = () => {
     const latest = findPipelineRecord(pipeline.id);
     const currentAttempt = latest?.runs.find(run => run.stageId === stageId)?.attempts.find(item => item.n === attempt.n);
@@ -12362,11 +12391,13 @@ async function attemptTurnTranscript(
   const operations = await ports.originalLaunchOperations?.(attempt.launchId!, attempt.conversationId, stillCurrent) ?? "unknown";
   if (operations === "conflict") return { pathname: null, operationConflict: true };
   if (operations === "rejected") return { pathname: null, operationRejected: true };
-  if (operations !== "matched" || !stillCurrent()) return null;
+  if ((operations !== "matched" && operations !== "delivered") || !stillCurrent()) return null;
+  if (!nativeTurn && operations !== "delivered") return null;
   const current = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
-  if (receipt && (!current || current.conversationId !== receipt.conversationId
+  if (receipt && (!sameSpawnReceiptFence(current, receipt) || !current
     || current.currentGeneration === false && !claimedGenerationMatches(current)
     || current.stagedTranscript !== receipt.stagedTranscript || current.state !== receipt.state || current.error !== receipt.error)) return null;
+  if (deliveryPathPending && !ports.sourcePathAllowed(pathname) && !stagedDeliveryPathPending(current, pathname)) return null;
   return { pathname, operationConflict: false };
 }
 
@@ -19273,6 +19304,10 @@ async function applyPipelinePatch(
           ...(inPlace ? { inPlace: true as const, cut: req.applyNowCut ?? "boundary" } : {}),
           ...(typeof req.turbo === "string" && req.turbo ? { turbo: req.turbo.slice(0, 80) } : {}),
           from: { ...(nativeGeneration ?? currentRuntimeSeat(live)), conversationId: live.conversationId, launchId: live.launchId, sessionId: nativeGeneration?.sessionId ?? live.sessionId, agentPath: nativeGeneration?.agentPath ?? live.agentPath }, to };
+        if (live.runtimeEvidenceSince && (live.runtimeSwitches?.length ?? 0) >= 8) {
+          // Reconcile a legacy uncut tier marker while its switch is still available.
+          live.runtimeEvidenceSince = attemptEvidenceFloor(live) ?? undefined;
+        }
         live.runtimeSwitches = [...(live.runtimeSwitches ?? []).slice(-7), runtimeSwitch];
       }
       // All target validation and switch replay/conflict checks precede the
@@ -19715,6 +19750,24 @@ async function verifiedForkContinuation(target: StageCompletionTarget, ports: Pi
   return evidence?.turnStartedAt != null && evidence.turnStartedAt >= Date.parse(delivery.at);
 }
 
+/** Tier changes apply to the next turn. Until a native cut actually happens,
+ * this conversation's running turn retains completion authority (#3976). */
+async function uncutTierReportable(target: StageCompletionTarget, ports: PipelinePorts): Promise<boolean> {
+  const record = openRuntimeSwitch(target.attempt);
+  if (!record?.inPlace || record.mode !== "fork" || record.phase !== "switching"
+    || !REPORTABLE_ATTEMPT_STATES.has(target.attempt.state) || target.attempt.completedAt || target.attempt.verdict
+    || record.tierCut !== "armed" || record.cutAt || record.continuationDispatch
+    || record.from.conversationId !== target.attempt.conversationId) return false;
+  const state = await ports.runtimeSwitchTierCut?.(record.from.conversationId, switchOperationKey(record, "tier"), record.cutTurnId);
+  if (state !== "armed" && state !== "turn-ended" && state !== "cancelled") return false;
+  const generation = ports.conversationGeneration?.(record.from.conversationId);
+  if (!generation || generation.sessionId !== record.from.sessionId || generation.agentPath !== record.from.agentPath
+    || !runtimeTargetsEqual(generation, { ...record.to,
+      serviceTier: record.appliedServiceTier === undefined ? record.to.serviceTier : record.appliedServiceTier })) return false;
+  const allowed = ports.allowedAccountIds?.(target.pipeline.project, generation.engine);
+  return !allowed || !!generation.accountId && allowed.includes(generation.accountId);
+}
+
 /** Which attempt a completion call is about, decided from the conversation the
     server attributed the call to. Nothing the caller says takes part beyond
     `stageId`, which only narrows the attempts it already holds. */
@@ -19757,6 +19810,7 @@ async function resolveStageCompletionTarget(
   const handoffSuccessors = new Set<StageCompletionTarget>();
   const unverifiedHandoffSuccessors = new Set<StageCompletionTarget>();
   for (const target of named) if (await verifiedForkContinuation(target, ports)) forkSuccessors.add(target);
+  for (const target of named) if (await uncutTierReportable(target, ports)) forkSuccessors.add(target);
   for (const target of named) {
     const pending = openRuntimeSwitch(target.attempt);
     const successor = pending?.mode === "handoff" && pending.cutAt && pending.launch?.conversationId === conversationId
@@ -19805,7 +19859,11 @@ async function resolveStageCompletionTarget(
         && stageId === recoveryEvidence.stageId && attempt.n === recoveryEvidence.attempt
         && stageCompletionRuntimeFence(attempt) === recoveryEvidence.runtimeFence);
       if (target?.attempt.launchId === recoveryEvidence.launchId
-        && sameSpawnReceiptFence(ports.spawnReceipt(target.attempt.launchId), recoveryEvidence.receipt)) {
+        && target.pipeline.state === recoveryEvidence.pipelineState
+        && (target.pipeline.controlGeneration ?? null) === recoveryEvidence.controlGeneration
+        && deliveryUnverifiedAttempt(target.pipeline, target.attempt)
+        && sameSpawnReceiptFence(ports.spawnReceipt(target.attempt.launchId), recoveryEvidence.receipt)
+        && (ports.sourcePathAllowed(recoveryEvidence.path) || stagedDeliveryPathPending(recoveryEvidence.receipt, recoveryEvidence.path))) {
         recoverable.set(target, recoveryEvidence.path);
       }
     }
@@ -19850,6 +19908,8 @@ type StageCompletionRecoveryEvidence = {
   attempt: number;
   launchId: string;
   runtimeFence: string;
+  pipelineState: Pipeline["state"];
+  controlGeneration: string | null;
   path: string;
   receipt: ReturnType<PipelinePorts["spawnReceipt"]>;
 };
@@ -19861,6 +19921,7 @@ function sameSpawnReceiptFence(
   const fingerprint = (receipt: typeof current) => receipt && JSON.stringify([
     receipt.launchId, receipt.conversationId, receipt.state, receipt.sessionId, receipt.transcript,
     receipt.stagedTranscript, receipt.staged, receipt.error, receipt.currentGeneration,
+    receipt.accountId, receipt.paneId, receipt.generationMatches, receipt.retryClaimId, receipt.successorTranscript,
   ]);
   return fingerprint(current) === fingerprint(expected);
 }
@@ -19956,10 +20017,12 @@ export async function reportStageCompletion(
   const recoveryEvidence: StageCompletionRecoveryEvidence | null = previewed.recoveryPath && preview.attempt.launchId && recoveryReceipt
     ? { pipelineId: preview.pipeline.id, stageId: preview.stageId, attempt: preview.attempt.n,
       launchId: preview.attempt.launchId, runtimeFence: previewRuntimeFence,
+      pipelineState: preview.pipeline.state, controlGeneration: preview.pipeline.controlGeneration ?? null,
       path: previewed.recoveryPath, receipt: recoveryReceipt }
     : null;
   const heldWork = await backgroundWorkRefusal(previewed.recoveryPath
-    ? { ...preview, attempt: { ...preview.attempt, agentPath: previewed.recoveryPath } }
+    ? { ...preview, attempt: { ...preview.attempt,
+      agentPath: ports.sourcePathAllowed(previewed.recoveryPath) ? previewed.recoveryPath : null } }
     : preview, ports);
   if (heldWork) return heldWork;
   return withPipelineMutation(async (pipelines, persist) => {

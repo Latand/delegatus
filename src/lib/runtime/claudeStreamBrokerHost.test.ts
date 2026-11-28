@@ -1203,7 +1203,7 @@ describe("ClaudeStreamBrokerHost", () => {
       readTranscript: () => [],
       spawnProcess: (_command, args, options) => {
         const marker = args.indexOf("--session-id");
-        return spawn(Bun.which("bun") ?? "bun", [fixture], {
+        return spawn(Bun.which("bun") ?? "bun", [fixture, "--hold-first-result"], {
           ...options,
           env: { ...options.env, LLV_FIXTURE_SESSION_ID: args[marker + 1] ?? "" } as NodeJS.ProcessEnv,
           stdio: ["pipe", "pipe", "pipe"],
@@ -1212,34 +1212,37 @@ describe("ClaudeStreamBrokerHost", () => {
     });
 
     const firstContent = structuredContent("spawn frame", [IMAGE_REF]);
-    const first = await host.send({ id: "fixture-spawn", ...firstContent });
-    expect(first).toEqual({ outcome: "turn-started", turnId: "fixture-spawn" });
-    const secondContent = structuredContent("follow-up frame", [IMAGE_REF]);
-    const second = await host.send({ id: "fixture-follow-up", ...secondContent });
-    expect(second).toEqual({ outcome: "queued-next-turn", turnId: "fixture-follow-up" });
-    await waitUntilIdle(host);
-    const imageOnly = structuredContent("", [IMAGE_REF]);
-    expect(await host.send({ id: "fixture-image-only", ...imageOnly })).toEqual({
-      outcome: "turn-started",
-      turnId: "fixture-image-only",
-    });
-    await waitUntilIdle(host);
-    expect((await host.health()).activeFlags).toContain("structured-image-v1");
-    const eventCursor = (await host.health()).eventCursor;
-    const attached = host.attach(0)[Symbol.asyncIterator]();
-    const attachedEvents: RuntimeEvent[] = [];
-    while ((attachedEvents.at(-1)?.seq ?? 0) < eventCursor) attachedEvents.push(await nextEvent(attached));
-    const encodedImage = IMAGE_BYTES.toString("base64");
-    const attachedJson = JSON.stringify(attachedEvents);
-    expect(attachedJson).not.toContain(encodedImage);
-    expect(attachedJson).toContain(IMAGE_REF.sha256);
-    expect(attachedJson).toContain(firstContent.contentDigest);
-    expect(attachedJson).toContain("spawn frame");
-    const eventLedger = fs.readFileSync(path.join(eventDirectory, `${encodeURIComponent(host.identity.sessionId)}.jsonl`), "utf8");
-    expect(eventLedger).not.toContain(encodedImage);
-    expect(eventLedger).toContain(IMAGE_REF.sha256);
     const sessionId = host.identity.sessionId;
-    await host.release();
+    try {
+      const first = await host.send({ id: "fixture-spawn", ...firstContent });
+      expect(first).toEqual({ outcome: "turn-started", turnId: "fixture-spawn" });
+      const secondContent = structuredContent("follow-up frame", [IMAGE_REF]);
+      const second = await host.send({ id: "fixture-follow-up", ...secondContent });
+      expect(second).toEqual({ outcome: "queued-next-turn", turnId: "fixture-follow-up" });
+      await waitUntilIdle(host);
+      const imageOnly = structuredContent("", [IMAGE_REF]);
+      expect(await host.send({ id: "fixture-image-only", ...imageOnly })).toEqual({
+        outcome: "turn-started",
+        turnId: "fixture-image-only",
+      });
+      await waitUntilIdle(host);
+      expect((await host.health()).activeFlags).toContain("structured-image-v1");
+      const eventCursor = (await host.health()).eventCursor;
+      const attached = host.attach(0)[Symbol.asyncIterator]();
+      const attachedEvents: RuntimeEvent[] = [];
+      while ((attachedEvents.at(-1)?.seq ?? 0) < eventCursor) attachedEvents.push(await nextEvent(attached));
+      const encodedImage = IMAGE_BYTES.toString("base64");
+      const attachedJson = JSON.stringify(attachedEvents);
+      expect(attachedJson).not.toContain(encodedImage);
+      expect(attachedJson).toContain(IMAGE_REF.sha256);
+      expect(attachedJson).toContain(firstContent.contentDigest);
+      expect(attachedJson).toContain("spawn frame");
+      const eventLedger = fs.readFileSync(path.join(eventDirectory, `${encodeURIComponent(sessionId)}.jsonl`), "utf8");
+      expect(eventLedger).not.toContain(encodedImage);
+      expect(eventLedger).toContain(IMAGE_REF.sha256);
+    } finally {
+      await host.release();
+    }
 
     const restartedChild = new FakeClaude(new RecordingDeliveryLedger());
     const restarted = await ClaudeStreamBrokerHost.adopt(sessionId, {
@@ -1251,12 +1254,15 @@ describe("ClaudeStreamBrokerHost", () => {
       readTranscript: () => [],
       spawnProcess: fakeSpawn(restartedChild, {}),
     });
-    expect(await restarted.send({ id: "fixture-spawn", ...firstContent })).toEqual({
-      outcome: "turn-started",
-      turnId: "fixture-spawn",
-    });
-    expect(restartedChild.inputs).toHaveLength(0);
-    await restarted.release();
+    try {
+      expect(await restarted.send({ id: "fixture-spawn", ...firstContent })).toEqual({
+        outcome: "turn-started",
+        turnId: "fixture-spawn",
+      });
+      expect(restartedChild.inputs).toHaveLength(0);
+    } finally {
+      await restarted.release();
+    }
   });
 
   test("real stream-json child accepts the admitted encoded image aggregate", async () => {
@@ -1287,12 +1293,15 @@ describe("ClaudeStreamBrokerHost", () => {
       },
     });
 
-    expect(await host.send({ id: "fixture-near-limit", ...structuredContent("near limit", imageRefs) })).toEqual({
-      outcome: "turn-started",
-      turnId: "fixture-near-limit",
-    });
-    await waitUntilIdle(host);
-    await host.release();
+    try {
+      expect(await host.send({ id: "fixture-near-limit", ...structuredContent("near limit", imageRefs) })).toEqual({
+        outcome: "turn-started",
+        turnId: "fixture-near-limit",
+      });
+      await waitUntilIdle(host);
+    } finally {
+      await host.release();
+    }
   }, 20_000);
 
   test("arbitrary child output above the admitted aggregate envelope remains bounded", async () => {

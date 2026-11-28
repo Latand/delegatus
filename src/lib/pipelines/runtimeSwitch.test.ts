@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { pathToFileURL } from "node:url";
 
 
 /* Isolated state only: this suite drives the production pipeline controller
@@ -2650,6 +2651,171 @@ test("in-place: an idle Codex stage takes the tier for its next turn; nothing is
   expect(attempt.n).toBe(1); expect(h.spawnCount()).toBe(1);
 });
 
+test("#3976: an armed tier boundary accepts the running turn's completion", async () => {
+  const h = await inPlaceHarness();
+  h.answer("armed");
+  await h.request({ applyNowCut: "boundary" });
+  await tickPipelines([], h.ports);
+  const before = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  const floor = before.runtimeEvidenceSince ?? before.startedAt;
+  const result = await reportStageCompletion({ verdict: "pass", summary: "Tier boundary work completed" },
+    { kind: "agent", role: "architect", conversationId: STAGE_CONVERSATION }, h.ports);
+  expect(result.error).toBeUndefined();
+  h.cutState("turn-ended");
+  await tickPipelines([], h.ports);
+  const after = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  expect(after.runtimeSwitches![0]).toMatchObject({ phase: "committed", tierCut: "turn-ended" });
+  expect(after.runtimeSwitches![0]!.continuedAt).toBeUndefined();
+  expect(after.runtimeEvidenceSince ?? after.startedAt).toBe(floor);
+  expect(after.report?.verdict.status).toBe("pass");
+  expect(h.continuations).toHaveLength(0);
+});
+
+test.each(["cut", "unknown", "host-gone"] as const)("an in-place %s boundary keeps report admission fenced", async state => {
+  const h = await inPlaceHarness();
+  h.answer("armed");
+  await h.request({ applyNowCut: "boundary" });
+  await tickPipelines([], h.ports);
+  h.cutState(state);
+  expect(await reportStageCompletion({ verdict: "pass", summary: "Incomplete switch" },
+    { kind: "agent", role: "architect", conversationId: STAGE_CONVERSATION }, h.ports))
+    .toMatchObject({ code: "STAGE_REPORT_RUNTIME_SWITCH" });
+});
+
+test("#3976: a turn ending before its tier cut settles from its original completion evidence", async () => {
+  const h = await inPlaceHarness();
+  h.answer("armed");
+  await h.request({ applyNowCut: "boundary" });
+  await tickPipelines([], h.ports);
+  const completedAt = h.wallClock() + 1000;
+  h.setTurn({ turn: "terminal", message: { text: 'Finished\n```json\n{"status":"pass"}\n```', ts: completedAt }, lastRecordAt: completedAt });
+  h.advance(2000);
+  h.cutState("turn-ended");
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
+  expect(h.continuations).toHaveLength(0);
+});
+
+test("#3976: a report accepted before a native cut cannot settle the continuation", async () => {
+  const h = await inPlaceHarness();
+  h.answer("armed");
+  await h.request({ applyNowCut: "boundary" });
+  await tickPipelines([], h.ports);
+  expect(await reportStageCompletion({ verdict: "pass", summary: "Completed before the cut" },
+    { kind: "agent", role: "builder", conversationId: STAGE_CONVERSATION }, h.ports)).toMatchObject({ report: { verdict: { status: "pass" } } });
+  h.advance(2000);
+  h.cutState("cut");
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(h.continuations).toHaveLength(1);
+  const afterCut = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  expect(afterCut.state).toBe("running");
+  expect(afterCut.verdict).toBeNull();
+  h.setTurn({ turn: "terminal", message: null, lastRecordAt: h.wallClock() + 1 });
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.verdict).toBeNull();
+});
+
+test.each(["fresh", "legacy", "legacy with a later cut"] as const)("#3976: retained uncut tier settlement (%s)", async shape => {
+  const h = await inPlaceHarness();
+  h.answer("armed");
+  await h.request({ applyNowCut: "boundary" });
+  await tickPipelines([], h.ports);
+  const completedAt = h.wallClock() + 1000;
+  h.advance(2000);
+  h.cutState("turn-ended");
+  await tickPipelines([], h.ports);
+
+  const persisted = loadPipelines()[0]!;
+  const attempt = persisted.runs[0]!.attempts[0]!;
+  const record = attempt.runtimeSwitches![0]!;
+  expect(record).toMatchObject({ phase: "committed", tierCut: "turn-ended" });
+  expect(record.cutAt).toBeUndefined();
+  if (shape !== "fresh") {
+    record.continuedAt = record.settledAt!;
+    attempt.runtimeEvidenceSince = record.continuedAt;
+  }
+  savePipelines([persisted]);
+  const laterCut = shape === "legacy with a later cut";
+  if (laterCut) {
+    h.advance(1000);
+    h.answer("cut");
+    expect((await h.request({ serviceTier: "priority" })).error).toBeUndefined();
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches!.at(-1)).toMatchObject({
+      phase: "committed", tierCut: "cut", continuedAt: expect.any(String),
+    });
+  }
+  h.setTurn({ turn: "terminal", message: { text: 'Finished\n```json\n{"status":"pass"}\n```', ts: completedAt }, lastRecordAt: completedAt });
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const final = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  expect(final.state).toBe(laterCut ? "running" : "passed");
+  expect(final.verdict?.status).toBe(laterCut ? undefined : "pass");
+  expect(h.continuations).toHaveLength(laterCut ? 1 : 0);
+  expect(h.spawnCount()).toBe(1);
+});
+
+test("#3976: an unconfirmed expired tier cut becomes a visible decision", async () => {
+  const h = await inPlaceHarness();
+  h.answer("armed");
+  await h.request({ applyNowCut: "boundary" });
+  await tickPipelines([], h.ports);
+  h.cutState("unknown");
+  h.advance(11 * 60_000);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(loadPipelines()[0]!.stateDetail).toContain("cut outcome");
+  expect(h.continuations).toHaveLength(0);
+});
+
+test.each([["session", 1], ["session", 2], ["account", 1], ["account", 2]] as const)("late tier cancellation keeps a changed %s fenced at read %d", async (change, changeOnRead) => {
+  const h = await inPlaceHarness();
+  h.answer("armed");
+  await h.request({ applyNowCut: "boundary" });
+  await tickPipelines([], h.ports);
+  h.advance(11 * 60_000);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  const generation = h.ports.conversationGeneration!(STAGE_CONVERSATION)!;
+  let reads = 0;
+  h.ports.runtimeSwitchTierCut = async (): Promise<"cancelled"> => {
+    if (++reads === changeOnRead) {
+      if (change === "session") h.ports.conversationGeneration = () => ({ ...generation, sessionId: "session-replacement" });
+      else h.ports.allowedAccountIds = () => [];
+    }
+    return "cancelled";
+  };
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(h.continuations).toHaveLength(0);
+});
+
+test.each(["cut", "generation", "account"] as const)("tier report admission rechecks %s after the preview", async change => {
+  const h = await inPlaceHarness();
+  h.answer("armed");
+  await h.request({ applyNowCut: "boundary" });
+  await tickPipelines([], h.ports);
+  const read = h.ports.durableTurnEvidence;
+  h.ports.durableTurnEvidence = async (...args) => {
+    const evidence = await read(...args);
+    if (change === "cut") h.cutState("cut");
+    if (change === "account") h.ports.allowedAccountIds = () => [];
+    if (change === "generation") {
+      const generation = h.ports.conversationGeneration!(STAGE_CONVERSATION)!;
+      h.ports.conversationGeneration = () => ({ ...generation, sessionId: "session-replacement" });
+    }
+    return evidence;
+  };
+  expect(await reportStageCompletion({ verdict: "pass", summary: "Admission changed" },
+    { kind: "agent", role: "architect", conversationId: STAGE_CONVERSATION }, h.ports))
+    .toMatchObject({ code: "STAGE_REPORT_RUNTIME_SWITCH" });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.report).toBeUndefined();
+});
+
 test("in-place: a cut turn is continued exactly once on the same attempt", async () => {
   const h = await inPlaceHarness();
   h.answer("cut");
@@ -2662,6 +2828,52 @@ test("in-place: a cut turn is continued exactly once on the same attempt", async
   expect(h.operations.size).toBe(0);
   expect(attempt.effectiveRole.serviceTier).toBe("ultrafast");
   expect(h.spawnCount()).toBe(1);
+});
+
+test("a delivered tier continuation survives real controller process restarts without redispatch", async () => {
+  const h = await inPlaceHarness();
+  h.answer("cut");
+  await h.request();
+  await tickPipelines([], h.ports);
+  const pipeline = loadPipelines()[0]!;
+  expect(pipeline.runs[0]!.attempts[0]!.runtimeSwitches![0]!.phase).toBe("continuing");
+  expect(h.continuations).toHaveLength(1);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "tier-continuation-restart-"));
+  const snapshot = path.join(root, "snapshot.json");
+  const script = path.join(root, "restart.mjs");
+  fs.writeFileSync(snapshot, JSON.stringify({ pipeline, at: h.ports.now() }));
+  fs.writeFileSync(script, `
+    import fs from "node:fs";
+    import { driveRuntimeSwitch } from ${JSON.stringify(pathToFileURL(path.join(import.meta.dir, "runtimeSwitch.ts")).href)};
+    const { pipeline, at } = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+    const attempt = pipeline.runs[0].attempts[0], record = attempt.runtimeSwitches[0];
+    const admitted = record.continuationDispatch.at;
+    const ports = {
+      now: () => at, allowedAccountIds: () => ["default"],
+      runtimeSwitchDelivery: async () => ({ state: "delivered", at: admitted }),
+      conversationGeneration: () => ({ ...record.to, sessionId: record.from.sessionId, agentPath: record.from.agentPath }),
+      durableTurnEvidence: async () => ({ turn: "busy", turnStartedAt: Date.parse(admitted) + 1 }),
+      resumeSeveredTurn: async () => { throw new Error("duplicate continuation dispatch"); },
+    };
+    await driveRuntimeSwitch(pipeline, pipeline.stages[0], attempt, ports,
+      () => fs.writeFileSync(process.argv[2], JSON.stringify({ pipeline, at })),
+      async () => { throw new Error("unexpected successor launch"); });
+    if (record.phase !== "committed") throw new Error("continuation did not reconcile: " + record.phase);
+  `);
+  try {
+    for (let restart = 0; restart < 2; restart++) {
+      const env: NodeJS.ProcessEnv = { ...process.env, LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" };
+      for (const key of ["HOME", "XDG_CONFIG_HOME", "TMPDIR", "LLV_STATE_DIR"]) {
+        env[key] = path.join(root, `restart-${restart}`, key.toLowerCase());
+        fs.mkdirSync(env[key]!, { recursive: true });
+      }
+      const child = Bun.spawn([process.execPath, script, snapshot], { env, stdout: "pipe", stderr: "pipe" });
+      const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      expect({ exit, output: stdout + stderr }).toEqual({ exit: 0, output: "" });
+    }
+    expect(JSON.parse(fs.readFileSync(snapshot, "utf8")).pipeline.runs[0].attempts[0].runtimeSwitches[0].phase).toBe("committed");
+    expect(h.continuations).toHaveLength(1);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test("in-place: Turbo keeps the conversation's account when the automatic selector prefers another", async () => {
