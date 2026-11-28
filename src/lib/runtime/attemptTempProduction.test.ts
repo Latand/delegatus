@@ -704,7 +704,8 @@ test.each([
   const repo = path.join(root, "repo"); fs.mkdirSync(repo);
   const started = WORK_TICK - 120_000, completed = WORK_TICK - 60_000;
   const lane = finishedLane(repo, new Date(completed).toISOString());
-  lane.state = "running"; lane.closedAt = null; lane.worktreeDir = repo;
+  lane.state = "running"; lane.closedAt = null;
+  fs.mkdirSync(lane.worktreeDir, { recursive: true });
   if (scenario === "cursor") lane.cursor = { stageId: "build", state: "pending", input: null, activatedBy: null };
   const launchId = "prompt-release-launch";
   lane.runs = [{ stageId: "build", attempts: [{ n: 1, state: "running", launchId, effectiveRole: lane.stages[0]!.effectiveRole,
@@ -749,7 +750,9 @@ test.each([
       ? [{ pid: 123, namespace: null, stamped: false, paths: [path.join(directory, "tmp")] }] : [] });
     // For the early release, preparation skips the recent measurement.
     clock.mockReturnValue(WORK_TICK - 2);
-    const first = (await runAttemptTempSweep({ ...workPorts, scan, references }, workMode))!;
+    const first = (await runAttemptTempSweep({
+      ...workPorts, scan, ...(scenario === "process" ? {} : { references }),
+    }, workMode))!;
     expect(first.errors).toBe(0);
     if (scenario === "released" || scenario === "early-release" || scenario === "intent" || scenario === "vanished") {
       expect(first.removed).toBe(scenario === "vanished" ? 0 : 1);
@@ -761,7 +764,7 @@ test.each([
     }
     expect(first.removed).toBe(0);
     expect(fs.statSync(payload).size).toBe(allocation);
-    const reasons = { process: "process_reference", custody: "recorded_evidence_hold", linked: "linked_evidence_hold",
+    const reasons = { process: "process_reference", custody: "recorded_evidence_lifetime", linked: "linked_evidence_hold",
       keep: "keep_marker", checkout: "checkout_changed" } as const;
     if (scenario in reasons) expect(first.outcomes.find(row => row.directory === directory)?.reasonCode)
       .toBe(reasons[scenario as keyof typeof reasons]);
