@@ -46,7 +46,7 @@ import { groupDigest, snapshotGroups, stampLinkedRows, type GroupSnapshot, type 
 import { tombstoneCollection, tombstoneRowKey, type TombstoneRow } from "@/lib/links/tombstones";
 
 import { snapshotTasks, stampTaskRevisions, taskFingerprint, taskRevision } from "./revision";
-import { storedTaskHold } from "./hold";
+import { storedTaskHold, taskFormIds } from "./hold";
 import { storedTaskSteps } from "./steps";
 import { isTaskAttachment } from "./attachments";
 import { withTaskCompletion } from "./completion";
@@ -1457,6 +1457,16 @@ function writeTaskCommands<R>(filePath: string,
               if (canonical(task.project) === canonical(project) && task.findingKey === key && task.status !== "done") rows.set(id, task);
             }
             return [...rows.values()];
+          },
+          *formIds(project) {
+            const evidence = taskProjectEvidence(collection, projects(project), canonical, aliasKey);
+            const changed = draftChanges(changes);
+            for (const [id, task] of evidence.rows) {
+              if (!changed.has(id)) yield* taskFormIds(task);
+            }
+            for (const task of changed.values()) {
+              if (canonical(task.project) === canonical(project)) yield* taskFormIds(task);
+            }
           },
           replace: task => makeView(new Map([...changes, [task.id, task]])),
         };

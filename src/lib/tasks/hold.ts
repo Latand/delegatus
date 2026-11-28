@@ -1,5 +1,6 @@
 import { textLengthError } from "@/lib/textLimits";
-import { TASK_HOLD_KINDS, type TaskHold, type TaskHoldKind } from "./types";
+import { MIN_SHORT_ID_CHARS, resolveShortId } from "@/lib/shortIds";
+import { TASK_HOLD_KINDS, type BoardTask, type TaskHold, type TaskHoldKind } from "./types";
 
 const iso = (value: unknown): string | undefined => typeof value === "string" && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : undefined;
 const sentence = (value: unknown): string => typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
@@ -11,6 +12,28 @@ export const holdParks = (hold: TaskHold): boolean => hold.kind === "operator" &
 
 export function normalizeHoldKind(kind: unknown): unknown {
   return typeof kind === "string" ? kind.trim().toLowerCase() : kind;
+}
+
+export type HoldFormIds = (prefix: string) => Iterable<string>;
+
+export function* taskFormIds(task: Pick<BoardTask, "prototypeReview" | "prototypeReviews" | "prototypeReviewReplica">): Iterable<string> {
+  for (const round of task.prototypeReviews ?? task.prototypeReviewReplica?.rounds ?? []) yield round.id;
+  const summary = task.prototypeReview ?? task.prototypeReviewReplica?.summary;
+  if (summary?.latestReviewId) yield summary.latestReviewId;
+  if (summary?.waitingReviewId) yield summary.waitingReviewId;
+}
+
+/** Resolve only the abbreviated form IDs that tools can print. Include
+    retained forms in the candidate set so an old hold cannot pick a newer
+    form just because the original was answered or dismissed. */
+export function resolveHoldFormRef(ref: string, formIds: HoldFormIds) {
+  if (ref.length < "pr_".length + MIN_SHORT_ID_CHARS || !/^pr_[a-f0-9]{1,31}$/i.test(ref)) return undefined;
+  const prefix = ref.toLowerCase();
+  try {
+    return resolveShortId(formIds(prefix), prefix);
+  } catch {
+    return { kind: "unavailable" as const };
+  }
 }
 
 /** New authoritative input is refused before any task or step is persisted. */
@@ -27,14 +50,18 @@ export function validateTaskHoldInput(value: unknown, field = "hold"): { ok: fal
 /** Waiting reasons normalize bad kinds to unstated. Writers validate length
     separately; readers preserve retained text, including legacy overages.
     Provenance and first-write time belong to the server. */
-export function readTaskHold(value: unknown, now: string, by: TaskHold["by"], previous?: TaskHold, conversationId?: string, notes?: string[]): TaskHold | undefined {
+export function readTaskHold(value: unknown, now: string, by: TaskHold["by"], previous?: TaskHold, conversationId?: string, notes?: string[], formIds?: HoldFormIds): TaskHold | undefined {
   if (value === null || value === undefined) return undefined;
   const raw = typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
   const normalized = normalizeHoldKind(raw.kind);
   const known = (TASK_HOLD_KINDS as readonly unknown[]).includes(normalized);
   const kind: TaskHoldKind = known ? normalized as TaskHoldKind : "unstated";
   if (!known && raw.kind !== undefined) notes?.push(`Unknown hold kind ${JSON.stringify(raw.kind)} normalized to unstated.`);
-  const ref = typeof raw.ref === "number" && Number.isSafeInteger(raw.ref) && raw.ref > 0 ? String(raw.ref) : (typeof raw.ref === "string" ? raw.ref : "");
+  let ref = typeof raw.ref === "number" && Number.isSafeInteger(raw.ref) && raw.ref > 0 ? String(raw.ref) : (typeof raw.ref === "string" ? raw.ref : "");
+  if (kind === "operator" && ref && formIds) {
+    const resolved = resolveHoldFormRef(ref, formIds);
+    if (resolved?.kind === "match") ref = resolved.value;
+  }
   const until = (kind === "limit" || kind === "postponed") ? iso(raw.until) : undefined;
   if (raw.until !== undefined && kind !== "limit" && kind !== "postponed") {
     notes?.push(`hold.until ignored for hold kind "${kind}"; only limit and postponed store until. Use dueAt for the task deadline.`);

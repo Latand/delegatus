@@ -2,7 +2,9 @@ import { forgeCacheView } from "@/lib/forge/cache";
 import { taskRepositoryOrCarrier } from "@/lib/forge/resolve";
 import { normalizeWorkLinkInput } from "@/lib/forge/workLinks";
 import type { Pipeline } from "@/lib/pipelines/types";
-import { findSeatRound } from "@/lib/prototypeReview/seatRounds";
+import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
+import { findSeatRound, seatFormIds } from "@/lib/prototypeReview/seatRounds";
+import { matchesShortId } from "@/lib/shortIds";
 import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
 import type { BoardTask } from "./types";
 import type { HoldPullRequestState, PublishedRoundLookup } from "./waitingRoute";
@@ -41,8 +43,9 @@ export function holdPullRequestState(
     whatever became of its delivery; the notices say which unanswered rounds
     still wait on the operator (a dismissed one waits on nobody). */
 export function seatRoundLookup(notices: readonly PrototypeReviewNotice[] = []): PublishedRoundLookup {
-  return reviewId => {
-    const notice = notices.find(candidate => candidate.reviewId === reviewId);
+  const byId = new Map(notices.map(notice => [notice.reviewId, notice]));
+  const lookup: PublishedRoundLookup = reviewId => {
+    const notice = byId.get(reviewId);
     let stored: ReturnType<typeof findSeatRound>;
     try { stored = findSeatRound(reviewId); } catch { stored = undefined; }
     if (stored) {
@@ -52,4 +55,11 @@ export function seatRoundLookup(notices: readonly PrototypeReviewNotice[] = []):
     if (!notice) return undefined;
     return notice.undelivered ? { project: notice.project, open: false, answeredBy: reviewId } : { project: notice.project, open: true };
   };
+  lookup.formIds = function* (project, prefix) {
+    yield* seatFormIds(project, prefix);
+    for (const notice of byId.values()) {
+      if (matchesShortId(notice.reviewId, prefix) && canonicalOrchestratorProject(notice.project) === project) yield notice.reviewId;
+    }
+  };
+  return lookup;
 }

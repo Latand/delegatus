@@ -12,6 +12,7 @@ export interface TaskMutationView {
   boardCount(project: string, now: number, members?: (task: BoardTask) => boolean, seat?: TaskSeatReader): number;
   completedFinding(project: string, key: string): BoardTask[];
   finding(project: string, key: string): BoardTask[];
+  formIds(project: string): Iterable<string>;
   replace(task: BoardTask): BoardTask[];
 }
 

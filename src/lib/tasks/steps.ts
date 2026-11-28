@@ -1,5 +1,5 @@
 import { textLengthError } from "@/lib/textLimits";
-import { validateTaskHoldInput, readTaskHold, storedTaskHold } from "./hold";
+import { validateTaskHoldInput, readTaskHold, storedTaskHold, type HoldFormIds } from "./hold";
 import type { TaskHold, TaskStep } from "./types";
 
 export const TASK_STEPS_LIMIT = 20;
@@ -71,7 +71,7 @@ export function deriveTaskSteps(steps: readonly TaskStep[] | undefined, pipeline
 
 /** Normalize a client checklist while preserving each step hold's original
     start time when the same step's reason is edited. */
-export function readTaskSteps(value: unknown, now: string, by: TaskHold["by"], conversationId?: string, previous: readonly TaskStep[] = [], notes?: string[]): TaskStepsResult {
+export function readTaskSteps(value: unknown, now: string, by: TaskHold["by"], conversationId?: string, previous: readonly TaskStep[] = [], notes?: string[], formIds?: HoldFormIds): TaskStepsResult {
   if (value === null || value === undefined) return { ok: true };
   const fail = (): TaskStepsResult => ({ ok: false, error: "steps must contain up to 20 valid checklist items", status: 400, code: "TASK_INVALID_FIELD", field: "steps" });
   if (!Array.isArray(value)) return fail();
@@ -101,7 +101,7 @@ export function readTaskSteps(value: unknown, now: string, by: TaskHold["by"], c
     let hold: TaskHold | undefined;
     if (Object.hasOwn(raw, "hold")) {
       if (raw.hold !== null) {
-        hold = readTaskHold(raw.hold, now, by, old.get(raw.id)?.hold, conversationId, notes);
+        hold = readTaskHold(raw.hold, now, by, old.get(raw.id)?.hold, conversationId, notes, formIds);
         if (!hold) return fail();
       }
     } else hold = old.get(raw.id)?.hold;

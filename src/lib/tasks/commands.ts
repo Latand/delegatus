@@ -5,12 +5,13 @@ import crypto from "node:crypto";
 import { readFindingKey } from "./finding";
 import { canonicalProject } from "@/lib/projects/aliases";
 
-import { holdParks, validateTaskHoldInput, readTaskHold, storedTaskHold } from "./hold";
+import { holdParks, validateTaskHoldInput, readTaskHold, storedTaskHold, taskFormIds, type HoldFormIds } from "./hold";
 import { prototypeWaitsOnOperator } from "@/lib/prototypeReview/model";
 import { resolvedPrototypeSummary } from "@/lib/prototypeReview/read";
+import { seatFormIds } from "@/lib/prototypeReview/seatRounds";
 import { isTaskAttachment } from "./attachments";
 import { taskRevision } from "./revision";
-import { taskMutationView } from "./mutationView";
+import { taskMutationView, type TaskMutationView } from "./mutationView";
 import { defaultTaskDue, isoNow, storedDueHistory } from "./helpers";
 import { hasUndeliveredDecision, TaskDecisionUndeliveredError } from "./decisionCompletion";
 import { withTaskCompletion } from "./completion";
@@ -200,6 +201,7 @@ export interface PatchTaskOptions {
   allowBoardOverflow?: boolean;
   /** Internal keyed admission; transports never populate this callback. */
   boardTaskCount?: (project: string, now: number) => number;
+  projectTaskFormIds?: TaskMutationView["formIds"];
   /** Trusted transport attribution of a status change, never read from the
       request body. Without it a changed status records no writer. */
   statusActor?: PauseResumeActor;
@@ -235,6 +237,7 @@ export interface TaskCommandDeps {
   allowBoardOverflow?: boolean;
   /** Internal keyed admission; transports never populate this callback. */
   boardTaskCount?: (project: string, now: number) => number;
+  projectTaskFormIds?: TaskMutationView["formIds"];
   /** Trusted transport attribution of the create; see {@link PatchTaskOptions.statusActor}. */
   statusActor?: PauseResumeActor;
 }
@@ -416,6 +419,17 @@ function normalizeDetails(value: unknown): DetailsResult {
   return { ok: true, details };
 }
 
+function holdFormIds(existing: readonly BoardTask[], project: string, stored?: TaskMutationView["formIds"]): HoldFormIds {
+  return function* (prefix) {
+    const key = canonicalProject(project);
+    if (stored) yield* stored(key);
+    else for (const task of existing) {
+      if (canonicalProject(task.project) === key) yield* taskFormIds(task);
+    }
+    yield* seatFormIds(key, prefix);
+  };
+}
+
 export function createTask(
   existing: BoardTask[],
   input: CreateTaskInput,
@@ -445,6 +459,7 @@ export function createTask(
     }
     const result = createTask([...rows.values()], input, recentCreates, { ...deps,
       boardTaskCount: (project, now) => view.boardCount(project, now, deps.hasBoardMembers, deps.seatHolding),
+      projectTaskFormIds: view.formIds,
     });
     if (result.ok && !result.replay && !result.matched && view.get(result.task.id)) throw new Error("duplicate persisted task id");
     return result.ok ? { ...result, tasks: result.replay ? existing : view.replace(result.task) } : result;
@@ -532,7 +547,8 @@ export function createTask(
   const board = Object.hasOwn(input, "board") ? normalizeBoardVisibility(input.board) : undefined;
   if (board === null) return { ok: false, error: "invalid board visibility", status: 400, code: "TASK_INVALID_FIELD", field: "board" };
   const notes: string[] = [];
-  const steps = readTaskSteps(input.steps, now, deps.actor ?? "operator", deps.conversationId, [], notes);
+  const formIds = holdFormIds(existing, project, deps.projectTaskFormIds);
+  const steps = readTaskSteps(input.steps, now, deps.actor ?? "operator", deps.conversationId, [], notes, formIds);
   if (!steps.ok) return steps;
   /* The bound is on bands, so only a task that will occupy one is counted
      against it: a task created off the board joins the history, which has no
@@ -545,7 +561,7 @@ export function createTask(
   const holdError = validateTaskHoldInput(input.hold);
   if (holdError) return holdError;
   const hold = readTaskHold(input.hold ?? (input.status === "blocked" ? { kind: "unstated" } : undefined),
-    now, deps.actor ?? "operator", undefined, deps.conversationId, notes);
+    now, deps.actor ?? "operator", undefined, deps.conversationId, notes, formIds);
   const parks = hold && holdParks(hold);
   if (input.status === "blocked" && !parks && deps.actor === "agent") notes.push(WAITING_OPERATOR_NOTE);
   const declaration = taskDeclaration(input.accounting, project, now, hold, existing, canonicalProject);
@@ -647,6 +663,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     }
     const result = patchTask([...rows.values()], id, input, now, { ...options,
       boardTaskCount: (project, now) => view.boardCount(project, now, options.hasBoardMembers, options.seatHolding),
+      projectTaskFormIds: view.formIds,
     });
     return result.ok ? { ...result, tasks: view.replace(result.task) } : result;
   }
@@ -755,6 +772,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
   }
   const restoringHold = Object.hasOwn(input, "restoreHold");
   const writingHold = Object.hasOwn(input, "hold");
+  const formIds = holdFormIds(existing, task.project, options.projectTaskFormIds);
   const ownerColumn = (): TaskStatus => task.assignments.some(a => ["delivered", "spawning", "handoff", "linked"].includes(a.state)) ? "assigned" : "inbox";
   const hasCurrentDecision = (writingHold || patch.status === "blocked")
     && (task.prototypeReviews?.length || task.prototypeReviewReplica || task.prototypeReview)
@@ -770,7 +788,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
   if (writingHold) {
     const holdError = validateTaskHoldInput(input.hold);
     if (holdError) return holdError;
-    patch.hold = readTaskHold(input.hold, now, options.actor ?? "operator", task.hold, options.conversationId, notes);
+    patch.hold = readTaskHold(input.hold, now, options.actor ?? "operator", task.hold, options.conversationId, notes, formIds);
     // A new operator action must not inherit the age of a form already answered.
     if (patch.hold?.kind === "operator" && (task.hold?.kind !== "operator" || patch.hold.note !== task.hold.note)) {
       patch.hold.since = now;
@@ -797,7 +815,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     }
   }
   if (Object.hasOwn(input, "steps")) {
-    const steps = readTaskSteps(input.steps, now, options.actor ?? "operator", options.conversationId, task.steps, notes);
+    const steps = readTaskSteps(input.steps, now, options.actor ?? "operator", options.conversationId, task.steps, notes, formIds);
     if (!steps.ok) return steps;
     patch.steps = steps.steps;
   }

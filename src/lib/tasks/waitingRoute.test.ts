@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { laneNeedKind, laneRouteKey } from "@/lib/attention/routeTypes";
+import { seatAgendaAsks } from "@/lib/attention/seatAgenda";
 import { buildPipeline } from "@/lib/pipelines/store";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { PrototypeReviewSummary } from "@/lib/prototypeReview/types";
@@ -188,6 +189,63 @@ test("a seat round answered through the real store points to the saved answer af
     mutateSeatRound(id, round => { round.decision!.delivery = { ...round.decision!.delivery, state: "sent" } as never; });
     // A delivered answer leaves no notice behind; the store still holds it.
     expect(route([])).toMatchObject({ owner: "seat", rule: "form-answered", action: expect.stringContaining(id) });
+  } finally { clearSeatRoundsForTests(); }
+});
+
+const formId = (prefix: string, suffix: string) => `pr_${prefix}${suffix.repeat(24)}`;
+
+test("seven cards referencing two open seat forms by short id stay off the seat agenda", async () => {
+  const { clearSeatRoundsForTests, insertSeatRound, mutateSeatRound } = await import("@/lib/prototypeReview/seatRounds");
+  const { seatDecisionNotices } = await import("@/lib/prototypeReview/read");
+  const { seatRoundLookup } = await import("./holdEvidence");
+  const ids = [formId("10203040", "a"), formId("50607080", "b")];
+  clearSeatRoundsForTests();
+  try {
+    for (const id of ids) {
+      insertSeatRound({ id, taskId: null, project, title: "Choose", createdAt: at(-3), publicationKey: id,
+        inputDigest: "fixture", source: { conversationId: null }, variants: [] });
+    }
+    const tasks = Array.from({ length: 7 }, (_, i) => task(`waiting-${i}`, "operator", { ref: ids[i % 2]!.slice(0, 11) }));
+    const pipelines = tasks.map(row => lane(row.id, "needs_decision", { dismissedAt: at(-1) }));
+    const seatRound = seatRoundLookup(seatDecisionNotices(project));
+    const index = waitingRouteIndex(tasks, pipelines, new Set(), {}, undefined, seatRound);
+    const routes = (rows: BoardTask[]) => rows.map(row => waitingRoute(row, index, NOW));
+    const fullRefs = tasks.map((row, i) => ({ ...row, hold: { ...row.hold!, ref: ids[i % 2]! } }));
+    expect(routes(fullRefs)).toEqual(tasks.map(() => ({ owner: "operator", rule: "operator-hold" })));
+    expect(routes(tasks)).toEqual(routes(fullRefs));
+    expect(seatAgendaAsks({ files: [], tasks, pipelines, seatRound }, NOW / 1000, project)).toEqual([]);
+
+    const answered = ids[0]!;
+    mutateSeatRound(answered, round => { round.decision = { chosen: [], comment: "Proceed", at: at(-1), revision: 1,
+      delivery: { state: "sent", clientMessageId: "fixture-answer", conversationId: null, text: "" } }; });
+    const refreshed = waitingRouteIndex(tasks, pipelines, new Set(), {}, undefined, seatRoundLookup(seatDecisionNotices(project)));
+    expect(waitingRoute(tasks[0]!, refreshed, NOW)).toMatchObject({
+      owner: "seat", rule: "form-answered", action: expect.stringContaining(answered),
+    });
+  } finally { clearSeatRoundsForTests(); }
+});
+
+test("short form refs stay within the project and report ambiguous and unknown ids", async () => {
+  const { clearSeatRoundsForTests, insertSeatRound } = await import("@/lib/prototypeReview/seatRounds");
+  const { seatDecisionNotices } = await import("@/lib/prototypeReview/read");
+  const { seatRoundLookup } = await import("./holdEvidence");
+  const id = formId("12345678", "a");
+  const sharedPrefix = id.slice(0, 11);
+  const held = task("prefix-hold", "operator", { ref: sharedPrefix });
+  const owner = { ...task("form-owner", null), status: "assigned" as const,
+    prototypeReview: { ...form(), latestReviewId: id, waitingReviewId: id } };
+  const seatId = formId("12345678", "b");
+  clearSeatRoundsForTests();
+  try {
+    insertSeatRound({ id: seatId, taskId: null, project, title: "Choose", createdAt: at(-3), publicationKey: seatId,
+      inputDigest: "fixture", source: { conversationId: null }, variants: [] });
+    const route = (row: BoardTask, carrier: BoardTask) =>
+      waitingRoute(row, waitingRouteIndex([row, carrier], [], new Set(), {}, undefined, seatRoundLookup(seatDecisionNotices(project))), NOW);
+    expect(route(held, owner)).toMatchObject({ owner: "seat", rule: "unowned", why: expect.stringContaining("ambiguous") });
+    expect(route(held, { ...owner, project: "other-project" })).toEqual({ owner: "operator", rule: "operator-hold" });
+    expect(route({ ...held, hold: { ...held.hold!, ref: id.slice(0, 12) } }, owner)).toEqual({ owner: "operator", rule: "operator-hold" });
+    expect(route({ ...held, hold: { ...held.hold!, ref: "pr_90807060" } }, owner))
+      .toMatchObject({ owner: "seat", rule: "unowned", why: expect.stringContaining("unknown") });
   } finally { clearSeatRoundsForTests(); }
 });
 
