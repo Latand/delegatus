@@ -11,7 +11,7 @@ export async function until(condition: () => boolean, ms = 2_000): Promise<void>
 
 export function journalTickets(directory: string): number {
   const queue = `${directory}.pending.jsonl.write-locks`;
-  return fs.existsSync(queue) ? fs.readdirSync(queue).length : 0;
+  return fs.existsSync(queue) ? fs.readdirSync(queue).filter(name => name.endsWith(".json")).length : 0;
 }
 
 export function journalClaims(directory: string): string[] {

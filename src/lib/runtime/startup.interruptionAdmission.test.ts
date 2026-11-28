@@ -264,3 +264,39 @@ test("a scheduled row retry preserves its two adoption failures when the journal
     f.clean();
   }
 }, 20_000);
+
+for (const startupFirst of [false, true]) test(`a torn sealed journal preserves repair bytes and recovers its complete cut (startup first=${startupFirst})`, async () => {
+  const f = fixture();
+  const record = f.record(1);
+  const raw = jsonl(record) + '{"version":1,"incomplete":';
+  const errors = spyOn(console, "error");
+  try {
+    await cuts.initializeRecipientInterruptionIndex(f.journal);
+    fs.appendFileSync(`${f.journal}.pending.jsonl`, raw);
+    if (startupFirst) {
+      const sessionId = ["00000000", "0000", "4000", "8000", "000000000043"].join("-");
+      addStructuredRestartConversation(f.registry, f.directory, { sessionId, status: "idle", turn: "idle" });
+      let refreshed = 0;
+      await adoptStructuredHostsAtStartup({
+        registry: f.registry, client: null, orchestratorSeats: () => [],
+        refreshTranscriptState: async () => { refreshed++; }, adopt: async () => [], adoptClaude: async () => [],
+      });
+      expect(refreshed).toBe(1);
+    }
+    const expected = startupFirst
+      ? { id: record.id, state: "discharged", resolution: "the conversation no longer exists" }
+      : record;
+    expect(await readJournal(f.journal)).toMatchObject([expected]);
+    expect(await readJournal(f.journal)).toMatchObject([expected]);
+    expect(cuts.recipientInterruptionEvidence(f.journal, [record.conversationId]).records).toMatchObject([expected]);
+    expect(journalClaims(f.journal)).toEqual([]);
+    expect(journalTickets(f.journal)).toBe(0);
+    const artifact = fs.readdirSync(f.directory).filter(name => name.startsWith(path.basename(f.journal) + ".pending.jsonl.damaged-"));
+    expect(artifact).toHaveLength(1);
+    expect(fs.readFileSync(path.join(f.directory, artifact[0]!), "utf8")).toBe(raw);
+    expect(errors.mock.calls).toContainEqual(["[interruption recovery] retained damaged journal for repair", { artifact: artifact[0] }]);
+  } finally {
+    errors.mockRestore();
+    f.clean();
+  }
+}, 15_000);

@@ -332,46 +332,59 @@ function enqueue(filePath: string): LockTicket {
     queuePath,
     `${String(fileTransactionClock()).padStart(16, "0")}-${process.pid}-${crypto.randomUUID()}.json`,
   );
-  fs.writeFileSync(ticketPath, JSON.stringify(owner), { encoding: "utf8", flag: "wx", mode: 0o600 });
+  const temporary = ticketPath + ".tmp";
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(owner), { encoding: "utf8", flag: "wx", mode: 0o600 });
+    fs.renameSync(temporary, ticketPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") fs.rmSync(temporary, { force: true });
+    throw error;
+  }
   return { lockPath, queuePath, owner, ticketPath };
 }
 
-function firstLiveTicket(ticket: LockTicket): string | null {
-  const liveTickets: string[] = [];
-  for (const entry of fs.readdirSync(ticket.queuePath).filter((candidate) => candidate.endsWith(".json")).sort()) {
-    const candidate = path.join(ticket.queuePath, entry);
-    if (ownerIsStale(candidate)) {
-      fs.rmSync(candidate, { force: true });
-      continue;
-    }
-    if (fs.existsSync(candidate)) liveTickets.push(candidate);
-  }
-  return liveTickets[0] ?? null;
+function unpublishedTicketPid(name: string): number | null {
+  const match = /^\d{16}-(\d+)-[0-9a-f-]{36}\.json\.tmp$/.exec(name);
+  return match ? Number(match[1]) : null;
 }
 
-function tryAcquire(ticket: LockTicket): number | null {
-  if (firstLiveTicket(ticket) !== ticket.ticketPath) return null;
-  let descriptor: number;
+function firstLiveTicket(ticket: LockTicket): string | null {
+  for (const entry of fs.readdirSync(ticket.queuePath).sort()) {
+    const candidate = path.join(ticket.queuePath, entry);
+    if (!entry.endsWith(".json")) {
+      const creator = unpublishedTicketPid(entry);
+      if (creator && !procBackend.pidAlive(creator)) fs.rmSync(candidate, { force: true });
+      continue;
+    }
+    if (ownerIsStale(candidate)) fs.rmSync(candidate, { force: true });
+    else if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+function tryAcquire(ticket: LockTicket): boolean {
+  if (firstLiveTicket(ticket) !== ticket.ticketPath) return false;
   try {
-    descriptor = fs.openSync(ticket.lockPath, "wx", 0o600);
+    // The queue entry already contains a complete owner. A hard link installs
+    // that same record exclusively, with no empty ownership window.
+    fs.linkSync(ticket.ticketPath, ticket.lockPath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     if (ownerIsStale(ticket.lockPath)) fs.rmSync(ticket.lockPath, { force: true });
-    return null;
+    return false;
   }
   try {
-    fs.writeFileSync(descriptor, JSON.stringify(ticket.owner), "utf8");
-    fs.fsyncSync(descriptor);
-    return descriptor;
+    const descriptor = fs.openSync(ticket.lockPath, "r+");
+    try { fs.fsyncSync(descriptor); }
+    finally { fs.closeSync(descriptor); }
+    return true;
   } catch (error) {
-    fs.closeSync(descriptor);
-    fs.rmSync(ticket.lockPath, { force: true });
+    removeIfOwned(ticket.lockPath, ticket.owner.token);
     throw error;
   }
 }
 
-function release(ticket: LockTicket, descriptor: number): void {
-  fs.closeSync(descriptor);
+function release(ticket: LockTicket): void {
   removeIfOwned(ticket.lockPath, ticket.owner.token);
 }
 
@@ -380,11 +393,10 @@ function release(ticket: LockTicket, descriptor: number): void {
 export function withFileTransactionAttempt<T>(filePath: string, busyMessage: string, operation: () => T): T {
   const ticket = enqueue(filePath);
   try {
-    const descriptor = tryAcquire(ticket);
-    if (descriptor === null) throw new FileTransactionAdmissionError(busyMessage);
+    if (!tryAcquire(ticket)) throw new FileTransactionAdmissionError(busyMessage);
     noteWriterAdmitted();
     try { return operation(); }
-    finally { release(ticket, descriptor); }
+    finally { release(ticket); }
   } finally { removeIfOwned(ticket.ticketPath, ticket.owner.token); }
 }
 
@@ -406,8 +418,7 @@ export function withFileTransactionSync<T>(filePath: string, busyMessage: string
   const ticket = enqueue(filePath);
   try {
     for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
-      const descriptor = tryAcquire(ticket);
-      if (descriptor === null) {
+      if (!tryAcquire(ticket)) {
         if (!waited) {
           waited = true;
           callSiteStack = new Error().stack;
@@ -421,7 +432,7 @@ export function withFileTransactionSync<T>(filePath: string, busyMessage: string
       try {
         return operation();
       } finally {
-        release(ticket, descriptor);
+        release(ticket);
       }
     }
     // Collect holder metadata only on final timeout so diagnostic stat/read
@@ -460,8 +471,7 @@ export async function withFileTransaction<T>(filePath: string, busyMessage: stri
   const ticket = enqueue(filePath);
   try {
     for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
-      const descriptor = tryAcquire(ticket);
-      if (descriptor === null) {
+      if (!tryAcquire(ticket)) {
         if (!waited) {
           waited = true;
           callSiteStack = new Error().stack;
@@ -479,7 +489,7 @@ export async function withFileTransaction<T>(filePath: string, busyMessage: stri
         // A synchronous commit releases before another in-process synchronous
         // writer can run. Only an asynchronous body holds across a microtask.
         return result && typeof (result as Promise<T>).then === "function" ? await result : result;
-      } finally { release(ticket, descriptor); }
+      } finally { release(ticket); }
     }
     throw new FileTransactionBusyError(busyMessage);
   } finally {
@@ -521,13 +531,18 @@ export async function withFileTransactionAsync<T>(filePath: string, busyMessage:
   const owner: LockOwner = { pid: process.pid, startIdentity: await processIdentityAsync(process.pid), token: crypto.randomUUID(), role: normalizeBlockingWaitHolderKind(blockingWaitRole(), "unowned") };
   const ticketPath = path.join(queuePath, `${String(fileTransactionClock()).padStart(16, "0")}-${process.pid}-${crypto.randomUUID()}.json`);
   const ticket = { lockPath, queuePath, owner, ticketPath };
-  const ticketHandle = await fsp.open(ticketPath, "wx", 0o600);
+  const temporary = ticketPath + ".tmp";
+  const handle = await fsp.open(temporary, "wx", 0o600);
   try {
-    await ticketHandle.writeFile(JSON.stringify(owner));
-    await ticketHandle.close();
+    try {
+      await handle.writeFile(JSON.stringify(owner));
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await fsp.rename(temporary, ticketPath);
   } catch (error) {
-    await ticketHandle.close().catch(() => undefined);
-    await fsp.rm(ticketPath, { force: true }).catch(() => undefined);
+    await fsp.rm(temporary, { force: true });
     throw error;
   }
 
@@ -556,9 +571,13 @@ export async function withFileTransactionAsync<T>(filePath: string, busyMessage:
     } catch { /* The owner exited or another contender recovered its stale record. */ }
   };
   const firstLiveTicketAsync = async (): Promise<string | null> => {
-    const entries = (await fsp.readdir(queuePath)).filter(name => name.endsWith(".json")).sort();
-    for (const entry of entries) {
+    for (const entry of (await fsp.readdir(queuePath)).sort()) {
       const candidate = path.join(queuePath, entry);
+      if (!entry.endsWith(".json")) {
+        const creator = unpublishedTicketPid(entry);
+        if (creator && !pidAliveAsyncSafe(creator)) await fsp.rm(candidate, { force: true });
+        continue;
+      }
       if (await ownerIsStaleAsync(candidate)) await fsp.rm(candidate, { force: true });
       else {
         try { await fsp.access(candidate); return candidate; }
@@ -567,24 +586,23 @@ export async function withFileTransactionAsync<T>(filePath: string, busyMessage:
     }
     return null;
   };
-  const acquireAsync = async (): Promise<import("node:fs/promises").FileHandle | null> => {
-    if (await firstLiveTicketAsync() !== ticketPath) return null;
-    let handle: import("node:fs/promises").FileHandle;
-    try { handle = await fsp.open(lockPath, "wx", 0o600); }
-    catch (error) {
+  const acquireAsync = async (): Promise<boolean> => {
+    if (await firstLiveTicketAsync() !== ticketPath) return false;
+    try {
+      await fsp.link(ticketPath, lockPath);
+      return true;
+    } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       if (await ownerIsStaleAsync(lockPath)) await fsp.rm(lockPath, { force: true });
-      return null;
+      return false;
     }
-    try { await handle.writeFile(JSON.stringify(owner)); await handle.sync(); return handle; }
-    catch (error) { await handle.close(); await fsp.rm(lockPath, { force: true }); throw error; }
   };
+
   try {
     for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
       options.signal?.throwIfAborted();
       if (performance.now() >= deadline) throw new FileTransactionBusyError(busyMessage);
-      const handle = await acquireAsync();
-      if (handle === null) {
+      if (!await acquireAsync()) {
         if (!waited) {
           waited = true;
           callSiteStack ??= new Error().stack;
@@ -613,8 +631,7 @@ export async function withFileTransactionAsync<T>(filePath: string, busyMessage:
         // writer can run. Only an asynchronous body holds across a microtask.
         return result && typeof (result as Promise<T>).then === "function" ? await result : result;
       } finally {
-        try { await handle.close(); }
-        finally { await removeOwnedAsync(lockPath, owner.token); }
+        await removeOwnedAsync(lockPath, owner.token);
       }
     }
     throw new FileTransactionBusyError(busyMessage);

@@ -510,3 +510,77 @@ test("slow diagnostic holder metadata never delays lock admission or causes File
     fs.rmSync(lock, { force: true });
   }
 });
+
+for (const point of ["ticket", "lock"] as const) test(`a process exit at ${point} creation leaves no owner that can block the next contender`, async () => {
+  const file = path.join(root, `owner-publication-${point}`);
+  const ready = file + ".ready";
+  const child = Bun.spawn([process.execPath, "-e", `
+    import fs from "node:fs";
+    import fsp from "node:fs/promises";
+    import { withFileTransactionAsync } from ${JSON.stringify(new URL("./fileTransaction.ts", import.meta.url).pathname)};
+    const [file, ready, point] = process.argv.slice(1);
+    const waitForExit = async () => {
+      fs.writeFileSync(ready, "");
+      await Bun.sleep(15_000);
+    };
+    const open = fsp.open.bind(fsp);
+    fsp.open = async (target, flags, ...args) => {
+      const handle = await open(target, flags, ...args);
+      const pathname = String(target);
+      if (flags === "wx" && (point === "ticket" ? pathname.startsWith(file + ".write-locks/") : pathname === file + ".write-lock")) {
+        await waitForExit();
+      }
+      return handle;
+    };
+    const link = fsp.link.bind(fsp);
+    fsp.link = async (from, target) => {
+      await link(from, target);
+      if (point === "lock" && String(target) === file + ".write-lock") await waitForExit();
+    };
+    await withFileTransactionAsync(file, "fixture journal writer", () => { throw new Error("writer crossed the crash barrier"); });
+  `, file, ready, point], { stdout: "ignore", stderr: "inherit" });
+  try {
+    const handshake = performance.now() + 2_000;
+    while (!fs.existsSync(ready) && child.exitCode === null && performance.now() < handshake) await Bun.sleep(5);
+    expect(fs.existsSync(ready)).toBe(true);
+    child.kill("SIGKILL");
+    await child.exited;
+
+    const started = performance.now();
+    expect(await withFileTransactionAsync(file, "fixture journal waiter", () => "admitted", { waitMs: 4_500 })).toBe("admitted");
+    expect(performance.now() - started).toBeLessThan(5_000);
+    expect(fs.existsSync(file + ".write-lock")).toBe(false);
+    expect(fs.readdirSync(file + ".write-locks")).toEqual([]);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await child.exited;
+  }
+}, 12_000);
+
+test("published tickets keep live writers in admission order", async () => {
+  const file = path.join(root, "live-owner-order");
+  const release = Promise.withResolvers<void>();
+  const held = Promise.withResolvers<void>();
+  const order: string[] = [];
+  const holder = withFileTransactionAsync(file, "live journal owner", async () => {
+    held.resolve();
+    await release.promise;
+  });
+  await held.promise;
+  const first = withFileTransactionAsync(file, "first journal waiter", () => { order.push("first"); }, { waitMs: 2_000 });
+  let second: Promise<void> | undefined;
+  try {
+    const deadline = performance.now() + 1_000;
+    while (fs.readdirSync(file + ".write-locks").filter(name => name.endsWith(".json")).length !== 2
+      && performance.now() < deadline) await Bun.sleep(5);
+    expect(fs.readdirSync(file + ".write-locks").filter(name => name.endsWith(".json"))).toHaveLength(2);
+    await Bun.sleep(5);
+    second = withFileTransactionAsync(file, "second journal waiter", () => { order.push("second"); }, { waitMs: 2_000 });
+    release.resolve();
+    await Promise.all([holder, first, second]);
+    expect(order).toEqual(["first", "second"]);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([holder, first, second]);
+  }
+});

@@ -491,12 +491,10 @@ export interface PipelinePorts {
   conversationHostEnded?(conversationId: string, launchId?: string | null): string | null;
   /** A durable exit for this launch, independent of turn-state verification. */
   conversationHostExited?(conversationId: string, launchId?: string | null): boolean;
-  /** Load cut evidence before entering the operator mutation lease. */
-  prepareInterruptionEvidence?(): Promise<void>;
   /** The newest turn a Viewer release or restart cut for this conversation, as
       its interruption obligation records it (#1835). Null when none was
       recorded, which is the answer for every conversation no deploy cut. */
-  conversationInterruption?(conversationId: string): StageInterruption | null | Promise<StageInterruption | null>;
+  conversationInterruption?(conversationId: string, options?: { fresh?: boolean }): StageInterruption | null | Promise<StageInterruption | null>;
   /** When a service restart last cut this conversation's turn: the release
       that handed its host over, or the boot that found the turn in flight,
       recorded it. Null for every conversation no restart cut. */
@@ -1970,7 +1968,7 @@ export function defaultPipelinePorts(
   let adoptionMemberships: Array<[string, RegistryFile["memberships"][string]]> | null = null;
   let materializationFence: ReturnType<typeof identityMaterializationFence> | null = null;
   let interruptions: Promise<InterruptionObligation[]> | null = null;
-  const readInterruptions = () => interruptions ??= readInterruptionObligations(
+  const readInterruptions = () => readInterruptionObligations(
     interruptionObligationDirectory(registry.filename), { signal: dependencies.runtimeObservation?.signal },
   );
   const snapshot = () => registrySnapshot ??= registry.readOnlySnapshot();
@@ -2004,11 +2002,11 @@ export function defaultPipelinePorts(
     return Boolean(identity && hostExitWriterPending(identity) && processIdentityStatus(identity) === "dead");
   };
   /* The newest cut recorded for a conversation; the store lists oldest first. */
-  const newestCut = async (conversationId: string): Promise<InterruptionObligation | null> => {
+  const newestCut = async (conversationId: string, fresh = false): Promise<InterruptionObligation | null> => {
     if (!conversationId.startsWith("conversation_")) return null;
     // Keep one read for this pass. A journal refusal ends recovery that
     // depends on this evidence, leaving it for the next controller tick.
-    const records = await readInterruptions();
+    const records = await (fresh ? readInterruptions() : interruptions ??= readInterruptions());
     const canonical = registry.canonicalConversationId(conversationId as ViewerConversationId);
     return records.filter((obligation) =>
       registry.canonicalConversationId(obligation.conversationId) === canonical).at(-1) ?? null;
@@ -2810,9 +2808,8 @@ export function defaultPipelinePorts(
       const result = hostEndEvidence(conversationId, launchId);
       return result ? [hostExitText(result.evidence), result.ended ? claudeHostEndText(result.ended) : null].filter(Boolean).join("; ") : null;
     },
-    prepareInterruptionEvidence: async () => { await readInterruptions(); },
-    conversationInterruption: async (conversationId) => {
-      const cut = await newestCut(conversationId);
+    conversationInterruption: async (conversationId, options) => {
+      const cut = await newestCut(conversationId, options?.fresh);
       if (!cut) return null;
       /* The queue answers `submitted` on admission, and the store records the
          arrival only on a later startup pass; the reservation the obligation's
@@ -7460,9 +7457,10 @@ function rebindPipelineAttemptPaths(pipeline: Pipeline, ports: PipelinePorts): b
  * after the attempt started is this attempt's; an older one belongs to an
  * earlier turn of the conversation.
  */
-async function deployCutOf(attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<StageInterruption | null> {
+async function deployCutOf(attempt: PipelineStageAttempt, ports: PipelinePorts, fresh = false): Promise<StageInterruption | null> {
   if (attempt.paneId || !attempt.conversationId || !attempt.startedAt || !ports.conversationInterruption) return null;
-  const cut = await ports.conversationInterruption(attempt.conversationId);
+  const cut = fresh ? await ports.conversationInterruption(attempt.conversationId, { fresh: true })
+    : await ports.conversationInterruption(attempt.conversationId);
   return cut && unixMs(cut.recordedAt) >= unixMs(attemptEvidenceFloor(attempt)) ? cut : null;
 }
 
@@ -17467,17 +17465,14 @@ export async function patchPipeline(
   workspaceMemberId?: string,
 ): Promise<PipelinePatchResult> {
   let before: BriefTextSnapshot | undefined;
-  if (req.action === "retry-stage" && ports.prepareInterruptionEvidence) {
-    assertAuthority?.();
-    try { await ports.prepareInterruptionEvidence(); }
-    catch (error) {
-      if (!(error instanceof InterruptionJournalBusyError)) throw error;
-      return { error: error.message, status: 503 };
-    }
+  try {
+    const result = await applyPipelinePatch(id, req, ports, actor, assertAuthority, workspaceMemberId,
+      pipeline => { before = briefTextSnapshot(pipeline); });
+    return result.pipeline ? withBriefWarnings(result, before ?? briefTextSnapshot(result.pipeline)) : result;
+  } catch (error) {
+    if (req.action !== "retry-stage" || !(error instanceof InterruptionJournalBusyError)) throw error;
+    return { error: error.message, status: 503 };
   }
-  const result = await applyPipelinePatch(id, req, ports, actor, assertAuthority, workspaceMemberId,
-    pipeline => { before = briefTextSnapshot(pipeline); });
-  return result.pipeline ? withBriefWarnings(result, before ?? briefTextSnapshot(result.pipeline)) : result;
 }
 
 async function applyPipelinePatch(
@@ -18514,7 +18509,7 @@ async function applyPipelinePatch(
         if (hostExited && !await stageHostExited(attempt, ports)) {
           return { error: "the failed attempt still has a live stage host; retry was cancelled", status: 409 };
         }
-        if (deployCutHoldsAttempt(await deployCutOf(attempt, ports), ports)
+        if (deployCutHoldsAttempt(await deployCutOf(attempt, ports, true), ports)
           || (attempt.conversationId && ports.conversationDeliveryOutstanding?.(attempt.conversationId))) {
           return { error: "the attempt parked by turn recovery still has a pending continuation", status: 409 };
         }
@@ -18523,6 +18518,9 @@ async function applyPipelinePatch(
         if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {
           await persist();
           return { error: "the host of the attempt parked by turn recovery has not confirmed termination", status: 409 };
+        }
+        if (!hostExited && deployCutHoldsAttempt(await deployCutOf(attempt, ports, true), ports)) {
+          return { error: "the attempt parked by turn recovery still has a pending continuation", status: 409 };
         }
       }
       if (stage?.kind === "run" && attempt && (attempt.state === "spawning" || isStructuredSpawnPark(pipeline, attempt)) && !attempt.report
@@ -18548,12 +18546,14 @@ async function applyPipelinePatch(
         /* Two refusals, said apart (#2790): one waits on a message still on
            its way to the attempt, the other on evidence that its agent has
            stopped working. */
+        const cut = await deployCutOf(attempt, ports, true);
+        assertAuthority?.();
         if (ports.conversationDeliveryOutstanding?.(attempt.conversationId)) {
           return { error: "the running attempt has a pending delivery; retry once that delivery settles", status: 409 };
         }
         if (!hostExited && (!interrupted || durable?.turn !== "busy" || durable.launchOnly
           || (interrupted === "idle" && !idleTurnSilent(durable, ports)))
-          || deployCutHoldsAttempt(await deployCutOf(attempt, ports), ports)) {
+          || deployCutHoldsAttempt(cut, ports)) {
           return { error: "the running attempt is not confirmed stalled", status: 409 };
         }
         /* The transcript read above can register a new generation for this
@@ -18596,7 +18596,10 @@ async function applyPipelinePatch(
           await persist();
           return { error: "the stalled attempt made progress while its host was stopping; retry was cancelled", status: 409 };
         }
-        if (ports.conversationDeliveryOutstanding?.(attempt.conversationId)) {
+        const latestCut = await deployCutOf(attempt, ports, true);
+        assertAuthority?.();
+        if (deployCutHoldsAttempt(latestCut, ports)
+          || ports.conversationDeliveryOutstanding?.(attempt.conversationId)) {
           await persist();
           return { error: "the running attempt has a pending delivery; retry once that delivery settles", status: 409 };
         }

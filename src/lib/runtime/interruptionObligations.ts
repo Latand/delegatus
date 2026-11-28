@@ -764,28 +764,40 @@ function createInterruptionObligationStore(
       removeCutPointer(obligation);
     }
   };
-  const readJournal = (filename: string): InterruptionObligation[] => {
+  const parseJournal = (filename: string, validate = isObligation) => {
+    const records: InterruptionObligation[] = [];
+    let damaged = false;
     let text: string;
     try {
       text = fs.readFileSync(filename, "utf8");
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-      healthy = journalReadable = false;
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { records, damaged, unreadable: false };
       console.error("[interruption recovery] unreadable pending obligations", { filename, error });
-      return [];
+      return { records, damaged, unreadable: true };
     }
-    return text.split("\n").flatMap((line) => {
-      if (!line.trim()) return [];
+    for (const line of text.split("\n")) {
+      if (!line.trim()) continue;
       try {
-        const parsed = JSON.parse(line) as unknown;
-        if (isObligation(parsed)) return [parsed];
-        healthy = journalReadable = false;
-        return [];
-      } catch {
-        healthy = journalReadable = false;
-        return [];
-      }
-    });
+        const value: unknown = JSON.parse(line);
+        if (validate(value)) { records.push(value); continue; }
+      } catch { /* Keep the original file for repair. */ }
+      damaged = true;
+    }
+    return { records, damaged, unreadable: false };
+  };
+  const readJournal = (filename: string): InterruptionObligation[] => {
+    const { records, damaged, unreadable } = parseJournal(filename);
+    if (damaged || unreadable) healthy = journalReadable = false;
+    return records;
+  };
+  const retireClaim = (claimed: string, damaged: boolean) => {
+    if (!damaged) { fs.rmSync(claimed, { force: true }); return; }
+    const artifact = `${pendingFile}.damaged-${path.basename(claimed).slice(claimPrefix.length)}`;
+    // Preserve the exact input bytes for repair outside the active claim
+    // namespace. The complete records have already been accounted for.
+    fs.renameSync(claimed, artifact);
+    fsyncPath(path.dirname(artifact));
+    console.error("[interruption recovery] retained damaged journal for repair", { artifact: path.basename(artifact) });
   };
   const readPending = () => readJournal(pendingFile);
   /* Renames `source` to a claim only this call holds; null when it is gone. */
@@ -826,7 +838,7 @@ function createInterruptionObligationStore(
   /* Claims are replayed from disk under the same fence as withdrawal. A
      queued importer may finish a recent claim: an earlier importer will
      re-read its file and find it gone. */
-  const publishClaims = (sealed: CutSource | null, claims: readonly string[]) => {
+  const publishClaims = (sealed: CutSource | null, claims: readonly string[], recoverDamaged = false) => {
     if (sealed) {
       const current = source();
       if (!current || current.epoch !== sealed.epoch || current.databaseIdentity !== sealed.databaseIdentity) unavailableRecipientCuts();
@@ -836,9 +848,12 @@ function createInterruptionObligationStore(
         /* A withdrawal may have consumed this claim while the import was
            reading. Only the records still on disk can be published. */
         const waiting: InterruptionObligation[] = [];
-        const journalRecords = readJournal(claimed);
-        if (sealed && !healthy) continue;
-        for (const obligation of journalRecords) {
+        const { records, damaged, unreadable } = parseJournal(claimed, recoverDamaged ? completeObligation : isObligation);
+        if (unreadable || damaged && !recoverDamaged) {
+          healthy = journalReadable = false;
+          if (sealed || unreadable) continue;
+        }
+        for (const obligation of records) {
           if (exists(obligation.id)) continue;
           if (waiting.some((record) => record.id === obligation.id)) continue;
           try {
@@ -852,7 +867,7 @@ function createInterruptionObligationStore(
         if (waiting.length > 0) {
           appendDurably(pendingFile, waiting.map((obligation) => `${JSON.stringify(obligation)}\n`).join(""));
         }
-        fs.rmSync(claimed, { force: true });
+        retireClaim(claimed, damaged && recoverDamaged);
       } catch (error) {
         healthy = false;
         /* The claim stays on disk; a later read takes it over. */
@@ -1028,7 +1043,7 @@ function createInterruptionObligationStore(
         const current = source();
         if (pending.sealed && (!current || current.epoch !== pending.sealed.epoch
           || current.databaseIdentity !== pending.sealed.databaseIdentity)) unavailableRecipientCuts();
-        publishClaims(current, claimPending(current));
+        publishClaims(current, claimPending(current), true);
         return read();
       });
     },
@@ -1129,10 +1144,15 @@ function createInterruptionObligationStore(
              go back to the live journal before any claim is removed. */
           const pendingClaim = claim(pendingFile);
           const claims = [...new Set([...(pendingClaim ? [pendingClaim] : []), ...activeClaims()])];
-          const pending = claims.flatMap(readJournal);
+          const journals = claims.map(claimed => ({ claimed, ...parseJournal(claimed) }));
+          if (journals.some(journal => journal.unreadable)) {
+            healthy = false;
+            throw new RecipientInterruptionEvidenceError("pending journal inspection failed");
+          }
+          const pending = journals.flatMap(journal => journal.records);
           const kept = pending.filter((obligation) => obligation.id !== id);
           if (kept.length > 0) appendDurably(pendingFile, kept.map((obligation) => `${JSON.stringify(obligation)}\n`).join(""));
-          for (const claimed of claims) fs.rmSync(claimed, { force: true });
+          for (const { claimed, damaged } of journals) retireClaim(claimed, damaged);
           let removed = kept.length < pending.length;
           for (const current of pending) if (current.id === id) { removeRecipientPointer(current); removeCutPointer(current); }
           if (exists(id)) {
