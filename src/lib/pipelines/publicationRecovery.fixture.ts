@@ -101,7 +101,8 @@ export async function fixture(prelaunchPrefix?: "unrecorded" | "hooks-off" | "fo
     await git(lane, "add", "file.txt"); await git(lane, "commit", "-m", text);
     return git(lane, "rev-parse", "HEAD");
   };
-  const refuse = () => fs.writeFileSync(path.join(hooks, "pre-push"), '#!/bin/sh\necho "pre-push: touched tests" >&2\necho "NEW file.test.ts: failing assertion" >&2\nexit 1\n', { mode: 0o700 });
+  const refuse = (check: "touched tests" | "custom check" = "touched tests") =>
+    fs.writeFileSync(path.join(hooks, "pre-push"), `#!/bin/sh\necho "pre-push: ${check}" >&2\necho "NEW file.test.ts: failing assertion" >&2\nexit 1\n`, { mode: 0o700 });
   const finish = async (n = 1) => tickPipelines([h.finish(`/codex/stage-${n}.jsonl`, "pass", "implemented")], h.ports);
   return { root, repo, remote, hooks, h, git, commit, finish, refuse, lane: () => lane, execute,
     agentGit: async (cwd: string, ...args: string[]) => {

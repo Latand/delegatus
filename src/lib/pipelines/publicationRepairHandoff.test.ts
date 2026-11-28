@@ -70,11 +70,11 @@ test.each(["clean", "staged", "staged-unstaged", "saved-intent"] as const)(
     } finally { f.close(); }
   });
 
-test.each(["committed", "staged", "parked-staged", "committed-staged", "staged-unstaged", "unstaged", "live"] as const)(
+test.each(["committed", "staged", "committed-staged", "staged-unstaged", "unstaged", "live"] as const)(
   "a requested publication repair hands a %s dead producer head to review", async shape => {
     const f = await fixture();
     try {
-      let clock = f.h.ports.now();
+      const clock = f.h.ports.now();
       f.h.ports.now = () => clock;
       let sends = 0;
       f.h.ports.resumeSeveredTurn = async () => { sends++; return true; };
@@ -88,21 +88,14 @@ test.each(["committed", "staged", "parked-staged", "committed-staged", "staged-u
       let repaired = accepted;
       if (shape === "committed" || shape === "committed-staged" || shape === "live") repaired = await f.commit("producer repair");
       const parent = repaired;
-      if (shape === "staged" || shape === "parked-staged" || shape === "staged-unstaged" || shape === "unstaged" || shape === "committed-staged") {
+      if (shape === "staged" || shape === "staged-unstaged" || shape === "unstaged" || shape === "committed-staged") {
         fs.writeFileSync(path.join(f.lane(), "file.txt"), "staged producer repair\n");
         if (shape !== "unstaged") await f.agentGit(f.lane(), "add", "file.txt");
         if (shape === "staged-unstaged") fs.writeFileSync(path.join(f.lane(), "file.txt"), "unstaged remainder\n");
       }
       fs.unlinkSync(path.join(f.hooks, "pre-push"));
-      if (shape === "parked-staged") {
-        clock = new Date(Date.parse(clock) + 21 * 60_000).toISOString();
-        f.h.advanceWallClock(21 * 60_000);
-        await tickPipelines([], f.h.ports);
-        expect(current().state).toBe("needs_decision");
-      }
       f.h.setConversationActive(shape === "live");
       f.h.ports.conversationTurnInterrupted = async () => shape === "live" ? null : "dead";
-      if (shape === "parked-staged") expect((await rawPatchPipeline(current().id, { action: "retry-stage" }, f.h.ports)).error).toBeUndefined();
       await tickPipelines([], f.h.ports);
       const result = current();
       const attempt = result.runs[0]!.attempts[0]!;
@@ -117,7 +110,7 @@ test.each(["committed", "staged", "parked-staged", "committed-staged", "staged-u
         expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(repaired);
         return;
       }
-      if (shape === "staged" || shape === "parked-staged" || shape === "staged-unstaged" || shape === "committed-staged") {
+      if (shape === "staged" || shape === "staged-unstaged" || shape === "committed-staged") {
         repaired = await f.git(f.lane(), "rev-parse", "HEAD");
         expect(repaired).not.toBe(accepted);
         expect(await f.git(f.lane(), "show", "HEAD:file.txt")).toBe("staged producer repair");
@@ -141,6 +134,47 @@ test.each(["committed", "staged", "parked-staged", "committed-staged", "staged-u
       expect(start.worktree).toBe(f.lane());
     } finally { f.close(); }
   });
+
+test("retrying a parked test refusal preserves staged repair work for a fresh producer", async () => {
+  const f = await fixture();
+  try {
+    let clock = f.h.ports.now();
+    f.h.ports.now = () => clock;
+    let sends = 0;
+    f.h.ports.resumeSeveredTurn = async () => { sends++; return true; };
+    const accepted = await f.commit("implementation"); f.refuse(); await f.finish();
+    const original = structuredClone(current().runs[0]!.attempts[0]!);
+    expect(original.publicationRepair?.requestedAt).toBeDefined();
+    f.h.durableTurns.set(original.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(clock) });
+    fs.unlinkSync(path.join(f.hooks, "pre-push"));
+    // Work staged by the producer before the publication repair parks must
+    // survive both the park and a fresh-producer retry.
+    fs.writeFileSync(path.join(f.lane(), "file.txt"), "staged producer repair\n");
+    await f.agentGit(f.lane(), "add", "file.txt");
+    const staged = await f.git(f.lane(), "write-tree");
+    clock = new Date(Date.parse(clock) + 21 * 60_000).toISOString();
+    f.h.advanceWallClock(21 * 60_000);
+    await tickPipelines([], f.h.ports);
+    expect(current().state).toBe("needs_decision");
+    expect(await f.git(f.lane(), "write-tree")).toBe(staged);
+
+    f.h.ports.conversationTurnInterrupted = async () => "dead";
+    expect((await rawPatchPipeline(current().id, { action: "retry-stage" }, f.h.ports)).error).toBeUndefined();
+    const result = current();
+    expect(result).toMatchObject({ state: "running", lastPassedCommit: accepted, publishedCommit: null,
+      cursor: { stageId: "build", state: "pending" }, publicationProducerRepairs: 1 });
+    const attempts = result.runs[0]!.attempts;
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0]!.report).toEqual(original.report);
+    expect(attempts[0]!.verdict).toEqual(original.verdict);
+    expect(attempts[1]).toMatchObject({ n: 2, publicationRepairFrom: { stageId: "build", attempt: 1, round: 1 } });
+    expect(sends).toBe(1);
+    expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(accepted);
+    expect(await f.git(f.lane(), "write-tree")).toBe(staged);
+    expect(fs.readFileSync(path.join(f.lane(), "file.txt"), "utf8")).toBe("staged producer repair\n");
+    expect(await f.git(f.repo, "ls-remote", "--heads", "origin", result.delivery!.target.branch)).toBe("");
+  } finally { f.close(); }
+});
 
 test.each(["dead", "unhosted", "scoped-unhosted", "conflict", "idle", "running", "missing", "attention", "unavailable", "aborted"] as const)(
   "publication repair uses native host absence with a completed turn (%s)", async state => {
@@ -196,7 +230,7 @@ test.each(["dead", "unhosted", "scoped-unhosted", "conflict", "idle", "running",
     }
   });
 
-async function repairController(f: Awaited<ReturnType<typeof fixture>>, crash: "intent" | "commit" | "accepted" | null, race?: "index" | "worktree", hosted = false) {
+async function repairController(f: Awaited<ReturnType<typeof fixture>>, crash: "intent" | "commit" | "accepted" | null, race?: "index" | "worktree", hosted = false, commitTimeoutMs?: number) {
   return realExec("bun", ["-e", `
       const { spyOn } = await import("bun:test");
       const pullRequests = await import("./src/lib/pipelines/stagePullRequest.ts");
@@ -213,9 +247,11 @@ async function repairController(f: Awaited<ReturnType<typeof fixture>>, crash: "
       ports.scheduleTick = () => {};
       ports.conversationAgentActive = async () => false;
       ports.publicationRepairProducerGone = undefined;
+      ports.publicationRepairProducerState = async () => ${hosted} ? "idle" : "gone";
       ports.conversationTurnInterrupted = async () => ${hosted} ? "idle" : "dead";
       ports.conversationDeliveryOutstanding = () => false;
       ports.resumeSeveredTurn = async () => true;
+      ports.stageRepairDelivery = async () => ({ operationId: "fixture-repair", state: "delivered", safeToReplace: false });
       ports.durableTurnEvidence = async () => {
         const repair = loadPipelines()[0].runs[0].attempts[0].publicationRepair;
         const ts = Math.max(Date.parse(ports.now()), repair.messageTs ?? 0) + 1;
@@ -244,9 +280,54 @@ async function repairController(f: Awaited<ReturnType<typeof fixture>>, crash: "
         if (${JSON.stringify(crash)} === "commit" && args[0] === "git" && args[1][0] === "commit" && result.code === 0) process.exit(0);
         return result;
       };
+      if (${commitTimeoutMs ?? "undefined"} !== undefined) {
+        const execute = ports.exec;
+        ports.exec = async (command, args, cwd, env, options) => command === "git" && args[0] === "commit"
+          ? execute(command, args, cwd, env, { ...options, timeoutMs: ${commitTimeoutMs ?? "undefined"} })
+          : execute(command, args, cwd, env, options);
+      }
       await tickPipelines([], ports);
     `], process.cwd(), { ...process.env }, { timeoutMs: 30_000 });
 }
+
+test("publication repair commit timeouts have a restart-persistent retry limit and preserve staged custody", async () => {
+  const f = await fixture();
+  try {
+    const clock = f.h.ports.now();
+    f.h.ports.now = () => clock;
+    f.h.ports.resumeSeveredTurn = async () => true;
+    const accepted = await f.commit("implementation"); f.refuse(); await f.finish();
+    const original = structuredClone(current().runs[0]!.attempts[0]!);
+    f.h.durableTurns.set(original.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(clock) });
+    fs.unlinkSync(path.join(f.hooks, "pre-push"));
+    fs.writeFileSync(path.join(f.lane(), "file.txt"), "staged repair custody\n");
+    await f.agentGit(f.lane(), "add", "file.txt");
+    const stagedTree = await f.git(f.lane(), "write-tree");
+    const hookCalls = path.join(f.root, "pre-commit-calls");
+    fs.writeFileSync(path.join(f.hooks, "pre-commit"), `#!/bin/sh\nprintf x >> '${hookCalls}'\nsleep 5\n`, { mode: 0o755 });
+
+    // Each call is a fresh controller process. A real sleeping hook proves
+    // that the persisted retry budget survives process restart.
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      const restarted = await repairController(f, null, undefined, false, 450);
+      expect(restarted.code, restarted.stderr).toBe(0);
+      expect(fs.readFileSync(hookCalls, "utf8")).toHaveLength(attempt);
+      const row = current();
+      if (attempt < 5) expect(row.state).toBe("running");
+      else expect(row.state).toBe("needs_decision");
+    }
+
+    const result = current(), attempt = result.runs[0]!.attempts[0]!;
+    expect(attempt.publicationRepair?.commitTimeoutFailures).toBe(5);
+    expect(result.stateDetail).toContain("stopped after 4 automatic retries");
+    expect(result.stateDetail).toContain(accepted);
+    expect(result.stateDetail).toContain(stagedTree);
+    expect(result.lastPassedCommit).toBe(accepted);
+    expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(accepted);
+    expect(await f.git(f.lane(), "write-tree")).toBe(stagedTree);
+    expect(await f.git(f.repo, "ls-remote", "--heads", "origin", result.delivery!.target.branch)).toBe("");
+  } finally { f.close(); }
+}, 30_000);
 
 test.each(["automatic", "retry-stage", "foreign", "dirty", "missing-receipt"] as const)(
   "a live-origin repair intent survives later host loss (%s)", async shape => {
@@ -254,7 +335,9 @@ test.each(["automatic", "retry-stage", "foreign", "dirty", "missing-receipt"] as
     try {
       const clock = f.h.ports.now(); f.h.ports.now = () => clock;
       f.h.ports.resumeSeveredTurn = async () => true;
-      const accepted = await f.commit("implementation"); f.refuse(); await f.finish();
+      const accepted = await f.commit("implementation");
+      f.refuse(shape === "retry-stage" ? "custom check" : "touched tests");
+      await f.finish();
       const original = structuredClone(current().runs[0]!.attempts[0]!);
       const repaired = await f.commit("producer repair");
       fs.unlinkSync(path.join(f.hooks, "pre-push"));
@@ -304,6 +387,7 @@ test.each(["automatic", "retry-stage", "foreign", "dirty", "missing-receipt"] as
         expect(await f.git(f.lane(), "status", "--porcelain")).toBe("");
       } else {
         expect(result.state).toBe("needs_decision");
+        expect(result.stateDetail).toContain("The repair commit intent has no exact custody checkpoint");
         expect(result.lastPassedCommit).toBe(accepted);
         expect(attempt.publicationRepair?.committedSha).toBeUndefined();
         expect(await f.git(f.repo, "ls-remote", "--heads", "origin", result.delivery!.target.branch)).toBe("");
@@ -511,6 +595,7 @@ test.each(["unchanged", "foreign", "legacy-foreign", "changed-index", "reset-ind
         expect(refused.code, refused.stderr).toBe(0);
         expect(current().state).toBe("running");
         expect(current().lastPassedCommit).toBe(accepted);
+        expect(current().runs[0]!.attempts[0]!.publicationRepair).toEqual(checkpoint);
         expect(fs.readFileSync(lock, "utf8")).toBe("held\n");
         fs.unlinkSync(lock);
         expect(await f.git(f.lane(), "write-tree")).toBe(tree);

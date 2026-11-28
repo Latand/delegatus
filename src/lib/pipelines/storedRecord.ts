@@ -233,6 +233,9 @@ function isPublicationRepairCheckpoint(value: unknown): boolean {
   return (repair.cleanHead === undefined || !!repair.cleanHead && sha(repair.cleanHead.sha)
       && typeof repair.cleanHead.branch === "string" && !!repair.cleanHead.branch
       && (repair.cleanHead.ignoredPaths === undefined || paths(repair.cleanHead.ignoredPaths)))
+    && (repair.commitTimeoutFailures === undefined || Number.isSafeInteger(repair.commitTimeoutFailures)
+      && repair.commitTimeoutFailures >= 0 && repair.commitTimeoutFailures <= 5)
+    && (repair.preserveWorktreeOnRetry === undefined || repair.preserveWorktreeOnRetry === true)
     && (repair.rollback === undefined || !!repair.rollback && [repair.rollback.index, repair.rollback.tree, repair.rollback.afterTree].every(sha)
       && (repair.rollback.head === undefined || sha(repair.rollback.head))
       && paths(repair.rollback.tracked) && paths(repair.rollback.untracked) && ["restore", "clean", "done"].includes(repair.rollback.phase));

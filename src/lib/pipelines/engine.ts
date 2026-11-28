@@ -6746,6 +6746,12 @@ async function settlePublicationRepairWithCustody(
       const head = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
       if (head.code !== 0) return fail("The repair custody head cannot be read; preserve the checkout.");
       if (head.stdout.trim() === repair.commitStartedHead) {
+        const index = await exec("git", ["rev-parse", "--path-format=absolute", "--git-path", "index"], pipeline.worktreeDir);
+        if (index.code !== 0 || !path.isAbsolute(index.stdout.trim())) return fail("The repair custody index cannot be located; preserve the checkout.");
+        if (fs.existsSync(`${index.stdout.trim()}.lock`)) {
+          ports.scheduleTick?.(1_000);
+          return false;
+        }
         const tree = await exec("git", ["write-tree"], pipeline.worktreeDir);
         const unstaged = await exec("git", ["diff", "--quiet", "--no-ext-diff", "--no-textconv"], pipeline.worktreeDir);
         if (tree.code !== 0 || tree.stdout.trim() !== custody.tree || unstaged.code !== 0) {
@@ -6763,8 +6769,29 @@ async function settlePublicationRepairWithCustody(
       result = recovered?.ok && writable ? recovered : await commitPipelineStage(pipeline, worker.stage.id, writable, exec,
         attemptStage(worker.stage, worker.attempt).outputs, writable ? null : repair.sha, ports.stageCommitReceiptFile);
     }
-    if (!result.ok) return fail(deadProducer && writable && result.error === `read-only stage ${worker.stage.id} created a commit`
-      ? custodyMoved : result.error);
+    if (!result.ok) {
+      if (result.deferred) {
+        if (result.commitTimeout || result.commitCancelled) {
+          const failures = (repair.commitTimeoutFailures ?? 0) + 1;
+          repair.commitTimeoutFailures = failures;
+          if (failures > 4) {
+            const tree = repair.commitCustody?.tree;
+            const detail = `${result.error}; stopped after 4 automatic retries; accepted head ${repair.sha}`
+              + `${tree ? ` and staged tree ${tree}` : ""} preserved for recovery`;
+            attempt.error = publicationRepairParkDetail(repair, detail);
+            pipeline.stateDetail = attempt.error;
+            await persist();
+            await park(pipeline, attempt.error);
+            return false;
+          }
+          await persist();
+        }
+        ports.scheduleTick?.(1_000);
+        return false;
+      }
+      return fail(deadProducer && writable && result.error === `read-only stage ${worker.stage.id} created a commit`
+        ? custodyMoved : result.error);
+    }
     const current = await currentPipelineBranchHead(pipeline, ports.exec);
     if (!current.ok || current.sha !== result.sha) return fail(current.ok ? "The publication repair head moved during settlement." : current.error);
     if (deadProducer && (await exec("git", ["merge-base", "--is-ancestor", repair.sha, result.sha], pipeline.worktreeDir)).code !== 0) {
@@ -6879,6 +6906,7 @@ async function settleRejectedPublicationRepair(
   ports: PipelinePorts, persist: () => void | Promise<void>,
 ): Promise<boolean> {
   const repair = attempt.publicationRepair!;
+  if (repair.preserveWorktreeOnRetry) return true;
   // A clean unchanged head needs no discard. Preserve the original timeout
   // and delivery refusal records; their retry path still checks live producers.
   if (!repair.rollback) {
@@ -6897,9 +6925,11 @@ async function settleRejectedPublicationRepair(
       const diff = await ports.exec("git", ["diff", "--quiet", "--no-ext-diff", "--no-textconv"], pipeline.worktreeDir, pipelineLiteralGitEnv());
       conflict = head.code === 0 && head.stdout.trim() !== repair.commitStartedHead
         || tree.code === 0 && tree.stdout.trim() !== repair.commitCustody.tree || diff.code === 1;
-    } else if (head.code === 0 && head.stdout.trim() !== repair.commitStartedHead) {
-      const owned = await settleStageAttemptPush(pipeline, worker, ports.exec, ports.now(), { acceptedHead: repair.sha, allowDirty: true });
-      conflict = !owned?.ok || owned.sha !== head.stdout.trim();
+    } else if (head.code === 0) {
+      // A live producer recorded only its head. A restart has no tree
+      // checkpoint authorizing cleanup of a dirty or unreceipted checkout.
+      const owned = await settleStageAttemptPush(pipeline, worker, ports.exec, ports.now(), { acceptedHead: repair.sha });
+      conflict = !owned?.ok || owned.sha !== repair.commitStartedHead;
     }
     if (conflict) {
       attempt.error = publicationRepairParkDetail(repair,
@@ -6981,6 +7011,9 @@ async function stageCommitRepairSettled(
   const giveUp = async (why: string) => {
     repair.outcome = { status: "rejected", reason: why };
     if (publication) {
+      if (publication && why.includes("did not finish that turn in time")) {
+        attempt.publicationRepair!.preserveWorktreeOnRetry = true;
+      }
       await persist();
       if (!await settleRejectedPublicationRepair(pipeline, stage, attempt, ports, persist)) return false;
     }

@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
+import { captureProcessIdentity, processIdentityMayRun, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
 import { signalFixtureIdentity, stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
 import { procBackend } from "../src/lib/proc";
 import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
@@ -44,6 +44,9 @@ function portableFixture(manager: "missing" | "unreachable") {
     env[key] = path.join(root, dir); fs.mkdirSync(env[key]!);
   }
   Object.assign(env, { NODE_ENV: "test", LLV_GATE_RUNNER: "off", DELEGATUS_CPU_PRESSURE: "off", DELEGATUS_AGENT_CPU: "off", LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_GATE_LOCK_DIR: path.join(root, "locks"), LLV_OWNED_RUN_TIMEOUT_MS: "12000" });
+  // The outer test already holds a machine permit. Exercise nested admission
+  // against a private queue so unrelated checks cannot delay fixture readiness.
+  env.LLV_CHECK_ADMISSION_FILE = path.join(root, "checks.sqlite");
   if (manager === "missing") {
     const bin = path.join(root, "bin"); fs.mkdirSync(bin);
     for (const name of ["bash", "date", "mkdir", "flock", "sleep", "dirname", "mktemp", "touch", "rm"]) fs.symlinkSync(`/usr/bin/${name}`, path.join(bin, name));
@@ -66,7 +69,15 @@ for (const mode of ["complete", "exit", "deadline", "TERM", "INT", "KILL", "test
   // only the runner and gate interfaces accept an explicit supervisor identity.
   if (entry === "direct" && mode === "supervisor-KILL") continue;
   test.skipIf(process.platform !== "linux")(`Linux portable ${entry} ${mode} ends recorded children and preserves a bystander`, async () => {
-    const { root, env, repo } = portableFixture("unreachable");
+    const scope = process.env.LLV_OWNED_TEST_RUN_CGROUP ? scopeBaseline() : null;
+    const { root, env, repo } = portableFixture(entry === "gate" && mode === "KILL" ? "missing" : "unreachable");
+    if (entry === "gate" && mode === "KILL") {
+      // The configured interpreter can keep its shell between the wrapper
+      // and the runner. Admission commands still exec the real interpreter.
+      const shim = path.join(root, "bun-shim");
+      fs.writeFileSync(shim, '#!/bin/bash\nif [[ $1 != */owned-runner.ts ]]; then exec bun "$@"; fi\nbun "$@" &\nwait "$!"\n', { mode: 0o700 });
+      env.LLV_GATE_BUN = shim;
+    }
     const record = path.join(root, "ready.json"), release = path.join(root, "release"), received = path.join(root, "signal");
     fs.writeFileSync(path.join(root, "example.test.ts"), `import { test } from "bun:test";
 import { spawn } from "node:child_process"; import fs from "node:fs";
@@ -95,8 +106,8 @@ test("portable lifetime", async () => {
     let diagnostic = ""; runner.stderr!.on("data", chunk => { diagnostic += String(chunk); });
     let owned: ProcessIdentity[] = [];
     try {
-      await until(() => fs.existsSync(record) || runner.exitCode !== null);
-      if (!fs.existsSync(record)) throw new Error(diagnostic);
+      await until(() => fs.existsSync(record) || runner.exitCode !== null || runner.signalCode !== null);
+      if (!fs.existsSync(record)) throw new Error(`runner exited before readiness: ${diagnostic}`);
       owned = JSON.parse(fs.readFileSync(record, "utf8"));
       if (mode === "exit" || mode === "complete") fs.writeFileSync(release, "go");
       if (mode === "TERM" || mode === "INT" || mode === "KILL") runner.kill(mode === "TERM" ? "SIGTERM" : mode === "INT" ? "SIGINT" : "SIGKILL");
@@ -106,17 +117,22 @@ test("portable lifetime", async () => {
         supervisor.kill("SIGKILL"); await ended;
       }
       await until(() => runner.exitCode !== null || runner.signalCode !== null, 12000);
-      await until(() => owned.every(identity => processIdentityStatus(identity) === "dead"));
+      // A killed orphan can retain its identity as a zombie until reaped by
+      // its new parent. The runner must end execution of every recorded child.
+      await until(() => owned.every(identity => !processIdentityMayRun(identity)));
       expect(processIdentityStatus(other)).toBe("alive");
+      expect(processIdentityMayRun(other)).toBe(true);
       if (mode === "TERM" || mode === "INT") expect(fs.readFileSync(received, "utf8")).toBe(mode === "INT" ? "SIGINT" : "SIGTERM");
       expect(runner.exitCode).toBe(mode === "complete" ? 0 : mode === "exit" ? 1 : mode === "deadline" ? 124 : mode === "TERM" ? 143 : mode === "INT" ? 130 : mode === "KILL" ? null : 137);
+      expect(runner.signalCode).toBe(mode === "KILL" ? "SIGKILL" : null);
     } finally {
       await stopFixtureProcess(runner);
       if (supervisor) await stopFixtureProcess(supervisor);
       await stopFixtureProcess(bystander);
       if (!owned.length && fs.existsSync(record)) owned = JSON.parse(fs.readFileSync(record, "utf8"));
       for (const identity of owned) signalFixtureIdentity(identity, "SIGKILL");
-      await until(() => owned.every(identity => processIdentityStatus(identity) === "dead"));
+      await until(() => owned.every(identity => !processIdentityMayRun(identity)));
+      if (scope) await drainScope(scope);
       fs.rmSync(root, { recursive: true, force: true });
     }
   }, 20000);

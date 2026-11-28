@@ -1,4 +1,4 @@
-import { expect, test, harness, create, createPipelineFromRequest, BUILD_ONLY, loadPipelines, savePipelines, tickPipelines, pipelineIdentity, publishHarness, Database, path, fs, spawn, realWorktreeLane, stopFixtureProcess, defaultPipelinePorts, crypto, registerPipelineTick, reserveActivationOnly, engineModule } from "./engine.fixture";
+import { expect, test, harness, create, createPipelineFromRequest, BUILD_ONLY, loadPipelines, savePipelines, tickPipelines, pipelineIdentity, publishHarness, Database, path, fs, spawn, realWorktreeLane, stopFixtureProcess, defaultPipelinePorts, crypto, registerPipelineTick, engineModule } from "./engine.fixture";
 import { FlowPipelineController, type FlowPipelineControllerHeartbeat } from "./controller";
 import { requestPipelineTick } from "./controllerSignal";
 import { tickPipelinesController } from "./controllerPass";
@@ -7,6 +7,7 @@ import { latch, until, withControllerAuditState } from "./fixtures/ownedStageCon
 import { pipelineControllerJobLanes, settlePipelineControllerJobs, startPipelineControllerJob, takePipelineControllerJobChanges } from "./controllerJobs";
 import { controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, acknowledgePipelineControllerWork, archiveSettledPipelines, controllerPipelineVersion, findControllerPipeline, pipelineControllerReady, selectControllerPipelines, selectPipelineControllerWork, withPipelineMutation, withDeliveryMutationAsync, withPipelineControllerMutation, controllerUnclaimedPublications, PipelineStoreError } from "./store";
 import { SqliteStateCollection, StateSnapshotChangedError, resetStateReadonlyConnectionCountForTests, stateReadonlyConnectionCountForTests } from "@/lib/state/sqliteStateStore";
+import { assertStateChildSuccess } from "@/lib/state/stateChildResult.fixture";
 import { setSystemTime, spyOn } from "bun:test";
 import { performanceSpans, performanceSites } from "@/lib/performanceSpans";
 import { instanceCpuAdmissionFile, instanceCpuAdmissionQueue } from "@/lib/runtime/cpuAdmissionScope";
@@ -15,6 +16,8 @@ import { withControllerPipelineScope } from "./controllerScope";
 import { CpuAdmissionQueue } from "@/lib/runtime/cpuAdmission";
 import { DEFAULT_CPU_PRESSURE_POLICY } from "@/lib/runtime/cpuPressure";
 import { OperationLeaseExpiredError } from "@/lib/operationLease";
+import { settleProvisioningJobsForTests } from "./provisioningJob";
+import { provisioningStripe } from "./provisionCheckoutCustody";
 
 async function committing(publication: "internal" | "remote-branch" = "internal") {
   const h = harness();
@@ -26,6 +29,32 @@ async function committing(publication: "internal" | "remote-branch" = "internal"
   Object.assign(lane.runs[0]!.attempts[0]!, { state: "committing", verdict: { status: "pass" } });
   savePipelines([lane]);
   return { h, lane };
+}
+
+async function waitForProvisioning(check: () => Promise<boolean>) {
+  const deadline = performance.now() + 8_000;
+  while (!await check()) {
+    if (performance.now() >= deadline) throw new Error("fixture provisioning did not reach its expected checkpoint");
+    await Bun.sleep(10);
+  }
+}
+
+function pinFixtureCheckoutOutsideStripes(lane: Awaited<ReturnType<typeof create>>, stem: string,
+  peers: ReadonlyArray<{ worktreeDir: string }>): void {
+  const occupied = new Set(peers.map(peer => provisioningStripe(path.resolve(peer.worktreeDir))));
+  for (let suffix = 0; suffix < 256; suffix++) {
+    const id = `${stem}-${suffix}`;
+    const identity = pipelineIdentity(id, lane.task, lane.repoDir);
+    if (occupied.has(provisioningStripe(path.resolve(identity.worktreeDir)))) continue;
+    lane.id = id;
+    Object.assign(lane, identity);
+    if (lane.delivery) {
+      lane.delivery.ownerId = id;
+      lane.delivery.target.branch = `refs/heads/${lane.branch}`;
+    }
+    return;
+  }
+  throw new Error("fixture could not select an independent checkout stripe");
 }
 
 test.each(["never", "late-write"] as const)("an expired controller abandons a %s await and the next tick admits and launches the waiting stage", async mode => {
@@ -710,20 +739,40 @@ test("a peer-held SQLite writer yields while a schedule acknowledgment waits", a
 
 test("a bounded reconciliation preserves another lane's CPU ticket and FIFO age", async () => {
   const { lane } = await committing();
-  const file = instanceCpuAdmissionFile();
-  expect(file.startsWith(`${path.dirname(process.env.XDG_CONFIG_HOME!)}${path.sep}`)).toBe(true);
-  const queue = instanceCpuAdmissionQueue();
-  const prefix = `stage:${crypto.createHash("sha256").update(stateDir()).digest("hex")}:`;
-  const peer = `${prefix}unselected-peer:build:1`;
-  queue.check(peer, false);
-  const db = new Database(file, { readonly: true });
+  const directory = stateDir();
+  const queueRoot = path.join(directory, "fifo-admission");
+  const previousLockDir = process.env.LLV_GATE_LOCK_DIR;
+  // The comparator gives its runner a separate admission directory. Give
+  // these synthetic stage tickets a queue owned by the pipeline fixture.
+  process.env.LLV_GATE_LOCK_DIR = queueRoot;
   try {
-    const before = db.query("SELECT seq,since FROM tickets WHERE key=?").get(peer);
-    const ports = defaultPipelinePorts();
-    await withControllerPipelineScope([lane.id], async () => { await ports.cpuAdmissionReconcile?.(ports); });
-    expect(db.query("SELECT seq,since FROM tickets WHERE key=?").get(peer)).toEqual(before);
-    expect(before).not.toBeNull();
-  } finally { db.close(); queue.cancel(peer); }
+    const file = instanceCpuAdmissionFile();
+    expect(file).toBe(path.join(queueRoot, "admission.sqlite"));
+    const prefix = `stage:${crypto.createHash("sha256").update(directory).digest("hex")}:`;
+    const peer = `${prefix}unselected-peer:build:1`;
+    const stale = `${prefix}${lane.id}:retired:1`;
+    const queue = instanceCpuAdmissionQueue();
+    queue.check(peer, false);
+    queue.check(stale, false);
+    const db = new Database(file, { readonly: true });
+    try {
+      const ticket = db.query("SELECT seq,since FROM tickets WHERE key=?");
+      const before = ticket.get(peer);
+      expect(before).not.toBeNull();
+      expect(ticket.get(stale)).not.toBeNull();
+      const ports = defaultPipelinePorts();
+      await withControllerPipelineScope([lane.id], async () => { await ports.cpuAdmissionReconcile!(ports); });
+      expect(ticket.get(stale)).toBeNull();
+      expect(ticket.get(peer)).toEqual(before);
+    } finally {
+      db.close();
+      queue.cancel(stale);
+      queue.cancel(peer);
+    }
+  } finally {
+    if (previousLockDir === undefined) delete process.env.LLV_GATE_LOCK_DIR;
+    else process.env.LLV_GATE_LOCK_DIR = previousLockDir;
+  }
 });
 
 test("a Viewer restart during a real push retains child custody and reconciles its outcome without another push", async () => {
@@ -1081,8 +1130,20 @@ test("lazy controller copies isolate discarded edits and checkpoint the whole re
 },30_000);
 
 test("an off-window activation keeps its custody while the current attempt waits", async () => {
-  const h = await reserveActivationOnly();
+  const h = harness();
+  await create(h.ports);
+  const priorDrain = process.env.LLV_PIPELINE_ACTIVATION_DRAIN;
+  const previousPublication = h.ports.structuredDeliveryPublication;
+  process.env.LLV_PIPELINE_ACTIVATION_DRAIN = "1";
+  h.ports.structuredDeliveryPublication = () => loadPipelines()[0]?.runs[0]?.attempts[0]?.activation ? "unbound" : "ready";
+  try { await tickPipelines([], h.ports); }
+  finally {
+    h.ports.structuredDeliveryPublication = previousPublication;
+    if (priorDrain === undefined) delete process.env.LLV_PIPELINE_ACTIVATION_DRAIN;
+    else process.env.LLV_PIPELINE_ACTIVATION_DRAIN = priorDrain;
+  }
   const lane = loadPipelines()[0]!, original = lane.runs[0]!.attempts[0]!;
+  expect(original.activation?.phase).toBe("reserved");
   const history = Array.from({ length: 65 },(_,n) => {
     const attempt = { ...structuredClone(original),n:n+1,accounting: { ...original.accounting!, repeatReason: n ? "unknown" as const : null },historical:true,state:"failed" as const,
       verdict:{status:"fail" as const},completedAt:h.ports.now() };
@@ -1381,6 +1442,10 @@ async function auditPeerRotation(admission: "direct" | "queued", base: "pinned" 
   const epoch = Date.parse("2026-11-18T00:00:00.000Z");
   let elapsed = 0;
   h.ports.now = () => new Date(epoch + elapsed).toISOString();
+  h.ports.provisionClock = {
+    wallMs: () => epoch, monotonicMs: () => performance.now(),
+    arm: (delay, run) => { const timer = setTimeout(run, delay); return () => clearTimeout(timer); },
+  };
   await create(h.ports, BUILD_ONLY as never);
   await tickPipelines([], h.ports); await tickPipelines([], h.ports);
   const blocker = loadPipelines()[0]!;
@@ -1448,7 +1513,8 @@ async function auditPeerRotation(admission: "direct" | "queued", base: "pinned" 
   };
   h.ports.worktreePresent = fs.existsSync;
 
-  const diagnostics: Array<{ pipelineId: string; at: string; phase: string; admission?: string; step?: string; status?: string }> = [];
+  const diagnostics: Array<{ pipelineId: string; at: string; phase: string; admission?: string; step?: string; status?: string;
+    view?: { step: string; status: string } }> = [];
   const trace = "[flow pipeline provisioning] ";
   const quiet = process.env.LLV_QUIET_DIAGNOSTICS;
   delete process.env.LLV_QUIET_DIAGNOSTICS;
@@ -1517,6 +1583,9 @@ async function auditPeerRotation(admission: "direct" | "queued", base: "pinned" 
       if (timedOutPeer !== undefined) expect(readWork.get(timedOutPeer)).toEqual(before);
       release.resolve();
       await settlePipelineControllerJobs();
+      if (diagnostics.some(event => event.pipelineId === lane.id && event.phase === "scheduler-selected")) {
+        await waitForProvisioning(async () => (await findControllerPipeline(lane.id))?.state === "running");
+      }
       if (mixedDue && process.env.LLV_COLD_CONTROLLER_EVIDENCE) {
         const dueCursor = db.query<{ row_key: string }, []>("SELECT row_key FROM pipeline_tick_priority_cursor WHERE kind='due'").get();
         console.log("mixed-due-audit", JSON.stringify({ pass, timedOutPeer, dueCursorAtOldPeer: dueCursor?.row_key === blockers[0]!.id,
@@ -1541,22 +1610,29 @@ async function auditPeerRotation(admission: "direct" | "queued", base: "pinned" 
     expect(queue.listQueuedPipelineCreations()).toEqual([]);
     const events = diagnostics.filter(event => event.pipelineId === lane.id);
     const { startedAt } = (await findControllerPipeline(lane.id))!.runs[0]!.attempts[0]!;
-    expect(events).toEqual([
-      { pipelineId: lane.id, at: new Date(epoch).toISOString(), phase: "accepted", admission },
-      { pipelineId: lane.id, at: expect.any(String), phase: "scheduler-selected" },
-      { pipelineId: lane.id, at: expect.any(String), phase: "state-validated" },
+    if (!startedAt) throw new Error("the first attempt has no start timestamp");
+    expect(events[0]).toEqual({ pipelineId: lane.id, at: new Date(epoch).toISOString(), phase: "accepted", admission });
+    expect(events[1]).toMatchObject({ phase: "scheduler-selected" });
+    expect(events.filter(event => event.phase === "step").map(event => event.view?.step)).toEqual([
+      "resolvingRepository", "resolvingBase", "verifyingCheckout", "creatingCheckout",
+      "startingToolchain", "checkingDependencies", "applyingCheckout",
+    ]);
+    expect(events.filter(event => event.phase.startsWith("git-"))).toEqual([
       ...(["common-directory", ...(base === "pinned" ? [] : ["fetch"]), "worktree-add"].flatMap(step => [
         { pipelineId: lane.id, at: expect.any(String), phase: "git-started", step },
         { pipelineId: lane.id, at: expect.any(String), phase: "git-finished", step, status: "ok" },
       ])),
-      { pipelineId: lane.id, at: startedAt, phase: "first-attempt" },
     ]);
-    const times = events.map(event => Date.parse(event.at));
-    expect(times).toEqual([...times].sort((a, b) => a - b));
-    expect(Date.parse(startedAt!) - epoch).toBeLessThanOrEqual(4 * budget);
+    expect(events.at(-1)).toEqual({ pipelineId: lane.id, at: startedAt, phase: "first-attempt" });
+    for (const stepEvents of [true, false]) {
+      const times = events.filter(event => (event.phase === "step") === stepEvents).map(event => Date.parse(event.at));
+      expect(times).toEqual([...times].sort((a, b) => a - b));
+    }
+    expect(Date.parse(startedAt) - epoch).toBeLessThanOrEqual(4 * budget);
   } finally {
     release.resolve();
     await settlePipelineStopReadLanes();
+    await settleProvisioningJobsForTests();
     await settlePipelineControllerJobs();
     db.close();
     info.mockRestore();
@@ -1571,15 +1647,15 @@ test.each(["recovers", "exhausts"] as const)("a classified provisioning lock ret
   const initial = Date.parse("2026-11-18T00:00:00.000Z");
   const iso = (offset: number) => new Date(initial + offset).toISOString();
   f.h.ports.now = () => iso(0);
+  f.h.ports.provisionClock = { wallMs: () => Date.parse(f.h.ports.now()), monotonicMs: () => 0, arm: () => () => {} };
   const source = `
-    import { defaultPipelinePorts } from "./src/lib/pipelines/engine.ts";
+    import { defaultPipelinePorts, tickPipelines } from "./src/lib/pipelines/engine.ts";
     import { realProvisionExec } from "./src/lib/pipelines/git.ts";
-    import { tickPipelinesController } from "./src/lib/pipelines/controllerPass.ts";
-    import { settlePipelineControllerJobs } from "./src/lib/pipelines/controllerJobs.ts";
     import { registerPipelineTick } from "./src/lib/pipelines/controllerSignal.ts";
     registerPipelineTick(async () => {});
     const ports = defaultPipelinePorts();
     ports.now = () => process.env.LLV_FIXTURE_RETRY_AT;
+    ports.provisionClock = { wallMs: () => Date.parse(ports.now()), monotonicMs: () => 0, arm: () => () => {} };
     ports.structuredDeliveryPublication = () => "unbound";
     ports.worktreeDiskWait = () => null;
     ports.cpuAdmissionReconcile = async () => {};
@@ -1589,8 +1665,7 @@ test.each(["recovers", "exhausts"] as const)("a classified provisioning lock ret
       if (args[1][0] === "worktree" && args[1][1] === "add") adds++;
       return realProvisionExec(...args);
     };
-    await tickPipelinesController([], ports);
-    await settlePipelineControllerJobs();
+    await tickPipelines([], ports);
     console.log(adds);
   `;
   const runAt = async (offset: number) => {
@@ -1602,7 +1677,7 @@ test.each(["recovers", "exhausts"] as const)("a classified provisioning lock ret
     try {
       await until(result, 10_000);
       const [exit, stdout, stderr] = await result;
-      expect({ exit, stderr }).toEqual({ exit: 0, stderr: "" });
+      assertStateChildSuccess(exit, stderr);
       return Number(stdout.trim());
     } finally {
       if (child.exitCode === null) child.kill();
@@ -1616,18 +1691,21 @@ test.each(["recovers", "exhausts"] as const)("a classified provisioning lock ret
     const lock = path.join(f.repo, ".git", "refs", "heads", `${lane.branch}.lock`);
     fs.mkdirSync(path.dirname(lock), { recursive: true });
     fs.writeFileSync(lock, "");
-    await tickPipelinesController([], f.h.ports);
-    await settlePipelineControllerJobs();
+    await tickPipelines([], f.h.ports);
     const waiting = (await findControllerPipeline(lane.id))!;
+    const retry = (row: typeof waiting) => row.provisioningJob?.admittedAdd?.previousWait ?? row.provisioningWait;
     expect(waiting.stateDetail).toContain("a Git lock was held");
-    expect(waiting.provisioningWait).toMatchObject({ startedAt: iso(0), retryAfter: iso(5_000), rounds: 1, budgetMs: 180_000 });
+    expect(retry(waiting)).toMatchObject({ startedAt: iso(0), retryAfter: iso(5_000), rounds: 1, budgetMs: 180_000 });
     expect(await runAt(4_999)).toBe(0);
-    expect((await findControllerPipeline(lane.id))?.provisioningWait).toEqual(waiting.provisioningWait);
+    expect(retry((await findControllerPipeline(lane.id))!)).toEqual(retry(waiting));
     if (outcome === "exhausts") {
-      expect(await runAt(180_000)).toBe(1);
+      for (const offset of [5_000, 15_000, 35_000, 75_000, 135_000, 180_000]) {
+        expect(retry((await findControllerPipeline(lane.id))!)?.retryAfter).toBe(iso(offset));
+        expect(await runAt(offset)).toBe(1);
+      }
       const parked = await findControllerPipeline(lane.id);
       expect(parked).toMatchObject({ state: "needs_decision", baseRef: f.base,
-        stateDetail: expect.stringContaining("gave up after 1 retries over 180s: a Git lock was held") });
+        provisioningJob: { status: "parked" }, stateDetail: expect.stringContaining("a Git lock was held") });
       expect(parked?.runs[0]?.attempts).toEqual([]);
       expect(await runAt(181_000)).toBe(0);
       expect(fs.existsSync(lane.worktreeDir)).toBe(false);
@@ -1642,6 +1720,7 @@ test.each(["recovers", "exhausts"] as const)("a classified provisioning lock ret
       expect((await findControllerPipeline(lane.id))?.provisioningWait).toBeUndefined();
     }
   } finally {
+    await settleProvisioningJobsForTests();
     await settlePipelineControllerJobs();
     fs.rmSync(f.root, { recursive: true, force: true });
   }
@@ -1691,8 +1770,12 @@ test("provisioning yields the controller phase and has capacity while all publis
     // the bounded attempt window on the following pass.
     await until(tickPipelinesController([], h.ports));
     expect(h.spawnInputs.some(input => input.cwd === peer.worktreeDir)).toBe(true);
-  } finally { release.resolve(); await tick; await settlePipelineControllerJobs(); unregister(); }
-  expect((await findControllerPipeline(lane.id))?.state).toBe("running");
+    release.resolve();
+    await waitForProvisioning(async () => (await findControllerPipeline(lane.id))?.state === "running");
+  } finally {
+    release.resolve(); await tick;
+    await settleProvisioningJobsForTests(); await settlePipelineControllerJobs(); unregister();
+  }
 });
 
 test.each(["failure", "pause", "remove", "branch", "owner"] as const)("a detached provisioning %s settles against the current lane", async change => {
@@ -1724,14 +1807,17 @@ test.each(["failure", "pause", "remove", "branch", "owner"] as const)("a detache
       if (change === "owner") current.delivery!.epoch++;
       savePipelines([current]);
     }
-  } finally { release.resolve(); await tick; await settlePipelineControllerJobs(); }
+    release.resolve();
+    if (change === "failure") await waitForProvisioning(async () => (await findControllerPipeline(lane.id))?.state === "needs_decision");
+  } finally { release.resolve(); await tick; await settleProvisioningJobsForTests(); await settlePipelineControllerJobs(); }
   const current = await findControllerPipeline(lane.id);
   if (change === "remove") expect(current).toBeNull();
   else if (change === "pause") expect(current?.state).toBe("paused");
   else if (change === "branch" || change === "owner") expect(current?.state).toBe("provisioning");
   else {
     expect(current?.state).toBe("needs_decision");
-    expect(current?.stateDetail).toContain("fixture common directory refused");
+    expect(current?.stateDetail).toBe("resolving the pipeline Git directory failed");
+    expect(current?.provisioningJob).toMatchObject({ step: "resolvingRepository", status: "parked" });
   }
   expect(h.spawnInputs).toHaveLength(0);
   expect(pipelineControllerJobLanes()).toEqual([]);
@@ -1745,33 +1831,37 @@ test("a new controller process resumes active and repository-waiting provisionin
   const peer = structuredClone(lane);
   peer.id = "restart-repository-waiter"; peer.delivery = undefined;
   Object.assign(peer, pipelineIdentity(peer.id, peer.task, peer.repoDir));
+  pinFixtureCheckoutOutsideStripes(lane, "restart-checkout-owner", [peer]);
   savePipelines([lane, peer]);
+  const laneIds = [lane.id, peer.id];
+  const clock = Date.parse(h.ports.now());
   const source = `
-    const { defaultPipelinePorts } = await import("./src/lib/pipelines/engine.ts");
-    const { tickPipelinesController } = await import("./src/lib/pipelines/controllerPass.ts");
-    const { settlePipelineControllerJobs, startPipelineControllerJob } = await import("./src/lib/pipelines/controllerJobs.ts");
+    const { defaultPipelinePorts, tickPipelines } = await import("./src/lib/pipelines/engine.ts");
+    const { withControllerPipelineScope } = await import("./src/lib/pipelines/controllerScope.ts");
     const { registerPipelineTick } = await import("./src/lib/pipelines/controllerSignal.ts");
+    const { findControllerPipeline } = await import("./src/lib/pipelines/store.ts");
     registerPipelineTick(async () => {});
     const ports = defaultPipelinePorts();
+    let now = ${clock};
+    ports.now = () => new Date(now).toISOString();
     ports.structuredDeliveryPublication = () => "unbound";
     ports.cpuAdmissionReconcile = async () => {};
     ports.worktreeDiskWait = () => null;
     ports.scheduleTick = () => {};
-    let lookups = 0;
+    let checkoutEntered;
+    const checkout = new Promise(resolve => { checkoutEntered = resolve; });
     let repositoryWaiterReady;
     const repositoryWaiter = new Promise(resolve => { repositoryWaiterReady = resolve; });
+    ports.observeProvisioningCheckpoint = async (id, step) => {
+      if (id === ${JSON.stringify(peer.id)} && step?.step === "waitingForTurn" && step.status === "waiting") repositoryWaiterReady();
+    };
     ports.provisionExec = async (command, args) => {
       if (args.includes("--git-common-dir")) {
-        if (++lookups === 2) repositoryWaiterReady();
         return { code: 0, stdout: "/fixture/common.git", stderr: "" };
       }
       if (args[0] === "worktree" && args[1] === "add" && process.argv[1] === "hold") {
+        checkoutEntered();
         await repositoryWaiter;
-        await new Promise(resolve => setImmediate(resolve));
-        // Three spare permits prove the second lane is outside capacity.
-        for (let i = 0; i < 3; i++) if (!startPipelineControllerJob(
-          "restart-capacity-" + i, () => new Promise(() => {}), async () => "unchanged", "provisioning"))
-          throw new Error("repository waiter retained active capacity");
         console.log("provision-entered");
         await new Promise(() => {});
       }
@@ -1779,21 +1869,42 @@ test("a new controller process resumes active and repository-waiting provisionin
         return { code: 1, stdout: "", stderr: "" };
       return { code: 0, stdout: args[0] === "rev-parse" ? "1".repeat(40) : "", stderr: "" };
     };
-    await tickPipelinesController([], ports);
-    await settlePipelineControllerJobs();
+    if (process.argv[1] === "hold") {
+      await withControllerPipelineScope([${JSON.stringify(lane.id)}], () => tickPipelines([], ports));
+      await checkout;
+      await withControllerPipelineScope([${JSON.stringify(peer.id)}], () => tickPipelines([], ports));
+      await new Promise(() => setInterval(() => {}, 1_000));
+    } else {
+      const ids = ${JSON.stringify(laneIds)};
+      for (let pass = 0; pass < 5; pass++) {
+        const rows = await Promise.all(ids.map(findControllerPipeline));
+        if (rows.every(row => row?.state === "running")) break;
+        now = Math.max(now, ...rows.map(row => row?.provisioningJob?.retryAt ?? 0));
+        await tickPipelines([], ports);
+      }
+      console.log(JSON.stringify(await Promise.all(ids.map(async id => (await findControllerPipeline(id))?.state))));
+    }
   `;
-  const child = spawn(process.execPath, ["-e", source, "hold"], { env: { ...process.env }, stdio: ["ignore", "pipe", "pipe"] });
+  const env = { ...process.env, LLV_QUIET_DIAGNOSTICS: "1" };
+  const child = spawn(process.execPath, ["-e", source, "hold"], { env, stdio: ["ignore", "pipe", "pipe"] });
   const entered = latch();
   child.stdout!.on("data", data => { if (String(data).includes("provision-entered")) entered.resolve(); });
+  let stderr = "";
+  child.stderr!.on("data", data => { stderr += String(data); });
   try {
-    await until(entered.promise);
-    expect((await findControllerPipeline(lane.id))?.state).toBe("provisioning");
-    expect((await findControllerPipeline(peer.id))?.state).toBe("provisioning");
+    await until(entered.promise).catch(error => { throw new Error(stderr || "provisioning child did not reach the restart checkpoint", { cause: error }); });
+    expect(await findControllerPipeline(lane.id)).toMatchObject({ state: "provisioning",
+      provisioningJob: { step: "creatingCheckout", status: "running", owner: { pid: child.pid } } });
+    const waiting = await findControllerPipeline(peer.id);
+    expect(waiting).toMatchObject({ state: "provisioning",
+      provisioningJob: { step: "waitingForTurn", status: "waiting", owner: { pid: child.pid } } });
+    expect(waiting?.provisioningJob?.resource).toBe(`repo:${provisioningStripe("/fixture/common.git")}`);
   } finally { await stopFixtureProcess(child); }
   const resumed = Bun.spawn([process.execPath, "-e", source, "resume"],
-    { env: { ...process.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-  const [code, stderr] = await Promise.all([resumed.exited, new Response(resumed.stderr).text()]);
-  expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+    { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const [code, stdout, resumeError] = await Promise.all([resumed.exited, new Response(resumed.stdout).text(), new Response(resumed.stderr).text()]);
+  assertStateChildSuccess(code, resumeError);
+  expect(JSON.parse(stdout)).toEqual(["running", "running"]);
   expect((await findControllerPipeline(lane.id))?.state).toBe("running");
   expect((await findControllerPipeline(peer.id))?.state).toBe("running");
 });
@@ -1861,6 +1972,9 @@ test.each(["success", "failure", "pause", "remove", "branch", "owner"] as const)
     row.id = id; row.repoDir = repo; row.delivery = undefined;
     Object.assign(row, pipelineIdentity(row.id, row.task, row.repoDir));
   }
+  // This case holds a repository stripe and requires an independent checkout grant.
+  pinFixtureCheckoutOutsideStripes(lane, "linked-checkout-owner", [peer, unrelated]);
+  pinFixtureCheckoutOutsideStripes(unrelated, "unrelated-checkout", [lane, peer]);
   savePipelines([lane]);
   const entered = latch(), release = latch(), peerLookup = latch(), otherReady = latch();
   const unregister = registerPipelineTick(async () => {
@@ -1885,12 +1999,15 @@ test.each(["success", "failure", "pause", "remove", "branch", "owner"] as const)
     // The worktree command runs under the common-directory owner. Admit the
     // contenders while that command is held and retain the selected cursor.
     await until(entered.promise);
-    expect(pipelineControllerJobLanes()).toEqual([lane.id]);
+    expect((await findControllerPipeline(lane.id))?.provisioningJob).toMatchObject({ step: "creatingCheckout", status: "running" });
     await withDeliveryMutationAsync(tx => { tx.put(peer); tx.put(unrelated); }, 2);
     await until(tickPipelinesController([], h.ports));
     await until(peerLookup.promise);
     await until(otherReady.promise);
-    expect(pipelineControllerJobLanes()).toContain(peer.id);
+    await waitForProvisioning(async () => (await findControllerPipeline(peer.id))?.provisioningJob?.status === "waiting");
+    const waiting = (await findControllerPipeline(peer.id))?.provisioningJob;
+    expect(waiting?.step).toBe("waitingForTurn");
+    expect(waiting?.resource).toBe(`repo:${provisioningStripe("/linked-common.git")}`);
     expect(peerLookups).toBe(1);
     expect(peerCommands).toBe(0);
     expect((await findControllerPipeline(peer.id))?.state).toBe("provisioning");
@@ -1909,7 +2026,19 @@ test.each(["success", "failure", "pause", "remove", "branch", "owner"] as const)
       }
       savePipelines(change === "remove" ? rows.filter(row => row.id !== peer.id) : rows);
     }
-  } finally { release.resolve(); await settlePipelineControllerJobs(); unregister(); }
+    release.resolve();
+    await waitForProvisioning(async () => (await findControllerPipeline(lane.id))?.state === (change === "failure" ? "needs_decision" : "running"));
+    if (change === "success" || change === "failure") {
+      h.advanceWallClock(5_000);
+      await waitForProvisioning(async () => {
+        await tickPipelines([], h.ports);
+        return (await findControllerPipeline(peer.id))?.state === "running";
+      });
+    }
+  } finally {
+    release.resolve();
+    await settleProvisioningJobsForTests(); await settlePipelineControllerJobs(); unregister();
+  }
   const current = await findControllerPipeline(peer.id);
   if (change === "success" || change === "failure") {
     expect(peerCommands).toBeGreaterThan(0);
@@ -1931,9 +2060,11 @@ test("four linked provisioning lanes leave capacity for a later independent laun
     Object.assign(row, pipelineIdentity(row.id, row.task, row.repoDir));
     return row;
   })];
+  pinFixtureCheckoutOutsideStripes(lane, "linked-capacity-owner", linked.slice(1));
   savePipelines(linked);
   const entered = latch(), release = latch(), linkedLookups = latch(), independentReady = latch();
-  let independent: typeof lane | undefined, lookups = 0, linkedCommands = 0, holding = false;
+  const lookedUp = new Set<string>();
+  let independent: typeof lane | undefined, linkedCommands = 0, holding = false;
   const unregister = registerPipelineTick(async () => {
     if (independent && (await findControllerPipeline(independent.id))?.state === "running") independentReady.resolve();
   });
@@ -1947,7 +2078,10 @@ test("four linked provisioning lanes leave capacity for a later independent laun
   };
   h.ports.provisionExec = async (command, args, cwd) => {
     if (args.includes("--git-common-dir")) {
-      if (linked.some(row => row.repoDir === cwd) && ++lookups === 4) linkedLookups.resolve();
+      if (linked.some(row => row.repoDir === cwd)) {
+        lookedUp.add(cwd);
+        if (lookedUp.size === linked.length) linkedLookups.resolve();
+      }
       return { code: 0, stdout: cwd === independent?.repoDir ? "/independent.git" : "/linked.git", stderr: "" };
     }
     if (linked.some(row => row.repoDir === cwd || row.worktreeDir === cwd)) {
@@ -1963,15 +2097,28 @@ test("four linked provisioning lanes leave capacity for a later independent laun
     const created = await createPipelineFromRequest({ task: "Independent lane", spec: "Provision beside a held repository", repoDir: "/independent", stages: BUILD_ONLY as never, publication: "internal" }, h.ports);
     expect(created.pipeline).toBeDefined();
     independent = created.pipeline!;
+    const admittedId = independent.id;
+    pinFixtureCheckoutOutsideStripes(independent, "independent-checkout", linked);
+    await withDeliveryMutationAsync(tx => { tx.delete(admittedId); tx.put(independent!); }, 2);
     await until(tickPipelinesController([], h.ports));
     await until(independentReady.promise);
-    await until(tickPipelinesController([], h.ports));
-    await until(tickPipelinesController([], h.ports));
+    await waitForProvisioning(async () => {
+      await tickPipelinesController([], h.ports);
+      return h.spawnInputs.some(input => input.cwd === independent!.worktreeDir);
+    });
     expect(h.spawnInputs.filter(input => input.cwd === independent!.worktreeDir)).toHaveLength(1);
     expect(linkedCommands).toBe(1);
     for (const row of linked) expect((await findControllerPipeline(row.id))?.state).toBe("provisioning");
-    expect(lookups).toBe(4);
-  } finally { release.resolve(); await settlePipelineControllerJobs(); unregister(); }
-  for (const row of linked) expect((await findControllerPipeline(row.id))?.state).toBe("running");
+    expect(lookedUp.size).toBe(4);
+    release.resolve();
+    await waitForProvisioning(async () => {
+      h.advanceWallClock(5_000);
+      await tickPipelinesController([], h.ports);
+      return (await Promise.all(linked.map(row => findControllerPipeline(row.id)))).every(row => row?.state === "running");
+    });
+  } finally {
+    release.resolve();
+    await settleProvisioningJobsForTests(); await settlePipelineControllerJobs(); unregister();
+  }
   expect(pipelineControllerJobLanes()).toEqual([]);
 });

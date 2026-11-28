@@ -777,6 +777,10 @@ export type PipelineStageAttempt = {
       head?: string;
       phase: "restore" | "clean" | "done" };
     commitStartedHead?: string;
+    /** Persisted timeout/cancellation budget for repair commits across restarts. */
+    commitTimeoutFailures?: number;
+    /** A timed-out producer's checkout is retained for an explicit retry. */
+    preserveWorktreeOnRetry?: true;
     /** Dead-producer custody pins the branch and staged tree before committing.
         An unchanged intent can retry; a moved head needs the controller receipt. */
     commitCustody?: { branch: string; tree: string; paths: string[] };

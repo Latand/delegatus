@@ -248,11 +248,19 @@ shared_lock_file() {
 # exec cannot preserve the shell's native PID. The runner inherits the Unix
 # lock descriptors for its own lifetime and for nested-slot proof.
 run_claimed() {
-  local runner="" signal="" result
+  local runner="" signal="" result gate_stat gate_identity=""
+  local -a gate_fields
   trap 'signal=TERM; if [[ -n $runner ]]; then kill -TERM "$runner" 2>/dev/null || true; fi' TERM
   trap 'signal=INT; if [[ -n $runner ]]; then kill -INT "$runner" 2>/dev/null || true; fi' INT
   end_cpu_wait
-  run "$@" <&0 &
+  # Use the shell's kernel identity here. A queue ticket can use a mapped PID,
+  # and an interpreter shim can sit between the shell and the runner.
+  # A namespace's PID 1 already owns its descendants through the kernel.
+  if [[ $$ -gt 1 && -r /proc/$$/stat ]] && IFS= read -r gate_stat < "/proc/$$/stat"; then
+    read -ra gate_fields <<< "${gate_stat##*) }"
+    if [[ ${gate_fields[19]:-} =~ ^[0-9]+$ ]]; then gate_identity="$$:${gate_fields[19]}"; fi
+  fi
+  LLV_OWNED_RUN_GATE_PARENT_IDENTITY="$gate_identity" run "$@" <&0 &
   runner=$!
   if [[ -n $signal ]]; then kill -s "$signal" "$runner" 2>/dev/null || true; fi
   while :; do

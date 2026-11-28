@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, afterEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -7,6 +7,8 @@ const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-role-memory-launch-")
 process.env.LLV_STATE_DIR = path.join(sandbox, "state");
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 const { composeStageInput } = await import("@/lib/pipelines/stageInput");
+const { shutdownTaskPageWorker } = await import("@/lib/links/taskPageWorker");
+afterEach(shutdownTaskPageWorker);
 const { resolveStageTestGuidance } = await import("@/lib/pipelines/testGuidance");
 const { renderStagePrompt } = await import("@/lib/pipelines/prompts");
 const { buildPipeline } = await import("@/lib/pipelines/store");
