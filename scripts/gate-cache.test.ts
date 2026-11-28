@@ -39,7 +39,7 @@ test("isolated checks remove the stage Git command shim from PATH", () => {
 
 test("package cache locations reach checks without changing their reusable inputs", () => {
   const base = { PATH: "/usr/bin", LLV_GATE_CHECK_ENV: "BUN_INSTALL_CACHE_DIR,UV_CACHE_DIR" };
-  const caches = { BUN_INSTALL_CACHE_DIR: "/fixture/cache/bun", UV_CACHE_DIR: "/fixture/cache/uv" };
+  const caches = { BUN_INSTALL_CACHE_DIR: "/fixture/cache/bun", UV_CACHE_DIR: "/fixture/cache/uv", GOMODCACHE: "/fixture/cache/go" };
   const producer = checkEnvironment({ ...base, ...caches });
   const publisher = checkEnvironment(base);
   expect(producer).toMatchObject(caches);

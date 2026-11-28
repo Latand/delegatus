@@ -2613,7 +2613,8 @@ export function copilotHostOptions(
     effort: profile.effort ?? undefined,
     /* The bypass mode is the only one that grants every tool up front; any
        other profile answers each permission request through attention. */
-    allowAll: !launchProfileEngineReadOnly(profile) && (profile.permissionMode ?? "bypassPermissions") === "bypassPermissions",
+    allowAll: !launchProfileEngineReadOnly(profile) && explicitLaunchProfileSandbox(profile) !== "restricted"
+      && (profile.permissionMode ?? "bypassPermissions") === "bypassPermissions",
     allowSubagents: profile.allowSubagents,
     mcpServers: profile.mcpServers,
     ...(access.host.releaseCleanup ? { releaseCleanup: access.host.releaseCleanup } : {}),
@@ -2660,7 +2661,8 @@ export async function antigravityHostOptions(
     accountId: input.account.accountId,
     model: profile.model ?? undefined,
     effort: profile.effort ?? undefined,
-    allowAll: !launchProfileEngineReadOnly(profile) && (profile.permissionMode ?? "bypassPermissions") === "bypassPermissions",
+    allowAll: !launchProfileEngineReadOnly(profile) && explicitLaunchProfileSandbox(profile) !== "restricted"
+      && (profile.permissionMode ?? "bypassPermissions") === "bypassPermissions",
     appendSystemPrompt: await learnedRulesForLaunchProfile(profile, input.receipt && input.registry
       ? { engine: "antigravity", ...memoryStartIdentity(input.registry, input.receipt.conversationId), cwd: input.spec.cwd, home: input.account.home, env: access.env }
       : undefined, onMemoryPrepared),
@@ -2678,6 +2680,9 @@ export async function startAntigravityStructuredHost(
   overrides: Partial<AntigravityAcpHostOptions> = {},
   onMemoryPrepared?: (receipt: MemoryDeliveryReceipt) => void,
 ): Promise<AntigravityAcpHost> {
+  const profile = input.spec.launchProfile ?? {} as LaunchProfile;
+  if (explicitLaunchProfileSandbox(profile) === "restricted")
+    throw new Error("Antigravity cannot enforce a restricted filesystem sandbox; refusing launch");
   const resumeSessionId = structuredResumeSessionId(input);
   const initialEventCursor = resumeSessionId
     ? startupHostSnapshot(input.registry, { engine: "antigravity", sessionId: resumeSessionId }).entries[sessionKeyId({ engine: "antigravity", sessionId: resumeSessionId })]?.structuredHost?.eventCursor

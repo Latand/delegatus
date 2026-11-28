@@ -117,7 +117,7 @@ test("a slow earlier root cannot hide a live allocation past the next bounded pa
     expect(incomplete?.overCapBytes).toBe(0);
     expect(store.owner(live)?.measuredAt).toBe(now - 60_000);
     clock.mockImplementation(() => now + 61_000);
-    expect(store.allocationDue(now + 61_000).map(owner => owner.directory)).toEqual([live]);
+    expect(store.allocationDue(now + 61_000).map(owner => owner.directory)).toEqual([slow, live]);
     const recovered = await runAttemptTempSweep(ports, sweepEnv);
     expect(recovered?.overCapBytes).toBeGreaterThan(0);
     expect(store.owner(live)?.bytes).toBeGreaterThanOrEqual(64 * MiB);
@@ -184,6 +184,28 @@ test.skipIf(process.platform === "win32")("one allocation page charges shared ha
     expect(released.get(second)).toBeLessThan(8 * MiB);
     f.store.measure(second, released.get(second)!, NOW + 3);
     expect(f.store.bytes()).toBeLessThan(8 * MiB);
+  } finally { f.store.close(); }
+});
+
+test.skipIf(process.platform === "win32")("production allocation keeps hardlink attribution stable beyond the former 64-root page", async () => {
+  const f = fixture(), directories = Array.from({ length: 70 }, (_, index) => f.make(`page-${String(index).padStart(2, "0")}`));
+  const MiB = 1024 ** 2, first = path.join(directories[0]!, "registry.bin"), last = path.join(directories.at(-1)!, "registry.bin");
+  fs.writeFileSync(first, Buffer.alloc(8 * MiB, 9)); fs.linkSync(first, last);
+  try {
+    const due = f.store.allocationObservationRoots();
+    expect(due).toHaveLength(70);
+    const observed = await measureAttemptAllocations(due.map(row => row.directory), { budgetMs: 5000 });
+    expect(observed.size).toBe(70);
+    f.store.recordAllocationPage(due, observed, NOW + 100_000);
+    expect(f.store.bytes()).toBeLessThan(10 * MiB);
+    expect(f.store.bytes()).toBeGreaterThanOrEqual(8 * MiB);
+    fs.rmSync(directories[0]!, { recursive: true }); f.store.forget(directories[0]!);
+    const surviving = f.store.allocationObservationRoots();
+    expect(surviving.map(row => row.directory)).toContain(directories[directories.length - 1]!);
+    const remeasured = await measureAttemptAllocations(surviving.map(row => row.directory), { budgetMs: 5000 });
+    f.store.recordAllocationPage(surviving, remeasured, NOW + 100_001);
+    expect(f.store.bytes()).toBeLessThan(10 * MiB);
+    expect(f.store.bytes()).toBeGreaterThanOrEqual(8 * MiB);
   } finally { f.store.close(); }
 });
 

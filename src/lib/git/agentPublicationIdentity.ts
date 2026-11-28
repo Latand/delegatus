@@ -56,6 +56,8 @@ export function agentPublicationIdentityEnv(source: AgentEnvironment): Record<st
 
 export function agentCodexPublicationPolicy(policy: unknown, source: AgentEnvironment, gateRoot?: GateCheckRoot | null): Record<string, unknown> {
   const identity = agentPublicationIdentityEnv(source);
+  const packageCaches = Object.fromEntries(["BUN_INSTALL_CACHE_DIR", "UV_CACHE_DIR", "GOMODCACHE"]
+    .flatMap(key => source[key] === undefined ? [] : [[key, source[key]]]));
   const shellBindings = source.LLV_GATE_CPU_PRIORITY_SOURCE === undefined
     ? {} : { LLV_GATE_CPU_PRIORITY_SOURCE: source.LLV_GATE_CPU_PRIORITY_SOURCE };
   const storage = Object.fromEntries(["TMPDIR", "LLV_EVIDENCE_DIR"].flatMap(key => source[key] === undefined ? [] : [[key, source[key]]]));
@@ -64,7 +66,7 @@ export function agentCodexPublicationPolicy(policy: unknown, source: AgentEnviro
     [GATE_CHECK_ROOT_ENV]: gateRoot.physicalRoot,
     [GATE_CHECK_ROOT_IDENTITY_ENV]: gateRoot.rootDirectoryIdentity,
   } : {};
-  const set = { ...identity, ...shellBindings, ...storage, ...gateBindings };
+  const set = { ...identity, ...packageCaches, ...shellBindings, ...storage, ...gateBindings };
   const configured = policy && typeof policy === "object" && !Array.isArray(policy)
     ? policy as Record<string, unknown> : {};
   const override: Record<string, unknown> = { set };

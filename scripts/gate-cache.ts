@@ -115,7 +115,7 @@ export function gateToolFiles(root: string): string[] {
 
 /** Per-executor paths and launch settings that do not change check inputs. */
 const ROOTS = new Set(["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR", "TMPDIR", "LLV_STATE_DIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_TMPDIR",
-  "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "NODE_ENV", "LLV_VIEWER_CONTROL_URL", "BUN_INSTALL_CACHE_DIR", "UV_CACHE_DIR"]);
+  "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "NODE_ENV", "LLV_VIEWER_CONTROL_URL", "BUN_INSTALL_CACHE_DIR", "UV_CACHE_DIR", "GOMODCACHE"]);
 const BOOKKEEPING = new Set(["PWD", "OLDPWD", "SHLVL", "_", "INVOCATION_ID", "JOURNAL_STREAM", "SYSTEMD_EXEC_PID", "MANAGERPID",
   // The native entry proves each worker's supervisor. The recorder collects
   // its queue timing separately. Those bindings belong to one execution.

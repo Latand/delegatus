@@ -13,9 +13,12 @@ import { AgentRegistry } from "@/lib/agent/registry";
 import type { FileEntry } from "@/lib/types";
 
 import {
+  antigravityHostOptions,
   materializeStructuredHostAccess,
+  startAntigravityStructuredHost,
   structuredHostAccessPolicy,
 } from "./structuredSpawn";
+import { antigravityLaunchArgs } from "./antigravityAcpHost";
 
 test.each([
   { readOnly: false, sandbox: "full", codexSandbox: "danger-full-access" },
@@ -69,6 +72,34 @@ test("legacy read-only launch profiles retain their pre-axis engine sandbox on a
   expect(structuredHostAccessPolicy({ readOnly: true, sandbox: null })).toBeTrue();
   expect(launchProfileEngineReadOnly({ readOnly: true, sandbox: null })).toBeTrue();
   expect(launchProfileCodexSandbox({ readOnly: true, sandbox: null })).toBe("read-only");
+});
+
+test("restricted Antigravity refuses before a child can write to shared package caches", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "antigravity-restricted-cache-"));
+  const sourceEnv: NodeJS.ProcessEnv = { NODE_ENV: "test", HOME: path.join(root, "home"), BUN_INSTALL_CACHE_DIR: path.join(root, "bun-cache"),
+    UV_CACHE_DIR: path.join(root, "uv-cache"), GOMODCACHE: path.join(root, "go-cache") };
+  fs.mkdirSync(sourceEnv.UV_CACHE_DIR!, { recursive: true });
+  const access = materializeStructuredHostAccess(false, sourceEnv, null, path.join(root, "scratch"),
+    { pipelineId: "restricted-cache", launchId: "restricted-cache-launch", retainUntilClose: false });
+  try {
+    const input = { spec: { launchProfile: emptyLaunchProfile({ sandbox: "restricted", permissionMode: "bypassPermissions" }) },
+      account: { home: "/fixture/account", accountId: "fixture", kind: "legacy" } } as Parameters<typeof antigravityHostOptions>[0];
+    const options = await antigravityHostOptions(input, { env: access.env, host: {} });
+    expect(options.allowAll).toBeFalse();
+    expect(antigravityLaunchArgs(options)).not.toContain("--dangerously-skip-permissions");
+    expect(options.env).toMatchObject({ BUN_INSTALL_CACHE_DIR: sourceEnv.BUN_INSTALL_CACHE_DIR!,
+      UV_CACHE_DIR: sourceEnv.UV_CACHE_DIR!, GOMODCACHE: sourceEnv.GOMODCACHE! });
+    const cacheWrite = path.join(sourceEnv.UV_CACHE_DIR!, "attempt-write");
+    let childStarted = false;
+    await expect(startAntigravityStructuredHost(input as Parameters<typeof startAntigravityStructuredHost>[0], "fixture",
+      { spawnProcess: (() => {
+        childStarted = true;
+        fs.writeFileSync(cacheWrite, "same-uid write");
+        return null;
+      }) as never })).rejects.toThrow("cannot enforce a restricted filesystem sandbox");
+    expect(childStarted).toBeFalse();
+    expect(fs.existsSync(cacheWrite)).toBeFalse();
+  } finally { access.cleanup(); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test("full-access stages pin package caches before isolating their working directories", () => {

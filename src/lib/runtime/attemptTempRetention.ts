@@ -7,10 +7,11 @@ import { statePath } from "@/lib/configDir";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { withFileTransactionAsync, FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { attemptTempJournalPath, inspectTree, mountPointsUnder, sweepStaleTempDirs, resolvePhysicalPath, type ProcessScan } from "@/lib/tempSweep";
-import { allocatedAttemptBytes, attemptReferencesClear, attemptTreeHold, attemptProcessReferencesClear, blockedSubtrees, inspectAttemptTree, measureAttemptAllocation,
+import { allocatedAttemptBytes, attemptReferencesClear, attemptTreeHold, attemptProcessReferencesClear, blockedSubtrees, inspectAttemptTree,
   privilegedCleanupUnavailable, snapshotAttemptProtection, closedAttemptProtection, removeAttemptTree, RepositoryLinkInventory, repositoryReferencesAttemptTemp, ledgerLinkedEvidence,
   type BlockedSubtree, type RetainedCheckoutReads, type AttemptNamespaceProtection, type AttemptProtection } from "./attemptTempFilesystem";
 import { AttemptTempBudgetDeferred, attemptTempDeferralCode, attemptTempFailureDetail } from "./attemptTempDiagnostics";
+import * as attemptTempFilesystem from "./attemptTempFilesystem";
 import { preserveAttemptEvidence, type AttemptEvidenceSelection } from "./attemptTempEvidence";
 import { attemptEvidenceKey } from "./attemptEvidenceBinding";
 import { recordedRootHeld, readRecorded, recordRootRetirement, expireRecordedRootHolds, type CheckRow } from "@/lib/recordedChecks/store";
@@ -30,7 +31,7 @@ import { ATTEMPT_SCRATCH_AUDIT_INTERVAL_MS, ATTEMPT_SCRATCH_EXPIRY_OFFSET_MS, at
 import type { Pipeline } from "@/lib/pipelines/types";
 
 export type AttemptTempState = "live" | "settled" | "closed" | "expired" | "orphan" | "unknown";
-export type AttemptTempAuthority = { state: AttemptTempState; expiresAt?: number | null; checkout?: string | null; revision: string; isCurrent: () => boolean };
+export type AttemptTempAuthority = { state: AttemptTempState; expiresAt?: number | null; checkout?: string | null; checkouts?: readonly string[]; revision: string; isCurrent: () => boolean };
 const authorityDisposition = (state: AttemptTempState): "live" | "held" => state === "live" ? "live" : "held";
 /** Registration and adoption write the marker right after the directory
  * exists, so a root's birth is never later than its ledger row. */
@@ -53,7 +54,7 @@ export type AttemptTempOwner = {
 };
 type Row = AttemptTempOwner & { identity: string; released: number; checkedAt: number; bytes: number; measuredAt?: number; allocationAttemptAt?: number };
 type ScheduledRoot = Row & { expiresAt: number; failure?: string | null };
-type AllocationRoot = Row & { measuredAt: number };
+type AllocationRoot = Row;
 export type EvidenceCopy = { destination: string; pipelineId: string | null; launchId: string; kind: "lane" | "agent" | "unattributed";
   createdAt: number; expiresAt: number | null; checkedAt: number; bytes: number };
 export const DEFAULT_ATTEMPT_TEMP_CAP_BYTES = 100 * 1024 ** 3;
@@ -573,6 +574,9 @@ export class AttemptTempStore {
         SELECT 1 FROM root_retention t WHERE t.directory=r.directory AND t.expiresAt<=?))
       ORDER BY allocationAttemptAt,createdAt,directory LIMIT ?`).all(now - 60_000, now - 60 * 60_000, now, now, limit);
   }
+  allocationObservationRoots(limit = 8192): AllocationRoot[] {
+    return this.db.query<AllocationRoot, [number]>("SELECT * FROM roots ORDER BY directory LIMIT ?").all(limit);
+  }
   /** Subtrees of a root that this user cannot remove, as last observed. */
   recordBlocked(directory: string, blocked: { count: number; entries: BlockedSubtree[] } | null, at: number) {
     if (!blocked?.count) this.db.query("DELETE FROM root_blocked WHERE directory=?").run(directory);
@@ -613,6 +617,9 @@ export class AttemptTempStore {
   forget(directory: string) {
     forgetAttemptProtection(directory);
     this.db.transaction(() => {
+      // A root may have carried GNU du's shared-inode charge. Reassign all
+      // surviving names on the next host-wide allocation sample after unlink.
+      this.db.query("UPDATE roots SET allocationAttemptAt=0 WHERE directory<>? AND allocationAttemptAt<>0").run(directory);
       this.db.query("DELETE FROM root_retention WHERE directory=?").run(directory);
       this.db.query("DELETE FROM root_expiry_admission WHERE directory=?").run(directory);
       this.db.query("DELETE FROM root_blocked WHERE directory=?").run(directory);
@@ -760,7 +767,15 @@ export class AttemptTempStore {
     this.db.query(`UPDATE roots SET allocationAttemptAt=?${complete ? ",measuredAt=?" : ""}${bytes === null ? "" : ",bytes=?"} WHERE directory=? AND identity=?
       AND launchId=? AND pipelineId IS ? AND createdAt=? AND retainUntilClose=? AND released=? AND measuredAt=?`)
       .run(at, ...(complete ? [at] : []), ...(bytes === null ? [] : [bytes]), owner.directory, owner.identity, owner.launchId, owner.pipelineId, owner.createdAt,
-        Number(owner.retainUntilClose), owner.released, owner.measuredAt);
+        Number(owner.retainUntilClose), owner.released, owner.measuredAt ?? 0);
+  }
+  recordAllocationPage(owners: readonly AllocationRoot[], observations: ReadonlyMap<string, number>, at: number) {
+    this.db.transaction(() => {
+      for (const [index, owner] of owners.entries()) {
+        const bytes = observations.get(owner.directory);
+        this.recordAllocation(owner, bytes ?? null, at + index, bytes !== undefined);
+      }
+    })();
   }
   bytes() { return this.db.query<{ bytes: number }, []>("SELECT bytes FROM totals WHERE id=1").get()!.bytes; }
   close() { this.db.close(); this.releaseMemoryTracking?.(); this.releaseMemoryTracking = undefined; }
@@ -1086,12 +1101,25 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         const recordedOnly = owner.bytes > 0 && !needsFinalMeasurement && initialState !== null && finished(initialState)
           && !fs.existsSync(path.join(owner.directory, ".delegatus-keep")) && !recordedRootHeld(owner.directory)
           && ledgerLinkedEvidence(owner.directory).length === 0;
-        const measured = await measureAttemptAllocation(owner.directory, { budgetMs: remaining(), bytes: owner.bytes, recordedOnly });
+        const measured = await attemptTempFilesystem.measureAttemptAllocation(owner.directory, { budgetMs: remaining(), bytes: owner.bytes, recordedOnly });
         if (recordedOnly) recordedAllocation.add(owner.directory);
         // An unreadable walk reports only a lower bound. Losing visibility
         // cannot release pressure without a complete measurement or removal.
         bytes = measured.unreadable ? Math.max(owner.bytes, measured.bytes) : measured.bytes;
-        if (measured.unreadable) partiallyRead.add(owner.directory);
+        if (measured.unreadable) {
+          partiallyRead.add(owner.directory);
+          store.recordAllocation(owner, null, Date.now(), false);
+          const blocked = await blockedSubtrees(owner.directory).catch(() => ({ count: 0, entries: [] }));
+          if (blocked.count > 0) {
+            await holdForOperator(bytes, measured.reason ?? "cleanup namespace could not complete an allocation sample");
+            return;
+          }
+          disposition = "operator";
+          reason = "allocation sample incomplete; full post-completion sample required";
+          reasonCode = "allocation_incomplete";
+          outcome(owner.directory, disposition, bytes, reason, reasonCode);
+          return;
+        }
       } else bytes = pendingTrash ? owner.bytes : 0;
       if (!stat && !pendingTrash) store.measure(owner.directory, 0);
       if (stat) {
@@ -1202,18 +1230,35 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         [...rootWatches(directory), ...authorityWatches(), ...inventory.mutationDirectories()],
         () => retirementAuthorityCurrent(directory) && processInputsClear(directory), remaining(), ownerAuthorityCurrent);
       const scan = () => options.scan([owner.directory, currentDirectory]);
-      const observeReferences = async (directory: string, checkout?: string | null) => {
+      const observeReferences = async (directory: string, checkout?: string | null, checkouts: readonly string[] = []) => {
         try {
-          if (checkout !== undefined) {
-            const physical = checkout && resolvePhysicalPath(checkout);
+          for (const dependency of [...new Set([...(checkout == null ? [] : [checkout]), ...checkouts])]) {
+            let checkoutStat: fs.Stats | undefined;
+            try { checkoutStat = fs.lstatSync(dependency, { throwIfNoEntry: false }); }
+            catch (error) {
+              if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+                disposition = "operator";
+                reason = `open lane checkout is missing: ${dependency}`;
+                reasonCode = "checkout_unreadable";
+                return false;
+              }
+              throw error;
+            }
+            if (!checkoutStat) {
+              disposition = "operator";
+              reason = `open lane checkout is missing: ${dependency}`;
+              reasonCode = "checkout_unreadable";
+              return false;
+            }
+            const physical = dependency && resolvePhysicalPath(dependency);
             const containsCheckout = physical && [owner.directory, directory].some(candidate => {
               const target = resolvePhysicalPath(candidate);
               return physical === target || physical.startsWith(target + path.sep);
             });
-            if (!checkout || containsCheckout || await repositoryReferencesAttemptTemp(checkout, owner.directory, directory, inventory)) {
+            if (!dependency || containsCheckout || await repositoryReferencesAttemptTemp(dependency, owner.directory, directory, inventory)) {
               disposition = "live";
               reason = "open lane checkout has an unresolved scratch dependency";
-              reasonCode = !checkout ? "checkout_unknown" : "checkout_link_reference";
+              reasonCode = !dependency ? "checkout_unknown" : "checkout_link_reference";
               return false;
             }
           }
@@ -1307,7 +1352,8 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
             reasonCode = "authority_changed";
             return false;
           }
-          if (admission.checkout !== undefined && !await observeReferences(directory, admission.checkout)) return false;
+          if ((admission.checkout !== undefined || admission.checkouts !== undefined)
+            && !await observeReferences(directory, admission.checkout, admission.checkouts)) return false;
         }
         const idleHold = cleanerHold(directory);
         if (idleHold) {
@@ -1374,7 +1420,8 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         // Checkout state can change while evidence and producer authority are
         // awaited. Repeat every process/socket/container reference observation
         // at the last eligibility boundary before quarantine or removal.
-        if (!await observeReferences(directory, typeof authorityObservation === "string" ? undefined : authorityObservation.checkout)) return false;
+        if (!await observeReferences(directory, typeof authorityObservation === "string" ? undefined : authorityObservation.checkout,
+          typeof authorityObservation === "string" ? [] : authorityObservation.checkouts)) return false;
         checkBudget();
         // All awaited authority and consumer observations are complete.
         // Activation may revoke the observations above. Once admitted here,

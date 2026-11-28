@@ -181,9 +181,12 @@ bottleneck; the 14-hour cycle was.
 
 - Registration writes `bytes=0`, `measuredAt=0`, `allocationAttemptAt=0` and `checkedAt=createdAt`
   (`attemptTempRetention.ts:153-154,224-225`).
-- The minute tick's preparation measures up to 64 due roots in one `du`
-  invocation within a 5-second window (`attemptTempProduction.ts:28,233-262`).
-  Grouping the page lets GNU `du` count a hardlinked inode once across roots.
+- The minute tick checks up to 64 due rows, then samples up to 8,192 valid
+  registered roots in one `du` invocation within a 5-second window
+  (`attemptTempProduction.ts:248-283`, `attemptTempRetention.ts:577`). This keeps
+  the installation's normal root population in one inode-deduplication set.
+  Completed stdout survives a nonzero `du` exit; only missing roots are
+  isolated for a bounded retry.
   The queue orders by `allocationAttemptAt` and
   admits every row whose last attempt is at least a minute old and whose size
   is zero, stale or otherwise due (`attemptTempRetention.ts:561-568`). Live
@@ -211,11 +214,13 @@ bottleneck; the 14-hour cycle was.
    retries without replacing the last full size. Release clears both timestamps
    so the post-completion sample is due. Compare-and-set still rejects a release
    or owner change that races the walk.
-2. **Measure shared inodes once and keep the queue fair.** The production page
-   sends up to 64 valid roots to one `du` command, which deduplicates hardlinks
-   across its operands. A timed-out command records no full sample; attempt
-   timestamps are staggered so the same slow first root cannot pin later roots
-   at the head of the next page. Preparation remains bounded by five seconds.
+2. **Measure shared inodes once and keep the queue fair.** When allocation is
+   due, one production `du` command covers up to 8,192 valid roots, deduplicating
+   hardlinks across its operands. It retains completed per-root output when
+   another operand fails and isolates only missing roots within the existing
+   five-second window. A timeout leaves incomplete roots due for retry. When a
+   root is retired, surviving rows are queued for the next sample so a charge
+   assigned to the removed name moves to its surviving link.
 3. **Stop charging vanished directories.** Apply the stale-intent rule of §4.
    It clears a recovery row that has no quarantine journal. The existing
    missing-root paths then record zero (`attemptTempProduction.ts:249-250`)
@@ -232,6 +237,8 @@ successful-sample timestamp. Existing rows backfill their attempt time from
 | `src/lib/runtime/attemptTempProduction.backfill.test.ts` | A large live root beyond 40 older rows is measured in one production page | The root remains at its first size |
 | same | An incomplete attempt leaves `measuredAt` unchanged and cannot satisfy the post-release full sample | A timeout advances `measuredAt` and retirement accepts the old size |
 | same | Two roots sharing an 8 MiB hardlink are charged once; removing one name keeps the charge while the other remains | Independent `du` walks double count or drop the remaining allocation |
+| same | A shared hardlink spanning roots beyond the former 64-root page is counted once and remeasured after one owner is removed | Page membership changes the charged total |
+| `src/lib/runtime/attemptTempProduction.test.ts` | An incomplete final allocation read keeps the released root; a later full read retires it | A lower bound is promoted and the root disappears in the first tick |
 | same | A directory removed by someone else, with a stale intent row and no journal, counts zero after one tick and its row is gone | On main its bytes stay in `store.bytes()` |
 | same | A pending quarantine (journal present) keeps its recorded bytes | Guards the existing custody rule |
 

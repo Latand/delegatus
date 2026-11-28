@@ -243,7 +243,7 @@ test("reporting reads remain bounded with a large copy and root backlog", () => 
   } finally { db.close(); f.store.close(); }
 });
 
-test("an unreadable production allocation keeps recorded bytes and rotates to another due root", async () => {
+test("an incomplete production allocation keeps old bytes until a later full sample", async () => {
   const { runAttemptTempSweep } = await import("./attemptTempProduction");
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "retention-allocation-refresh-")); roots.push(root);
   const previousStateDir = process.env.LLV_STATE_DIR;
@@ -256,20 +256,26 @@ test("an unreadable production allocation keeps recorded bytes and rotates to an
   store.register({ directory: second, pipelineId: null, launchId: "allocation-second", retainUntilClose: false, createdAt: NOW - 120_000 });
   store.measure(first, 8 * 1024 ** 3, NOW - 120_000);
   store.measure(second, 2 * 1024 ** 3, NOW);
-  const measured: string[] = [];
-  const allocation = spyOn(filesystem, "measureAttemptAllocation").mockImplementation(async directory => {
-    measured.push(directory);
-    return directory === first ? { bytes: 0, unreadable: true } : { bytes: 3 * 1024 ** 3, unreadable: false };
+  const measured: string[][] = [];
+  let complete = false;
+  const allocation = spyOn(filesystem, "measureAttemptAllocations").mockImplementation(async directories => {
+    measured.push([...directories]);
+    const result = new Map<string, number>();
+    for (const directory of directories) {
+      if (directory !== first || complete) result.set(directory, directory === first ? 9 * 1024 ** 3 : 3 * 1024 ** 3);
+    }
+    return result;
   });
   try {
     const ports = { scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true };
     expect(await runAttemptTempSweep(ports, { NODE_ENV: "test", LLV_TEMP_SWEEP: "on" })).not.toBeNull();
     expect(store.owner(first)?.bytes).toBe(8 * 1024 ** 3);
-    expect(measured).toEqual([first]);
-    store.measure(second, 2 * 1024 ** 3, NOW - 120_000);
+    expect(measured).toEqual([[first, second]]);
+    clock.mockReturnValue(NOW + 61_000);
+    complete = true;
     expect(await runAttemptTempSweep(ports, { NODE_ENV: "test", LLV_TEMP_SWEEP: "on" })).not.toBeNull();
-    expect(measured).toEqual([first, second]);
-    expect(store.owner(first)?.bytes).toBe(8 * 1024 ** 3);
+    expect(measured).toEqual([[first, second], [first, second]]);
+    expect(store.owner(first)?.bytes).toBe(9 * 1024 ** 3);
     expect(store.owner(second)?.bytes).toBe(3 * 1024 ** 3);
   } finally {
     allocation.mockRestore(); store.close(); clock.mockRestore();
@@ -884,6 +890,9 @@ const commandAt = scripts[scripts.length - 1];
 const script = args[commandAt + 1];
 if (script.includes("sha256sum /tmp/sorted") && !script.includes("-delete")) {
   process.stdout.write("a".repeat(64) + "\\n"); process.exit(0);
+}
+if (script.includes("exec du -skx /attempt")) {
+  process.stdout.write("8\\t/attempt\\n"); process.exit(0);
 }
 // The namespace holds DAC_OVERRIDE: it lists what this user cannot.
 const grant = file => { if (!fs.lstatSync(file).isDirectory()) return; fs.chmodSync(file, 0o700); for (const entry of fs.readdirSync(file)) grant(file + "/" + entry); };

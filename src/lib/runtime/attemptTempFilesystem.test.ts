@@ -8,7 +8,7 @@ import { statePath } from "@/lib/configDir";
 import { reportMediaRoot } from "@/lib/reportMedia/lookup";
 import { execFile } from "node:child_process";
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { attemptReferencesClear, containerMountHold, blockedSubtrees, measureAttemptAllocation, inspectAttemptTree, attemptTempUtilityImage, removeAttemptTree, repositoryReferencesAttemptTemp, RepositoryLinkInventory,
+import { attemptReferencesClear, containerMountHold, blockedSubtrees, measureAttemptAllocation, measureAttemptAllocations, inspectAttemptTree, attemptTempUtilityImage, removeAttemptTree, repositoryReferencesAttemptTemp, RepositoryLinkInventory,
   RETAINED_CHECKOUT_READ_MAX_AGE_MS, type RetainedCheckoutReads } from "./attemptTempFilesystem";
 import { withAttemptTempDeadline } from "./attemptTempDeadline";
 import { AttemptTempBudgetDeferred } from "./attemptTempDiagnostics";
@@ -22,6 +22,14 @@ const roots: string[] = [];
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { removeKeepMarkers(); for (const cleanup of cleanups.splice(0)) await cleanup(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(reportMediaRoot(), { recursive: true, force: true }); });
 const root = () => { const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-filesystem-")); roots.push(directory); return directory; };
+
+test.skipIf(process.platform === "win32")("a failed du operand does not discard completed allocation measurements", async () => {
+  const parent = root(), healthy = path.join(parent, "healthy"), missing = path.join(parent, "missing");
+  fs.mkdirSync(healthy); fs.writeFileSync(path.join(healthy, "payload"), Buffer.alloc(1024 * 1024, 4));
+  const measurements = await measureAttemptAllocations([healthy, missing], { budgetMs: 5000 });
+  expect(measurements.get(healthy)).toBeGreaterThanOrEqual(1024 * 1024);
+  expect(measurements.has(missing)).toBeFalse();
+});
 
 test.skipIf(process.platform !== "linux")("a long process command line holds only the attempt it references", async () => {
   const parent = root(), proc = path.join(parent, "proc"), pid = path.join(proc, "41");

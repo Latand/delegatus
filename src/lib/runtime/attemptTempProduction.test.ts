@@ -791,6 +791,14 @@ test("absent allocation entries and recurring deferrals leave a path to the tail
   const absent = Array.from({ length: 4 }, (_, index) => statePath("scratch", `llv-stage-absent${index}`));
   const live = statePath("scratch", "llv-stage-live");
   const clock = spyOn(Date, "now");
+  const measureBatch = spyOn(attemptTempFilesystem, "measureAttemptAllocations");
+  const realMeasureBatch = measureBatch.getMockImplementation()!;
+  let deepObservation: number | undefined;
+  measureBatch.mockImplementation(async (...args) => {
+    const result = await realMeasureBatch(...args);
+    deepObservation = result.get(deep);
+    return result;
+  });
   try {
     for (const [index, directory] of absent.entries()) {
       fs.mkdirSync(directory);
@@ -800,7 +808,9 @@ test("absent allocation entries and recurring deferrals leave a path to the tail
     }
     const pipeline = finishedLane(path.dirname(live), new Date(WORK_TICK - 3 * 86400_000).toISOString());
     pipeline.state = "paused";
-    savePipelines([...loadPipelines(), { ...pipeline, ...pipelineIdentity("live-lane", pipeline.task, pipeline.repoDir), id: "live-lane" }]);
+    const liveLane = { ...pipeline, ...pipelineIdentity("live-lane", pipeline.task, pipeline.repoDir), id: "live-lane" };
+    fs.mkdirSync(path.join(liveLane.worktreeDir!, ".git"), { recursive: true });
+    savePipelines([...loadPipelines(), liveLane]);
     fs.mkdirSync(live);
     store.register({ directory: live, pipelineId: "live-lane", launchId: "live-launch", retainUntilClose: true, createdAt: WORK_TICK - 1 });
     store.retainRoot(live, WORK_TICK - 1);
@@ -818,6 +828,7 @@ test("absent allocation entries and recurring deferrals leave a path to the tail
     } finally { db.close(); }
 
     const seen = new Set<string>();
+    expect(store.allocationDue(WORK_TICK, 64).map(owner => owner.directory)).toContain(deep);
     const maxTicks = Math.ceil((count + 1) / 32) + 1;
     for (let i = 0; i < maxTicks && fs.existsSync(deep); i++) {
       clock.mockReturnValue(WORK_TICK + i * 60_000);
@@ -828,7 +839,12 @@ test("absent allocation entries and recurring deferrals leave a path to the tail
       expect(report.pressure).toBeFalse();
       expect(report.errors).toBe(0);
       for (const row of report.outcomes) seen.add(row.directory);
-      if (i === 0) expect(store.owner(deep)?.bytes).toBeGreaterThanOrEqual(8 * 1024 ** 2);
+      if (i === 0) {
+        expect(measureBatch).toHaveBeenCalled();
+        expect(measureBatch.mock.calls[0]![0]).toContain(deep);
+        expect(deepObservation).toBeGreaterThanOrEqual(8 * 1024 ** 2);
+        expect(store.owner(deep)?.bytes).toBeGreaterThanOrEqual(8 * 1024 ** 2);
+      }
       if (i === 1) {
         expect(report.checked).toBe(32);
         expect(report.outcomes.some((row: { directory: string }) => firstPage.has(row.directory))).toBeFalse();
@@ -874,6 +890,31 @@ test("registered live allocation is measured over cap and a pending quarantine k
     expect(store.owner(gone)?.bytes).toBe(quarantineBytes);
     expect(fs.existsSync(trash)).toBeTrue();
     expect(fs.statSync(path.join(live, "payload")).size).toBe(payloadBytes);
+  } finally { clock.mockRestore(); store.close(); }
+});
+
+test("production allocation deduplicates links across root pages and reassigns the charge after retirement", async () => {
+  const { store, directories } = workScratchFixture(70, 1);
+  const clock = spyOn(Date, "now").mockReturnValue(WORK_TICK + 61_000);
+  const [charged, ...rest] = directories;
+  const survivor = rest.at(-1)!;
+  const first = path.join(charged!, "registry.bin"), last = path.join(survivor, "registry.bin");
+  const sharedBytes = 8 * 1024 ** 2;
+  fs.writeFileSync(first, Buffer.alloc(sharedBytes, 9)); fs.linkSync(first, last);
+  const sweepEnv = { ...workMode, LLV_ATTEMPT_TEMP_CAP_BYTES: String(4 * 1024 ** 2) };
+  try {
+    const firstTick = await runAttemptTempSweep({ ...workPorts, references: async () => true }, sweepEnv);
+    expect(firstTick?.removed).toBe(1);
+    expect(fs.existsSync(charged!)).toBeFalse();
+    expect(fs.statSync(last).size).toBe(sharedBytes);
+
+    clock.mockReturnValue(WORK_TICK + 122_000);
+    const secondTick = await runAttemptTempSweep({ ...workPorts, references: async () => true }, sweepEnv);
+    expect(secondTick?.overCapBytes).toBeGreaterThan(0);
+    expect(store.owner(survivor)?.bytes).toBeGreaterThanOrEqual(sharedBytes);
+    expect(store.bytes()).toBeGreaterThanOrEqual(sharedBytes);
+    expect(store.bytes()).toBeLessThan(10 * 1024 ** 2);
+    expect(fs.existsSync(survivor)).toBeTrue();
   } finally { clock.mockRestore(); store.close(); }
 });
 
@@ -1199,23 +1240,28 @@ test("a scheduled namespace proof above the cap persists its retry across ticks"
 test("an incomplete preparation sample is followed by a full post-completion allocation sample", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-incomplete-allocation-")); roots.push(root); isolateState(root);
   const now = Date.parse("2035-01-15T00:02:00Z"), clock = spyOn(Date, "now").mockReturnValue(now), MiB = 1024 ** 2;
+  const completedAt = new Date(now - 10 * 86400_000).toISOString();
   const pipeline = buildPipeline({ id: "allocation-timeout-lane", task: "Allocation completion", project: "fixture", repoDir: root,
     stages: [{ id: "build", kind: "run", prompt: "Fixture", next: null,
       effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } }],
     srcPath: null, srcConversationId: null, now: "2035-01-15T00:00:00Z" });
-  pipeline.state = "paused";
+  pipeline.state = "completed";
+  pipeline.cursor = null;
+  pipeline.closedAt = completedAt;
   const attempt = { n: 1, state: "failed" as const, launchId: "allocation-timeout-launch", effectiveRole: pipeline.stages[0]!.effectiveRole,
     conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
-    startedAt: "2035-01-15T00:00:00Z", completedAt: "2035-01-15T00:01:00Z", input: null, activatedBy: null,
+    startedAt: new Date(now - 10 * 86400_000 - 60_000).toISOString(), completedAt, input: null, activatedBy: null,
     output: "complete", verdict: null, error: null };
   pipeline.runs = [{ stageId: "build", attempts: [attempt] }];
   fs.mkdirSync(path.join(pipeline.worktreeDir!, ".git"), { recursive: true }); savePipelines([pipeline]);
   const directory = path.join(statePath("scratch"), "llv-stage-allocation-timeout"); fs.mkdirSync(directory, { recursive: true });
   fs.writeFileSync(path.join(directory, "allocation.bin"), Buffer.alloc(8 * MiB, 3));
   const store = new AttemptTempStore();
-  const measurePage = spyOn(attemptTempFilesystem, "measureAttemptAllocations").mockImplementation(async () => {
-    throw new AttemptTempBudgetDeferred("attempt measurement time budget exhausted");
-  });
+  const measureRoot = spyOn(attemptTempFilesystem, "measureAttemptAllocation");
+  const realMeasure = measureRoot.getMockImplementation()!;
+  let measurementCount = 0;
+  measureRoot.mockImplementation(async (...args) => ++measurementCount <= 2
+    ? { bytes: 4096, unreadable: true } : realMeasure(...args));
   try {
     store.register({ directory, pipelineId: pipeline.id, launchId: attempt.launchId, retainUntilClose: false,
       createdAt: Date.parse(attempt.startedAt) });
@@ -1223,11 +1269,17 @@ test("an incomplete preparation sample is followed by a full post-completion all
     store.release(directory);
     const report = await runAttemptTempSweep({ scan: emptyScan, references, availableBytes: () => 400e9 },
       { NODE_ENV: "test", LLV_TEMP_SWEEP: "on" });
-    expect(measurePage).toHaveBeenCalledTimes(1);
-    expect(report).toMatchObject({ removed: 1, errors: 0 });
-    expect(report?.removedBytes).toBeGreaterThanOrEqual(8 * MiB);
+    expect(report).toMatchObject({ removed: 0, errors: 0 });
+    expect(report?.outcomes.find(row => row.directory === directory)?.reasonCode).toBe("allocation_incomplete");
+    expect(fs.existsSync(directory)).toBeTrue();
+    measureRoot.mockImplementation(realMeasure);
+    clock.mockReturnValue(now + 30 * 60_000);
+    const complete = await runAttemptTempSweep({ scan: emptyScan, references, availableBytes: () => 400e9 },
+      { NODE_ENV: "test", LLV_TEMP_SWEEP: "on" });
+    expect(complete).toMatchObject({ removed: 1, errors: 0 });
+    expect(complete?.removedBytes).toBeGreaterThanOrEqual(8 * MiB);
     expect(fs.existsSync(directory)).toBeFalse();
-  } finally { measurePage.mockRestore(); clock.mockRestore(); store.close(); }
+  } finally { measureRoot.mockRestore(); clock.mockRestore(); store.close(); }
 });
 
 test.skipIf(process.platform !== "linux")("permission repair progress retries next minute and retires a 3,395-directory module cache", async () => {
@@ -1396,13 +1448,13 @@ test.each([false, true])("a process first seen by the quarantine scan reports it
       scan: () => {
         // Fresh retirement runs one quarantine eligibility check and replay
         // runs two. Each check observes references twice before the scan.
-        if (!quarantine || injected || quarantineReads !== (replay ? 4 : 2)) return emptyScan();
+        if (!quarantine || !injected && quarantineReads !== (replay ? 4 : 2)) return emptyScan();
         injected = true;
         return { ownNamespace: null, processes: [{ pid: 41, namespace: null, stamped: false, paths: [quarantine] }] };
       },
     }, workMode);
     expect(injected).toBeTrue();
-    expect(quarantineReads).toBe(replay ? 4 : 2);
+    expect(quarantineReads).toBe(replay ? 6 : 3);
     expect(fs.readFileSync(path.join(trash ?? directory!, "payload"), "utf8")).toBe("fixture");
     expect(report).toMatchObject({ removed: 0, errors: 0, liveHeld: 1, outcomes: [expect.objectContaining({
       directory, disposition: "live", reasonCode: "process_reference",
@@ -1655,24 +1707,30 @@ test("a paused lane's durable checkout keeps a released producer payload with an
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-paused-checkout-owner-")); roots.push(root); isolateState(root);
   const completedAt = "2035-01-15T00:01:00.000Z", now = Date.parse("2035-01-15T00:02:00.000Z");
   const clock = spyOn(Date, "now").mockReturnValue(now);
-  const pipeline = buildPipeline({ id: "paused-consumer", task: "Paused checkout consumer", project: "fixture", repoDir: root,
+  const producer = buildPipeline({ id: "ended-producer", task: "Ended scratch producer", project: "fixture", repoDir: root,
     stages: [{ id: "build", kind: "run", prompt: "Fixture", next: null,
       effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } }],
     srcPath: null, srcConversationId: null, now: "2035-01-15T00:00:00Z" });
-  pipeline.state = "paused";
-  const attempt = { n: 1, state: "failed" as const, launchId: "paused-producer", effectiveRole: pipeline.stages[0]!.effectiveRole,
+  producer.state = "paused";
+  const attempt = { n: 1, state: "failed" as const, launchId: "ended-producer-attempt", effectiveRole: producer.stages[0]!.effectiveRole,
     conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
     startedAt: "2035-01-15T00:00:00.000Z", completedAt, input: null, activatedBy: null, output: "done", verdict: null, error: null };
-  pipeline.runs = [{ stageId: "build", attempts: [attempt] }];
-  const checkout = pipeline.worktreeDir!;
+  producer.runs = [{ stageId: "build", attempts: [attempt] }];
+  const consumer = buildPipeline({ id: "paused-consumer", task: "Paused checkout consumer", project: "fixture", repoDir: root,
+    stages: [{ id: "build", kind: "run", prompt: "Fixture", next: null,
+      effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } }],
+    srcPath: null, srcConversationId: null, now: "2035-01-15T00:00:00Z" });
+  consumer.state = "paused";
+  fs.mkdirSync(path.join(producer.worktreeDir!, ".git"), { recursive: true });
+  const checkout = consumer.worktreeDir!;
   fs.mkdirSync(path.join(checkout, ".git"), { recursive: true });
   const directory = path.join(statePath("scratch"), "llv-stage-paused-producer"); fs.mkdirSync(directory, { recursive: true });
   fs.writeFileSync(path.join(directory, "payload"), "consumer dependency");
   const link = path.join(checkout, "node_modules", "producer-payload"); fs.mkdirSync(path.dirname(link), { recursive: true }); fs.symlinkSync(directory, link, "dir");
-  savePipelines([pipeline]);
+  savePipelines([producer, consumer]);
   const store = new AttemptTempStore();
   try {
-    store.register({ directory, pipelineId: pipeline.id, launchId: attempt.launchId, retainUntilClose: false,
+    store.register({ directory, pipelineId: producer.id, launchId: attempt.launchId, retainUntilClose: false,
       createdAt: Date.parse(attempt.startedAt) });
     store.release(directory);
     expect(store.retentionExpiry(directory)).toBe(Date.parse(completedAt) + 1);
