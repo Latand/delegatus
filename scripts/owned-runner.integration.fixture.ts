@@ -69,6 +69,7 @@ for (const mode of ["complete", "exit", "deadline", "TERM", "INT", "KILL", "test
   // only the runner and gate interfaces accept an explicit supervisor identity.
   if (entry === "direct" && mode === "supervisor-KILL") continue;
   test.skipIf(process.platform !== "linux")(`Linux portable ${entry} ${mode} ends recorded children and preserves a bystander`, async () => {
+    const scope = process.env.LLV_OWNED_TEST_RUN_CGROUP ? scopeBaseline() : null;
     const { root, env, repo } = portableFixture(entry === "gate" && mode === "KILL" ? "missing" : "unreachable");
     const record = path.join(root, "ready.json"), release = path.join(root, "release"), received = path.join(root, "signal");
     fs.writeFileSync(path.join(root, "example.test.ts"), `import { test } from "bun:test";
@@ -124,6 +125,7 @@ test("portable lifetime", async () => {
       if (!owned.length && fs.existsSync(record)) owned = JSON.parse(fs.readFileSync(record, "utf8"));
       for (const identity of owned) signalFixtureIdentity(identity, "SIGKILL");
       await until(() => owned.every(identity => !processIdentityMayRun(identity)));
+      if (scope) await drainScope(scope);
       fs.rmSync(root, { recursive: true, force: true });
     }
   }, 20000);
