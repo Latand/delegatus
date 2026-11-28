@@ -2,15 +2,20 @@ import { canonicalOrchestratorProject, orchestratorSeatFor } from "@/lib/orchest
 import { textLengthError } from "@/lib/textLimits";
 import { normalizeMaintenanceWindow, type MaintenanceWindow } from "@/lib/boardMaintenance/window";
 import { changeRelease, normalizeRelease, type ReleaseSetting, type ReleaseSettingChange } from "@/lib/release/settings";
+import type { Database as BunDatabase } from "bun:sqlite";
 import fs from "node:fs";
+import path from "node:path";
+import { MeasuredCache } from "@/lib/cacheTelemetry";
+import { observeSqlite } from "@/lib/sqliteReadAttribution";
+import { openCurrentDatabase } from "@/lib/state/currentDatabase";
 import { autonomyActive, changeAutonomy, endedAutonomy, type AutonomySetting, type AutonomyChange, type AutonomyDecisionInput } from "./autonomy";
 import { changeTurbo, endedTurbo, upsertTurboSwitches, TURBO_HISTORY_LIMIT, type TurboChange, type TurboChangeContext, type TurboSetting } from "./turbo";
 
 import { statePath } from "@/lib/configDir";
 import { ROTATION_THRESHOLD_FRACTION } from "@/lib/orchestrator/contextPolicy";
 import { applyLineEdits, type LineEdits, type LineTarget } from "@/lib/lineEdits";
-import type { LegacyImportHooks, LegacyImportOutcome } from "@/lib/state/legacyImport";
-import { LegacyDocumentStore } from "@/lib/state/legacyDocumentStore";
+import { legacyDatabasePath, type LegacyImportHooks, type LegacyImportOutcome } from "@/lib/state/legacyImport";
+import { LegacyDocumentStore, onLegacyDocumentStoreReset } from "@/lib/state/legacyDocumentStore";
 
 import { seatMayInheritInstruction, hasUnknownAuthor, previewSeatTickInstructions, seatTickInstructionLines, type SeatNoteRemoval, type SeatTickInstructionLine } from "./seatTickInstructions";
 
@@ -434,9 +439,204 @@ function withValidatedMaintenanceWindow(settings: SeatTickSettings): SeatTickSet
   return { ...settings, maintenance: window ? { ...maintenance, window } : null };
 }
 
+type CachedCurationEntry = {
+  witness: string;
+  curation: ReturnType<typeof effectiveCurationSetting>;
+  bytes: number;
+};
+
+type NarrowReaderSlot = {
+  db: BunDatabase;
+  generation: number;
+};
+
+const MAX_CURATION_CACHE_ENTRIES = 64;
+const MAX_NARROW_READERS = 4;
+const settingsCacheHost = globalThis as typeof globalThis & {
+  __llvSeatTickCurationCache?: MeasuredCache<string, CachedCurationEntry>;
+  __llvSeatTickNarrowReaders?: Map<string, NarrowReaderSlot>;
+  __llvSeatTickNarrowReaderGeneration?: number;
+  __llvSeatTickResetHookRegistered?: boolean;
+};
+const curationReadCache = settingsCacheHost.__llvSeatTickCurationCache ??= new MeasuredCache<string, CachedCurationEntry>(
+  "seat-tick-curation",
+  "monitor/seatTickSettings",
+  entry => entry.bytes,
+  "encoded-json",
+);
+const narrowReaders = settingsCacheHost.__llvSeatTickNarrowReaders ??= new Map<string, NarrowReaderSlot>();
+
+function closeAllNarrowReaders(): void {
+  for (const slot of narrowReaders.values()) {
+    try { slot.db.close(); } catch { /* already closed */ }
+  }
+  narrowReaders.clear();
+  curationReadCache.clear();
+}
+
+if (!settingsCacheHost.__llvSeatTickResetHookRegistered) {
+  settingsCacheHost.__llvSeatTickResetHookRegistered = true;
+  onLegacyDocumentStoreReset(closeAllNarrowReaders);
+}
+
+function curationCacheKey(database: string, project: string): string {
+  return JSON.stringify([database, project]);
+}
+
+function settingsDatabaseIdentity(database: string): string | null {
+  try {
+    const stat = fs.statSync(database, { bigint: true });
+    return `${stat.dev}:${stat.ino}:${stat.birthtimeNs}`;
+  } catch {
+    return null;
+  }
+}
+
+function closeNarrowReader(resolvedDatabase: string, slot: NarrowReaderSlot): void {
+  if (narrowReaders.get(resolvedDatabase) === slot) narrowReaders.delete(resolvedDatabase);
+  try { slot.db.close(); } catch { /* already closed */ }
+}
+
+function openNarrowReader(resolvedDatabase: string): NarrowReaderSlot {
+  const existing = narrowReaders.get(resolvedDatabase);
+  if (existing) {
+    narrowReaders.delete(resolvedDatabase);
+    narrowReaders.set(resolvedDatabase, existing);
+    return existing;
+  }
+  const sqlite = process.getBuiltinModule("bun:sqlite") as typeof import("bun:sqlite");
+  const nextGeneration = () => {
+    settingsCacheHost.__llvSeatTickNarrowReaderGeneration = (settingsCacheHost.__llvSeatTickNarrowReaderGeneration ?? 0) + 1;
+    return settingsCacheHost.__llvSeatTickNarrowReaderGeneration;
+  };
+  const slot: NarrowReaderSlot = { db: null as unknown as BunDatabase, generation: nextGeneration() };
+  slot.db = openCurrentDatabase(resolvedDatabase, () => {
+    const opened = observeSqlite(new sqlite.Database(resolvedDatabase, { readonly: true, strict: true }), "state.document");
+    opened.exec("PRAGMA busy_timeout = 0");
+    return opened;
+  }, {
+    reopened: () => {
+      slot.generation = nextGeneration();
+    },
+  });
+  while (narrowReaders.size >= MAX_NARROW_READERS) {
+    const oldestKey = narrowReaders.keys().next().value;
+    if (oldestKey === undefined) break;
+    closeNarrowReader(oldestKey, narrowReaders.get(oldestKey)!);
+  }
+  narrowReaders.set(resolvedDatabase, slot);
+  return slot;
+}
+
+function readerWitness(slot: NarrowReaderSlot, identity: string): string {
+  const dataVersion = slot.db.query<{ data_version: number }, []>("PRAGMA data_version").get()!.data_version;
+  const schemaVersion = slot.db.query<{ schema_version: number }, []>("PRAGMA schema_version").get()!.schema_version;
+  return `${slot.generation}:${identity}:${dataVersion}:${schemaVersion}`;
+}
+
+function rollbackQuietly(db: BunDatabase): void {
+  if (!db.inTransaction) return;
+  try { db.exec("ROLLBACK"); } catch { /* already rolled back */ }
+}
+
+function setCachedCurationEntry(key: string, entry: CachedCurationEntry): void {
+  curationReadCache.delete(key);
+  curationReadCache.set(key, entry);
+  while (curationReadCache.size > MAX_CURATION_CACHE_ENTRIES) {
+    const oldestKey = curationReadCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    curationReadCache.delete(oldestKey);
+  }
+}
+
+function patchProjectSettings<R>(
+  filePath: string,
+  project: string,
+  update: (current: SeatTickSettings | undefined) => { next?: SeatTickSettings; result: R },
+): R {
+  const key = projectKey(project);
+  return settingsStore().patchRows(filePath, 2, tx => {
+    const held = tx.get(key);
+    const current = held?.value as SeatTickSettings | undefined;
+    const outcome = update(current);
+    if (outcome.next !== undefined && (!held || JSON.stringify(held.value) !== JSON.stringify(outcome.next))) {
+      tx.put({ key, value: outcome.next });
+    }
+    return outcome.result;
+  });
+}
+
 export function readSeatTickSettings(project: string, filePath = seatTickSettingsPath()): SeatTickSettings {
   const row = settingsStore().readRow(filePath, projectKey(project))?.value as SeatTickSettings | undefined;
   return withInstructionLines(withValidatedMaintenanceWindow(row ?? defaultSeatTickSettings(project)));
+}
+
+/** Narrow read of a project's curation schedule without decoding unrelated
+ * autonomy/turbo history. Cached strictly against SQLite's `PRAGMA data_version`
+ * captured inside the same read transaction as the extracted curation JSON, so
+ * concurrent writers and direct second-connection updates always invalidate. */
+export function readSeatTickCurationSetting(project: string, filePath = seatTickSettingsPath()) {
+  const database = path.resolve(legacyDatabasePath(filePath));
+  const beforeIdentity = settingsDatabaseIdentity(database);
+  if (beforeIdentity === null) return effectiveCurationSetting(readSeatTickSettings(project, filePath));
+  const key = curationCacheKey(database, project);
+  let slot: NarrowReaderSlot | null = null;
+  try {
+    slot = openNarrowReader(database);
+    const cached = curationReadCache.get(key);
+    if (cached && cached.witness === readerWitness(slot, beforeIdentity)) {
+      curationReadCache.touch(key);
+      return { ...cached.curation };
+    }
+    slot.db.exec("BEGIN");
+    let imported: unknown;
+    let row: { valid: number; curation_type: string | null; curation_json: string | null } | null = null;
+    let generationAtRead = slot.generation;
+    let witness = "";
+    try {
+      imported = slot.db.query("SELECT 1 FROM state_imports WHERE collection = 'seat_tick_settings'").get();
+      if (imported) {
+        row = slot.db.query<{ valid: number; curation_type: string | null; curation_json: string | null }, [string]>(`
+          SELECT
+            CASE
+              WHEN json_valid(value_json)
+                AND json_type(value_json, '$') = 'object'
+                AND json_type(value_json, '$.key') = 'text'
+                AND length(json_extract(value_json, '$.key')) > 0
+                AND json_type(value_json, '$.value') IS NOT NULL
+              THEN 1 ELSE 0
+            END AS valid,
+            CASE WHEN json_valid(value_json) THEN json_type(value_json, '$.value.curation') END AS curation_type,
+            CASE WHEN json_valid(value_json) THEN json_extract(value_json, '$.value.curation') END AS curation_json
+          FROM state_rows
+          WHERE collection = 'seat_tick_settings' AND row_key = ?
+        `).get(projectKey(project)) ?? null;
+        generationAtRead = slot.generation;
+        // Captured inside the open read transaction so it describes this exact
+        // WAL snapshot even if another connection commits before ROLLBACK.
+        witness = readerWitness(slot, beforeIdentity);
+      }
+    } finally {
+      rollbackQuietly(slot.db);
+    }
+    if (!imported) return effectiveCurationSetting(readSeatTickSettings(project, filePath));
+    if (row && (row.valid !== 1 || (row.curation_type !== null && row.curation_type !== "null" && row.curation_type !== "object"))) {
+      return effectiveCurationSetting(readSeatTickSettings(project, filePath));
+    }
+    const curation = row?.curation_type === "object" && row.curation_json
+      ? JSON.parse(row.curation_json) as BoardMaintenanceSetting
+      : undefined;
+    const computed = effectiveCurationSetting({ curation });
+    if (settingsDatabaseIdentity(database) === beforeIdentity && slot.generation === generationAtRead) {
+      const bytes = Buffer.byteLength(key) + Buffer.byteLength(witness) + 96;
+      setCachedCurationEntry(key, { witness, curation: computed, bytes });
+    }
+    return { ...computed };
+  } catch {
+    if (slot) closeNarrowReader(database, slot);
+    curationReadCache.delete(key);
+    return effectiveCurationSetting(readSeatTickSettings(project, filePath));
+  }
 }
 
 export function readSeatTickSettingsFile(filePath = seatTickSettingsPath()): Record<string, SeatTickSettings> {
@@ -446,8 +646,8 @@ export function readSeatTickSettingsFile(filePath = seatTickSettingsPath()): Rec
 /** Serialized read-modify-write of one project's row. Only that row is
     written, so two writers of different projects cannot clobber each other. */
 export function writeSeatTickSettings(project: string, settings: SeatTickSettings, filePath = seatTickSettingsPath()): void {
-  settingsStore().mutate(filePath, (file) => ({
-    next: { ...file, projects: { ...file.projects, [project]: withInstructionLines({ ...settings, project }) } },
+  patchProjectSettings(filePath, project, () => ({
+    next: withInstructionLines({ ...settings, project }),
     result: undefined,
   }));
 }
@@ -854,51 +1054,47 @@ export function applySeatTickNoteLineEdits(
 
 /** A report acknowledgement merges into the latest row, preserving concurrent edits. */
 export function markAutonomyReported(project: string, startedAt: string, at: string, filePath = seatTickSettingsPath()): void {
-  settingsStore().mutate(filePath, file => {
-    const current = file.projects[project];
+  patchProjectSettings(filePath, project, current => {
     if (!current) throw new Error("autonomy episode not found");
     const mark = (episode: AutonomySetting) => episode.startedAt === startedAt ? { ...endedAutonomy(episode, Date.parse(at))!, reportAt: at } : episode;
     const next = { ...current, ...(current.autonomy ? { autonomy: mark(current.autonomy) } : {}),
       ...(current.autonomyHistory ? { autonomyHistory: current.autonomyHistory.map(mark) } : {}) };
-    return { next: { ...file, projects: { ...file.projects, [project]: next } }, result: undefined };
+    return { next, result: undefined };
   });
 }
 
 /** Apply against the locked row so an extension cannot overwrite a decision or an end report. */
 export function changeSeatTickSettings(project: string, change: SeatTickSettingsChange, context: { at: string; actor: SeatTickSettingsActor; instructionActor?: SeatTickSettingsActor; activeSeat?: { conversationId: string | null; seatEpoch: number } | null; turbo?: TurboChangeContext }, filePath = seatTickSettingsPath()): SeatTickSettingsChangeResult {
-  return settingsStore().mutate(filePath, file => {
-    const result = applySeatTickSettingsChange(file.projects[project] ?? defaultSeatTickSettings(project), change, { ...context, activeSeat: orchestratorSeatFor(project).active });
-    return { next: result.ok ? { ...file, projects: { ...file.projects, [project]: result.settings } } : file, result };
+  return patchProjectSettings(filePath, project, current => {
+    const result = applySeatTickSettingsChange(current ?? defaultSeatTickSettings(project), change, { ...context, activeSeat: orchestratorSeatFor(project).active });
+    return { next: result.ok ? result.settings : undefined, result };
   });
 }
 
 export function expireSeatAutonomy(project: string, now: number, filePath = seatTickSettingsPath()): void {
-  settingsStore().mutate(filePath, file => {
-    const current = file.projects[project];
-    if (!current?.autonomy?.enabled || autonomyActive(current.autonomy, now)) return { next: file, result: undefined };
-    return { next: { ...file, projects: { ...file.projects, [project]: { ...current, autonomy: endedAutonomy(current.autonomy, now) } } }, result: undefined };
+  patchProjectSettings(filePath, project, current => {
+    if (!current?.autonomy?.enabled || autonomyActive(current.autonomy, now)) return { result: undefined };
+    return { next: { ...current, autonomy: endedAutonomy(current.autonomy, now) }, result: undefined };
   });
 }
 
 /** Re-read under the store lock: schedule expiry must preserve intervening autonomy edits. */
 export function expireSeatSchedule(project: string, now: number, interval: number, filePath = seatTickSettingsPath()): void {
-  settingsStore().mutate(filePath, file => {
-    const current = file.projects[project];
-    if (!current) return { next: file, result: undefined };
+  patchProjectSettings(filePath, project, current => {
+    if (!current) return { result: undefined };
     const effective = effectiveSeatTickSettings(current, now, interval);
-    if (!effective.lapsed) return { next: file, result: undefined };
-    return { next: { ...file, projects: { ...file.projects, [project]: seatTickSettingsAfterLapse(project, effective) } }, result: undefined };
+    if (!effective.lapsed) return { result: undefined };
+    return { next: seatTickSettingsAfterLapse(project, effective), result: undefined };
   });
 }
 
 /** Form settlement is independently durable; retain failed attempts and allow the same id to retry. */
 export function markAutonomyDecisionReview(project: string, startedAt: string, id: string, reviewState: "decided" | "refused", filePath = seatTickSettingsPath()): void {
-  settingsStore().mutate(filePath, file => {
-    const current = file.projects[project];
+  patchProjectSettings(filePath, project, current => {
     if (!current) throw new Error("autonomy episode not found");
     const mark = (episode: AutonomySetting) => episode.startedAt === startedAt ? { ...episode, decisions: episode.decisions.map(d => d.id === id ? { ...d, reviewState } : d) } : episode;
     const next = { ...current, ...(current.autonomy ? { autonomy: mark(current.autonomy) } : {}), ...(current.autonomyHistory ? { autonomyHistory: current.autonomyHistory.map(mark) } : {}) };
-    return { next: { ...file, projects: { ...file.projects, [project]: next } }, result: undefined };
+    return { next, result: undefined };
   });
 }
 
@@ -908,7 +1104,7 @@ export function markAutonomyDecisionReview(project: string, startedAt: string, i
  * is no longer current changes nothing and answers null.
  */
 export function updateTurboEpisode(project: string, startedAt: string, update: (episode: TurboSetting) => TurboSetting, filePath = seatTickSettingsPath()): TurboSetting | null {
-  return settingsStore().patchRows(filePath, 2, tx => {
+  const result = settingsStore().patchRows(filePath, 2, tx => {
     const key = projectKey(project);
     const held = tx.get(key);
     if (!held) return null;
@@ -925,10 +1121,59 @@ export function updateTurboEpisode(project: string, startedAt: string, update: (
     tx.put({ key, value: { ...current, turboHistory } });
     return turboHistory[index]!;
   });
+  return result;
 }
 
-/** The sweep and credit guard read just their project's row on recurring passes. */
+/** The sweep and credit guard read just their project's turbo fields on recurring passes. */
 export function readTurboSettings(project: string, filePath = seatTickSettingsPath()): Pick<SeatTickSettings, "turbo" | "turboHistory"> {
+  const database = path.resolve(legacyDatabasePath(filePath));
+  if (settingsDatabaseIdentity(database) !== null) {
+    let slot: NarrowReaderSlot | null = null;
+    try {
+      slot = openNarrowReader(database);
+      slot.db.exec("BEGIN");
+      let imported: unknown;
+      let row: { valid: number; turbo_type: string | null; turbo_json: string | null; history_type: string | null; history_json: string | null } | null = null;
+      try {
+        imported = slot.db.query("SELECT 1 FROM state_imports WHERE collection = 'seat_tick_settings'").get();
+        if (imported) {
+          row = slot.db.query<{ valid: number; turbo_type: string | null; turbo_json: string | null; history_type: string | null; history_json: string | null }, [string]>(`
+            SELECT
+              CASE
+                WHEN json_valid(value_json)
+                  AND json_type(value_json, '$') = 'object'
+                  AND json_type(value_json, '$.key') = 'text'
+                  AND length(json_extract(value_json, '$.key')) > 0
+                  AND json_type(value_json, '$.value') IS NOT NULL
+                THEN 1 ELSE 0
+              END AS valid,
+              CASE WHEN json_valid(value_json) THEN json_type(value_json, '$.value.turbo') END AS turbo_type,
+              CASE WHEN json_valid(value_json) THEN json_extract(value_json, '$.value.turbo') END AS turbo_json,
+              CASE WHEN json_valid(value_json) THEN json_type(value_json, '$.value.turboHistory') END AS history_type,
+              CASE WHEN json_valid(value_json) THEN json_extract(value_json, '$.value.turboHistory') END AS history_json
+            FROM state_rows
+            WHERE collection = 'seat_tick_settings' AND row_key = ?
+          `).get(projectKey(project)) ?? null;
+        }
+      } finally {
+        rollbackQuietly(slot.db);
+      }
+      if (imported && (!row || row.valid === 1)) {
+        const turbo = row?.turbo_type === "object" && row.turbo_json
+          ? JSON.parse(row.turbo_json) as TurboSetting
+          : row?.turbo_type === "null" ? null : undefined;
+        const turboHistory = row?.history_type === "array" && row.history_json
+          ? JSON.parse(row.history_json) as TurboSetting[]
+          : undefined;
+        if ((!row?.turbo_type || row.turbo_type === "object" || row.turbo_type === "null")
+          && (!row?.history_type || row.history_type === "array")) {
+          return { turbo, turboHistory };
+        }
+      }
+    } catch {
+      if (slot) closeNarrowReader(database, slot);
+    }
+  }
   const row = settingsStore().readRow(filePath, projectKey(project))?.value as SeatTickSettings | undefined;
   return { turbo: row?.turbo, turboHistory: row?.turboHistory };
 }

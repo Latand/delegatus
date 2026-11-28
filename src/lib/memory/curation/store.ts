@@ -1,6 +1,6 @@
 import { yieldToRuntime } from "@/lib/cooperative";
 import { MeasuredCache } from "@/lib/cacheTelemetry";
-import { effectiveCurationSetting, readSeatTickSettings } from "@/lib/monitor/seatTickSettings";
+import { effectiveCurationSetting, readSeatTickCurationSetting } from "@/lib/monitor/seatTickSettings";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { statePath } from "@/lib/configDir";
@@ -343,7 +343,7 @@ const shared = globalThis as typeof globalThis & {
   __llvCurationSweep?: { stamp: string; pending: boolean };
 };
 const summaries = shared.__llvCurationSummaries ??= new MeasuredCache("summaries", "memory/curation/store");
-function* curationStatusSteps(project: string, now = Date.now(), setting = effectiveCurationSetting(readSeatTickSettings(canonicalProject(project))), scopeRows?: readonly RoleMemoryScopeRow[], cacheSummary = true, fence?: CurationReadFence) {
+function* curationStatusSteps(project: string, now = Date.now(), setting = readSeatTickCurationSetting(canonicalProject(project)), scopeRows?: readonly RoleMemoryScopeRow[], cacheSummary = true, fence?: CurationReadFence) {
   const collection = roleMemoryCollection();
   const key = `${statePath("state.sqlite")}:${canonicalProject(project)}`;
   const sourceVersion = curationReadVersion();
@@ -512,7 +512,7 @@ function finishRead<T>(steps: Generator<null | undefined, T>, check?: () => void
   }
   finally { steps.return(undefined as never); }
 }
-export function curationStatus(project: string, now = Date.now(), setting = effectiveCurationSetting(readSeatTickSettings(canonicalProject(project))), scopeRows?: readonly RoleMemoryScopeRow[], cacheSummary = true) {
+export function curationStatus(project: string, now = Date.now(), setting = readSeatTickCurationSetting(canonicalProject(project)), scopeRows?: readonly RoleMemoryScopeRow[], cacheSummary = true) {
   return withViewerOperation("memory.curation-status", () => {
     for (let attempt = 0; attempt < 3; attempt++) {
       const fence = new CurationReadFence(), version = statusReadVersion();
@@ -526,7 +526,7 @@ export function curationStatus(project: string, now = Date.now(), setting = effe
 /** Serving reads yield in labelled slices. Every caller owns its iterator and
  * cancellation. Only relevant changes restart work; unrelated commits trigger
  * bounded dependency validation. One deadline covers work and validation. */
-export async function curationStatusCooperatively(project: string, now = Date.now(), setting = effectiveCurationSetting(readSeatTickSettings(canonicalProject(project))), signal?: AbortSignal) {
+export async function curationStatusCooperatively(project: string, now = Date.now(), setting = readSeatTickCurationSetting(canonicalProject(project)), signal?: AbortSignal) {
   return curationReadCooperatively(fence => curationStatusSteps(project, now, setting, undefined, true, fence), signal);
 }
 async function curationReadCooperatively<T>(create: (fence: CurationReadFence) => Generator<null | undefined, T>, signal?: AbortSignal, operation: "memory.curation-status" | "memory.curation-panel" = "memory.curation-status"): Promise<T> {
@@ -588,7 +588,7 @@ async function curationReadCooperatively<T>(create: (fence: CurationReadFence) =
 export function claimPass(input: { project: string; repoDir: string | null; now: number; setting?: ReturnType<typeof effectiveCurationSetting>; importOnly?: boolean }): CuratorPass | null {
   const project = canonicalProject(input.project);
   const prior = projectRow(project);
-  const setting = input.setting ?? effectiveCurationSetting(readSeatTickSettings(project));
+  const setting = input.setting ?? readSeatTickCurationSetting(project);
   const status = curationStatus(project, input.now, setting);
   if (!status.due) return null;
   const importBatch = selectImportBatch(project);

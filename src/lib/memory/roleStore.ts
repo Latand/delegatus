@@ -11,7 +11,7 @@ import { statePath } from "@/lib/configDir";
 import { staticSensitiveClasses } from "@/lib/privacy/staticDetectors";
 import { canonicalProject, projectAliasKeys, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { databaseFileIdentity } from "@/lib/state/currentDatabase";
-import { effectiveCurationSetting, readSeatTickSettings, seatTickSettingsPath } from "@/lib/monitor/seatTickSettings";
+import { readSeatTickCurationSetting, seatTickSettingsPath } from "@/lib/monitor/seatTickSettings";
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized, stateDatabaseSignature, StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 
 import { appendRule as appendWithPolicy, archivedRule, lessonPatternSource, retainRules as retainWithPolicy, leavingOrder, pendingCorrection, sameRule, scopeChars } from "./roleConsolidate";
@@ -750,7 +750,7 @@ function projectViewContext(project: string, now: number, allowCachedView = true
   const selector = roleMemorySelectorEnabled();
   const version = (): ProjectViewVersion => {
     const memoryRevision = roleMemoryCollection()?.revision();
-    const other = `${databaseFileIdentity(file)}:${curationRevision()}:${enabled}:${selector}:${swarmRulesEnabled()}:${JSON.stringify(projectAliasSnapshot().aliases)}:${JSON.stringify(effectiveCurationSetting(readSeatTickSettings(canonical)))}`;
+    const other = `${databaseFileIdentity(file)}:${curationRevision()}:${enabled}:${selector}:${swarmRulesEnabled()}:${JSON.stringify(projectAliasSnapshot().aliases)}:${JSON.stringify(readSeatTickCurationSetting(canonical))}`;
     return { memoryRevision, other, stamp: `${other}|memory:${memoryRevision}` };
   };
   const revision = version().stamp;
