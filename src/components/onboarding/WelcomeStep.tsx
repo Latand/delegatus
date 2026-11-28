@@ -46,9 +46,9 @@ export function WelcomeStep({ claude, codex, antigravity, cli, installs = {}, cl
   const onHost = useOnHost();
   const signingIn = (state: EngineAccountsState) => state.accounts.some((account) => account.loginPending);
   const words: Record<typeof AGENT_PROGRAMS[number], ProgramStateWords | null> = cliAnswered ? {
-    claude: accountsRowWords(claude, accountsRowKind(claude, cli.claude, platform, signingIn(claude)), now, t, installs.claude),
-    codex: accountsRowWords(codex, accountsRowKind(codex, cli.codex, platform, signingIn(codex)), now, t, installs.codex),
-    antigravity: antigravityRowWords(antigravity, cli.antigravity ?? antigravity.cli, t, installs.antigravity),
+    claude: accountsRowWords(claude, accountsRowKind(claude, cli.claude, platform, signingIn(claude)), now, t, installs.claude, platform),
+    codex: accountsRowWords(codex, accountsRowKind(codex, cli.codex, platform, signingIn(codex)), now, t, installs.codex, platform),
+    antigravity: antigravityRowWords(antigravity, cli.antigravity ?? antigravity.cli, t, installs.antigravity, platform),
   } : { claude: null, codex: null, antigravity: null };
   /* The question waits for every program's answer, so the buttons never change under a pointer. */
   const settled = AGENT_PROGRAMS.every((program) => words[program] !== null);

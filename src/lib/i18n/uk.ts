@@ -6603,6 +6603,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "onboarding.engines.accountSigningIn": "триває вхід",
   "onboarding.engines.accountLimitLeft": "лишилося {left}% ліміту сесії",
   "onboarding.engines.note.missing": "Не знайдено в ~/.local/bin, ~/.bun/bin і PATH.",
+  "onboarding.engines.note.missingWindows": "Не знайдено в ~/.local/bin, ~/.bun/bin, AppData\\Local і PATH.",
   "onboarding.engines.note.missingCopilot": "Команду copilot не знайдено в PATH.",
   "onboarding.engines.note.signedOut": "Жоден акаунт ще не увійшов.",
   "onboarding.engines.note.agySignedOut": "agy встановлено, входу через Google ще немає.",

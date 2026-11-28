@@ -217,14 +217,16 @@ function FloatingDot({ tone, note, label }: { tone: DotTone; note: string; label
   return <span ref={slot} className="contents"><StatusDot key={round} tone={tone} note={note} label={label} hit={DOT_HIT} anchor={anchor} /></span>;
 }
 
-/** What a program's state reads as: its words, the tone they share with the dot, and what the dot's popover adds. */
-export type ProgramStateWords = { words: string; tone: DotTone; note: string };
+/** What a program's state reads as: its words, the tone they share with the dot, and what the dot's popover adds.
+    `inline` is what the note says in a narrow card, where it opens right under the words: null when the words
+    already say all of it, and left out when the note is whole there too. */
+export type ProgramStateWords = { words: string; tone: DotTone; note: string; inline?: string | null };
 
 /** One state line: the dot leads its own words, and the words keep one line. */
 export function StateLine({ label, state }: { label: string; state: ProgramStateWords }) {
   return (
     <span className="flex min-w-0 items-center">
-      <RowDot tone={state.tone} note={state.note} label={label} />
+      <RowDot tone={state.tone} note={state.note} inline={state.inline} label={label} />
       <span data-onboarding-engine-header="" className={`whitespace-nowrap text-ui ${TONE_INK[state.tone]}`}>{state.words}</span>
     </span>
   );

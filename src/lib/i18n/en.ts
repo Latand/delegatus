@@ -6693,6 +6693,7 @@ export const en = {
   "onboarding.engines.accountSigningIn": "signing in",
   "onboarding.engines.accountLimitLeft": "{left}% of the session limit left",
   "onboarding.engines.note.missing": "Not found in ~/.local/bin, ~/.bun/bin or PATH.",
+  "onboarding.engines.note.missingWindows": "Not found in ~/.local/bin, ~/.bun/bin, AppData\\Local or PATH.",
   "onboarding.engines.note.missingCopilot": "The copilot command was not found on PATH.",
   "onboarding.engines.note.signedOut": "No account is signed in yet.",
   "onboarding.engines.note.agySignedOut": "agy is installed and its Google sign-in is missing.",

@@ -112,26 +112,39 @@ export function accountsRowKind(state: Pick<EngineAccountsState, "engine" | "acc
   return signingIn ? "signing-in" : "signed-out";
 }
 
+/** A note that only says its state line over again. A wide card's popover and a screen reader keep it; in a narrow
+    card, where it would open right under that line, the dot opens nothing (design §12.3). */
+const restated = (note: string): Pick<ProgramStateWords, "note" | "inline"> => ({ note, inline: null });
+
+/** Where a missing program was looked for. On Windows the search also covers the folders under AppData\Local that
+    the native installers write to (`windowsAgentBinaryCandidates`). */
+const missingNote = (platform: HostPlatform, t: TFunction) => t(platform === "win32" ? "onboarding.engines.note.missingWindows" : "onboarding.engines.note.missing");
+
 /** A Claude Code or Codex row's state line: its words, their tone and the dot's popover. Shared with the welcome. */
-export function accountsRowWords(state: Pick<EngineAccountsState, "engine" | "accounts" | "active" | "status">, kind: AccountsRowKind, now: number, t: TFunction, install?: ProgramInstall | null): ProgramStateWords | null {
+export function accountsRowWords(state: Pick<EngineAccountsState, "engine" | "accounts" | "active" | "status">, kind: AccountsRowKind, now: number, t: TFunction, install?: ProgramInstall | null, platform: HostPlatform = "linux"): ProgramStateWords | null {
   if (kind === "loading") return null;
-  if (kind === "missing") return { words: t("onboarding.engines.missing"), tone: "off", note: t("onboarding.engines.note.missing") };
+  if (kind === "missing") return { words: t("onboarding.engines.missing"), tone: "off", note: missingNote(platform, t) };
   if (kind === "unsupported") return { words: t("onboarding.engines.needsWsl"), tone: "off", note: t("onboarding.engines.needsWslNote") };
-  if (kind === "signing-in") return { words: t("onboarding.engines.signingIn"), tone: "warn", note: t("onboarding.engines.note.accountSigningIn") };
+  if (kind === "signing-in") return { words: t("onboarding.engines.signingIn"), tone: "warn", ...restated(t("onboarding.engines.note.accountSigningIn")) };
   if (kind === "signed-out") {
     if (state.status === "error") return { words: t("onboarding.engines.authUnknown"), tone: "warn", note: t("onboarding.engines.note.authUnknown") };
-    return { words: t("onboarding.engines.signedOut"), tone: "warn", note: installNote(install, t) ?? t(state.engine === "claude" ? "onboarding.engines.isolatedSignin" : "onboarding.engines.note.signedOut") };
+    const words = t("onboarding.engines.signedOut");
+    const found = installNote(install, t);
+    if (found !== null) return { words, tone: "warn", note: found };
+    /* With no version or path known, Claude Code's sentence still adds to the line; Codex's says the line again. */
+    return state.engine === "claude" ? { words, tone: "warn", note: t("onboarding.engines.isolatedSignin") } : { words, tone: "warn", ...restated(t("onboarding.engines.note.signedOut")) };
   }
   if (kind === "connected") {
     const account = engineAccount(state);
     const plan = planName(account?.plan);
     const limit = account ? accountSessionLeft(account, now) : null;
+    /* The version and the limit left; without a limit read, the version and the place; without a version, the limit and its hour. */
+    const known = limit && install?.version ? t("onboarding.engines.note.versionLimit", { version: install.version, left: limit.left })
+      : limit ? limitNote(limit, now, t) : installNote(install, t);
     return {
       words: plan ? t("onboarding.engines.connected", { plan }) : t("onboarding.engines.connectedNoPlan"),
       tone: "ok",
-      /* The version and the limit left; without a limit read, the version and the place; without a version, the limit and its hour. */
-      note: limit && install?.version ? t("onboarding.engines.note.versionLimit", { version: install.version, left: limit.left })
-        : limit ? limitNote(limit, now, t) : installNote(install, t) ?? t("onboarding.engines.note.connected"),
+      ...(known !== null ? { note: known } : restated(t("onboarding.engines.note.connected"))),
     };
   }
   /* Several accounts: the line counts them, and only the ones that wait for a sign-in. */
@@ -146,12 +159,14 @@ export function accountsRowWords(state: Pick<EngineAccountsState, "engine" | "ac
 }
 
 /** Antigravity's state line, from the facts every surface of it reads. */
-export function antigravityRowWords(agy: Pick<AntigravityAccount, "cli" | "auth" | "loaded" | "plan">, cli: AntigravityCliPresence, t: TFunction, install?: ProgramInstall | null): ProgramStateWords | null {
+export function antigravityRowWords(agy: Pick<AntigravityAccount, "cli" | "auth" | "loaded" | "plan">, cli: AntigravityCliPresence, t: TFunction, install?: ProgramInstall | null, platform: HostPlatform = "linux"): ProgramStateWords | null {
   const state = antigravityCardState(agy, cli);
   if (state === "loading") return null;
-  if (state === "missing") return { words: t("onboarding.engines.missing"), tone: "off", note: t("onboarding.engines.note.missing") };
-  if (state === "connected") return { words: agy.plan ? t("onboarding.engines.connected", { plan: agy.plan }) : t("onboarding.engines.connectedNoPlan"), tone: "ok", note: installNote(install, t) ?? t("onboarding.engines.note.connected") };
-  if (state === "signed-out") return { words: t("onboarding.engines.signedOut"), tone: "warn", note: installNote(install, t) ?? t("onboarding.engines.note.agySignedOut") };
+  if (state === "missing") return { words: t("onboarding.engines.missing"), tone: "off", note: missingNote(platform, t) };
+  /* With no version or path known the sentence says the line again: the row's own sign-in block names Google. */
+  const found = installNote(install, t);
+  if (state === "connected") return { words: agy.plan ? t("onboarding.engines.connected", { plan: agy.plan }) : t("onboarding.engines.connectedNoPlan"), tone: "ok", ...(found !== null ? { note: found } : restated(t("onboarding.engines.note.connected"))) };
+  if (state === "signed-out") return { words: t("onboarding.engines.signedOut"), tone: "warn", ...(found !== null ? { note: found } : restated(t("onboarding.engines.note.agySignedOut"))) };
   return { words: t("onboarding.engines.authUnknown"), tone: "warn", note: t("onboarding.engines.note.agyUnknown") };
 }
 
@@ -247,7 +262,7 @@ function AccountsRow({ state, cli, install, now, platform, primary, lead, phone,
   const phases = state.accounts.map((account) => accountSignInPhase(engine, account, signIn));
   const running = phases.includes("running");
   const kind = accountsRowKind(state, cli, platform, running);
-  const base = accountsRowWords(state, kind, now, t, install);
+  const base = accountsRowWords(state, kind, now, t, install, platform);
   /* While a sign-in is pending "Add an account" is disabled, and the row's dot says why. */
   const words = base && running && kind === "several" ? { ...base, note: t("onboarding.engines.note.signingIn") } : base;
   const only = state.accounts[0] ?? null;
@@ -301,7 +316,7 @@ function AntigravityRow({ agy, cli, install, platform, onHost }: { agy: Antigrav
   const { t } = useLocale();
   const state = antigravityCardState(agy, cli);
   return (
-    <ProgramRow program="antigravity" kind={state} words={antigravityRowWords(agy, cli, t, install)}>
+    <ProgramRow program="antigravity" kind={state} words={antigravityRowWords(agy, cli, t, install, platform)}>
       {state === "missing" ? (
         <InstallCommand engine="antigravity" install={agentInstallCommand("antigravity", platform)} sentence={t(platform === "win32" ? "onboarding.engines.pastePowerShell" : "onboarding.engines.pasteTerminal")} />
       ) : state === "signed-out" || state === "unknown" ? <AntigravitySignIn agy={agy} onHost={onHost} /> : null}
@@ -323,10 +338,11 @@ function CopilotRow({ accounts, install, onHost }: { accounts: CopilotAccounts; 
   const { t } = useLocale();
   const kind = copilotKind(accounts);
   const signedIn = copilotSignedIn(accounts.body);
+  const found = installNote(install, t);
   const words: ProgramStateWords | null = kind === "loading" ? null
     : kind === "missing" ? { words: t("onboarding.engines.missing"), tone: "off", note: t("onboarding.engines.note.missingCopilot") }
       : kind === "connected" ? { words: t("onboarding.engines.connectedCopilot", { label: signedIn?.label ?? "" }), tone: "ok", note: t("onboarding.engines.copilotNote") }
-        : { words: t("onboarding.engines.signedOut"), tone: "warn", note: installNote(install, t) ?? t("onboarding.engines.note.copilotSignedOut") };
+        : { words: t("onboarding.engines.signedOut"), tone: "warn", ...(found !== null ? { note: found } : restated(t("onboarding.engines.note.copilotSignedOut"))) };
   return (
     <ProgramRow program="copilot" kind={kind} words={words}>
       {kind === "missing" ? <p data-onboarding-copilot-manual="" className="text-ui text-secondary">{t("onboarding.engines.copilotInstall")}</p>

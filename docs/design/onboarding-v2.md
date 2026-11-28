@@ -1160,7 +1160,12 @@ step to the list and touches none of the files that pull request rewrites.
     their dot leads, so they add only what that line leaves out: under
     "12% of the session limit left" an amber account's note reads "Resets
     at 11:35." alone. Where the words say all of it (no hour known, "needs
-    sign-in", "signing in") the dot opens nothing there. The
+    sign-in", "signing in") the dot opens nothing there. A program's own
+    line follows the same rule as an account's: under "Signing in" its dot
+    opens nothing, and neither does a sentence kept for want of a version
+    and a path when it only says the line again ("Signed in." under
+    "Connected", "No account is signed in yet." under "Installed, signed
+    out"). The
     floating popover of a wide card keeps both sentences, and the dot's
     label for a screen reader keeps both at every width. Escape closes an
     open popover alone and the next
@@ -1180,14 +1185,17 @@ step to the list and touches none of the files that pull request rewrites.
     (`windowsAgentBinaryCandidates` in `bin/agent-binaries.mjs`, the one
     list the launcher and the Viewer's resolver in `src/lib/agent/cli.ts`
     both read). "Check again" after the install finds it with no restart.
+    A missing program's popover names `AppData\Local` among the places
+    searched there.
   - *The guide no longer carries* the provider form, the usage header or
     "Remove": they stay on the accounts screen (A3).
   - *Frames:* the states `welcome-*`, `engines-*` and `accounts-*` of the
     kanban driver's guide block, at 1440, 900, 860, 645 and 390; 860 in
     both themes, as 1440 and 390 are. The block presses every dot and
     checks that a signed-out program's popover names its version and path,
-    a signed-in one's its version, and that words opened in a narrow row
-    repeat nothing of the line above them.
+    a signed-in one's its version, that words opened in a narrow row
+    repeat nothing of the line above them, and that under 768 px the dot
+    of a program that is signing in opens nothing.
 
 ### 12.4 Slice 3: the install job and its button
 

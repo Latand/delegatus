@@ -46653,6 +46653,20 @@ describe("first-run guide: variant 1 on the real components", () => {
               await page.waitForSelector("[data-settings-dot-popover]", { state: "detached", timeout: 5_000 });
             }
             reading.popovers = popovers;
+            /* The dots that open nothing, by the name a screen reader hears. Under 768 px a program that is signing in is
+               one of them: its line says all of its note, in other words than the note's, which the comparison above cannot see. */
+            const quiet = await page.locator("[data-onboarding-dialog] [data-onboarding-programs] span[data-settings-dot][role=img]").evaluateAll((nodes) => nodes.map((node) => ({
+              program: node.closest("[data-onboarding-engine]")?.getAttribute("data-onboarding-engine") ?? "",
+              account: node.closest("[data-onboarding-account]") !== null,
+              state: node.closest("[data-engine-state]")?.getAttribute("data-engine-state") ?? "",
+              label: (node.getAttribute("aria-label") ?? "").replaceAll("\u00a0", " "),
+            })));
+            reading.quietDots = quiet;
+            const signingIn = await page.locator('[data-onboarding-dialog] [data-onboarding-programs] > [data-engine-state="signing-in"]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-onboarding-engine") ?? ""));
+            for (const program of signingIn) {
+              const silent = quiet.some((dot) => dot.program === program && !dot.account && dot.label.length > 0);
+              if (silent !== width < 768) failures.push(`${name}: the dot of ${program}, which is signing in, ${silent ? "opens nothing" : "opens its note"} at ${width} px`);
+            }
             /* Escape closed each popover alone: the guide is still open. */
             if (!(await page.locator("[data-onboarding-dialog]").count())) failures.push(`${name}: closing a popover closed the guide`);
           }

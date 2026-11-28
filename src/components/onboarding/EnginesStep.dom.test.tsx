@@ -183,6 +183,8 @@ test("on Windows a missing row shows the vendor's PowerShell line, and Codex ask
   expect(words(host, "codex")).toBe("Needs WSL 2 on Windows");
   expect(codex.querySelector("code")).toBeNull();
   expect(codex.textContent).toContain("Start Delegatus inside WSL 2 to use Codex.");
+  /* The popover of a missing program names every place Windows was searched, the installers' AppData folders among them. */
+  for (const program of ["claude", "antigravity"]) expect(await popoverOf(host, program)).toBe("Not found in ~/.local/bin, ~/.bun/bin, AppData\\Local or PATH.");
 });
 
 test("on Windows an installed Codex is an ordinary row", async () => {
@@ -462,7 +464,7 @@ test("in a narrow card a row's action stands under its head, and a dot's words o
   view.matchMedia = phone;
   Object.assign(globalThis, { matchMedia: phone });
   try {
-    const host = await mount(one(), engineState("codex", [signedOut({ id: "cx-main", label: "Main" })], "cx-main"));
+    const host = await mount(one(), engineState("codex", [signedOut({ id: "cx-main", label: "Main" })], "cx-main"), { installs: INSTALLS });
     for (const [program, selector] of [["claude", "[data-onboarding-add-account=claude]"], ["codex", "[data-onboarding-sign-in=cx-main]"]] as const) {
       const item = row(host, program);
       const action = item.querySelector(selector)!;
@@ -477,7 +479,7 @@ test("in a narrow card a row's action stands under its head, and a dot's words o
     const dot = head.querySelector<HTMLButtonElement>("[data-settings-dot]")!;
     const notes = () => Array.from(document.querySelectorAll("[data-settings-dot-popover]"));
     await act(async () => { dot.click(); });
-    expect(notes().map((note) => note.textContent)).toEqual(["No account is signed in yet."]);
+    expect(notes().map((note) => spaced(note.textContent))).toEqual(["Version 0.170.0 at ~/.npm-global/bin/codex"]);
     expect(head.contains(notes()[0]!)).toBe(true);
     expect(head.querySelector("[data-onboarding-engine-header]")!.compareDocumentPosition(notes()[0]!) & 4).toBe(4);
     expect(dot.getAttribute("aria-expanded")).toBe("true");
@@ -671,6 +673,76 @@ test("in a narrow card an account that waits for its sign-in says so once, in it
   const line = row(host, "claude").querySelector<HTMLElement>("[data-onboarding-account=cl-spare]")!;
   await act(async () => { line.querySelector<HTMLButtonElement>("button[data-settings-dot]")!.click(); });
   expect(spaced(document.querySelector("[data-settings-dot-popover]")!.textContent)).toBe("No sign-in yet.");
+});
+
+/** The dot that leads a program's own state line. */
+const programDot = (host: HTMLElement, program: string) => row(host, program).querySelector<HTMLElement>(":scope > div > [data-program-dot-row] [data-settings-dot]")!;
+
+test("in a narrow card a program that is signing in says so once: its dot opens nothing there and keeps its note for a screen reader", async () => {
+  const signingIn = () => [
+    engineState("claude", [signedOut({ id: "cl-main", label: "Main", loginPending: true, loginState: "pending", login: login("awaiting_code") })], "cl-main"),
+    engineState("codex", [signedOut({ id: "cx-main", label: "Main", loginPending: true, loginState: "pending" })], "cx-main"),
+  ] as const;
+  await narrow(async () => {
+    const [claude, codex] = signingIn();
+    const host = await mount(claude, codex, { installs: INSTALLS });
+    for (const [program, name] of [["claude", "Claude Code"], ["codex", "Codex"]] as const) {
+      expect(row(host, program).getAttribute("data-engine-state")).toBe("signing-in");
+      expect(words(host, program)).toBe("Signing in");
+      const dot = programDot(host, program);
+      expect(dot.getAttribute("data-settings-dot")).toBe("warn");
+      expect(dot.tagName).toBe("SPAN");
+      expect(dot.getAttribute("role")).toBe("img");
+      expect(spaced(dot.getAttribute("aria-label"))).toBe(`${name}: Its sign-in is in progress.`);
+      await act(async () => { dot.click(); });
+      expect(document.querySelectorAll("[data-settings-dot-popover]")).toHaveLength(0);
+      /* The row says it is signing in once, in its state line. */
+      expect(row(host, program).querySelector("[data-program-dot-row]")!.textContent!.split("Signing in")).toHaveLength(2);
+    }
+  });
+  await act(async () => mounted!.root.unmount());
+  mounted!.host.remove();
+  /* A wide card's popover stands beside the name, and keeps the sentence. */
+  const [claude, codex] = signingIn();
+  const host = await mount(claude, codex, { installs: INSTALLS });
+  expect(programDot(host, "codex").tagName).toBe("BUTTON");
+  expect(await popoverOf(host, "codex")).toBe("Its sign-in is in progress.");
+});
+
+test("in a narrow card a note that only says its line again opens nothing, and one that adds to the line opens under it", async () => {
+  copilot = { present: true, accounts: [] };
+  await narrow(async () => {
+    /* No check learned a version or a path, so each row keeps its own sentence. */
+    const connected = engineState("claude", [account({ id: "cl-main", label: "Main", plan: "max" })], "cl-main");
+    const host = await mount(connected, engineState("codex", [signedOut({ id: "cx-main", label: "Main" })], "cx-main"), { antigravity: agyAccount({ auth: "signed_out" }) });
+    for (const [program, said, heard] of [
+      ["claude", "Connected · Max", "Claude Code: Signed in."],
+      ["codex", "Installed, signed out", "Codex: No account is signed in yet."],
+      ["antigravity", "Installed, signed out", "Antigravity: agy is installed and its Google sign-in is missing."],
+      ["copilot", "Installed, signed out", "Copilot: The copilot command is installed and no account is signed in."],
+    ] as const) {
+      expect(words(host, program)).toBe(said);
+      const dot = programDot(host, program);
+      expect(dot.tagName).toBe("SPAN");
+      expect(spaced(dot.getAttribute("aria-label"))).toBe(heard);
+      await act(async () => { dot.click(); });
+      expect(document.querySelectorAll("[data-settings-dot-popover]")).toHaveLength(0);
+    }
+  });
+  await act(async () => mounted!.root.unmount());
+  mounted!.host.remove();
+  await narrow(async () => {
+    /* A signed-out Claude Code with nothing learned says whose sign-in it waits for, and a known version and path open whole. */
+    const host = await mount(engineState("claude", [signedOut({ id: "cl-main", label: "Main" })], "cl-main"), engineState("codex", [signedOut({ id: "cx-main", label: "Main" })], "cx-main"), { installs: { codex: INSTALLS.codex } });
+    for (const [program, note] of [["claude", "Agents use their own Claude sign-in."], ["codex", "Version 0.170.0 at ~/.npm-global/bin/codex"]] as const) {
+      const dot = programDot(host, program);
+      expect(dot.tagName).toBe("BUTTON");
+      await act(async () => { dot.click(); });
+      const opened = row(host, program).querySelector("[data-program-dot-note] [data-settings-dot-popover]")!;
+      expect(spaced(opened.textContent)).toBe(note);
+      await act(async () => { dot.click(); });
+    }
+  });
 });
 
 test("in a wide card the low account's floating popover keeps the share and the hour", async () => {

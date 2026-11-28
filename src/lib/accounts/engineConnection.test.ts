@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { cliDisplayPath, cliInstalls, cliReport, cliResolvable, engineCliPresence, engineConnectedFrom, engineNotConnectedMessage, probeCli, probeCliVersion, versionFromOutput, type CliReports } from "./engineConnection";
+import { CLI_PROBE_TTL_MS, cliDisplayPath, cliInstalls, cliReport, cliResolvable, engineCliPresence, engineConnectedFrom, engineNotConnectedMessage, probeCli, probeCliVersion, versionFromOutput, type CliReports } from "./engineConnection";
 
 test("an engine is connected when an account holds credentials inside the project's allowed set", () => {
   expect(engineConnectedFrom([], null)).toBe(false);
@@ -100,34 +100,49 @@ test.skipIf(process.platform === "win32")("one --version run answers presence an
 test.skipIf(process.platform === "win32")("a program's check reports its path and version, holds them for a minute, and Check again reads anew", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-cli-report-"));
   const previous = { agy: process.env.LLV_ANTIGRAVITY_BIN, copilot: process.env.LLV_COPILOT_BIN, shims: process.env.LLV_DOCKER_NSENTER_SHIMS };
+  /* Every check names its own moment, so the minute is counted on this clock and never on the machine's. */
+  const START = Date.UTC(2026, 10, 26, 9, 0, 0);
   try {
     const agy = path.join(dir, "agy");
-    fs.writeFileSync(agy, "#!/bin/sh\necho 'agy 1.5.17'\n", { mode: 0o755 });
+    const install = (version: string) => fs.writeFileSync(agy, `#!/bin/sh\necho 'agy ${version}'\n`, { mode: 0o755 });
+    install("1.5.17");
     process.env.LLV_ANTIGRAVITY_BIN = agy;
     process.env.LLV_COPILOT_BIN = path.join(dir, "absent-copilot");
     delete process.env.LLV_DOCKER_NSENTER_SHIMS;
-    expect(await cliReport("antigravity", { fresh: true })).toEqual({ presence: "found", version: "1.5.17", path: cliDisplayPath(agy) });
-    expect(await cliReport("copilot", { fresh: true })).toEqual({ presence: "missing", version: null, path: null });
+    expect(await cliReport("antigravity", { fresh: true, now: START })).toEqual({ presence: "found", version: "1.5.17", path: cliDisplayPath(agy) });
+    expect(await cliReport("copilot", { fresh: true, now: START })).toEqual({ presence: "missing", version: null, path: null });
 
-    /* An upgrade inside the minute is not seen until the step's "Check again". */
-    fs.writeFileSync(agy, "#!/bin/sh\necho 'agy 1.6.0'\n", { mode: 0o755 });
-    expect((await cliReport("antigravity")).version).toBe("1.5.17");
-    expect(await engineCliPresence("antigravity")).toBe("found");
-    expect((await cliReport("antigravity", { fresh: true })).version).toBe("1.6.0");
+    /* An upgrade inside the minute is not seen, up to its last millisecond. */
+    install("1.6.0");
+    expect((await cliReport("antigravity", { now: START + 1 })).version).toBe("1.5.17");
+    expect((await cliReport("antigravity", { now: START + CLI_PROBE_TTL_MS - 1 })).version).toBe("1.5.17");
+    expect(await engineCliPresence("antigravity", { now: START + CLI_PROBE_TTL_MS - 1 })).toBe("found");
+    /* Once the minute is over the next check reads anew, unasked, and its answer holds for a minute of its own. */
+    const expired = START + CLI_PROBE_TTL_MS;
+    expect((await cliReport("antigravity", { now: expired })).version).toBe("1.6.0");
+    install("1.7.2");
+    expect((await cliReport("antigravity", { now: expired + CLI_PROBE_TTL_MS - 1 })).version).toBe("1.6.0");
+    expect((await cliReport("antigravity", { now: expired + CLI_PROBE_TTL_MS })).version).toBe("1.7.2");
+    /* The step's "Check again" reads anew inside the minute. */
+    const held = expired + CLI_PROBE_TTL_MS;
+    install("1.8.0");
+    expect((await cliReport("antigravity", { now: held + 1 })).version).toBe("1.7.2");
+    expect((await cliReport("antigravity", { fresh: true, now: held + 2 })).version).toBe("1.8.0");
 
     /* A removed command reads as missing on the next check and keeps no path or version of the old one. */
     fs.rmSync(agy);
-    expect(await cliReport("antigravity", { fresh: true })).toEqual({ presence: "missing", version: null, path: null });
-    expect(await engineCliPresence("antigravity")).toBe("missing");
+    expect(await cliReport("antigravity", { now: held + 3 })).toEqual({ presence: "found", version: "1.8.0", path: cliDisplayPath(agy) });
+    expect(await cliReport("antigravity", { fresh: true, now: held + 4 })).toEqual({ presence: "missing", version: null, path: null });
+    expect(await engineCliPresence("antigravity", { now: held + 5 })).toBe("missing");
 
-    fs.writeFileSync(agy, "#!/bin/sh\necho 'agy 1.6.0'\n", { mode: 0o755 });
+    install("1.8.0");
     /* The popovers' read keeps the path and the version of each program and drops nothing but the presence. */
     const absent = { presence: "missing", version: null, path: null } as const;
-    const reports: CliReports = { claude: absent, codex: absent, antigravity: await cliReport("antigravity", { fresh: true }), copilot: await cliReport("copilot") };
+    const reports: CliReports = { claude: absent, codex: absent, antigravity: await cliReport("antigravity", { fresh: true, now: held + 6 }), copilot: await cliReport("copilot", { now: held + 6 }) };
     expect(cliInstalls(reports)).toEqual({
       claude: { path: null, version: null },
       codex: { path: null, version: null },
-      antigravity: { path: cliDisplayPath(agy), version: "1.6.0" },
+      antigravity: { path: cliDisplayPath(agy), version: "1.8.0" },
       copilot: { path: null, version: null },
     });
   } finally {

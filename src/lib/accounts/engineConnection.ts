@@ -124,7 +124,8 @@ export type CliInstall = { path: string | null; version: string | null };
 export type CliProgram = EngineName | "copilot";
 
 const CLI_PROBE_TIMEOUT_MS = 3_000;
-const CLI_PROBE_TTL_MS = 60_000;
+/** How long one check of a program's command answers for. */
+export const CLI_PROBE_TTL_MS = 60_000;
 const cliCache = new Map<CliProgram, { at: number; value: Promise<CliInstall & { presence: CliPresence }> }>();
 
 const VERSION = /\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?/;
@@ -177,20 +178,24 @@ function shownPath(program: CliProgram, binary: string): string | null {
   return cliDisplayPath(shimmed ? resolveHostBinary(COMMAND[program]) : binary);
 }
 
+/** How a check is asked for: `fresh` is the step's "Check again", and `now` is
+    the moment the minute is counted from, in milliseconds, which a test supplies. */
+export type CliCheckOptions = { fresh?: boolean; now?: number };
+
 /** One check of a program's command: whether it starts, where it was found and
-    its version, from a single `--version` run. Cached per program for a minute;
-    `fresh` is the step's "Check again". */
-export function cliReport(program: CliProgram, { fresh = false }: { fresh?: boolean } = {}): Promise<CliInstall & { presence: CliPresence }> {
+    its version, from a single `--version` run. Cached per program for a minute,
+    counted from the moment the run was started. */
+export function cliReport(program: CliProgram, { fresh = false, now = Date.now() }: CliCheckOptions = {}): Promise<CliInstall & { presence: CliPresence }> {
   const cached = cliCache.get(program);
-  if (!fresh && cached && Date.now() - cached.at < CLI_PROBE_TTL_MS) return cached.value;
+  if (!fresh && cached && now - cached.at < CLI_PROBE_TTL_MS) return cached.value;
   const binary = binaryForProgram(program);
   const value = probeCliVersion(binary).then(({ presence, version }) => ({ presence, version, path: presence === "found" ? shownPath(program, binary) : null }));
-  cliCache.set(program, { at: Date.now(), value });
+  cliCache.set(program, { at: now, value });
   return value;
 }
 
 /** Cached per engine for a minute; `fresh` is the step's "Check again". */
-export function engineCliPresence(engine: EngineName, options: { fresh?: boolean } = {}): Promise<CliPresence> {
+export function engineCliPresence(engine: EngineName, options: CliCheckOptions = {}): Promise<CliPresence> {
   return cliReport(engine, options).then((report) => report.presence);
 }
 
@@ -199,7 +204,7 @@ export const CLI_PROGRAMS: readonly CliProgram[] = ["claude", "codex", "antigrav
 export type CliReports = Record<CliProgram, CliInstall & { presence: CliPresence }>;
 
 /** One check of all four programs, each from its own cached `--version` run. */
-export async function cliReports(options: { fresh?: boolean } = {}): Promise<CliReports> {
+export async function cliReports(options: CliCheckOptions = {}): Promise<CliReports> {
   const reports = await Promise.all(CLI_PROGRAMS.map((program) => cliReport(program, options)));
   return Object.fromEntries(CLI_PROGRAMS.map((program, index) => [program, reports[index]])) as CliReports;
 }
