@@ -44,13 +44,13 @@ run tells you where to look without republishing what it found.
 
 ## Commits from launched agents
 
-Delegatus sets the author and committer environment for every launched agent,
-including pipeline stages and plain spawns. User repositories use their
-configured Git user identity with Delegatus as a no-reply co-author. Missing or
-incomplete user configuration retains the Delegatus machine identity. This
-repository's checked-in publication configuration retains its machine identity
-and existing attribution policy. Git configuration stays untouched. See
-[Pipeline dependencies and commit identity](docs/design/pipeline-package-installs.md).
+Delegatus sets the Git author and committer for lane commits to the GitHub
+noreply address of the installation's active GitHub CLI account. Sign in with
+`gh auth login --hostname github.com` to enable commits. Settings → Privacy
+controls the Delegatus co-author trailer, which is on by default. Standalone
+tools such as the batch merger keep this repository's machine policy.
+Delegatus leaves Git configuration untouched.
+See [Pipeline dependencies and commit identity](docs/design/pipeline-package-installs.md).
 
 An agent must add a new commit on top of work authored by someone else. The
 launch environment installs Git hooks that refuse
@@ -217,12 +217,12 @@ alias the operator defined with `gh alias set` is not expanded.
 - **The engine** (`src/lib/forge/autoMerge.ts`) merges through
   `AutoMergePorts.write`: `forgeAppWriter` for a declared repository,
   the plain `gh` runner for any other. A refusal blocks the merge with the
-  refusal as its reason. A branch that is only behind is updated by the
-  runner itself: a merge of the base tip under the machine identity, pushed
-  as a fast-forward with hooks skipped, gated by the required checks on that
+  refusal as its reason. When a branch is only behind, the runner merges the
+  base tip with the owner's GitHub noreply identity and pushes it as a
+  fast-forward with hooks skipped. The required checks run on the updated
   head. A conflicting branch refreshes through an owned pipeline that merges
-  the base locally under the enforced machine identity and publishes through
-  the gate; the runner never calls GitHub update-branch. The push that publishes a lane's branch
+  the base locally with the same owner identity and publishes through the gate.
+  The runner never calls GitHub update-branch. The push that publishes a lane's branch
   (`src/lib/pipelines/git.ts`) and the push and `gh pr create` that finish a
   workflow (`src/lib/workflows/provision.ts`) run with `engineForgeWriteEnv()`,
   the same push rewrite and the same `gh` and `git` shims.

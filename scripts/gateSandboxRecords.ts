@@ -9,6 +9,48 @@ import { cpuOwnerIdentity } from "../src/lib/runtime/signalSandboxContext";
 const allocations = new Map<string, { identity: SandboxIdentity; journal: string }>();
 const identityKey = (row: SandboxIdentity) => JSON.stringify([row.directory, row.dev, row.ino, row.generation]);
 
+/** A timed-out test can leave a sealed dependency cache behind. Restore write
+ * access on owned directories only, after the test's runner has ended. */
+function removeSandbox(directory: string, expected?: SandboxIdentity): void {
+  const stat = fs.lstatSync(directory, { throwIfNoEntry: false });
+  if (!stat) return;
+  const checkRoot = (current: fs.Stats) => {
+    if (!current.isDirectory() || current.dev !== stat.dev || current.ino !== stat.ino
+      || (expected && (current.dev !== expected.dev || current.ino !== expected.ino
+        || fs.realpathSync(directory) !== expected.directory))) throw new Error("recorded gate sandbox changed identity");
+  };
+  checkRoot(stat);
+  const remove = () => fs.rmSync(directory, { recursive: true, force: true });
+  try { remove(); }
+  catch (error) {
+    if (process.platform !== "linux" || (error as NodeJS.ErrnoException).code !== "EACCES") throw error;
+    const flags = fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW;
+    const uid = process.getuid!();
+    const mount = (fd: number) => /^mnt_id:\s*(\d+)$/m.exec(fs.readFileSync(`/proc/self/fdinfo/${fd}`, "utf8"))?.[1];
+    const root = fs.openSync(directory, flags);
+    try {
+      checkRoot(fs.fstatSync(root));
+      const rootMount = mount(root);
+      if (!rootMount) throw error;
+      const unseal = (fd: number) => {
+        const entry = fs.fstatSync(fd);
+        if (entry.uid !== uid || entry.dev !== stat.dev || mount(fd) !== rootMount) throw error;
+        if ((entry.mode & 0o700) !== 0o700) fs.fchmodSync(fd, (entry.mode & 0o777) | 0o700);
+        const anchor = `/proc/self/fd/${fd}`;
+        for (const child of fs.readdirSync(anchor, { withFileTypes: true })) {
+          if (!child.isDirectory()) continue;
+          const nested = fs.openSync(path.join(anchor, child.name), flags);
+          try { unseal(nested); }
+          finally { fs.closeSync(nested); }
+        }
+      };
+      unseal(root);
+      checkRoot(fs.lstatSync(directory));
+      remove();
+    } finally { fs.closeSync(root); }
+  }
+}
+
 function writeRecoveryRecord(file: string, values: object): void {
   try {
     fs.writeFileSync(file, JSON.stringify({ ...values, owner: cpuOwnerIdentity(process.pid) }), { mode: 0o600, flag: "wx" });
@@ -60,14 +102,11 @@ export function releaseGateSandbox(directory: string) {
   const allocation = allocations.get(key);
   if (!allocation) {
     if (process.env.LLV_GATE_SANDBOX_RECORD) throw new Error("gate sandbox has no local allocation record");
-    fs.rmSync(directory, { recursive: true, force: true });
+    removeSandbox(directory);
     return;
   }
   const { identity, journal } = allocation;
-  const stat = fs.lstatSync(identity.directory, { throwIfNoEntry: false });
-  if (stat && (!stat.isDirectory() || stat.isSymbolicLink() || stat.dev !== identity.dev || stat.ino !== identity.ino
-    || fs.realpathSync(identity.directory) !== identity.directory)) throw new Error("recorded gate sandbox changed identity");
-  if (stat) fs.rmSync(identity.directory, { recursive: true, force: true });
+  removeSandbox(identity.directory, identity);
   fs.appendFileSync(journal, JSON.stringify({ ...identity, released: true }) + "\n");
   allocations.delete(key);
 }
@@ -102,11 +141,7 @@ export function ownGateSandboxes() {
       const retained = new Set(rows.filter(row => row.retained === true).map(identityKey));
       for (const row of rows) {
         if (row.released || row.retained || released.has(identityKey(row)) || retained.has(identityKey(row))) continue;
-        const stat = fs.lstatSync(row.directory, { throwIfNoEntry: false });
-        if (!stat) continue;
-        if (!stat.isDirectory() || stat.isSymbolicLink() || stat.dev !== row.dev || stat.ino !== row.ino
-          || fs.realpathSync(row.directory) !== row.directory) throw new Error("recorded gate sandbox changed identity");
-        fs.rmSync(row.directory, { recursive: true, force: true });
+        removeSandbox(row.directory, row);
       }
       fs.rmSync(root, { recursive: true, force: true });
     } catch (error) {

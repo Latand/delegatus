@@ -22,12 +22,20 @@ import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
 import { DELEGATUS_COAUTHOR } from "@/lib/git/repositoryCommitIdentity";
 import { mcpHttpAccessToken, MCP_HTTP_ACCESS_HEADER } from "@/lib/mcp/httpAccess";
+import { fixtureForgeAccount, fixtureNoreply, seedForgeCommitAccount } from "@/test-helpers/forgeCommitAccount";
 
 import { FileRuntimeEventStore, type RuntimeEventStore } from "./eventStore";
 import type { RuntimeEvent } from "./engineHost";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-copilot-acp-"));
-afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
+const previousStateDir = process.env.LLV_STATE_DIR;
+process.env.LLV_STATE_DIR = path.join(sandbox, "state");
+seedForgeCommitAccount();
+afterAll(() => {
+  if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
+  else process.env.LLV_STATE_DIR = previousStateDir;
+  fs.rmSync(sandbox, { recursive: true, force: true });
+});
 
 class MemoryEventStore implements RuntimeEventStore {
   readonly events = new Map<string, RuntimeEvent[]>();
@@ -194,14 +202,14 @@ test.each(["fresh", "adopt"] as const)("Copilot %s binds repository authorship b
     const host = launch === "fresh" ? await CopilotAcpHost.start(opts) : await CopilotAcpHost.adopt(child.sessionId, opts);
     const childEnv = opts.captured.options!.env as NodeJS.ProcessEnv;
     git(["commit", "--allow-empty", "-m", "copilot repository commit"], childEnv);
-    expect(git(["log", "-1", "--format=%an%n%ae"])).toBe("Repository Fixture\nrepo-fixture@example.invalid");
+    expect(git(["log", "-1", "--format=%an%n%ae"])).toBe("Repository Fixture\n" + fixtureNoreply);
     const message = git(["log", "-1", "--format=%B"]);
     expect(message.split("\n").filter(line => line === DELEGATUS_COAUTHOR)).toHaveLength(1);
     await host.release();
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test("Copilot retains machine fallback without repository identity and the configured machine privacy policy", async () => {
+test("Copilot uses the owner login when Git has no name and preserves standalone machine privacy policy", async () => {
   const root = fs.mkdtempSync(path.join(sandbox, "copilot-machine-policy-"));
   const repo = path.join(root, "repo"); fs.mkdirSync(repo);
   const git = (args: string[], env: NodeJS.ProcessEnv = process.env) => {
@@ -217,9 +225,9 @@ test("Copilot retains machine fallback without repository identity and the confi
     const opts = options(child, { cwd: repo, env });
     const host = await CopilotAcpHost.start(opts);
     let childEnv = opts.captured.options!.env as NodeJS.ProcessEnv;
-    expect(childEnv.GIT_AUTHOR_NAME).toBe(controllerCommitIdentityEnv().GIT_AUTHOR_NAME);
+    expect(childEnv.GIT_AUTHOR_NAME).toBe(fixtureForgeAccount.login);
     git(["commit", "--allow-empty", "-m", "fallback commit"], childEnv);
-    expect(git(["log", "-1", "--format=%an"])).toBe(controllerCommitIdentityEnv().GIT_AUTHOR_NAME!);
+    expect(git(["log", "-1", "--format=%an%n%ae"])).toBe([fixtureForgeAccount.login, fixtureNoreply].join("\n"));
     expect(git(["log", "-1", "--format=%B"]).split("\n").filter(line => line === DELEGATUS_COAUTHOR)).toHaveLength(1);
     await host.release();
 

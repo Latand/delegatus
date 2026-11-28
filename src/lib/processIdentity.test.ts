@@ -73,6 +73,18 @@ test("an absent pid is proven dead", () => {
   expect(processIdentityProvenDead(identity, probe({ pidAlive: () => false }))).toBeTrue();
 });
 
+test("pid absence and reuse still expire identities without a boot epoch", () => {
+  for (const identity of [
+    { pid: 42, startIdentity: "42:start" },
+    { pid: 42, startIdentity: "42:start", bootEpoch: null },
+  ]) {
+    expect(processIdentityStatus(identity, probe({ pidAlive: () => false }))).toBe("dead");
+    expect(processIdentityStatus(identity, probe({ processIdentity: () => "42:reused" }))).toBe("dead");
+  }
+  expect(processIdentityStatus({ pid: 42, startIdentity: "42:start", bootEpoch: "boot-current" },
+    probe({ bootEpoch: () => null, pidAlive: () => false }))).toBe("dead");
+});
+
 test("capture records pid, start token, and boot epoch together", () => {
   expect(captureProcessIdentity(42, probe())).toEqual({
     pid: 42,

@@ -745,7 +745,7 @@ test.each(["completed", "open"] as const)("a held restart proposal waits for led
       expect(stops).toBe(ending === "completed" ? 0 : 1);
       if (ending === "completed") {
         expect(store.list()).toEqual([]);
-        expect(defaultPipelinePorts().conversationRestartCut!(conversationId)).toBeNull();
+        expect(await defaultPipelinePorts().conversationRestartCut!(conversationId)).toBeNull();
         /* The host's completion is authoritative before its rollout echo. */
         fs.appendFileSync(transcriptPath, JSON.stringify({
           type: "event_msg", timestamp: new Date().toISOString(), payload: { type: "task_complete", turn_id: "T1" },

@@ -494,6 +494,19 @@ const carrierColumns = {
   cwd: "json_extract(value_json,'$.generations[#-1].launchProfile.cwd')",
 };
 const carrierSelect = Object.entries(carrierColumns).map(([name, expr]) => `${expr} AS ${name}`).join(",");
+const receiptState = "json_extract(value_json,'$.state')";
+const launchSetupRows = `collection='receipts' AND (
+  (COALESCE(${receiptState},'') NOT IN ('completed','failed','conflicted')
+    AND json_extract(value_json,'$.admissionOwner') IS NOT NULL)
+  OR (json_extract(value_json,'$.key') IS NULL
+    AND json_extract(value_json,'$.hostSetup.cleanupConfirmed') IS NOT 1
+    AND (json_extract(value_json,'$.hostSetup.phase')='executing'
+      OR json_extract(value_json,'$.hostSetup.execPermitGranted')=1
+      OR json_array_length(value_json,'$.hostSetup.processes')>0))
+)`;
+const registryLaunchSetupIndexes = declaredIndexes([
+  `CREATE INDEX IF NOT EXISTS registry_launch_setup_by_key_v2 ON registry_rows(row_key) WHERE ${launchSetupRows}`,
+]);
 const registryRowIndexes = declaredIndexes([
   `CREATE INDEX IF NOT EXISTS registry_busy_carriers ON registry_rows(collection,${carrierTurn},row_order,row_key,${Object.values(carrierColumns).join(",")}) WHERE ${busyCarrierRows}`,
   "CREATE INDEX IF NOT EXISTS registry_rows_collection_order ON registry_rows(collection, row_order)",
@@ -1983,6 +1996,9 @@ export class SqliteAgentRegistryStore {
           PRIMARY KEY(collection, row_key)
         );
         `);
+        // The current connection may reopen a database restored from a
+        // predecessor that had no launch-setup index.
+        if (options.allowArchiveMigration !== false) registryLaunchSetupIndexes.install(db, path.dirname(filename));
         // A restored pre-upgrade database can arrive under a held connection.
         // Install the journal on each connection, including one opened after a
         // file replacement, before any mutation can use it.
@@ -5368,6 +5384,16 @@ export class SqliteAgentRegistryStore {
   pipelineSpawnHistoryKeys(base: string): string[] {
     const { sql, values } = pipelineSpawnHistorySelection(base);
     return this.db.query<{ row_key: string }, string[]>(sql).all(...values).map(row => row.row_key);
+  }
+
+  /** Current hot and archived receipts share this index. Callers limit keys
+      before loading bodies, and cursor seeks remain ordered by receipt key. */
+  launchSetupKeys(selection: { after: string; limit: number }): string[] {
+    const index = this.options.readOnly || this.options.allowArchiveMigration === false ? "" : " INDEXED BY registry_launch_setup_by_key_v2";
+    return this.db.query<{ row_key: string }, (string | number)[]>(`SELECT row_key
+      FROM registry_rows${index} WHERE ${launchSetupRows}
+      AND row_key>? ORDER BY row_key LIMIT ?`)
+      .all(selection.after, selection.limit).map(row => row.row_key);
   }
 
   /** Diagnostic attribution needs one client id, including a conserving

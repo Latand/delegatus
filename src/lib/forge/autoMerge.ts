@@ -1,6 +1,7 @@
 import { proactiveResultReview } from "@/lib/tasks/proactiveLane";
 import { assertProactivePipelineExecution, proactivePipelineExecutionError, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
+import { COMMIT_ACCOUNT_REFUSAL, ownerNoreplyAddress, resolveForgeCommitAccount } from "@/lib/git/forgeCommitAccount";
 import { indexMergeSuccessors, mergeWithdrawalReason, mergeWithdrawalNeeded, withdrawPipelineMerge } from "@/lib/pipelines/mergeSuccessor";
 import { openRevertPr, readPostMergeChecks, sweepPostMerge } from "./postMerge";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -47,7 +48,7 @@ import { githubRepositoryOfRemote } from "./workLinks";
  *
  * A PR behind its base (reported BEHIND or proven after bounded UNKNOWN)
  * is updated by the runner itself: the
- * merge of the base tip into the PR head, under the machine identity, pushed
+ * merge of the base tip into the PR head, under the owner's noreply identity, pushed
  * as a fast-forward (docs/design/merge-queue-refresh-capacity.md §5).
  * A conflict, a BEHIND PR the runner cannot update, or a red check on an
  * outdated base starts visible refresh work
@@ -687,10 +688,13 @@ async function machineRefreshParent(merge: PipelineMerge, head: string, ports: A
     "{parents: [.parents[].sha], identity: .commit.committer}"]);
   const commit = JSON.parse(raw) as { parents?: unknown; identity?: { name?: unknown; email?: unknown } };
   const identity = controllerCommitIdentityEnv();
+  const owner = await resolveForgeCommitAccount();
+  const ownerEmail = owner ? ownerNoreplyAddress(owner) : null;
   const parents = Array.isArray(commit.parents) ? commit.parents : [];
   return parents.length === 2 && parents[0] === merge.chain.at(-1)
     && typeof parents[1] === "string" && /^[0-9a-f]{40}$/i.test(parents[1])
-    && commit.identity?.name === identity.GIT_COMMITTER_NAME && commit.identity?.email === identity.GIT_COMMITTER_EMAIL
+    && ((commit.identity?.name === identity.GIT_COMMITTER_NAME && commit.identity?.email === identity.GIT_COMMITTER_EMAIL)
+      || (ownerEmail !== null && commit.identity?.email === ownerEmail))
     ? parents[1] : null;
 }
 
@@ -812,6 +816,10 @@ async function updateBehindBase(read: Pipeline, merge: PipelineMerge, view: Pull
   if (before) return wait(before);
   const plan = await updateBase.plan({ ...target, head: view.headRefOid, base, at: iso(now) });
   if (plan.kind === "conflict") return false;
+  if (plan.kind === "refused") {
+    await commit(ports, read, live => { bookkeeping(live); block(live, plan.reason, now); });
+    return true;
+  }
   // The head already contains the base: GitHub has not caught up yet.
   if (plan.kind === "current") {
     if (!failedBase) return wait(null);
@@ -851,8 +859,8 @@ async function updateBehindBase(read: Pipeline, merge: PipelineMerge, view: Pull
 
 /** A recorded update whose commit has not reached the PR: recreate it from
     the same inputs and push it again. A commit that cannot be recreated
-    exactly, or a delivery the lane no longer owns, drops the entry; the next
-    read plans afresh. False when it was dropped. */
+    exactly, or a delivery the lane no longer owns, drops the entry. An
+    identity refusal blocks with a reason. False when the entry was dropped. */
 async function replayBaseUpdate(read: Pipeline, merge: PipelineMerge, update: PipelineMerge["updates"][number], view: PullRequestView, ports: AutoMergePorts, now: number): Promise<boolean> {
   const target = baseUpdateTarget(read);
   const baseBranch = await refreshBaseBranch(read, view.baseRefName, ports);
@@ -866,9 +874,13 @@ async function replayBaseUpdate(read: Pipeline, merge: PipelineMerge, update: Pi
   if (!target || plan?.kind !== "commit" || plan.commit !== update.commit) {
     await commit(ports, read, live => {
       live.updates = live.updates.filter(entry => entry.head !== null || entry.commit !== update.commit);
+      live.headSeenAt = null;
+      if (plan?.kind === "refused") {
+        block(live, plan.reason, now);
+        return;
+      }
       live.state = "checking";
       live.reason = null;
-      live.headSeenAt = null;
       live.nextReadAt = iso(now);
     });
     return false;
@@ -1284,6 +1296,13 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
     return;
   }
   const method = await mergeMethod(merge.repository, ports).catch(() => "squash" as const);
+  const commitAccount = await resolveForgeCommitAccount({ forceRefresh: true });
+  if (!commitAccount || method === "rebase") {
+    const reason = !commitAccount ? COMMIT_ACCOUNT_REFUSAL
+      : "GitHub rebase merges replace the committer identity; automatic merge is refused for this repository";
+    await commit(ports, read, live => { bookkeeping(live); block(live, reason, now); });
+    return;
+  }
   let reserved = false;
   const recorded = await commitReviewed(ports, read, (live) => {
     bookkeeping(live);
@@ -1337,7 +1356,10 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
       }
     };
     beforeDispatch();
-    await ports.write(["pr", "merge", String(merge.prNumber), "--repo", merge.repository, `--${method}`, "--match-head-commit", view.headRefOid], merge.repository,
+    const args = ["pr", "merge", String(merge.prNumber), "--repo", merge.repository, `--${method}`];
+    if (!isForgeAppRepository(merge.repository)) args.push("--author-email", ownerNoreplyAddress(commitAccount));
+    args.push("--match-head-commit", view.headRefOid);
+    await ports.write(args, merge.repository,
       () => { beforeDispatch(); dispatched = true; });
   } catch (error) {
     /* No App credential: the refusal is the whole reason, in its own words. */

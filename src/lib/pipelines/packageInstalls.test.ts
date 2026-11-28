@@ -1,3 +1,4 @@
+import { fixtureNoreply, seedForgeCommitAccount } from "@/test-helpers/forgeCommitAccount";
 import { expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -8,6 +9,7 @@ import type { Pipeline } from "./types";
 import type { ExecPort } from "@/lib/workflows/provision";
 
 async function fixture() {
+  seedForgeCommitAccount();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "package-installs-"));
   const repo = path.join(root, "source"), lane = path.join(root, "lane");
   fs.mkdirSync(repo);
@@ -52,7 +54,7 @@ test("package installs: controller commits use repository identity with tool att
     f.subject.worktreeDir = f.repo;
     fs.writeFileSync(path.join(f.repo, "change.txt"), "stage change\n");
     expect(await commitPipelineStage(f.subject, "build", true, f.exec)).toMatchObject({ ok: true });
-    expect(await f.git("log", "-1", "--format=%an")).toBe("Repository Fixture");
+    expect(await f.git("log", "-1", "--format=%an%n%ae%n%ce")).toBe(["Repository Fixture", fixtureNoreply, fixtureNoreply].join("\n"));
     expect(await f.git("log", "-1", "--format=%B")).toContain("Co-Authored-By: Delegatus <" + ["noreply", "delegatus.invalid"].join("@") + ">");
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });

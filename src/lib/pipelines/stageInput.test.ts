@@ -1,3 +1,4 @@
+import { seedForgeCommitAccount } from "@/test-helpers/forgeCommitAccount";
 import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -17,6 +18,7 @@ import { realExec } from "@/lib/workflows/provision";
 import * as provision from "@/lib/workflows/provision";
 
 const artifactState = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-inputs-"));
+seedForgeCommitAccount(artifactState);
 const laneRoot = path.join(artifactState, "worktree");
 fs.mkdirSync(laneRoot);
 const git = (...args: string[]) => {
