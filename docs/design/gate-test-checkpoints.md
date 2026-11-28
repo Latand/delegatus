@@ -4,20 +4,19 @@ A touched-test selection can exceed its aggregate execution budget after many
 individual files have passed. Retrying the same selection previously repeated
 those files before reaching the unfinished work.
 
-The local comparator now retains complete green head files in the existing
-bounded gate receipt store. A retry reads those receipts and executes the
-remaining files. The interrupted invocation still fails. Its result never
-becomes a passing receipt for the whole selection.
+The local comparator records each complete file sample in the bounded gate
+receipt store. A retry reuses matching head and baseline evidence and executes
+the remaining files. Only a completed comparison can pass the whole selection.
 
 ## Input and completion boundaries
 
-- Reuse requires the same clean worktree, commit, tree, branch, comparison base,
+- Head file reuse requires the same clean worktree, commit, tree and branch,
   full working inputs (including ignored files), installed dependency bytes,
-  gate and runtime bytes, Git configuration, execution environment, selection
-  and individual file limit. A longer phase or publication deadline keeps
-  that file's receipt valid. The existing gate input snapshot supplies the
-  source and tool fingerprints. The head key also binds the physical checkout
-  directory.
+  gate and runtime bytes, Git configuration, execution environment and
+  individual file limit. The head key also binds the physical checkout
+  directory. Each worker receives one file. Changing the other selected files,
+  the comparison base or the phase allowance leaves that head sample valid.
+  A comparison step still binds the base and full selection.
 - Whole-step receipts bind explicit `LLV_GATE_CHECK_ENV` values, including
   names that match a transport prefix. The local hook supplies fresh isolation
   directories, so caller values for those directories do not key its receipts.
@@ -39,8 +38,10 @@ becomes a passing receipt for the whole selection.
   The Linux worker entry issues fresh process and supervisor IDs for each
   file, so the parent invocation's IDs do not key these checkpoints.
 - Dirty trees, index flags and unreadable input identities receive fresh runs.
-- A file must have at least one passing assertion, no failed assertion or
-  diagnostic, a complete report and successful owned cleanup.
+- A head sample requires a complete report with assertions and confirmed owned
+  cleanup. A head sample with failed assertions is reusable while the
+  comparison is unfinished. A completed verdict retires it so a later
+  invocation can observe the failures afresh.
 - Reusable files use Linux service cgroup cleanup. The portable fallback is
   best effort; its samples never become head checkpoints. Other platforms
   retain their existing fresh-file execution and whole-step receipt rules.
@@ -49,10 +50,12 @@ becomes a passing receipt for the whole selection.
   socket, its D-Bus instance and its systemd manager's unique connection must
   be identifiable. The route and launcher/probe executable bytes are part of
   the key. An unknown manager leaves the head files cold.
-- Incomplete, timed-out and failed files run again. Baseline evidence retains
-  its own confirmation rules. Diagnostic and flaky confirmation rounds remain
-  fresh and never create head checkpoints.
-- The comparator seals each green receipt after its file runner has confirmed
+- A baseline sample binds the base commit, file, assertion filter, environment,
+  tools, dependency inputs and file allowance. A retry of the same verified
+  candidate can reuse its first complete baseline sample. Sharing that sample
+  with other candidates still requires two matching independent observations.
+  Diagnostic and flaky confirmation rounds take fresh samples.
+- The comparator seals each receipt after its file runner has confirmed
   owned cleanup, the file sandbox has been removed and the input snapshot
   still matches. It writes eligible receipts before reporting file completion,
   so a hook deadline can stop the comparator while leaving earlier receipts
@@ -60,17 +63,21 @@ becomes a passing receipt for the whole selection.
   require a final input check.
 
 The comparator snapshots inputs before selecting reusable results and again
-before writing each new green receipt. Single-file selections keep whole-step
-reuse and skip these snapshots.
-The head-file cache limits the namespace to 8192 entries and 256 MiB, limits
-each record to 1 MiB, and treats malformed or unavailable records as misses.
-Head-file receipts expire after 24 hours. No additional service or timer runs.
+before writing each new head receipt. An owned hook does this even for a
+single file, which can reach its deadline during comparison.
+The head samples, baseline samples and deadline hints each use a namespace
+limited to 8192 entries and 256 MiB. Records are limited to 1 MiB, expire after
+24 hours and are skipped when malformed or unavailable.
 
 Head and baseline phases get 15 execution minutes for selections of up to
 30 files and one extra minute for every additional four files, rounded up.
 The comparison shares a 40-minute ceiling across phases, including baseline
 setup and confirmations. Each file retains its five-minute limit.
-A phase cutoff leaves its unfinished file without a comparison verdict.
+A file deadline with confirmed owned cleanup leaves the comparison without a
+verdict. A matching retry runs the unfinished files in that phase one at a
+time, within the existing budget. The hook returns capacity status 75 and
+allows independent checks to record passes. An observed assertion refusal or
+failed cleanup retains its blocking result.
 The publisher gives retries of the same accepted head one fixed 45-minute
 push budget after a recorded deadline, including one minute for the pack.
 CPU admission is credited separately. A persistent assertion failure still
@@ -86,7 +93,10 @@ comparison deadlines can expire, or the remaining time can be too short for
 a full file and its cleanup. The next invocation runs only the remaining four
 files. The parent clock controls the simulated deadline, and the workers keep
 their real clocks and execution bounds. A hung file reaches its individual
-limit on both the initial run and the retry that reuses a green peer.
+limit on both the initial run and the serial retry that reuses a green peer.
+The baseline control uses a port-zero rendezvous and a peer deadline. After
+restart it reuses the completed head and base samples, then refreshes the
+baseline when its commit changes.
 `scripts/local-gate.checkpoints.hook.test.ts` expires the native pre-push hook
 after one file completes while another is still running. It checks that the services and directories
 were removed, the retry runs only the interrupted file, and a manager change

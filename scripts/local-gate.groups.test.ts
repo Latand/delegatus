@@ -41,6 +41,19 @@ test("a group's steps run at once and report each verdict", async () => {
   expect(runner.lines[0]).toBe(`pre-push: ${NATIVE_GROUP}`);
   for (const name of ["a", "b", "c"]) expect(runner.lines).toContainEqual(expect.stringMatching(new RegExp(`^pre-push: ${name}: passed in \\d+ s$`)));
 }, 20_000);
+
+test("a comparator deadline reports capacity and lets independent checks record their passes", async () => {
+  const marker = "touched-tests: no verdict: head: fixture.test.ts: file budget exhausted; nothing was judged";
+  const runner = stepRunner(soon(60_000), () => ({
+    "touched tests": `echo '${marker}'; exit 75`,
+    types: "sleep 1; exit 0",
+  }));
+  const error = await runner.run([grouped("touched tests"), grouped("types")]);
+  expect(endingOf("pre-push", error).code).toBe(75);
+  expect(runner.lines).toContain(marker);
+  expect(runner.lines).toContainEqual(expect.stringMatching(/^pre-push: types: passed in /));
+  expect(runner.lines.join("\n")).not.toContain("touched tests: failed");
+});
 test("a caller's deadline leaves a deferrable check to the hosted job and says so; a decisive one that finished keeps its verdict", async () => {
   const runner = stepRunner(soon(2_500), () => ({ engine: "sleep 0.5", tail: "sleep 60" }));
   const started = performance.now();

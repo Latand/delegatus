@@ -211,6 +211,11 @@ export class NoVerdict extends Error {
     super(`${NO_VERDICT_PREFIX}${budgetSeconds(deadline)} s: "${step.name}" ${what}; nothing was judged`);
   }
 }
+class ComparatorNoVerdict extends Error {
+  constructor(step: string) { super(`"${step}" did not reach a verdict within its execution budget`); }
+}
+const isNoVerdict = (error: unknown): error is NoVerdict | ComparatorNoVerdict =>
+  error instanceof NoVerdict || error instanceof ComparatorNoVerdict;
 /** A stopped step whose processes outlived the stop: the push fails, since a
     retry would start beside them. */
 export class ContainmentFailed extends Error {
@@ -458,7 +463,7 @@ const isOutcome = (value: Prepared | Outcome): value is Outcome => "stopped" in 
 interface PassRecord { at: string }
 export interface StepPasses { reused(step: Step, until?: number): boolean; passed(step: Step): void }
 /** The bytes and configuration every local check actually consumes. */
-export function gateInputSnapshot(root: string, base: string, steps: readonly Step[], env: NodeJS.ProcessEnv = process.env) {
+export function gateInputSnapshot(root: string, base: string | null, steps: readonly Step[], env: NodeJS.ProcessEnv = process.env) {
   const checkEnv = checkEnvironment(env);
   // The caller's paths never reach a local step. Its executor allocates them.
   for (const key of ISOLATED_DIRECTORY_KEYS) delete checkEnv[key];
@@ -471,7 +476,7 @@ export function gateInputSnapshot(root: string, base: string, steps: readonly St
       if (git(root, ["ls-files", "-v"]).split("\n").some(line => /^[a-zS] /.test(line))) { unavailableReason = "worktree index flags"; return; }
       const status = git(root, ["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"]);
       if (status) { unavailableReason = "dirty worktree"; return; }
-      if (git(root, ["merge-base", "HEAD", "origin/main"]) !== base) { unavailableReason = "base changed"; return; }
+      if (base !== null && git(root, ["merge-base", "HEAD", "origin/main"]) !== base) { unavailableReason = "base changed"; return; }
       const head = git(root, ["rev-parse", "HEAD"]), tree = git(root, ["rev-parse", "HEAD^{tree}"]);
       const runtimeCache = path.join(env.XDG_CACHE_HOME ?? path.join(homedir(), ".cache"), "delegatus-gate");
       const pins = steps.filter(step => step.pinned).length && existsSync(path.join(root, "Dockerfile"))
@@ -602,6 +607,12 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
           && !publicationDeadlineOnly(`${readFileSync(destination, "utf8")}\nowned runner: deadline expired`)) {
           return { ...outcome, stopped: false, cancelled: false, code: 1 };
         }
+        if (outcome.code === 75 && comparableStep(step) && destination && existsSync(destination)) {
+          const output = readFileSync(destination, "utf8");
+          if (/^touched-tests: no verdict: /m.test(output) && publicationDeadlineOnly(output)) {
+            throw new ComparatorNoVerdict(step.name);
+          }
+        }
         return outcome;
       };
       try {
@@ -650,10 +661,13 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
         if (options.passes?.reused(step, until + cpuInheritedWaitMs(budget.env))) continue;
         const ready = await prepared(prepare, step, until, options.cancel, budget.env);
         const log = mode === "pre-push" ? path.join(logDir, `${step.name.replace(/[^\w.-]+/g, "-")}.log`) : undefined;
-        const outcome = isOutcome(ready) ? ready : await runPrepared(step, ready, log, options.cancel);
-        if (log && existsSync(log)) {
-          const output = readFileSync(log, "utf8").trimEnd();
-          if (output) say(output);
+        let outcome: Outcome;
+        try { outcome = isOutcome(ready) ? ready : await runPrepared(step, ready, log, options.cancel); }
+        finally {
+          if (log && existsSync(log)) {
+            const output = readFileSync(log, "utf8").trimEnd();
+            if (output) say(output);
+          }
         }
         if (outcome.cancelled) {
           if (outcome.leaked) throw new ContainmentFailed(`"${step.name}"`, outcome.leaked, true);
@@ -696,7 +710,13 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
             if (!outcome.stopped && !outcome.cancelled && outcome.code === 0) options.passes?.passed(member);
             if (!outcome.stopped) say(`${mode}: ${member.name}: passed in ${seconds(Date.now() - started)}${taskPeak ? `; ${taskPeak}` : ""}`);
             return outcome;
-          } catch (error) { errors.set(at, error); cancel.abort(); return null; }
+          } catch (error) {
+            errors.set(at, error);
+            // A comparator that has yielded its owned files leaves its peers
+            // free to finish and record their passes within the same deadline.
+            if (!(error instanceof ComparatorNoVerdict)) cancel.abort();
+            return null;
+          }
         })();
         if (member.lane) lanes.set(member.lane, run);
         return run;
@@ -707,9 +727,9 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
         if (outcome?.leaked) throw new ContainmentFailed(`"${members[at]!.member.name}"`, outcome.leaked, outcome.cancelled);
       }
       if (errors.size) {
-        const [first, error] = [...errors].find(([, error]) => !(error instanceof NoVerdict)) ?? [...errors][0]!, culprit = members[first]!.member.name;
+        const [first, error] = [...errors].find(([, error]) => !isNoVerdict(error)) ?? [...errors][0]!, culprit = members[first]!.member.name;
         const reason = error instanceof Error ? error.message : String(error);
-        if (!(error instanceof NoVerdict)) say(`${mode}: ${culprit}: failed (${reason})`);
+        if (!isNoVerdict(error)) say(`${mode}: ${culprit}: failed (${reason})`);
         if (existsSync(members[first]!.log)) say(readFileSync(members[first]!.log, "utf8").trimEnd());
         let leak: ContainmentFailed | undefined;
         members.forEach(({ member }, at) => {
@@ -720,7 +740,7 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
         });
         if (leak) throw leak;
         if (error instanceof ContainmentFailed) throw error;
-        if (error instanceof NoVerdict) throw error;
+        if (isNoVerdict(error)) throw error;
         throw new Error(`"${culprit}" failed: ${reason}`);
       }
     }
@@ -732,7 +752,7 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
 /** The hook's last line and exit code for what stopped it: a missing verdict
     exits 75, anything else fails the gate. */
 export function endingOf(mode: Mode, error: unknown): { line: string; code: number } {
-  if (error instanceof NoVerdict) return { line: `${mode}: ${error.message}`, code: 75 };
+  if (isNoVerdict(error)) return { line: `${mode}: ${error.message}`, code: 75 };
   return { line: `${mode}: ${error instanceof Error ? error.message : error}; gate failed`, code: 1 };
 }
 

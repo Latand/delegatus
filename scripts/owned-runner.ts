@@ -184,7 +184,10 @@ if (args[0] === "--namespace-guardian") {
     if (refusal || !parentAlive()) cancel(refusal === "deadline" ? 124 : 137);
   }, 100);
   process.on("SIGTERM", () => cancel(143)); process.on("SIGINT", () => cancel(130, "SIGINT"));
-  const stopTimer = cpuBudgetTimer(timeoutMs, budget.elapsed, () => cancel(124));
+  const stopTimer = cpuBudgetTimer(timeoutMs, budget.elapsed, () => {
+    console.error("owned runner: deadline expired");
+    cancel(124);
+  });
   const code = await close;
   await cleanup;
   clearInterval(parentTimer); stopTimer(); budget.close();
@@ -280,6 +283,9 @@ if (args[0] === "--namespace-guardian") {
   let commandExit: number | null = null, commandSignal: string | null = null;
   let cancellation: ProducerReport["cancellation"] = null;
   let settled = false;
+  let stopRequested = false;
+  const ownerAlive = (owner: ProcessIdentity) => processIdentityStatus(owner) === "alive" && !procBackend.processExited(owner.pid);
+  const ownerLost = () => !ownerAlive(launch.owner) || (launch.parent !== undefined && !ownerAlive(launch.parent));
   let stopExecutionTimer = () => {};
   const finish = async (code: number) => {
     if (settled) return;
@@ -292,10 +298,10 @@ if (args[0] === "--namespace-guardian") {
     const survivors = await serviceSurvivors(members, async () => {
       try { await broker.close(); } finally { budget.close(); }
     });
-    // A deadline ends the main process before systemd drains the cgroup.
-    // Its pending children are expected; the waiting client returns only after
-    // that cleanup. A normal exit with children still refuses the check.
-    if (survivors.length) console.error(`owned runner: ${code === 124 ? "processes awaiting deadline cleanup" : "surviving owned processes"}: ${survivors.map(member => `${member.pid} (${member.startIdentity})`).join(", ")}`);
+    // During an owned stop systemd still has to drain this cgroup. A child
+    // exit and a stop signal can reach this supervisor in either order.
+    const pendingCleanup = code === 124 || ([130, 137, 143].includes(code) && (stopRequested || ownerLost()));
+    if (survivors.length) console.error(`owned runner: ${pendingCleanup ? "processes awaiting stop cleanup" : "surviving owned processes"}: ${survivors.map(member => `${member.pid} (${member.startIdentity})`).join(", ")}`);
     if ((commandExit !== null || commandSignal !== null) && survivors.length === 0) writeCompletionReceipt();
     // Exit of the service main process invokes systemd's control-group TERM,
     // followed by KILL after TimeoutStopSec, including detached descendants.
@@ -310,10 +316,12 @@ if (args[0] === "--namespace-guardian") {
     catch (error) { console.error(`GATE_TASK_OBSERVATION_FAILED: ${launch.unit}: ${(error as Error).message}`); void finish(1); }
   }, 50);
   setInterval(() => {
-    const alive = (owner: ProcessIdentity) => processIdentityStatus(owner) === "alive" && !procBackend.processExited(owner.pid);
     const refusal = recordedSupervisorRefusal(recorded);
     if (refusal) cancellation ??= supervisorCancellation(refusal);
-    if (refusal || !alive(launch.owner) || (launch.parent && !alive(launch.parent))) void finish(refusal === "deadline" ? 124 : 137);
+    if (refusal || ownerLost()) {
+      stopRequested = true;
+      void finish(refusal === "deadline" ? 124 : 137);
+    }
   }, 100);
   stopExecutionTimer = cpuBudgetTimer(launch.timeoutMs, budget.elapsed, () => { console.error("owned runner: deadline expired"); void finish(124); });
   // A kernel watchdog bounds a hung supervisor while its execution timer
@@ -360,8 +368,8 @@ if (args[0] === "--namespace-guardian") {
     }
   }
   notify();
-  process.on("SIGTERM", () => { void finish(143); });
-  process.on("SIGINT", () => { void finish(130); });
+  process.on("SIGTERM", () => { stopRequested = true; void finish(143); });
+  process.on("SIGINT", () => { stopRequested = true; void finish(130); });
 } else {
   if (!args.length) throw new Error("usage: owned-runner.ts command [args...]");
   const sandbox = signalSandboxContext();
@@ -443,11 +451,19 @@ if (args[0] === "--namespace-guardian") {
     writeEnvelope(path.join(path.dirname(filename), `${report.kind}.json`), finalReport);
     writeEnvelope(filename, finalReport);
   }
-  if (!taskError && fs.existsSync(taskFile)) {
+  if (!taskError && tasks) {
     try {
-      const { cgroup } = JSON.parse(fs.readFileSync(taskFile, "utf8")) as { cgroup?: string };
-      const events = cgroup && path.join("/sys/fs/cgroup", cgroup, "cgroup.events");
-      if (events && fs.existsSync(events) && /^populated 0$/m.test(fs.readFileSync(events, "utf8"))) writeCompletionReceipt();
+      // --wait returned after the stop job. --collect can already have
+      // removed the exact cgroup observed in sampleTasks. An unreadable
+      // group or a missing events file in an existing group proves nothing.
+      const events = path.join(tasks.directory, "cgroup.events");
+      let empty: boolean;
+      try { empty = /^populated 0$/m.test(fs.readFileSync(events, "utf8")); }
+      catch (error) {
+        empty = code === 124 && (error as NodeJS.ErrnoException).code === "ENOENT"
+          && fs.statSync(tasks.directory, { throwIfNoEntry: false }) === undefined;
+      }
+      if (empty) writeCompletionReceipt();
     } catch { /* A missing/invalid cgroup observation cannot authorize cleanup. */ }
   }
   fs.rmSync(directory, { recursive: true, force: true });

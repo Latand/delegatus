@@ -27,7 +27,8 @@ test("Cloud file checkpoints require the owned runner's matching cleanup receipt
   expect(confirmedFileCleanup({ ...cloud, receipt: undefined })).toBeFalse();
   expect(confirmedFileCleanup({ ...cloud, receipt: "run-token", survivors: "owned child" })).toBeFalse();
   expect(confirmedFileCleanup({ ...cloud, platform: "darwin", receipt: "run-token" })).toBeFalse();
-  expect(confirmedFileCleanup({ ...cloud, exitCode: 1, receipt: "run-token" })).toBeFalse();
+  expect(confirmedFileCleanup({ ...cloud, exitCode: 1, receipt: "run-token" })).toBeTrue();
+  expect(confirmedFileCleanup({ ...cloud, exitCode: 124, receipt: "run-token" })).toBeFalse();
 });
 
 
