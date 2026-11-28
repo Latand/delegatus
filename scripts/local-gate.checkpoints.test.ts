@@ -277,6 +277,73 @@ process.exitCode = result.introduced.length ? 1 : 0;
   }
 }, 60_000);
 
+serviceTest.each(["shared", "introduced"] as const)("a remaining-budget cutoff compares a %s failure before deciding", kind => {
+  const f = fixture();
+  const files = Array.from({ length: 9 }, (_, index) => `sample-${index}.test.ts`);
+  const failedFile = files[0]!;
+  const marker = path.join(f.root, "samples.txt");
+  const source = (file: string, passes: boolean) => `
+import { test, expect } from "bun:test";
+import { appendFileSync, readFileSync } from "node:fs";
+const marker = ${JSON.stringify(marker)};
+appendFileSync(marker, ${JSON.stringify(file + "\n")});
+test("fixture contract", async () => {
+  while (readFileSync(marker, "utf8").trim().split("\\n").length < 8) await Bun.sleep(5);
+  expect(${passes}).toBe(true);
+});`;
+  for (const file of files) writeFileSync(path.join(f.repo, file), source(file, kind === "introduced" || file !== failedFile));
+  f.git("add", ...files); f.git("commit", "-m", "Set comparison baseline");
+  const base = f.git("rev-parse", "HEAD");
+  f.git("update-ref", "refs/remotes/origin/main", base);
+  writeFileSync(path.join(f.repo, failedFile), source(failedFile, false));
+  f.git("add", failedFile); f.git("commit", "--allow-empty", "-m", "Set comparison candidate");
+  const driver = path.join(f.root, "compare-cutoff.ts");
+  writeFileSync(driver, `import { touchedTests, comparatorEnding } from ${JSON.stringify(path.join(import.meta.dir, "local-gate-tests.ts"))};
+import { publicationDeadlineOnly } from ${JSON.stringify(path.join(import.meta.dir, "../src/lib/pipelines/publication.ts"))};
+import { existsSync, readFileSync } from "node:fs";
+const marker = ${JSON.stringify(marker)};
+const stops = process.argv.at(-1) === "stop";
+Object.defineProperty(performance, "now", { value: () => stops && existsSync(marker)
+  && readFileSync(marker, "utf8").trim().split("\\n").length >= 8 ? 580_000 : 0 });
+const lines: string[] = [];
+try {
+  const result = await touchedTests(${JSON.stringify(f.repo)}, ${JSON.stringify(base)}, ${JSON.stringify(files)},
+    { budgets: { fileMs: 300_000, runMs: 900_000 }, log: line => lines.push(line) });
+  process.exitCode = result.introduced.length ? 1 : 0;
+} catch (error) {
+  const ending = comparatorEnding(error);
+  lines.push(ending.line); process.exitCode = ending.code;
+}
+const output = lines.join("\\n");
+console.log(output);
+console.log("retryable=" + publicationDeadlineOnly(output));
+`);
+  const run = (mode: "stop" | "continue") => {
+    const result = spawnSync(process.execPath, [driver, mode], { cwd: f.repo,
+      env: f.env, encoding: "utf8", timeout: 30_000 });
+    return { status: result.status, output: result.stdout + result.stderr };
+  };
+  const stopped = run("stop");
+  expect(f.samples()[files.at(-1)!], stopped.output).toBeUndefined();
+  expect(stopped.output).toContain("touched-tests: baseline selected 1 files");
+  if (kind === "introduced") {
+    expect(stopped.status, stopped.output).toBe(1);
+    expect(stopped.output).toContain(`NEW ${failedFile}: fixture contract`);
+    expect(stopped.output).toContain("retryable=false");
+    return;
+  }
+  expect(stopped.status, stopped.output).toBe(75);
+  expect(stopped.output).toContain(`PRE-EXISTING ${failedFile}: fixture contract`);
+  expect(stopped.output).toContain("remaining run budget cannot fit a full file and its cleanup");
+  expect(stopped.output).toContain("retryable=true");
+  expect(stopped.output).not.toContain("NEW ");
+  const resumed = run("continue");
+  expect(resumed.status, resumed.output).toBe(0);
+  expect(resumed.output.match(/reused complete green head file/g)).toHaveLength(7);
+  expect(resumed.output).toContain(`PRE-EXISTING ${failedFile}: fixture contract`);
+  expect(f.samples()[files.at(-1)!]).toBe(1);
+}, 60_000);
+
 serviceTest.each([false, true])("a phase cutoff leaves the file incomplete (observed refusal: %s)", refused => {
   const f = fixture();
   const file = "a.test.ts";

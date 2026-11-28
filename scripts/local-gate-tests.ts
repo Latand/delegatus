@@ -868,6 +868,7 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     // timeout and interrupt its nested runner during cleanup.
     const reserveFileBudget = !!headCache && budgets.runMs > budgets.fileMs + SUPERVISOR_MARGIN_MS;
     let freshHead: TestRun;
+    let headDeadline: BudgetExhausted | undefined;
     try {
       freshHead = await runFiles(root, pending, sandbox, inherited, "head", { ...runOptions, workers, reserveFileBudget,
         onFile: headCache ? (run, cleanupConfirmed) => {
@@ -876,12 +877,11 @@ export async function touchedTests(root: string, baseRef: string, selected: read
           else inputsChanged = true;
         } : undefined });
     } catch (error) {
-      if (error instanceof BudgetExhausted && error.partial?.failures.length) {
-        const observed = error.partial.failures.map(site =>
-          `NEW ${site.file}: ${site.suite ? `${site.suite} > ` : ""}${diagnosticName(site)}`);
-        throw new Error([error.message, ...observed].join("\n"));
-      }
-      throw error;
+      if (!(error instanceof BudgetExhausted) || !error.partial?.failures.length) throw error;
+      // Completed failures still need base evidence. Judge what we can within
+      // the comparison budget and keep the interrupted selection retryable.
+      freshHead = error.partial;
+      headDeadline = error;
     }
     const head: TestRun = { failures: freshHead.failures, passed: [...reused.flatMap(run => run.passed), ...freshHead.passed],
       completed: [...reused.flatMap(run => run.completed), ...freshHead.completed], elapsedMs: freshHead.elapsedMs };
@@ -1017,6 +1017,7 @@ export async function touchedTests(root: string, baseRef: string, selected: read
       }
     }
     logTiming();
+    if (headDeadline && !comparison.introduced.length) throw headDeadline;
     log(`touched-tests: ${comparison.introduced.length} new failures, ${comparison.preexisting.length} pre-existing failures, ${comparison.fixed.length} fixed, ${comparison.absent.length} removed/skipped, ${comparison.flaky.length} flaky`);
     return comparison;
   } finally {
