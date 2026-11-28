@@ -120,6 +120,12 @@ test("the capture runs without the seat-tick monitor, and both board frames refu
   }
 });
 
+test("the README orchestrator frame requires the Needs you tab and rejects the old Decisions label", () => {
+  const shot = SHOTS.find(candidate => candidate.id === "orchestrator")!;
+  expect(shot.requiredText).toContain("it waits in Needs you with two related questions");
+  expect(shot.absentText).toContain("Decisions");
+});
+
 test("the complete README capture seed finishes in a fresh process and private state", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "readme-seed-test-"));
   const env = buildCaptureEnvironment(root);

@@ -94,7 +94,7 @@ function claudeConversations(dirs: Record<DemoProject, string>): Conversation[] 
         { user: "Take the open harbor-api work: idempotent refunds first, then the webhook retries and the key rotation. The ledger move waits for finance." },
         { say: "On it. I opened a pipeline for **Idempotent refunds** (Build, Review, Verify) and started the webhook retries and the key rotation beside it. The ledger task waits until finance answers.\n\nI'll report each stage as it lands, and bring you any decision the spec leaves open." },
         { user: "Where are the retries and refunds now?" },
-        { say: "**Back off webhook retries** stopped on a choice the spec leaves open: how long a failed delivery keeps retrying. That one is yours, so it waits in Decisions with two related questions, and I sent it to Telegram.\n\n**Idempotent refunds** is still in Build; I'll report when it reaches Review." },
+        { say: "**Back off webhook retries** stopped on a choice the spec leaves open: how long a failed delivery keeps retrying. That one is yours, so it waits in Needs you with two related questions, and I sent it to Telegram.\n\n**Idempotent refunds** is still in Build; I'll report when it reaches Review." },
       ],
     },
     {
@@ -710,7 +710,7 @@ export async function seedDemoOrchestrator(layout: DemoLayout & { files: Record<
      decide it hands it on as a decision form, which is then the operator's
      only row for it. Seeded as already handed on: the seat owes no wake for
      it during the capture (a wake would resume the seat in a pane, a stray
-     card), and the form waits in Decisions, sent to Telegram. The form is the
+     card), and the form waits in Needs you, sent to Telegram. The form is the
      task's own (a task form asks three to seven questions), so the card is
      the one that needs the operator: it counts in its column and comes first
      on the phone. */
