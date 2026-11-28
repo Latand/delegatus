@@ -406,7 +406,11 @@ export const SHOTS: ReadmeShot[] = [
     id: "card-menu",
     subjects: ['[role="menu"]'],
     target: { kind: "project", project: "harbor-api" },
-    viewport: WIDE,
+    /* The menu hangs from the card's ⋯ over the cards under it and is 300 px
+       wide, so In progress has to be wider than the longest title or waiting
+       line plus the menu for those lines to stay readable beside it. Its
+       track grows with the screen. */
+    viewport: { width: 2560, height: WIDE.height },
     /* The priority hints («Top of the Inbox») belong to an Inbox card; this card is assigned, so its menu shows the three priorities as bare segments. */
     requiredText: ["Idempotent refunds", "Inbox", "Done", "High", "Normal", "Low", "Appearance", "Pipeline actions", "keeps working"],
     absentText: ["tmux", "Untitled task", "resume ·", "Top of the Inbox", "Bottom of the Inbox"],
@@ -417,9 +421,8 @@ export const SHOTS: ReadmeShot[] = [
       await page.waitForSelector('[role="menu"]');
       await page.waitForTimeout(400);
     },
-    /* The card's column and the next one, so the menu and the cards around it
-       read at README width. */
-    crop: cropToColumns(["assigned", "blocked"]),
+    /* The card's own column: the menu and the cards beside it read at README width. */
+    crop: cropToColumns(["assigned"]),
     description: "A task card's ⋯ menu: the columns in a row, icon actions with what hiding leaves running, the priorities, and the sections that open in place.",
   },
   {

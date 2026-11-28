@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "classification": "synthetic",
   "generator": "scripts/capture-readme-media.ts",
-  "generatorSha256": "917b760e578c07d2a48d840ec30ae676c04b1cb79e6f2b7c9417d270f04514f5",
+  "generatorSha256": "7f0634901df07f4e4bf6932f7d508911759a4c5ddde56a5f19f5d229ec40436c",
   "seed": "scripts/readme-demo-state.ts",
   "seedSha256": "19650ca24e809736702ef4cf1e2f3be32e761139070b8de4404092d0d289a714",
   "command": "bun run build && bun scripts/capture-readme-media.ts",
@@ -21,14 +21,14 @@
         "height": 418
       },
       "colorScheme": "dark",
-      "rasterTiles": 17,
+      "rasterTiles": 18,
       "renderBack": {
         "worstTileMean": 4.296,
         "changedTileShare": 0,
-        "meanDifference": 0.23,
-        "ringsClipped": 0
+        "meanDifference": 0.228,
+        "ringsClipped": 1
       },
-      "sha256": "7ed023c9239d0eb0e18c9e0aa918c6f4f68812122a5cec373d2fc35f45e42e78"
+      "sha256": "3d678cc236e1cab300c3f046d3803522643dee3e58449e0a626c48cec3b58023"
     },
     {
       "path": "orchestrator.svg",
@@ -47,11 +47,11 @@
       "rasterTiles": 14,
       "renderBack": {
         "worstTileMean": 13.513,
-        "changedTileShare": 0.032,
-        "meanDifference": 0.613,
+        "changedTileShare": 0.033,
+        "meanDifference": 0.616,
         "ringsClipped": 1
       },
-      "sha256": "821a43b092af7c8f408b32fac70b26ca88acd38935b8127fa5e3cfc621255b31"
+      "sha256": "4f172eceeeb2333136212292876ceacc3e092fd7410bc3ecf65514bd8e62a35c"
     },
     {
       "path": "conversation.svg",
@@ -74,7 +74,7 @@
         "meanDifference": 0.356,
         "ringsClipped": 2
       },
-      "sha256": "ce00f16a0510c0b5a436adbe300f0f40ed2f5adbe27d5201bebec885e22ab8a6"
+      "sha256": "4d03159290efa8ab5e972f5dcd1cf20bec9795ba8169610204f353cdfc484e6a"
     },
     {
       "path": "pipeline.svg",
@@ -90,37 +90,37 @@
         "height": 920
       },
       "colorScheme": "dark",
-      "rasterTiles": 22,
+      "rasterTiles": 23,
       "renderBack": {
         "worstTileMean": 8.39,
         "changedTileShare": 0,
         "meanDifference": 0.169,
-        "ringsClipped": 0
+        "ringsClipped": 1
       },
-      "sha256": "0eb4de040ff1c53559a826c30af647fccec7fdcf6c869c4ca3a82f06c6845d09"
+      "sha256": "4b2e137f1f3e54fecf609ce32dd90898144a0d8f7968cf9a1826c70e1e672237"
     },
     {
       "path": "card-menu.svg",
       "description": "A task card's ⋯ menu: the columns in a row, icon actions with what hiding leaves running, the priorities, and the sections that open in place.",
       "viewport": {
-        "width": 1728,
+        "width": 2560,
         "height": 944
       },
       "crop": {
-        "x": 562,
+        "x": 706,
         "y": 106,
-        "width": 837,
+        "width": 936,
         "height": 418
       },
       "colorScheme": "dark",
-      "rasterTiles": 21,
+      "rasterTiles": 22,
       "renderBack": {
-        "worstTileMean": 4.934,
+        "worstTileMean": 4.588,
         "changedTileShare": 0,
-        "meanDifference": 0.299,
-        "ringsClipped": 0
+        "meanDifference": 0.282,
+        "ringsClipped": 1
       },
-      "sha256": "eeecd241e88292d3b97c65aab396abeb76fac353ccff8e7f0dcc5366613f0ae9"
+      "sha256": "f2f3cac6bc7af250adca48830734cb80c9ee6be7729cbdf399c617cae9f33697"
     },
     {
       "path": "accounts.svg",
@@ -136,14 +136,14 @@
         "height": 321
       },
       "colorScheme": "dark",
-      "rasterTiles": 19,
+      "rasterTiles": 20,
       "renderBack": {
         "worstTileMean": 2.702,
         "changedTileShare": 0,
-        "meanDifference": 0.217,
-        "ringsClipped": 0
+        "meanDifference": 0.212,
+        "ringsClipped": 1
       },
-      "sha256": "a991610644efcd14a9c5f728852f0c16cf1edad88d284d06c9c151ff4b083abf"
+      "sha256": "3447125b0e32478078c83fdbcd18b3993456d83c169ee050bd3b5c79edc5f4ac"
     },
     {
       "path": "phone-conversation.svg",
@@ -160,7 +160,7 @@
         "meanDifference": 0.752,
         "ringsClipped": 0
       },
-      "sha256": "01a7fb98ea3398b577b25c2094cd053686bf300ce0a4076510e51615beec7d12"
+      "sha256": "2796fad48f44d949205f459f3672a2a7b4edce2fc99b7cc01996789597224463"
     },
     {
       "path": "phone-board.svg",
@@ -177,7 +177,7 @@
         "meanDifference": 0.422,
         "ringsClipped": 0
       },
-      "sha256": "0e93d1cb2c697ad2382ee17d3ec5f4ef29dabb07c9bec04fca5f38c2b96410b0"
+      "sha256": "5b4c5f97dbda0e22ae29d82553dc38742c78f3dac72291262721fd92743b6793"
     }
   ]
 }
