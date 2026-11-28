@@ -37,6 +37,7 @@ import { claudeSettingsPath } from "@/lib/accounts/claude";
 import { claudeValidityFromLimitRead } from "@/lib/accounts/spawnHealth";
 import { explicitLaunchProfileSandbox, launchProfileEngineReadOnly, type LaunchProfile, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { learnedRulesForLaunchProfile, memoryStartIdentity } from "@/lib/memory/roleLaunch";
+import { confirmMemoryDelivery, type MemoryDeliveryReceipt } from "@/lib/memory/deliveryLedger";
 import { sessionOriginFor } from "@/lib/agent/pluginAllowlist";
 import { codexNativeMemoryEnabled } from "@/lib/agent/codexSpawnPolicy";
 import type { SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
@@ -2626,6 +2627,7 @@ export async function antigravityHostOptions(
   input: Pick<StructuredSpawnInput, "spec" | "account"> & Partial<Pick<StructuredSpawnInput, "receipt" | "registry">>,
   access: Pick<StructuredHostAccessMaterialization, "env" | "host">,
   initialEventCursor?: number,
+  onMemoryPrepared?: (receipt: MemoryDeliveryReceipt) => void,
 ): Promise<AntigravityAcpHostOptions> {
   const profile = input.spec.launchProfile ?? {} as LaunchProfile;
   return {
@@ -2638,7 +2640,7 @@ export async function antigravityHostOptions(
     allowAll: !launchProfileEngineReadOnly(profile) && (profile.permissionMode ?? "bypassPermissions") === "bypassPermissions",
     appendSystemPrompt: await learnedRulesForLaunchProfile(profile, input.receipt && input.registry
       ? { engine: "antigravity", ...memoryStartIdentity(input.registry, input.receipt.conversationId), cwd: input.spec.cwd, home: input.account.home, env: access.env }
-      : undefined),
+      : undefined, onMemoryPrepared),
     mcpServers: profile.mcpServers,
     ...(access.host.releaseCleanup ? { releaseCleanup: access.host.releaseCleanup } : {}),
     initialEventCursor,
@@ -2651,6 +2653,7 @@ export async function startAntigravityStructuredHost(
   input: StructuredSpawnInput,
   capability: string,
   overrides: Partial<AntigravityAcpHostOptions> = {},
+  onMemoryPrepared?: (receipt: MemoryDeliveryReceipt) => void,
 ): Promise<AntigravityAcpHost> {
   const resumeSessionId = structuredResumeSessionId(input);
   const initialEventCursor = resumeSessionId
@@ -2658,7 +2661,7 @@ export async function startAntigravityStructuredHost(
     : undefined;
   const access = await materializeAttemptAccess(input, capability);
   const options = {
-    ...(await antigravityHostOptions(input, access, initialEventCursor)),
+    ...(await antigravityHostOptions(input, access, initialEventCursor, onMemoryPrepared)),
     ...overrides,
     assertCurrent: () => assertMemoryPreparedStartCurrent(input),
   };
@@ -2675,6 +2678,7 @@ export async function claudeStructuredHostOptions(
   initialEventCursor?: number,
   validateTelegramGrant?: () => void,
   agentRole?: string | null,
+  onMemoryPrepared?: (receipt: MemoryDeliveryReceipt) => void,
 ) {
   const profile = input.spec.launchProfile ?? {} as LaunchProfile;
   const launchPaths = claudeHostLaunchPaths(input.account);
@@ -2686,7 +2690,7 @@ export async function claudeStructuredHostOptions(
     allowSubagents: profile.allowSubagents,
     operatorDecisionForms: operatorDecisionFormsRequired(agentRole, input.spec.transcript),
     cleanMemory: profile.cleanMemory === true,
-    appendSystemPrompt: await learnedRulesForLaunchProfile(profile, input.receipt && input.registry ? { engine: "claude", ...memoryStartIdentity(input.registry, input.receipt.conversationId), cwd: input.spec.cwd, home: input.account.home, env: access.env, claudeSettingsPath: launchPaths.spawnPolicyBaseSettingsPath, providerAccount: Boolean(input.account.claudeProvider) } : undefined),
+    appendSystemPrompt: await learnedRulesForLaunchProfile(profile, input.receipt && input.registry ? { engine: "claude", ...memoryStartIdentity(input.registry, input.receipt.conversationId), cwd: input.spec.cwd, home: input.account.home, env: access.env, claudeSettingsPath: launchPaths.spawnPolicyBaseSettingsPath, providerAccount: Boolean(input.account.claudeProvider) } : undefined, onMemoryPrepared),
     mcpServers: profile.mcpServers,
     validateTelegramGrant,
     ...(profile.ownerRelayHandoffOnly ? { tools: ["Read"] } : {}),
@@ -2742,6 +2746,7 @@ export async function defaultStartHost(
     copilot?: Partial<Pick<CopilotAcpHostOptions, "spawnProcess">>;
     antigravity?: Partial<Pick<AntigravityAcpHostOptions, "spawnProcess">>;
   } = {},
+  onMemoryPrepared?: (receipt: MemoryDeliveryReceipt) => void,
 ): Promise<SpawnedStructuredHost> {
   input = admittedStructuredLaunchInput(input);
   const memoryCell = structuredHostCell(input.registry, input.engine, input.receipt.launchId, input.receipt.conversationId, input.receipt);
@@ -2754,7 +2759,7 @@ export async function defaultStartHost(
   if (input.engine === "antigravity") return await startAntigravityStructuredHost(input, capability, {
     ...engineProcess.antigravity,
     ...(memoryCell ? { memoryCell } : {}),
-  });
+  }, onMemoryPrepared);
   const profile = input.spec.launchProfile ?? {} as LaunchProfile;
   const validateTelegramGrant = profile.mcpServers.includes("telegram")
     ? () => { admittedStructuredLaunchInput(input); }
@@ -2784,7 +2789,7 @@ export async function defaultStartHost(
       nativeMemoryEnabled,
       ...(profile.ownerRelayHandoffOnly ? { ownerRelayHandoffOnly: true } : {}),
       omitSkillsInstructions: profile.omitSkillsInstructions === true || sessionOriginFor(input.receipt) === "delegated",
-      developerInstructions: await learnedRulesForLaunchProfile(profile, { engine: "codex", ...memoryStartIdentity(input.registry, input.receipt.conversationId), cwd: input.spec.cwd, home: input.account.home, env, nativeMemoryEnabled }),
+      developerInstructions: await learnedRulesForLaunchProfile(profile, { engine: "codex", ...memoryStartIdentity(input.registry, input.receipt.conversationId), cwd: input.spec.cwd, home: input.account.home, env, nativeMemoryEnabled }, onMemoryPrepared),
       mcpServers: profile.mcpServers,
       validateTelegramGrant,
       /* Plugin grant from the durable profile (issue #687): present only for
@@ -2811,7 +2816,7 @@ export async function defaultStartHost(
   }
   const form = structuredClaudeLaunchForm(input);
   const options = {
-    ...await claudeStructuredHostOptions(input, { env, host: access.host }, initialEventCursor, validateTelegramGrant, input.receipt.agentRole),
+    ...await claudeStructuredHostOptions(input, { env, host: access.host }, initialEventCursor, validateTelegramGrant, input.receipt.agentRole, onMemoryPrepared),
     ...engineProcess.claude,
     assertCurrent: () => assertMemoryPreparedStartCurrent(input),
     ...(memoryCell ? { memoryCell } : {}),
@@ -3427,7 +3432,6 @@ export async function spawnStructuredConversation(
     assertProactiveTaskExecution([...(input.receipt.failureReporting?.taskIds ?? []),
       ...proactiveConversationTaskIds([input.receipt.conversationId, input.receipt.parentConversationId], input.registry)], undefined, () => proactiveConversationContext(input.receipt.conversationId, input.registry, { id: input.receipt.accountId, engine: input.receipt.engine as "claude" | "codex", model: input.receipt.launchProfile.model }));
   } };
-  const startHost = dependencies.startHost ?? defaultStartHost;
   const assertMemberCurrent = () => {
     if (!input.receipt.launchProfile.workspace) return;
     const current = input.registry.spawnReceipt(input.receipt.launchId);
@@ -3728,12 +3732,16 @@ export async function spawnStructuredConversation(
       if (state.pid && state.pid > 1) await writeSetupCustodyOffLoop(captureProcessIdentity(state.pid, undefined, state.processStartIdentity));
     };
     const confirmSetupCleanup = async () => {
-      if (foregroundAdmissionOwner) await input.registry.deliveryWriteOrBusy({ label: "spawn.setup-cleanup", operationId }, () =>
-        input.registry.confirmStructuredHostSetupCleanup(operationId, foregroundAdmissionOwner));
+      if (foregroundAdmissionOwner && !await input.registry.deliveryWriteOrBusy({ label: "spawn.setup-cleanup", operationId }, () =>
+        input.registry.confirmStructuredHostSetupCleanup(operationId, foregroundAdmissionOwner)))
+        throw new Error("structured setup exec custody evidence is unavailable");
       setupCleanupConfirmed = true;
       setupCustodyActive = false;
     };
-    const startingHost = withStructuredSetupCustody(setupCustody, () => startHost(input, capability));
+    let memoryDelivery: MemoryDeliveryReceipt | undefined;
+    const startingHost = withStructuredSetupCustody(setupCustody, () => dependencies.startHost
+      ? dependencies.startHost(input, capability)
+      : defaultStartHost(input, capability, {}, receipt => { memoryDelivery = receipt; }));
     void startingHost.then(async (lateHost) => {
       if (!durableSetupTimedOut) { nativeSetupPending = false; return; }
       try {
@@ -3807,6 +3815,9 @@ export async function spawnStructuredConversation(
     /* Still unpublished: a refusal here enters the failure path below, which
        retires the host this launch started and fails its receipt. */
     await input.authorize?.();
+    assertMemberCurrent();
+    await withinDurableSetup(confirmMemoryDelivery(memoryDelivery));
+    assertMemberCurrent();
     const ownsLaunch = () => {
       if (durableSetupTimedOut || launchReleased || (durableSetupTimer && now() >= durableSetupDeadline)) return false;
       const snapshot = input.registry.spawnRecoverySnapshot([input.receipt.launchId]);
@@ -4086,8 +4097,9 @@ export async function spawnStructuredConversation(
         try {
           await cleanupHost(host, binding, input.receipt.launchId);
           if (foregroundAdmissionOwner && !nativeSetupPending) {
-            await input.registry.deliveryWriteOrBusy({ label: "spawn.setup-cleanup", operationId }, () =>
-              input.registry.confirmStructuredHostSetupCleanup(operationId, foregroundAdmissionOwner));
+            if (!await input.registry.deliveryWriteOrBusy({ label: "spawn.setup-cleanup", operationId }, () =>
+              input.registry.confirmStructuredHostSetupCleanup(operationId, foregroundAdmissionOwner)))
+              throw new Error("structured setup exec custody evidence is unavailable");
             setupCleanupConfirmed = true;
             setupCustodyActive = false;
           }

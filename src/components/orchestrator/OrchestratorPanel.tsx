@@ -420,6 +420,8 @@ export function OrchestratorPanel({
     incumbent,
     hostLive,
     unboundForMs,
+    /* The seat «needs you» while a form of its project waits, as «Needs you» counts. */
+    formsWaiting: openDecisionCount > 0,
   });
   /**
    * A rotation whose outcome is not yet settled KEEPS the panel, even after the
@@ -1393,7 +1395,7 @@ function StateBadge({ state, file, word = false }: { state: OrchestratorPanelSta
   /* The tooltip follows the badge: a seat the badge calls «needs you» carries
      the decision behind it, and every other badge is already its own whole
      answer. */
-  const decision = seatBadge === "needs-you" && file ? decisionLine(t, file) : null;
+  const decision = seatBadge === "needs-you" && state.kind === "live" && state.attention && file ? decisionLine(t, file) : null;
   if (word) {
     /* The seat header's form: a dot and the word, toned the same way. */
     const wordTone = tone.includes("success") ? "working" : tone.includes("warning") ? "needs" : tone.includes("danger") ? "failed" : tone.includes("accent") ? "accent" : "quiet";

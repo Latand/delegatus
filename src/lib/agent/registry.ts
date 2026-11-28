@@ -35,10 +35,12 @@ import { hotStateWriterRevision, withHotStateAuthorityAttempt } from "@/lib/stat
 import { assertStateMutationAllowed, stateMutationActivationOpen } from "@/lib/state/stateMutationBarrier";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 import {
+  bootEpochProvesExit,
   captureProcessIdentity,
   processIdentityMayOwn,
   processIdentityStatus,
   sameRecordedProcessIdentity,
+  systemBootEpoch,
   type ProcessIdentity,
 } from "@/lib/processIdentity";
 import { durableSemanticTitle, firstMeaningfulPromptLine, SPAWN_TITLE_REQUIRED_ERROR } from "@/lib/title";
@@ -419,7 +421,7 @@ export interface SpawnReceipt {
   preHostWriterRefusal?: true;
   /** Pre-session custody. `preparing` proves no engine exec was admitted;
       `executing` without process evidence remains an uncertain launch. */
-  hostSetup?: { phase: "preparing" | "executing"; processes: ProcessIdentity[]; cleanupConfirmed?: true; execPermitGranted?: true; adoptionClaimEpoch?: number };
+  hostSetup?: { phase: "preparing" | "executing"; processes: ProcessIdentity[]; cleanupConfirmed?: true; execPermitGranted?: true; execProcessRecorded?: true; adoptionClaimEpoch?: number };
   /** Revocation tombstone observed by the admission writer. Legacy means none. */
   memberRevocationId?: string | null;
   state: "starting" | "pane-bound" | "host-verified" | "prompt-delivered" | "path-pending" | "completed" | "failed" | "conflicted";
@@ -2340,6 +2342,66 @@ function registryReceiptsReferencing(file: RegistryFile, id: string): SpawnRecei
 }
 
 const CLAIMABLE_RECEIPT_STATES = new Set(["starting", "pane-bound", "host-verified", "prompt-delivered", "path-pending"]);
+
+type LaunchSetupReceipt = Pick<SpawnReceipt, "hostSetup" | "key" | "state" | "admissionOwner">;
+
+function unconfirmedLaunchSetup(receipt: LaunchSetupReceipt) {
+  return !receipt.key && !receipt.hostSetup?.cleanupConfirmed ? receipt.hostSetup : undefined;
+}
+
+export function missingSetupProcess(setup: NonNullable<SpawnReceipt["hostSetup"]>): boolean {
+  return (setup.phase === "executing" || setup.execPermitGranted === true)
+    && (setup.processes.length === 0 || !setupHasExecProcessEvidence(setup));
+}
+
+/** Before execProcessRecorded was added, the waiter was persisted before the
+    exec permit and the native engine identity was appended after it. Two
+    distinct recorded identities therefore prove that historical exec crossed
+    its boundary; a waiter-only receipt remains ambiguous. */
+function setupHasExecProcessEvidence(setup: NonNullable<SpawnReceipt["hostSetup"]>): boolean {
+  if (setup.execProcessRecorded === true) return true;
+  const first = setup.processes[0];
+  if (!first) return false;
+  if (setup.processes.some(identity => identity.pid !== first.pid)) return true;
+  // A repeated PID needs two observed start tokens to prove it was reused.
+  const starts = new Set(setup.processes.map(identity => identity.startIdentity).filter(Boolean));
+  return starts.size >= 2;
+}
+
+/** A local PID lookup can clear setup custody only in the recorded domain. */
+export function setupProcessMayOwn(identity: ProcessIdentity): boolean {
+  const current = systemBootEpoch();
+  if (!identity.bootEpoch || !current) return true;
+  if (identity.bootEpoch === current) return processIdentityMayOwn(identity);
+  return !bootEpochProvesExit(identity.bootEpoch, current);
+}
+
+function launchSetupAdmissionOwner(receipt: LaunchSetupReceipt): ProcessIdentity | null {
+  // Failed launches, including cancellations, retain their native process
+  // evidence. The controller that admitted them may serve for days after exit.
+  const admission = CLAIMABLE_RECEIPT_STATES.has(receipt.state)
+    || (receipt.state !== "failed" && unconfirmedLaunchSetup(receipt))
+    ? receipt.admissionOwner : null;
+  return admission && Number.isInteger(admission.pid) && admission.pid > 0 ? admission : null;
+}
+
+export function launchSetupIdentities(receipt: LaunchSetupReceipt): ProcessIdentity[] {
+  return [launchSetupAdmissionOwner(receipt), ...(unconfirmedLaunchSetup(receipt)?.processes ?? [])].filter((identity): identity is ProcessIdentity =>
+    !!identity && Number.isInteger(identity.pid) && identity.pid > 0);
+}
+
+function failedLaunchSetupCanBeConfirmed(receipt: SpawnReceipt) {
+  const setup = unconfirmedLaunchSetup(receipt);
+  // A preparing receipt can predate recording its waiter. Recovery needs
+  // recorded process evidence before it writes a cleanup confirmation.
+  return receipt.state === "failed" && receipt.transport === "structured" && setup
+    && !receipt.pane && !receipt.verifiedHost && !receipt.artifactPath && !receipt.completionMode
+    && receipt.artifactLifecycle !== "materialized"
+    && setup.adoptionClaimEpoch === undefined && setup.processes.length > 0
+    && !missingSetupProcess(setup) && !setup.processes.some(setupProcessMayOwn);
+}
+
+const LAUNCH_SETUP_CLEANUP_BATCH = 32;
 
 /** The same provisioning states in keyed reads and held startup views. */
 export function registryOpenSpawnReceipts(file: RegistryFile): SpawnReceipt[] {
@@ -4946,6 +5008,7 @@ function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnRe
   if (value.hostSetup && (!["preparing", "executing"].includes(value.hostSetup.phase)
     || !Array.isArray(value.hostSetup.processes)
     || value.hostSetup.execPermitGranted !== undefined && value.hostSetup.execPermitGranted !== true
+    || value.hostSetup.execProcessRecorded !== undefined && value.hostSetup.execProcessRecorded !== true
     || value.hostSetup.adoptionClaimEpoch !== undefined && (!Number.isSafeInteger(value.hostSetup.adoptionClaimEpoch)
       || value.hostSetup.adoptionClaimEpoch < 1))) throw new Error("structured setup custody is malformed");
   if (value.proactiveTaskIds !== undefined && (!Array.isArray(value.proactiveTaskIds)
@@ -4965,6 +5028,7 @@ function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnRe
       processes: normalizeStructuredTerminationSurvivors(value.hostSetup.processes)!,
       ...(value.hostSetup.adoptionClaimEpoch === undefined ? {} : { adoptionClaimEpoch: value.hostSetup.adoptionClaimEpoch }),
       ...(value.hostSetup.execPermitGranted === true ? { execPermitGranted: true } : {}),
+      ...(value.hostSetup.execProcessRecorded === true ? { execProcessRecorded: true } : {}),
       ...(value.hostSetup.cleanupConfirmed === true ? { cleanupConfirmed: true } : {}) } : undefined,
     memoryCap: memoryCap ?? undefined,
     clientAttemptId: typeof value.clientAttemptId === "string" ? value.clientAttemptId : null,
@@ -5687,6 +5751,7 @@ export class AgentRegistry {
   private readonly sqliteMode: AgentRegistrySqliteMode;
   private readonly writerDeadlineMs: number | undefined;
   private writerAdmissionTail: Promise<void> = Promise.resolve();
+  private launchSetupCleanupAfter = "";
   private readonly mcpGrantPolicy: McpGrantPolicy | undefined;
   private readonly sqliteStore: SqliteAgentRegistryStore | null;
   private antigravityStuckCount: number | undefined;
@@ -6875,9 +6940,18 @@ export class AgentRegistry {
     return { versions, owners, conversationsByPath };
   }
 
-  worktreeProtectionSnapshot(): WorktreeProtection {
+  /** `within` lets SQLite skip the rows that work elsewhere; the JSON file
+      answers with every row. */
+  worktreeProtectionSnapshot(within?: readonly string[]): WorktreeProtection {
     return this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
-      ? this.sqliteStore.worktreeProtectionSnapshot() : worktreeProtection(this.readOnlySnapshot());
+      ? this.sqliteStore.worktreeProtectionSnapshot(within) : worktreeProtection(this.readOnlySnapshot());
+  }
+
+  /** Changes with every SQLite commit, from any process; null when the registry
+      answers from its JSON file and a snapshot has to be read again. */
+  worktreeProtectionStamp(): string | null {
+    return this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
+      ? this.sqliteStore.worktreeProtectionStamp() : null;
   }
 
   /** Prepare the recovery lookups through asynchronous writer admission. */
@@ -7237,6 +7311,16 @@ export class AgentRegistry {
         if (row) byId.set(deliveryId, clone(row));
       }
       return { owners, held, byId };
+    }, { skipColdKeyInitialization: true });
+  }
+
+  /** Terminal owners retain the admitted message and its server-stamped origin. */
+  recentTerminalDeliveryOwners(conversationId: ViewerConversationId): DeliveryOperationOwner[] {
+    return this.readKeyed(file => {
+      const ids = conversationIdsResolvingTo(file, resolveConversationAlias(file, conversationId));
+      return ids.flatMap(id => registryKeysMatchingBounded(file, "deliveryOperationOwners", [
+        { field: "conversationId", value: id }, { field: "custodyState", value: "terminal" },
+      ], DELIVERY_OPERATION_OWNER_TERMINAL_LIMIT).map(key => clone(file.deliveryOperationOwners[key]!)));
     }, { skipColdKeyInitialization: true });
   }
 
@@ -7692,6 +7776,73 @@ export class AgentRegistry {
 
   openSpawnReceipts(): SpawnReceipt[] {
     return this.readKeyed(file => clone(registryOpenSpawnReceipts(file)));
+  }
+
+  /** Fresh custody at the deploy cut, including exec with missing evidence. */
+  launchSetupBlocker(): string | null {
+    return this.readKeyed(file => {
+      const keys = (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
+        ? this.sqliteStore!.launchSetupKeys({ after: "", limit: LAUNCH_SETUP_CLEANUP_BATCH + 1 })
+        : Object.keys(file.receipts).filter(key => {
+          const receipt = file.receipts[key]!;
+          return (CLAIMABLE_RECEIPT_STATES.has(receipt.state) && !!receipt.admissionOwner)
+            || (!receipt.key && !!receipt.hostSetup && !receipt.hostSetup.cleanupConfirmed);
+        }).sort().slice(0, LAUNCH_SETUP_CLEANUP_BATCH + 1);
+      // Inspect the bounded lookahead row too. A page boundary is not a
+      // launch blocker; only its persisted custody evidence can hold deploy.
+      for (const key of keys) {
+        const receipt = file.receipts[key];
+        if (!receipt) continue;
+        const setup = unconfirmedLaunchSetup(receipt);
+        const admission = launchSetupAdmissionOwner(receipt);
+        if ((setup && (missingSetupProcess(setup) || setup.processes.some(setupProcessMayOwn)))
+          || (admission && processIdentityMayOwn(admission))) {
+          return receipt.launchId;
+        }
+      }
+      // The indexed census is deliberately bounded. If there are more
+      // possible owners than this request can inspect, preserve the fence
+      // under a known launch id until a later cadence can establish absence.
+      if (keys.length > LAUNCH_SETUP_CLEANUP_BATCH) return file.receipts[keys[LAUNCH_SETUP_CLEANUP_BATCH]!]?.launchId ?? keys[LAUNCH_SETUP_CLEANUP_BATCH]!;
+      return null;
+    }, { skipColdKeyInitialization: true });
+  }
+
+  /** Advance even past live and unverifiable receipts so a later dead setup
+      gets a turn. The cursor only schedules work; the receipt grants custody. */
+  async reconcileFailedLaunchSetup(waitDeadlineAt: number): Promise<void> {
+    if (Date.now() >= waitDeadlineAt) return;
+    const after = this.launchSetupCleanupAfter;
+    const candidates = this.readKeyed(file => {
+      if (Date.now() >= waitDeadlineAt) return [];
+      const keys = (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
+        ? this.sqliteStore!.launchSetupKeys({ after, limit: LAUNCH_SETUP_CLEANUP_BATCH })
+        : Object.keys(file.receipts).filter(key => key > after && file.receipts[key]!.state === "failed"
+          && unconfirmedLaunchSetup(file.receipts[key]!)).sort().slice(0, LAUNCH_SETUP_CLEANUP_BATCH);
+      this.launchSetupCleanupAfter = keys.length === LAUNCH_SETUP_CLEANUP_BATCH ? keys.at(-1)! : "";
+      return keys.flatMap(key => {
+        const receipt = file.receipts[key];
+        return receipt && failedLaunchSetupCanBeConfirmed(receipt) ? [{
+          launchId: receipt.launchId, conversationId: receipt.conversationId,
+          owner: detachedRow(receipt.admissionOwner), setup: detachedRow(receipt.hostSetup),
+        }] : [];
+      });
+    }, { skipColdKeyInitialization: true });
+    if (!candidates.length || Date.now() >= waitDeadlineAt) return;
+    const correlation = { label: "spawn.reconcile-setup-cleanup", operationId: candidates[0]!.launchId, waitDeadlineAt };
+    const confirm = () => this.mutate(file => {
+      for (const observed of candidates) {
+        if (Date.now() >= waitDeadlineAt) break;
+        const current = file.receipts[observed.launchId];
+        if (!current || current.conversationId !== observed.conversationId
+          || !isDeepStrictEqual(detachedRow(current.admissionOwner), observed.owner)
+          || !isDeepStrictEqual(detachedRow(current.hostSetup), observed.setup)
+          || !failedLaunchSetupCanBeConfirmed(current)) continue;
+        current.hostSetup!.cleanupConfirmed = true;
+      }
+    }, { deliveryOnly: true, skipColdKeyInitialization: true });
+    if (this.sqliteMode === "read" || this.sqliteMode === "sqlite") await this.whenWriterHeld(correlation, confirm);
+    else this.deliveryWriteNow(correlation, confirm);
   }
 
   /** Includes terminal setup that still owns cleanup; the liveness index
@@ -8354,7 +8505,7 @@ export class AgentRegistry {
       const memoryProject = designatedSeatMembership?.containerId
         ?? explicitProject ?? existingConversation?.projectOwnership?.project ?? profile.project;
       if (designatedSeatMembership && memoryProject
-        && (memoryRole === "orchestrator" || memoryRole === "maintainer")) {
+        && (memoryRole === "orchestrator" || memoryRole === "maintainer" || memoryRole === "legatus")) {
         /* Designation is an explicit role transition. A conversation adopted
            from a stage must shed that stage's selector and clean-memory flag.
            The role label alone is insufficient: pipeline stages may use the
@@ -8363,7 +8514,7 @@ export class AgentRegistry {
         profile.learnedRules = { project: memoryProject, roleId: memoryRole };
       } else if (roleIsClean(memoryRole)) {
         profile.cleanMemory = true;
-      } else if ((memoryRole === "orchestrator" || memoryRole === "maintainer")
+      } else if ((memoryRole === "orchestrator" || memoryRole === "maintainer" || memoryRole === "legatus")
         && !profile.cleanMemory && !profile.learnedRules && memoryProject) {
         profile.learnedRules = { project: memoryProject, roleId: memoryRole };
       } else if (!designatedSeatMembership && !memoryRole) {
@@ -8774,6 +8925,7 @@ export class AgentRegistry {
       if (native && !receipt.hostSetup.processes.some(process => sameRecordedProcessIdentity(process, native))) {
         receipt.hostSetup.processes.push(clone(native));
       }
+      if (native) receipt.hostSetup.execProcessRecorded = true;
     }));
     if (!written.acquired) throw new RegistryWriterBusyError("spawn.setup-custody");
   }
@@ -8799,16 +8951,17 @@ export class AgentRegistry {
     if (!written.acquired) throw new RegistryWriterBusyError("spawn.setup-custody");
   }
 
-  confirmStructuredHostSetupCleanup(launchId: string, owner: ProcessIdentity): void {
-    this.mutate(file => {
+  /** Returns false when an executing setup has no recorded engine evidence. */
+  confirmStructuredHostSetupCleanup(launchId: string, owner: ProcessIdentity): boolean {
+    return this.mutate(file => {
       const receipt = file.receipts[launchId];
       if (!receipt?.admissionOwner || !sameRecordedProcessIdentity(receipt.admissionOwner, owner))
         throw new Error("structured setup custody changed");
-      if (receipt.hostSetup?.phase === "executing" && !receipt.hostSetup.processes.length)
-        throw new Error("structured setup native evidence is unavailable");
-      if (receipt.hostSetup?.processes.some(process => processIdentityStatus(process) !== "dead"))
+      if (receipt.hostSetup && missingSetupProcess(receipt.hostSetup)) return false;
+      if (receipt.hostSetup?.processes.some(setupProcessMayOwn))
         throw new Error("structured setup process cleanup is not confirmed");
       if (receipt.hostSetup) receipt.hostSetup.cleanupConfirmed = true;
+      return true;
     });
   }
 

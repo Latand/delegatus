@@ -46,7 +46,8 @@ function verifiedHook(target: string, body: Buffer, digest: string): boolean {
  * and config, and refuse branch-history replacements that discard another author.
  * This is a cooperative agent guard, not a sandbox against hostile shell code.
  */
-export function agentHistoryGuardEnv(source: AgentEnvironment, name: string, email: string, coauthor?: string): Record<string, string | undefined> {
+export function agentHistoryGuardEnv(source: AgentEnvironment, name: string, email: string, coauthor?: string,
+  policy: { refusal?: string; omitCoauthor?: string; verifyCommitter?: boolean; settingFile?: string } = {}): Record<string, string | undefined> {
   let count = Number(source.GIT_CONFIG_COUNT ?? 0);
   if (!Number.isSafeInteger(count) || count < 0 || count > 1024) throw new Error("Invalid agent Git environment");
   if (count > 0 && source.GIT_CONFIG_KEY_0 === undefined) throw new Error("Invalid agent Git environment");
@@ -60,6 +61,39 @@ export function agentHistoryGuardEnv(source: AgentEnvironment, name: string, ema
       env[key] = source[key];
     }
   }
+  const ident = quote(name + " <" + email + ">");
+  const refusal = policy.refusal ? `echo ${quote("Delegatus: " + policy.refusal)} >&2; exit 1` : "";
+  const committerCheck = policy.verifyCommitter ? `identity=$(git var GIT_COMMITTER_IDENT) || refuse
+  [ "\${identity%>*}>" = ${ident} ] || refuse` : "";
+  const stripCoauthor = policy.omitCoauthor ? `temporary=$(mktemp "$1.delegatus-XXXXXX") || exit 1
+  trap 'rm -f "$temporary"' EXIT
+  comment_char=$(git config --get core.commentChar 2>/dev/null || printf '#')
+  case "$comment_char" in auto|"") comment_char='#' ;; esac
+  awk -v comment_char="$comment_char" ' {
+    line[NR]=$0
+    if (!scissors && substr($0, 1, 1) == comment_char && $0 ~ /------------------------ >8 ------------------------/) scissors=NR
+  } END {
+    effective_end=scissors ? scissors-1 : NR
+    while (effective_end>0 && (substr(line[effective_end], 1, 1) == comment_char || line[effective_end] == "")) effective_end--
+    for (i=1; i<=effective_end; i++) if (line[i] == "") last_blank=i
+    first=last_blank+1; trailer_block=0
+    for (i=first; i<=effective_end; i++) {
+      if (substr(line[i], 1, 1) != comment_char && tolower(line[i]) ~ /^[[:space:]]*co-authored-by[[:space:]]*:/) trailer_block=1
+    }
+    for (i=1; i<=NR; i++) {
+      value=tolower(line[i]); gsub(/[[:space:]]+/, " ", value)
+      if (!(trailer_block && i>=first && i<=effective_end && substr(line[i], 1, 1) != comment_char && value ~ /^[[:space:]]*co-authored-by:[[:space:]]*delegatus[[:space:]]*<noreply@delegatus[.]invalid>[[:space:]]*$/)) print line[i]
+    }
+  }' "$1" > "$temporary" || exit 1
+  cat "$temporary" > "$1" || exit 1
+  rm -f "$temporary"
+  trap - EXIT` : "";
+  const commitMsgAction = policy.omitCoauthor
+    ? `if [ "$hook" = commit-msg ] && ! attribution_enabled; then ${stripCoauthor}; fi`
+    : "";
+  const trailerAction = policy.settingFile
+    ? `if attribution_enabled; then git interpret-trailers --in-place --if-exists addIfDifferent --trailer ${quote(coauthor ?? policy.omitCoauthor ?? "Co-Authored-By: Delegatus <noreply@delegatus.invalid>")} "$1" || exit 1; else ${stripCoauthor}; fi`
+    : coauthor ? `git interpret-trailers --in-place --if-exists addIfDifferent --trailer ${quote(coauthor)} "$1" || exit 1` : stripCoauthor;
   const script = `#!/bin/sh
 set -eu
 refuse() {
@@ -71,12 +105,16 @@ check_author() {
   [ "$author" = ${quote(name + "\n" + email)} ] || refuse
 }
 ${coauthor ? `check_coauthor() {
-  count=$(git show -s --no-show-signature --no-color --no-notes --format=%B "$1" | git interpret-trailers --parse | grep -Fxc -- ${quote(coauthor)} || true)
-  [ "$count" = 1 ] || refuse
+  count=$(git show -s --no-show-signature --no-color --no-notes --format=%B "$1" | git interpret-trailers --parse | grep -Eic '^[[:space:]]*Co-Authored-By:[[:space:]]*Delegatus[[:space:]]*<noreply@delegatus[.]invalid>[[:space:]]*$' || true)
+  if attribution_enabled; then [ "$count" = 1 ] || refuse; else [ "$count" = 0 ] || refuse; fi
 }` : ""}
 hook=\${0##*/}
 if [ "$hook" = post-rewrite ] || [ "$hook" = reference-transaction ]; then input=$(cat); fi
 ${stageAttemptGuardScript()}
+attribution_enabled() {
+  if [ -f ${quote(policy.settingFile ?? "")} ] && awk '/"commitAttribution"[[:space:]]*:/ { in_setting=1 } in_setting && /"value"[[:space:]]*:[[:space:]]*false/ { disabled=1 } in_setting && /}/ { in_setting=0 } END { exit !disabled }' ${quote(policy.settingFile ?? "")}; then return 1; fi
+  return 0
+}
 stage_final_check() {
   stage_owner_check "$@"
   stage_release_binding_check "$@"
@@ -84,23 +122,29 @@ stage_final_check() {
 if [ "$hook" = prepare-commit-msg ]; then
   # commit exports its effective author, including -C/-c inheritance. The
   # cherry-pick sequencer needs its own source check. --no-verify runs this hook.
+  ${refusal}
   identity=$(git var GIT_AUTHOR_IDENT) || refuse
-  [ "\${identity%>*}>" = ${quote(name + " <" + email + ">")} ] || refuse
+  [ "\${identity%>*}>" = ${ident} ] || refuse
+  ${committerCheck}
   if picked=$(git rev-parse --verify -q CHERRY_PICK_HEAD); then check_author "$picked"; fi
-  ${coauthor ? `git interpret-trailers --in-place --if-exists addIfDifferent --trailer ${quote(coauthor)} "$1" || exit 1` : ""}
+  ${trailerAction}
 fi
+${commitMsgAction}
 if [ "$hook" = applypatch-msg ]; then
   # git am owns this message hook; amend the mailbox message before commit
   # creation. --no-verify skips this hook, so reference-transaction below
   # independently refuses an unattributed commit.
   :
-  ${coauthor ? `count=$(git interpret-trailers --parse "$1" | grep -Fxc -- ${quote(coauthor)} || true)
+  ${refusal}
+  ${policy.settingFile ? trailerAction : coauthor ? `count=$(git interpret-trailers --parse "$1" | grep -Fxc -- ${quote(coauthor)} || true)
   [ "$count" -le 1 ] || refuse
-  if [ "$count" = 0 ]; then git interpret-trailers --in-place --trailer ${quote(coauthor)} "$1" || exit 1; fi` : ""}
+  if [ "$count" = 0 ]; then git interpret-trailers --in-place --trailer ${quote(coauthor)} "$1" || exit 1; fi` : stripCoauthor}
 fi
 if [ "$hook" = pre-applypatch ]; then
   # am keeps its author in the sequencer's quoted data, rather than exporting
   # it to hooks. Compare those assignments literally; never source the file.
+  ${refusal}
+  ${committerCheck}
   author_file=$(git rev-parse --git-path rebase-apply/author-script) || refuse
   author_data=$(sed -n '1,2p' "$author_file") || refuse
   [ "$author_data" = ${quote("GIT_AUTHOR_NAME=" + quote(name) + "\nGIT_AUTHOR_EMAIL=" + quote(email))} ] || refuse
@@ -121,10 +165,17 @@ if [ "$hook" = reference-transaction ]; then
       # older tip rather than appending a patch, and must remain available.
       applying=$(git rev-parse --git-path rebase-apply/applying) || refuse
       if [ -f "$applying" ]; then
+        check_applied_identity() {
+          ${refusal || ":"}
+          check_author "$1"
+          ${policy.verifyCommitter ? `committer=$(git show -s --no-show-signature --no-color --no-notes --format='%cn%n%ce' "$1") || refuse
+          [ "$committer" = ${quote(name + "\n" + email)} ] || refuse` : ""}
+          ${coauthor ? 'check_coauthor "$1"' : ""}
+        }
         parents=$(git show -s --no-show-signature --no-color --no-notes --format=%P "$new") || refuse
         case "$old" in
-          *[!0]*) [ "$parents" != "$old" ] || { check_author "$new"; ${coauthor ? `check_coauthor "$new";` : ""} } ;;
-          *) check_author "$new"; ${coauthor ? `check_coauthor "$new";` : ""} ;;
+          *[!0]*) [ "$parents" != "$old" ] || check_applied_identity "$new" ;;
+          *) check_applied_identity "$new" ;;
         esac
       fi
       case "$old" in *[!0]*) ;; *) continue ;; esac

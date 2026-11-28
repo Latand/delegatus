@@ -5,6 +5,8 @@ import { canonicalProject } from "@/lib/projects/aliases";
 import { nativeAssociationCurrent } from "@/lib/attention/nativeCallerSources";
 import { NATIVE_ASSOCIATION_AUTHORIZATION_ERROR } from "@/lib/attention/nativeAssociationForm";
 import { NextRequest } from "next/server";
+import { legatusDecisionRule } from "@/lib/memory/legatusCitation";
+import { RoleMemoryRefusal } from "@/lib/memory/roleStore";
 import { conversationHostPOST } from "@/app/api/conversation-host/handlers";
 import { handleRuntimeRetry } from "@/lib/runtime/http";
 import { SEND_DISCARDED_REASON, SEND_LOST_REASON, SEND_UNVERIFIED_REASON, SEND_UNRECORDED_REASON, SEND_UNSETTLEABLE_REASON, journalVerdict, resolveOriginalSend, resolveSendReceipt } from "@/lib/runtime/sendSettlement";
@@ -52,17 +54,17 @@ function wakeSeatCurrent(project: string, receipt: NonNullable<PrototypeDecision
   return seat?.conversationId === receipt.conversationId && seat.seatEpoch === receipt.seatEpoch;
 }
 
-export type PrototypeDeliveryContext = NextRequest | { kind: "operator-in-process"; telegramUserId?: string; authorize: () => void } | { kind: "autonomous-seat"; conversationId: string; project: string; authorize: () => void };
-const inProcess = (request: PrototypeDeliveryContext): request is Extract<PrototypeDeliveryContext, { kind: string }> => "kind" in request && (request.kind === "operator-in-process" || request.kind === "autonomous-seat");
+export type PrototypeDeliveryContext = NextRequest | { kind: "operator-in-process"; telegramUserId?: string; authorize: () => void } | { kind: "autonomous-seat"; conversationId: string; project: string; authorize: () => void } | { kind: "legatus"; conversationId: string; ruleId?: string; authorize: () => void };
+const inProcess = (request: PrototypeDeliveryContext): request is Extract<PrototypeDeliveryContext, { kind: string }> => "kind" in request && (request.kind === "operator-in-process" || request.kind === "autonomous-seat" || request.kind === "legatus");
 
 /** The persisted delivery text: retries use these exact bytes. A changed
     decision whose earlier message may already have reached the seat says it
     replaces that one. */
 export function prototypeDecisionText(task: { id: string; text: string } | null, round: PrototypeReviewRound,
-  decision: Pick<PrototypeDecision, "chosen" | "comment" | "answers" | "skipped" | "rejected" | "recommendedWithReservation">, amends?: { at: string }, actor: "operator" | "seat" = "operator"): string {
+  decision: Pick<PrototypeDecision, "chosen" | "comment" | "answers" | "skipped" | "rejected" | "recommendedWithReservation">, amends?: { at: string }, actor: "operator" | "seat" | "legatus" = "operator"): string {
   const amendment = amends ? ` (amended)\nThis replaces the decision of ${amends.at} on the same round.` : "";
   const header = task && round.taskId !== null ? `Prototype review decision${amendment}\nTask: ${task.id} — ${task.text.split("\n")[0]}`
-    : `${actor === "seat" ? "Seat" : "Operator"} decision${amendment}\nAsked: ${round.title}, ${round.createdAt.slice(11,16)} UTC`;
+    : `${actor === "legatus" ? "Legatus" : actor === "seat" ? "Seat" : "Operator"} decision${amendment}\nAsked: ${round.title}, ${round.createdAt.slice(11,16)} UTC`;
   const chosen = round.variants.filter(v => decision.chosen.includes(v.number)).map(v => `${v.number} — ${v.name}`).join(", ");
   const rejection = `Rejected: none of the variants fits. Publish a new prototype round${round.taskId === null ? "" : " on this task"} that applies the corrections below; build no variant of this round.`;
   const footer = `\n\n${decision.rejected ? "Corrections" : "Comment"}:\n${decision.comment}\n\nEnd of prototype review decision.`;
@@ -72,7 +74,7 @@ export function prototypeDecisionText(task: { id: string; text: string } | null,
     if (answer.skipped) return `${i + 1}. ${q.text}${q.multiple ? " (several allowed)" : ""}\n   Skipped by the ${actor}: already decided or no longer relevant — do not ask again.`;
     const selected = answer.options.map(index => `   ${String.fromCharCode(97 + index)}) ${q.options[index]!.label}${q.options[index]!.recommended ? " (recommended)" : ""}`);
     if (answer.other && !answer.customText) selected.push("   Other: see the comment");
-    if (answer.customText) selected.push(`   ${actor === "seat" ? "Seat's" : "Owner's"} custom note:\n${answer.customText}`);
+    if (answer.customText) selected.push(`   ${actor === "legatus" ? "Legatus's" : actor === "seat" ? "Seat's" : "Owner's"} custom note:\n${answer.customText}`);
     return `${i + 1}. ${q.text}${q.multiple ? " (several allowed)" : ""}\n${selected.join("\n")}`;
   }).join("\n");
   return `${header}\nRound: ${round.title}\n\nAnswers:${decision.recommendedWithReservation ? " recommended with reservation; resolve the owner's open point below." : decision.skipped ? " skipped, use your recommendations." : ""}\n${answers}${decision.rejected ? `\n\n${rejection}` : round.variants.length ? `\n\nChosen: ${chosen || "none"}` : ""}${footer}`;
@@ -112,12 +114,19 @@ const viewerRequest = (pathname: string, body?: unknown) => new NextRequest(new 
 });
 const journalRequiresVerification = (reason: string | null | undefined) =>
   reason === SEND_DISCARDED_REASON || reason === SEND_UNVERIFIED_REASON || reason === SEND_UNRECORDED_REASON || reason === SEND_UNSETTLEABLE_REASON;
+function decisionDeliveryActor(decision: PrototypeDecision) {
+  const actor = decision.decidedBy ?? { kind: "operator" as const };
+  return actor.kind === "legatus" ? { kind: "agent" as const, conversationId: actor.conversationId } : actor;
+}
+
 export const prototypeDelivery: PrototypeDelivery = {
   async recover(decision) {
     const delivery = decision.delivery;
     let operationId = delivery.operationId;
     if (!operationId) {
-      const original = await resolveOriginalSend({ conversationId: delivery.conversationId!, clientMessageId: delivery.clientMessageId, text: delivery.text, origin: decision.decidedBy?.kind === "agent" ? { kind: "agent", conversationId: decision.decidedBy.conversationId } : { kind: "operator" } });
+      const actor = decisionDeliveryActor(decision);
+      const original = await resolveOriginalSend({ conversationId: delivery.conversationId!, clientMessageId: delivery.clientMessageId,
+        text: delivery.text, origin: actor.kind === "agent" ? actor : { kind: "operator" } });
       if (original.kind === "absent") {
         // The admission ledger also remembers compacted keys. Absence in the
         // active rows alone cannot authorize another send after retention.
@@ -174,7 +183,7 @@ export const prototypeDelivery: PrototypeDelivery = {
   async send(decision) {
     return prototypeDeliveryResponse(await conversationHostPOST(viewerRequest("/api/conversation-host", { conversationId: decision.delivery.conversationId,
       clientMessageId: decision.delivery.clientMessageId, text: decision.delivery.text, policy: "steer-or-queue", images: [] }),
-    { actor: decision.decidedBy ?? { kind: "operator" } }));
+    { actor: decisionDeliveryActor(decision) }));
   },
   async retry(decision) {
     const operationId = decision.delivery.operationId!;
@@ -185,7 +194,7 @@ export const prototypeDelivery: PrototypeDelivery = {
 };
 
 function prototypeAuthorCurrent(decision: PrototypeDecision): boolean {
-  const actor = decision.decidedBy ?? { kind: "operator" as const };
+  const actor = decisionDeliveryActor(decision);
   if (actor.kind === "agent") return true;
   if (!activeDeliveryActor(actor)) return false;
   if (!decision.telegramUserId) return true;
@@ -212,8 +221,17 @@ export async function refreshPrototypeDelivery(taskId: string | null,reviewId: s
 }
 
 const messageKey = (reviewId: string, revision: number) => revision === 1 ? `${seatMessageKeys.decision}${reviewId}` : `${seatMessageKeys.decision}${reviewId}:${revision}`;
-function decidedBy(request: PrototypeDeliveryContext): NonNullable<PrototypeDecision["decidedBy"]> {
+function decidedBy(request: PrototypeDeliveryContext, project: string): NonNullable<PrototypeDecision["decidedBy"]> {
   if (inProcess(request)) {
+    if (request.kind === "legatus") {
+      try {
+        const ruleId = legatusDecisionRule(project, request.conversationId, request.ruleId);
+        return { kind: "legatus", conversationId: request.conversationId, ...(ruleId ? { ruleId } : {}) };
+      } catch (error) {
+        if (error instanceof RoleMemoryRefusal) throw new PrototypeError(error.message, 409);
+        throw error;
+      }
+    }
     if (request.kind === "autonomous-seat") return { kind: "agent", conversationId: request.conversationId };
     if (request.telegramUserId !== undefined) {
       const actor = telegramOwnerActor(request.telegramUserId);
@@ -239,8 +257,12 @@ export function decidePrototype(request: PrototypeDeliveryContext,taskId: string
   if (!/^pr_[a-f0-9]{32}$/.test(reviewId)) throw new PrototypeError("invalid review id");
   if (inProcess(request)) request.authorize();
   return mutatePrototypeRound(taskId,reviewId,(round,task) => {
+    const project = task?.project ?? round.project;
     if (inProcess(request)) {
       request.authorize();
+      if (request.kind === "legatus" && (round.nativeAssociation || "retry" in input)) {
+        throw new PrototypeError("Legatus cannot decide this form", 403);
+      }
       if (request.kind === "autonomous-seat" && (round.nativeAssociation || canonicalOrchestratorProject(task?.project ?? round.project ?? "") !== request.project)) throw new PrototypeError("autonomy cannot decide this form", 403);
       if (task && (runsElsewhere(task) || (!round.decision && prototypeReviewSummary(task.prototypeReviews ?? [])?.waitingReviewId !== round.id))) {
         throw new PrototypeError("prototype round is no longer waiting", 409);
@@ -265,7 +287,7 @@ export function decidePrototype(request: PrototypeDeliveryContext,taskId: string
       round.decision.delivery.startedAt = new Date().toISOString();
       // An authenticated person explicitly adopts this exact saved reply. A
       // legacy operator record alone supplies no member identity for recovery.
-      const actor = decidedBy(request);
+      const actor = decidedBy(request, project);
       if ((!round.decision.decidedBy || round.decision.decidedBy.kind === "operator") && actor.kind === "member") {
         round.decision.decidedBy = actor;
         delete round.decision.telegramUserId;
@@ -299,9 +321,10 @@ export function decidePrototype(request: PrototypeDeliveryContext,taskId: string
       throw new PrototypeError("This native session changed or ended. Nothing was approved; ask the live session to request a new association.", 409);
     }
     const prior = round.decision;
+    const actor = decidedBy(request, project);
     /* The same answers from someone else are a decision of their own: a person
        who confirms what an agent chose becomes the one who decided it. */
-    if (prior && JSON.stringify(prior.decidedBy ?? { kind: "operator" }) === JSON.stringify(decidedBy(request)) && prior.comment === input.comment && JSON.stringify(prior.chosen) === JSON.stringify(chosen)
+    if (prior && JSON.stringify(prior.decidedBy ?? { kind: "operator" }) === JSON.stringify(actor) && prior.comment === input.comment && JSON.stringify(prior.chosen) === JSON.stringify(chosen)
       && JSON.stringify(prior.answers) === JSON.stringify(answers) && prior.skipped === skipped && prior.rejected === input.reject
       && prior.originalReply === input.originalReply && prior.recommendedWithReservation === input.recommendedWithReservation
       && prior.nativeAssociationApproval === nativeAssociationApproval) return false;
@@ -310,15 +333,16 @@ export function decidePrototype(request: PrototypeDeliveryContext,taskId: string
        without a mark, unless it never had anyone to go to. */
     const handedOver = prior && (prior.revision === undefined ? prior.delivery.state !== "no-orchestrator" : prior.delivery.dispatchedAt !== undefined);
     const revision = prior ? (prior.revision ?? 1) + 1 : 1;
-    const recipient = world.orchestrator(task?.project ?? round.project);
+    const recipient = world.orchestrator(project);
     const autonomous = inProcess(request) && request.kind === "autonomous-seat";
-    let completeText = prototypeDecisionText(task, round, { chosen, comment: input.comment, answers, skipped, rejected: input.reject, recommendedWithReservation: input.recommendedWithReservation }, handedOver ? { at: prior.at } : undefined, autonomous ? "seat" : "operator");
+    let completeText = prototypeDecisionText(task, round, { chosen, comment: input.comment, answers, skipped, rejected: input.reject, recommendedWithReservation: input.recommendedWithReservation }, handedOver ? { at: prior.at } : undefined, actor.kind === "legatus" ? "legatus" : autonomous ? "seat" : "operator");
+    if (actor.kind === "legatus" && task) completeText = `Legatus decision.\n${completeText}`;
     if (autonomous) completeText = `Autonomous seat decision. The operator can amend this form to undo.\n${completeText}`;
     const text = ownerReply ? ownerDeliveryText(completeText, round) : completeText;
     if (questionnaire && Buffer.byteLength(text) > MAX_STRUCTURED_TEXT_BYTES) throw new PrototypeError("the answer is too long to send; shorten the comment");
     round.decision = { chosen, ...(ownerReply ? { originalReply: input.originalReply } : {}), ...(input.recommendedWithReservation ? { recommendedWithReservation: true as const } : {}),
       ...(input.reject ? { rejected: true as const } : {}), ...(answers ? { answers } : {}), ...(skipped ? { skipped } : {}), comment: input.comment, at: new Date().toISOString(),
-      decidedBy: decidedBy(request), ...(inProcess(request) && request.kind === "operator-in-process" && request.telegramUserId ? { telegramUserId: request.telegramUserId } : {}), ...(nativeAssociationApproval ? { nativeAssociationApproval } : {}), revision, delivery: {
+      decidedBy: actor, ...(inProcess(request) && request.kind === "operator-in-process" && request.telegramUserId ? { telegramUserId: request.telegramUserId } : {}), ...(nativeAssociationApproval ? { nativeAssociationApproval } : {}), revision, delivery: {
         state: recipient ? "pending" : "no-orchestrator", conversationId: recipient, clientMessageId: messageKey(reviewId, revision), text } };
     return true;
   });

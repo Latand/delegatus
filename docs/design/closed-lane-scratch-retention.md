@@ -34,8 +34,11 @@ check lanes finish. Shared builds remain available to all their consumers.
 ## Deadline repair and selection
 
 Release and the terminal change feed record a scratch deadline from confirmed
-completion. Stage scratch becomes due strictly after 24 hours, including
-under pressure. Roots marked retain-until-close use the lane's finish clock.
+completion. Stage scratch becomes due strictly after 24 hours. Pressure takes
+one thing earlier: a root of a closed or completed lane whose tree has been idle
+for three hours, in the Cleaner's pass on low free space and in
+[over-cap reclaim](attempt-temp-pressure.md#over-cap-reclaim) when the ledger is
+over its cap. Roots marked retain-until-close use the lane's finish clock.
 An independent 128-root metadata audit repairs older ledger entries without
 reading directory contents. It visits open lanes and standalone launches.
 Allocation measurement cannot use the audit's share of the preparation budget.

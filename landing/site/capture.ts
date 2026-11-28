@@ -52,7 +52,8 @@ import { chromium, type Frame, type Page } from "playwright-core";
 
 import { type Locale } from "@/lib/i18n";
 
-import worker, { type DataPoint } from "../worker";
+import worker from "../worker";
+import { createCaptureWorkerEnv, type CaptureEvent } from "./capture-stats";
 
 type PerfRecord = {
   type: string;
@@ -81,7 +82,7 @@ const colorScheme = process.argv.find((arg) => arg.startsWith("--scheme="))?.sli
 const fullscreenCheck = process.argv.includes("--check-fullscreen");
 const eventsCheck = process.argv.includes("--check-events");
 const promptCheck = process.argv.includes("--check-prompt");
-const eventPoints: DataPoint[] = [];
+const eventPoints: CaptureEvent[] = [];
 const eventBodies: unknown[] = [];
 const swipeCheck = process.argv.find((arg) => arg.startsWith("--check-swipe="))?.slice("--check-swipe=".length);
 if (!fs.existsSync(path.join(dist, "demo/demo.js"))) throw new Error("landing/site/dist is not built: run bun landing/site/build.ts first");
@@ -93,11 +94,9 @@ const server = Bun.serve({
   async fetch(request) {
     if (new URL(request.url).pathname.startsWith("/api/")) {
       if (eventsCheck) eventBodies.push(await request.clone().json());
-      return worker.fetch(request, {
-        INSTALLS: { writeDataPoint: () => { throw new Error("Install pings do not belong in landing captures"); } },
-        SITE_EVENTS: { writeDataPoint: (point) => { eventPoints.push(point); } },
-        ASSETS: { fetch: async () => new Response("not found", { status: 404 }) },
-      });
+      return worker.fetch(request, createCaptureWorkerEnv(eventPoints, {
+        fetch: async () => new Response("not found", { status: 404 }),
+      }));
     }
     let pathname = decodeURIComponent(new URL(request.url).pathname);
     if (pathname.endsWith("/")) pathname += "index.html";
@@ -571,7 +570,7 @@ async function checkEvents() {
         exact(event, agent);
       };
       const exact = (event: string, agent = "") => {
-        const expected = { blobs: [event, agent, lang, ""], doubles: [1], indexes: [event] };
+        const expected = { event, ...(agent ? { agent } : {}), lang, country: "" };
         if (JSON.stringify(eventPoints.at(-1)) !== JSON.stringify(expected)) throw new Error(`${key}: wrong ${event} data point`);
         const body = { event, lang, ...(agent ? { agent } : {}) };
         if (JSON.stringify(eventBodies.at(-1)) !== JSON.stringify(body)) throw new Error(`${key}: unexpected beacon fields`);

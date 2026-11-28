@@ -14,6 +14,7 @@ import { parseReport, testNameFilter, type TestRun, type TestSite } from "./loca
 import { isolatedEnvironment } from "./local-gate";
 import { batchTests, gatePlan, isBrowserTest, reviewedTestReader, selectTreeTests, type GatePlan, type TreeTestFile } from "./gate-plan";
 import { isDeclaredRepository } from "../bin/forge-app-token.mjs";
+import { isOwnerNoreplyAddress } from "../src/lib/git/forgeCommitAccount";
 
 export { batchTests as touchedTests, isBrowserTest } from "./gate-plan";
 
@@ -233,6 +234,21 @@ type Credit = { name: string; email: string; message: string };
 function machineEmail(email: string): boolean {
   return /^(?:noreply|no-reply)@[a-z0-9.-]+$/i.test(email)
     && !/@(?:users\.noreply\.github\.com|github\.com)$/i.test(email);
+}
+
+export function batchIdentityEmailAllowed(email: string, stageReceipt?: string): boolean {
+  return machineEmail(email) || (!!stageReceipt && isOwnerNoreplyAddress(email));
+}
+
+export function verifyBatchIdentity(cwd: string, env: NodeJS.ProcessEnv = process.env): void {
+  const stageReceipt = env.LLV_STAGE_GIT_RECEIPT;
+  for (const kind of ["AUTHOR", "COMMITTER"]) {
+    const identity = git(cwd, ["var", `GIT_${kind}_IDENT`], undefined, env);
+    const email = /<([^<>]+)>/.exec(identity)?.[1];
+    if (!email || !batchIdentityEmailAllowed(email, stageReceipt)) {
+      throw new Error("Batch commits require a machine noreply identity or the verified stage owner's GitHub noreply identity");
+    }
+  }
 }
 
 export function batchMessage(number: number, title: string, body: string, authors: Credit[]): string {
@@ -538,11 +554,7 @@ export class MergeBatch {
   }
 
   private identity(cwd: string): void {
-    for (const kind of ["AUTHOR", "COMMITTER"]) {
-      const identity = git(cwd, ["var", `GIT_${kind}_IDENT`]);
-      const email = /<([^<>]+)>/.exec(identity)?.[1];
-      if (!email || !machineEmail(email)) throw new Error("Batch commits require a machine noreply identity");
-    }
+    verifyBatchIdentity(cwd);
   }
 
   private async assertMachineForgePrincipal(repository: string): Promise<void> {

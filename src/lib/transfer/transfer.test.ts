@@ -1,3 +1,4 @@
+import { seedForgeCommitAccount } from "@/test-helpers/forgeCommitAccount";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -6,7 +7,7 @@ import zlib from "node:zlib";
 import crypto from "node:crypto";
 
 import { leaveSeatLessons, roleMemoryCollection } from "@/lib/memory/roleStore";
-import { readOperatorSettings } from "@/lib/operator/settings";
+import { readOperatorSettings, updateOperatorSettings } from "@/lib/operator/settings";
 import { importCollection } from "@/lib/memory/importStore";
 import { memorySource } from "@/lib/memory/source";
 import { bridgeReportsEnabled, mergeOnReviewEnabled, setBridgeReports, setMergeOnReview } from "@/lib/projects/settings";
@@ -141,6 +142,18 @@ describe("export", () => {
     expect(plain).not.toContain(later.trim());
     expect(plain).not.toContain(summary.trim());
   }, 60_000);
+});
+
+test("install transfer carries the attribution preference and keeps the forge account local", async () => {
+  const from = await freshTarget("commit-attribution-source");
+  const to = await freshTarget("commit-attribution-target");
+  await within(from, () => updateOperatorSettings({ commitAttribution: false }, NOW));
+  seedForgeCommitAccount(from.state);
+  const { bytes } = await exportFrom(from, { sections: ["settings.operator"] });
+  const plan = await within(to, () => previewTransferImport(bytes));
+  await within(to, () => applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions }));
+  expect(await within(to, () => readOperatorSettings().commitAttribution)).toEqual({ value: false, changedAt: NOW });
+  expect(fs.existsSync(path.join(to.state, "forge-commit-account.json"))).toBe(false);
 });
 
 describe("round trip into an empty install", () => {

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { claimProcessTempRoot, TEST_RUN_TEMP_PREFIX } from "../src/lib/tempDirs";
+import { claimTestTempRoot } from "../src/lib/tempDirs";
 
 export const homeKeys = ["HOME", "USERPROFILE", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "LLV_CLAUDE_HOME", "LLV_CODEX_HOME", "COPILOT_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "GEMINI_CLI_HOME", "OPENCLAW_STATE_DIR", "CLAUDE_CODE_TMPDIR"] as const;
 export const accountAliasKeys = ["DELEGATUS_CLAUDE_HOME", "DELEGATUS_CODEX_HOME"] as const;
@@ -23,7 +23,7 @@ export function prepareTestHome(env: NodeJS.ProcessEnv = process.env) {
   // A caller can select and validate a native tool before entering the runner.
   // Moving its cache would select different bytes during the same check.
   const selectedCache = env.XDG_CACHE_HOME ?? path.join(os.homedir(), ".cache");
-  const startup = claimProcessTempRoot(TEST_RUN_TEMP_PREFIX, prepared);
+  const startup = claimTestTempRoot(prepared);
   if (env.TMPDIR === undefined) delete prepared.TMPDIR;
   else prepared.TMPDIR = env.TMPDIR;
   isolateHomes(startup.root, prepared);

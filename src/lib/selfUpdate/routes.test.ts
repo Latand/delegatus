@@ -27,6 +27,7 @@ import { GreenReader, type GreenVerdict } from "./green";
 import { buildEnv } from "./env";
 import { checkForUpdate, readRevision, runGit } from "./git";
 import { launcherControlFile, readLauncherRecord, requestRestart } from "./launcher";
+import { releaseDirFor } from "./release";
 import { deploymentsEnabled, detectMode } from "./mode";
 import { readStartIdentity, sameProcess } from "./pid";
 import { getEvents, getSnapshot, getStepLog, postAuto, postCheck, postRestart, postUpdate, postInstallAction } from "./routes";
@@ -741,14 +742,24 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     await wait(() => existsSync(readLauncherRecord(h.recordFile)!.requestFile));
   }
 
-  test("a checkout update holds fresh stage reservations while the original setup settles", async () => {
-    const h = harness({ relaunch: true, holdBuild: true });
+  test.each(["settles", "times out", "appears at final dispatch"] as const)("a checkout update holds fresh stage reservations while the original setup %s", async outcome => {
+    const h = harness({ relaunch: outcome !== "appears at final dispatch", holdBuild: true });
     const sawSetup = Promise.withResolvers<void>();
-    let pending = true;
+    let pending = outcome !== "appears at final dispatch";
+    let blockerReads = 0;
+    const clock = spyOn(performance, "now");
+    const drainFile = join(h.deps.dir, "auto-drain.json");
     h.deps.quiet = { runtimeSnapshot: async () => ({ sessions: [] }), pipelines: () => [], presence: () => [],
-      launchSetupPending: () => { sawSetup.resolve(); return pending; } };
+      launchSetupBlocker: () => {
+        if (!existsSync(drainFile)) return null;
+        blockerReads++;
+        if (pending && outcome === "times out") clock.mockReturnValueOnce(performance.now() + 60_001);
+        sawSetup.resolve();
+        return outcome === "appears at final dispatch" ? blockerReads >= 3 ? "stage-launch" : null : pending ? "stage-launch" : null;
+      } };
     setSelfUpdateServiceForTests(h.service);
     const record = readLauncherRecord(h.recordFile)!;
+    const priorPointer = existsSync(record.releasePointer) ? readFileSync(record.releasePointer, "utf8") : null;
     try {
       await postCheck(post("/check"));
       await until(snapshot => snapshot.check.state === "update-available");
@@ -756,14 +767,105 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
       await until(() => h.releaseBuild !== null);
       h.releaseBuild!(); h.releaseBuild = null;
       await sawSetup.promise;
-      const intent = JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8"));
-      expect(intent.state).toBe("ready");
-      expect(JSON.parse(readFileSync(join(h.deps.dir, "auto-drain.json"), "utf8"))).toMatchObject({ id: intent.requestId });
       expect(existsSync(record.requestFile)).toBe(false);
+      if (outcome === "times out" || outcome === "appears at final dispatch") {
+        const applyFile = join(h.deps.dir, "apply.json");
+        await until(() => JSON.parse(readFileSync(applyFile, "utf8")).state === "failed");
+        expect(JSON.parse(readFileSync(applyFile, "utf8")).detail).toContain("launch stage-launch");
+        expect(existsSync(record.requestFile)).toBe(false);
+        expect(existsSync(drainFile)).toBe(false);
+        if (priorPointer === null) expect(existsSync(record.releasePointer)).toBe(false);
+        else expect(readFileSync(record.releasePointer, "utf8")).toBe(priorPointer);
+      } else {
+        const intent = JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8"));
+        expect(intent.state).toBe("ready");
+        expect(JSON.parse(readFileSync(drainFile, "utf8"))).toMatchObject({ id: intent.requestId });
+        pending = false;
+        await until(() => existsSync(record.requestFile));
+        expect(JSON.parse(readFileSync(record.requestFile, "utf8"))).toMatchObject({ requestId: intent.requestId, role: "relaunch" });
+      }
+    } finally { clock.mockRestore(); pending = false; h.releaseBuild?.(); h.service.stop(); }
+  });
+
+  test("a manual restart launch refusal settles its building apply and admits the next attempt", async () => {
+    const h = harness();
+    const record = readLauncherRecord(h.recordFile)!;
+    h.deps.bun = join(h.deps.dir, "bun-fixture");
+    mkdirSync(h.deps.dir, { recursive: true });
+    writeFileSync(h.deps.bun, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    const candidate = releaseDirFor(record.releasesDir, tipSha);
+    await git(checkout, "fetch", "origin");
+    const added = await runGit(["worktree", "add", "--detach", candidate, tipSha], checkout);
+    if (added.code !== 0) throw new Error(added.stderr);
+    mkdirSync(join(candidate, ".next"), { recursive: true });
+    writeFileSync(join(candidate, ".next", "BUILD_ID"), "fixture\n");
+    mkdirSync(join(candidate, "bin"), { recursive: true });
+    writeFileSync(join(candidate, "bin", "cli.mjs"), 'process.stdout.write("fixture\\n");\n');
+    writeFileSync(record.releasePointer, JSON.stringify({ sha: tipSha, dir: candidate, checkoutHead: firstSha }));
+    let restartRuns = 0;
+    h.deps.install = { action: () => ({ id: "restart-service", button: true, unit: "fixture.service" }),
+      run: () => { restartRuns++; }, entry: () => join(checkout, "bin", "cli.mjs"), unit: () => "fixture.service" };
+    const clock = spyOn(performance, "now");
+    let pending = true;
+    h.deps.quiet = { runtimeSnapshot: async () => ({ sessions: [] }), pipelines: () => [], presence: () => [],
+      launchSetupBlocker: () => {
+        if (pending) clock.mockReturnValueOnce(performance.now() + 60_001);
+        return pending ? "manual-restart-launch" : null;
+      } };
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    const drainFile = join(h.deps.dir, "auto-drain.json");
+    try {
+      const refused = await postInstallAction(post("/install-action"));
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toMatchObject({ error: expect.stringContaining("manual-restart-launch") });
+      const failed = JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8"));
+      expect(failed).toMatchObject({ state: "failed", externalRestart: true, detail: expect.stringContaining("manual-restart-launch") });
+      expect(existsSync(record.requestFile)).toBe(false);
+      expect(restartRuns).toBe(0);
+      expect(existsSync(drainFile)).toBe(false);
+      expect(existsSync(record.releasePointer)).toBe(false);
+
       pending = false;
-      await until(() => existsSync(record.requestFile));
-      expect(JSON.parse(readFileSync(record.requestFile, "utf8"))).toMatchObject({ requestId: intent.requestId, role: "relaunch" });
-    } finally { pending = false; h.releaseBuild?.(); h.service.stop(); }
+      expect(await h.service.performInstallAction()).toMatchObject({ ok: true });
+      expect(restartRuns).toBe(1);
+      expect(JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8"))).toMatchObject({ state: "switching", externalRestart: true });
+    } finally { clock.mockRestore(); pending = false; h.service.stop(); }
+  });
+
+  test("a late launch refusal preserves a newer apply and its drain", async () => {
+    const h = harness({ relaunch: false, holdBuild: true });
+    const drainFile = join(h.deps.dir, "auto-drain.json");
+    const applyFile = join(h.deps.dir, "apply.json");
+    let blockerReads = 0;
+    h.deps.quiet = { runtimeSnapshot: async () => ({ sessions: [] }), pipelines: () => [], presence: () => [],
+      launchSetupBlocker: () => existsSync(drainFile) && ++blockerReads >= 3 ? "stage-launch" : null };
+    const internals = h.service as unknown as {
+      apply: { current: Record<string, unknown> | null };
+      failApply(error: unknown): void;
+    };
+    const originalFail = internals.failApply.bind(h.service);
+    internals.failApply = error => {
+      if (error instanceof Error && error.message.includes("launch stage-launch")) {
+        const newer = { ...internals.apply.current!, requestId: "newer-stage-apply" };
+        internals.apply.current = newer;
+        writeFileSync(applyFile, JSON.stringify(newer));
+        writeFileSync(drainFile, JSON.stringify({ id: "newer-stage-apply", target: tipSha,
+          since: new Date().toISOString(), until: Date.now() + 60_000 }));
+      }
+      originalFail(error);
+    };
+    setSelfUpdateServiceForTests(h.service);
+    try {
+      await postCheck(post("/check"));
+      await until(snapshot => snapshot.check.state === "update-available");
+      expect((await updatePost(post("/update", { key: "newer-apply-survives-launch-refusal" }))).status).toBe(202);
+      await until(() => h.releaseBuild !== null);
+      h.releaseBuild!(); h.releaseBuild = null;
+      await until(() => JSON.parse(readFileSync(applyFile, "utf8")).requestId === "newer-stage-apply");
+      expect(JSON.parse(readFileSync(applyFile, "utf8"))).toMatchObject({ requestId: "newer-stage-apply", state: "ready" });
+      expect(JSON.parse(readFileSync(drainFile, "utf8")).id).toBe("newer-stage-apply");
+      expect(JSON.parse(readFileSync(readLauncherRecord(h.recordFile)!.releasePointer, "utf8")).sha).toBe(tipSha);
+    } finally { h.releaseBuild?.(); h.service.stop(); }
   });
 
   test.each(["optional-red", "empty-required-optional-red", "required-red", "unreadable-protection", "ruleset-required-red", "ruleset-required-green", "malformed-protection", "set-less-protection", "null-protection", "unreadable-rules"] as const)("manual checkout Update uses required CI on the equal-tree PR head: %s", async scenario => {

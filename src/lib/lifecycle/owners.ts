@@ -13,7 +13,7 @@
    for R6b, this Viewer's own identity and the session keys it holds a host for. */
 import { identityAlive, type LivenessProbe } from "@/lib/agent/accountLiveness";
 import type { AgentRegistryEntry, RegistryFile, SpawnReceipt } from "@/lib/agent/registry";
-import { resolveConversationAlias, structuredClaimIdentity } from "@/lib/agent/registry";
+import { launchSetupIdentities, resolveConversationAlias, structuredClaimIdentity } from "@/lib/agent/registry";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
 import { registryRowProjection } from "@/lib/agent/sqliteRegistryStore";
 import type { Flow, Round } from "@/lib/flows/types";
@@ -115,11 +115,6 @@ export function registryHostEvidence(
 
 function usable(identity: ProcessIdentity | null | undefined): identity is ProcessIdentity {
   return !!identity && Number.isInteger(identity.pid) && identity.pid > 0;
-}
-
-export function launchSetupIdentities(receipt: Pick<SpawnReceipt, "hostSetup" | "key" | "state" | "admissionOwner">): ProcessIdentity[] {
-  const setup = !receipt.key && !receipt.hostSetup?.cleanupConfirmed ? receipt.hostSetup : undefined;
-  return [OPEN_RECEIPT.has(receipt.state) || setup ? receipt.admissionOwner : null, ...(setup?.processes ?? [])].filter(usable);
 }
 
 /** Alive while any recorded identity answers under its start identity (R4). */

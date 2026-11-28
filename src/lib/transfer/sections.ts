@@ -253,8 +253,9 @@ export const PARTS: readonly Part[] = [
 
   { kind: "map", id: "map:operator-settings", section: "settings.operator", root: "state", file: "operator-settings.json", path: [],
     skeleton: () => ({ schemaVersion: 1 }), merge: "default",
-    accept: (key, value) => (key === "locale" || key === "timeZone") && isRecord(value) && isString(value.value) && isString(value.changedAt),
-    collect: source => mapRecords(source.stateText("operator-settings.json"), [], key => key === "locale" || key === "timeZone") },
+    accept: (key, value) => isRecord(value) && isString(value.changedAt)
+      && (key === "commitAttribution" ? typeof value.value === "boolean" : (key === "locale" || key === "timeZone") && isString(value.value)),
+    collect: source => mapRecords(source.stateText("operator-settings.json"), [], key => ["locale", "timeZone", "commitAttribution"].includes(key)) },
   { kind: "map", id: "map:asks-you-settings", section: "settings.operator", root: "state", file: "asks-you-settings.json", path: [],
     skeleton: () => ({ schemaVersion: 1 }), merge: "default",
     accept: (key, value) => key === "enabled" ? typeof value === "boolean" : key === "capUsd" ? typeof value === "number" && value >= 0 && value <= 50

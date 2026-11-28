@@ -1,3 +1,4 @@
+import { seedForgeCommitAccount } from "@/test-helpers/forgeCommitAccount";
 import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { afterAll, expect, spyOn, test } from "bun:test";
 import crypto from "node:crypto";
@@ -33,6 +34,7 @@ import { repositoryPublicationSource } from "@/lib/git/repositoryCommitIdentity"
 import { prepareStageGitGuard } from "@/lib/git/stageAttemptGuard";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-engine-"));
+seedForgeCommitAccount();
 const engineModule = await import("./engine");
 // Native Git and reserved-host fixtures model their forge separately;
 // PR delivery regressions use a GitHub target and execute the real helper.
@@ -1719,7 +1721,7 @@ function productionHostSeams(f: Awaited<ReturnType<typeof stagedRecoveryHarness>
 async function activationDrainFixture(afterPermit = false) {
   const h = harness();
   await create(h.ports);
-  await tickPipelines([], h.ports);
+  // Provisioning can dispatch the first stage in the same controller tick.
   process.env.LLV_PIPELINE_ACTIVATION_DRAIN = "1";
   let release!: () => void;
   let entered!: () => void;
@@ -1736,7 +1738,15 @@ async function activationDrainFixture(afterPermit = false) {
     return { launchId: "activation-launch", conversationId: "conversation_activation", sessionId: "activation-session", transcript: "/codex/activation.jsonl", paneId: null };
   };
   const ticking = tickPipelines([], h.ports);
-  await started;
+  try {
+    await Promise.race([started, ticking.then(() => {
+      throw new Error("controller tick completed before reaching the activation fixture");
+    })]);
+  } catch (error) {
+    release();
+    delete process.env.LLV_PIPELINE_ACTIVATION_DRAIN;
+    throw error;
+  }
   return { h, release, ticking, calls: () => calls, launches: () => launches, id: loadPipelines()[0]!.id };
 }
 

@@ -11,6 +11,7 @@ import { CODEX_MISSING_ROLLOUT_REASON, isMissingCodexRolloutError } from "./host
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
 import { forgetOrphanedHostGrace, orphanedHostFirstObservedAt, structuredHostOrphaned } from "./orphanedHost";
 import { recordedHostHeld } from "@/lib/recordedChecks/store";
+import { confirmMemoryDelivery, type MemoryDeliveryReceipt } from "@/lib/memory/deliveryLedger";
 import type {
   AgentHostStatus,
   AgentRegistry,
@@ -87,14 +88,16 @@ async function memberAdoptionCustody(registry: AgentRegistry, entry: AgentRegist
       if (!active) return;
       if (persisted.structuredHost?.process) registry.completeStructuredHostAdoption(receipt.launchId, owner);
       else {
-        registry.confirmStructuredHostSetupCleanup(receipt.launchId, owner);
+        if (!registry.confirmStructuredHostSetupCleanup(receipt.launchId, owner))
+          throw new Error("structured setup exec custody evidence is unavailable");
         registry.releaseStructuredSpawnAdmissionOwner(receipt.launchId, owner);
       }
       active = false;
     },
     cleanup: async () => {
       await registry.deliveryWriteOrBusy({ label: "adoption.setup-cleanup", operationId: receipt.launchId }, () => {
-        registry.confirmStructuredHostSetupCleanup(receipt.launchId, owner);
+        if (!registry.confirmStructuredHostSetupCleanup(receipt.launchId, owner))
+          throw new Error("structured setup exec custody evidence is unavailable");
         registry.releaseStructuredSpawnAdmissionOwner(receipt.launchId, owner);
       });
       active = false;
@@ -827,6 +830,7 @@ export interface AdoptedClaudeHost {
 
 export type StructuredHostAdoptionFilter = (entry: AgentRegistryEntry) => boolean;
 export type StructuredHostAdoptionProgress = (entry: AgentRegistryEntry) => void;
+type AdoptionOptions<T> = T & { memoryDelivery?: MemoryDeliveryReceipt };
 const STRUCTURED_CLAIM_PREFIX = "structured-host:";
 const ORPHAN_TERM_GRACE_MS = 250;
 const ORPHAN_KILL_GRACE_MS = 1_000;
@@ -1457,7 +1461,7 @@ export function codexBootAdoptionRetired(entry: AgentRegistryEntry): boolean {
 /** Boot seam: resume selected durable Codex rows when structured hosting is enabled. */
 export async function adoptCodexRegistryHosts(
   registry: AgentRegistry,
-  optionsFor: (entry: AgentRegistryEntry) => CodexAppServerHostOptions | Promise<CodexAppServerHostOptions>,
+  optionsFor: (entry: AgentRegistryEntry) => AdoptionOptions<CodexAppServerHostOptions> | Promise<AdoptionOptions<CodexAppServerHostOptions>>,
   env: NodeJS.ProcessEnv = process.env,
   shouldAdopt: StructuredHostAdoptionFilter = () => true,
   processed?: StructuredHostAdoptionProgress,
@@ -1548,8 +1552,9 @@ export async function adoptCodexRegistryHosts(
           const memberCurrent = memberAdoptionGuard(registry, claimed);
           memberCurrent?.();
           const retainedProtocolVersion = claimed.structuredHost.protocolVersion;
+          const { memoryDelivery, ...preparedOptions } = await optionsFor(claimed);
           const options = {
-            ...await optionsFor(claimed),
+            ...preparedOptions,
             initialEventCursor: claimed.structuredHost.eventCursor,
             ...(socketOwner ? { socketOwner, readProtocolVersion: () => retainedProtocolVersion ?? "unknown" } : {}),
           };
@@ -1574,6 +1579,10 @@ export async function adoptCodexRegistryHosts(
           memberCurrent?.();
           const binding = await bindCodexHostPersistence(registry, entry.key, host, claimed.claimOwner!, claimed.claimEpoch,
             "unhosted", { onCheckpoint: custody?.checkpoint });
+          if (!socketOwner) {
+            try { await confirmMemoryDelivery(memoryDelivery); }
+            catch (error) { await host.release(); await binding(); throw error; }
+          }
           const item = { key: entry.key, host, custody: binding.custody };
           adopted.push(item);
           dependencies.onAdopted?.(item);
@@ -1637,7 +1646,7 @@ export async function adoptCodexRegistryHosts(
 /** Boot seam: resume selected durable Claude broker rows when structured hosting is enabled. */
 export async function adoptClaudeRegistryHosts(
   registry: AgentRegistry,
-  optionsFor: (entry: AgentRegistryEntry) => ClaudeStreamBrokerHostOptions | Promise<ClaudeStreamBrokerHostOptions>,
+  optionsFor: (entry: AgentRegistryEntry) => AdoptionOptions<ClaudeStreamBrokerHostOptions> | Promise<AdoptionOptions<ClaudeStreamBrokerHostOptions>>,
   env: NodeJS.ProcessEnv = process.env,
   shouldAdopt: StructuredHostAdoptionFilter = () => true,
   processed?: StructuredHostAdoptionProgress,
@@ -1720,8 +1729,9 @@ export async function adoptClaudeRegistryHosts(
         try {
           const memberCurrent = memberAdoptionGuard(registry, claimed);
           memberCurrent?.();
+          const { memoryDelivery, ...preparedOptions } = await optionsFor(claimed);
           const options = {
-            ...await optionsFor(claimed),
+            ...preparedOptions,
             initialEventCursor: claimed.structuredHost.eventCursor,
           };
           const previousGuard = options.assertCurrent;
@@ -1744,6 +1754,8 @@ export async function adoptClaudeRegistryHosts(
           memberCurrent?.();
           const binding = await bindClaudeHostPersistence(registry, entry.key, host, claimed.claimOwner!, claimed.claimEpoch,
             "unhosted", { onCheckpoint: custody?.checkpoint });
+          try { await confirmMemoryDelivery(memoryDelivery); }
+          catch (error) { await host.release(); await binding(); throw error; }
           const item = { key: entry.key, host, custody: binding.custody };
           adopted.push(item);
           dependencies.onAdopted?.(item);

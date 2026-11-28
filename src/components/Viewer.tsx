@@ -47,7 +47,7 @@ import { AttentionToast } from "./attention/AttentionToast";
 import { SoundCaptions } from "./SoundCaptions";
 import type { CaptionTarget } from "@/lib/audio/captions";
 import { openCaptionTarget as openCaptionTargetIn } from "@/lib/audio/captionNavigation";
-import { attentionEntryProject, buildNeedsYouQueue, laneFocusId, laneFocusPath, type MobileAttentionEntry } from "./attention/attentionQueue";
+import { attentionEntryProject, buildNeedsYouQueue, laneFocusId, laneFocusPath, needsYouHolds, type MobileAttentionEntry } from "./attention/attentionQueue";
 import { MobileAttentionSheet, type MobileNoticeRow } from "./attention/MobileAttentionSheet";
 import { roleNameById } from "./builderCopy";
 import { purgeLegacyOperatorCredential } from "./operatorCredential";
@@ -1133,14 +1133,23 @@ function ViewerApp() {
     }
     publishBlockerNames({ projects: projectDisplayNames, conversations, tasks: taskTitles, cards });
   }, [updateBlockers, updateDecision, wantedNames, allFiles, tasks, projectDisplayNames]);
-  const needsYou = useMemo(() => buildNeedsYouQueue(files, pipelines, clock, closingPipelines, updateDecision, tasks, seatDecisions, secretRequestNotices), [files, pipelines, clock, closingPipelines, updateDecision, tasks, seatDecisions, secretRequestNotices]);
-  /* «Готово» (docs/design/done-section.md §5): finished work still waiting to
-     be accepted counts with the decisions on the header, the panel, the tab
-     title and the phone's badge, until it is accepted. The rail's ⏸, «Dismiss
-     all», the agents' read and the board report stay decisions only. */
+  /* Everything the board's cards mark as waiting on the operator: the N key
+     and the «show only who waits» filter walk it. */
+  const boardWaits = useMemo(
+    () => buildNeedsYouQueue(files, pipelines, clock, closingPipelines, updateDecision, tasks, seatDecisions, secretRequestNotices),
+    [files, pipelines, clock, closingPipelines, updateDecision, tasks, seatDecisions, secretRequestNotices],
+  );
+  /* «Needs you» (docs/design/legatus/build-plan.md, slice 1): the forms that
+     wait for the operator, and the waits no seat answers yet. The header, the
+     panel, the tab title, the rail's ⏸, the phone's badge and its sheet all
+     read this one list. */
+  const needsYou = useMemo(() => boardWaits.filter(needsYouHolds), [boardWaits]);
+  /* «Готово» (docs/design/done-section.md) no longer counts anywhere: the feed
+     still projects for the cards, the report log and the deploy and limit
+     fault sounds. */
   const doneItems = useDoneItems();
   const doneLoaded = useDoneItemsLoaded();
-  const waitingCount = needsYou.length + doneItems.length;
+  const waitingCount = needsYou.length;
   /* The sound map (docs/design/sound-redesign.md): what needs the operator,
      what landed and what was released, from the same queue and feed the badge
      reads, so a sound and the badge cannot disagree. A stand-in served for a
@@ -1454,8 +1463,8 @@ function ViewerApp() {
   /* N never leaves the current project (D4): the same items and order the
      global list holds, conversations and lanes, taken off its memo. */
   const projectEntries = useMemo(
-    () => (project === OVERVIEW ? [] : needsYou.filter((entry) => attentionEntryProject(entry) === project)),
-    [needsYou, project],
+    () => (project === OVERVIEW ? [] : boardWaits.filter((entry) => attentionEntryProject(entry) === project)),
+    [boardWaits, project],
   );
 
   /* The phone's ONE queue (mobile v2 §4.1, §4.6): the bar's badge counts it,
@@ -1473,16 +1482,17 @@ function ViewerApp() {
      (`needsDecisionPipelineRows`), so the count, the sheet and the rows under
      it cannot disagree. It is a slice of the desktop island's list, so the
      phone and the desktop cannot disagree either (#2129). */
-  const shellEntries = project === OVERVIEW ? needsYou : projectEntries;
+  const shellEntries = useMemo(
+    () => (project === OVERVIEW ? needsYou : needsYou.filter((entry) => attentionEntryProject(entry) === project)),
+    [needsYou, project],
+  );
   const shellQueueCount = shellEntries.length;
-  /* The phone's «Готово» is the same slice, plus what belongs to no board. */
-  const shellDone = useMemo(() => (project === OVERVIEW ? doneItems : doneItems.filter((item) => item.project === null || item.project === project)), [doneItems, project]);
   /* The filter is offered while anything on the board on screen waits, a
      parked lane (#2129) included: that card is what stays lit. Scoped to the
      board, so it never offers to dim a board where nothing would stay lit.
      The boards read it from one attribute on <main> (globals.css), so
      flipping it re-renders none of them. */
-  const needsOnlyAvailable = shellQueueCount > 0;
+  const needsOnlyAvailable = (project === OVERVIEW ? boardWaits : projectEntries).length > 0;
   /* eslint-disable-next-line react-hooks/set-state-in-effect */
   useEffect(() => {
     if (!needsOnlyAvailable) setNeedsOnly(false);
@@ -1729,7 +1739,6 @@ function ViewerApp() {
       onOpen={jumpToEntry}
       focus={panelFocus}
       pinned={favoritesPinned}
-      done={doneItems}
     />
   );
 
@@ -1846,12 +1855,11 @@ function ViewerApp() {
           onNoticesSeen={markNoticesSeen}
           filterActive={needsOnly}
           onToggleFilter={needsOnlyAvailable ? () => setNeedsOnly((value) => !value) : undefined}
-          done={shellDone}
         />
       );
     }
     return null;
-  }, [isMobile, shellEntries, shellDone, openFile, openOverOverview, mobileNav, files, allFiles, railCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, needsYouByProject, loaded, catalogFailures, selectProject, createProject, projectRowActions, toggleCrown, projectCwds, jumpToItem, openPrototypeEntry, noticeRows, railOrder, needsOnly, needsOnlyAvailable, workspaceState, clearNotice, markNoticesSeen]);
+  }, [isMobile, shellEntries, openFile, openOverOverview, mobileNav, files, allFiles, railCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, needsYouByProject, loaded, catalogFailures, selectProject, createProject, projectRowActions, toggleCrown, projectCwds, jumpToItem, openPrototypeEntry, noticeRows, railOrder, needsOnly, needsOnlyAvailable, workspaceState, clearNotice, markNoticesSeen]);
 
   const mobileArrival = useMemo(() => isMobile && toastFile ? (
     <AttentionToast file={toastFile} mobile onOpen={() => {
@@ -1860,12 +1868,11 @@ function ViewerApp() {
       setToastPath(null);
     }} onDismiss={() => setToastPath(null)} />
   ) : null, [isMobile, toastFile, project, openOverOverview, openFile]);
-  const attentionCount = shellQueueCount + shellDone.length;
   const filterActive = needsOnly && needsOnlyAvailable;
   const mobileShell = useMemo<MobileShellHost | null>(() => isMobile ? {
-    attentionCount, noticeDot: phoneNotices.unseen, filterActive, arrival: mobileArrival, workspaceEyebrow,
+    attentionCount: shellQueueCount, noticeDot: phoneNotices.unseen, filterActive, arrival: mobileArrival, workspaceEyebrow,
     renderSheet: renderViewerSheet,
-  } : null, [isMobile, attentionCount, phoneNotices.unseen, filterActive, mobileArrival, workspaceEyebrow]);
+  } : null, [isMobile, shellQueueCount, phoneNotices.unseen, filterActive, mobileArrival, workspaceEyebrow]);
 
   const shell = (
     <div className="flex h-full">

@@ -123,7 +123,7 @@ import { tierCutState as tierCutStateSync } from "@/lib/runtime/tierSwitch";
 import { DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR } from "@/lib/runtime/structuredDeliveryQueue";
 import { enqueueStructuredMessage, idleContinuationDeliveryRetryable } from "@/lib/runtime/structuredMessageDelivery";
 import { delegatusMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
-import { interruptionObligationDirectory, interruptionObligationStore, submittedContinuationOutcome, type InterruptionObligation } from "@/lib/runtime/interruptionObligations";
+import { InterruptionJournalBusyError, interruptionObligationDirectory, readInterruptionObligations, submittedContinuationOutcome, withInterruptionObligationAdmission, type InterruptionObligation } from "@/lib/runtime/interruptionObligations";
 import { StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
 import { dispatchStructuredControl, RUNTIME_HOST_UNAVAILABLE_CODE } from "@/lib/runtime/structuredControls";
 import {
@@ -191,7 +191,7 @@ import { isReviewGate, launchSizingRefusal, reviewGateRefusal, type Briefer, typ
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import { normalizeStageOutputPath } from "./stageAccess";
 import { settlePendingStageProvenance, stageProvenanceFence } from "./stageProvenance";
-import { commitAndAdoptStageBranch, observeStageBranchProtection, stageBranchOwnershipReader, type StageBranchProtection } from "./stageBranch";
+import { commitAndAdoptStageBranch, observeStageBranchProtection, StageBranchOwnershipChange, stageBranchOwnershipReader, type StageBranchProtection } from "./stageBranch";
 import { graphDigest, stageDigest } from "./stageDigest";
 import { matchesShortId, resolveShortId, shortId } from "@/lib/shortIds";
 import { pipelineStageRuntimeProfile, type PipelineStageRuntimeProfile } from "./stageSandbox";
@@ -494,11 +494,13 @@ export interface PipelinePorts {
   /** The newest turn a Viewer release or restart cut for this conversation, as
       its interruption obligation records it (#1835). Null when none was
       recorded, which is the answer for every conversation no deploy cut. */
-  conversationInterruption?(conversationId: string): StageInterruption | null;
+  conversationInterruption?(conversationId: string, options?: { fresh?: boolean }): StageInterruption | null | Promise<StageInterruption | null>;
+  /** Keep the cut fence through the retry cursor's commit. */
+  withRetryCut?<T>(conversationId: string, commit: (cut: StageInterruption | null) => Promise<T>): Promise<T>;
   /** When a service restart last cut this conversation's turn: the release
       that handed its host over, or the boot that found the turn in flight,
       recorded it. Null for every conversation no restart cut. */
-  conversationRestartCut?(conversationId: string): { recordedAt: string } | null;
+  conversationRestartCut?(conversationId: string): { recordedAt: string } | null | Promise<{ recordedAt: string } | null>;
   /** Startup has not yet decided this row's restart evidence. Replacement
       must wait even when the runtime already describes the host as dead. */
   conversationRestartCutHeld?(conversationId: string): boolean;
@@ -1967,7 +1969,10 @@ export function defaultPipelinePorts(
   let adoptionCandidatesByPipeline: Map<string, PipelineAdoptionCandidate[]> | null = null;
   let adoptionMemberships: Array<[string, RegistryFile["memberships"][string]]> | null = null;
   let materializationFence: ReturnType<typeof identityMaterializationFence> | null = null;
-  let interruptions: InterruptionObligation[] | null = null;
+  let interruptions: Promise<InterruptionObligation[]> | null = null;
+  const readInterruptions = () => readInterruptionObligations(
+    interruptionObligationDirectory(registry.filename), { signal: dependencies.runtimeObservation?.signal },
+  );
   const snapshot = () => registrySnapshot ??= registry.readOnlySnapshot();
   /* Host ownership and pending deliveries can change while a pipeline awaits
      transcript evidence. Settlement and retry admission must observe current
@@ -1999,19 +2004,33 @@ export function defaultPipelinePorts(
     return Boolean(identity && hostExitWriterPending(identity) && processIdentityStatus(identity) === "dead");
   };
   /* The newest cut recorded for a conversation; the store lists oldest first. */
-  const newestCut = (conversationId: string): InterruptionObligation | null => {
+  const newestCut = async (conversationId: string, fresh = false): Promise<InterruptionObligation | null> => {
     if (!conversationId.startsWith("conversation_")) return null;
-    if (!interruptions) {
-      try {
-        interruptions = interruptionObligationStore(interruptionObligationDirectory(registry.filename)).list();
-      } catch (error) {
-        console.error("[pipelines] interruption obligations are unreadable", error);
-        interruptions = [];
-      }
+    // Keep one read for this pass. A journal refusal ends recovery that
+    // depends on this evidence, leaving it for the next controller tick.
+    const pending = fresh ? readInterruptions() : interruptions ??= readInterruptions();
+    let records: InterruptionObligation[];
+    try { records = await pending; }
+    catch (error) {
+      if (interruptions === pending) interruptions = null;
+      throw error;
     }
+    return cutFor(records, conversationId);
+  };
+  const cutFor = (records: InterruptionObligation[], conversationId: string) => {
     const canonical = registry.canonicalConversationId(conversationId as ViewerConversationId);
-    return interruptions.filter((obligation) =>
+    return records.filter((obligation) =>
       registry.canonicalConversationId(obligation.conversationId) === canonical).at(-1) ?? null;
+  };
+  const cutView = (cut: InterruptionObligation | null): StageInterruption | null => {
+    if (!cut) return null;
+    // A submitted cut counts as delivered only when its reservation proves it.
+    const outcome = cut.state === "submitted"
+      ? submittedContinuationOutcome(cut, registry.livenessConversationSnapshot(cut.conversationId), id => registry.canonicalConversationId(id))
+      : null;
+    return outcome && !outcome.compacted
+      ? { state: outcome.state, recordedAt: cut.recordedAt, resolvedAt: outcome.at }
+      : { state: cut.state, recordedAt: cut.recordedAt, resolvedAt: cut.resolvedAt };
   };
   const identityFence = () => materializationFence ??= identityMaterializationFence(snapshot());
   const invalidateRegistryProjection = () => {
@@ -2810,24 +2829,13 @@ export function defaultPipelinePorts(
       const result = hostEndEvidence(conversationId, launchId);
       return result ? [hostExitText(result.evidence), result.ended ? claudeHostEndText(result.ended) : null].filter(Boolean).join("; ") : null;
     },
-    conversationInterruption: (conversationId) => {
-      const cut = newestCut(conversationId);
-      if (!cut) return null;
-      /* The queue answers `submitted` on admission, and the store records the
-         arrival only on a later startup pass; the reservation the obligation's
-         id keys says when the continuation arrived. A reservation retention
-         already dropped proves nothing about this turn, so it keeps the hold. */
-      const outcome = cut.state === "submitted"
-        ? submittedContinuationOutcome(cut, snapshot(), (id) => registry.canonicalConversationId(id))
-        : null;
-      return outcome && !outcome.compacted
-        ? { state: outcome.state, recordedAt: cut.recordedAt, resolvedAt: outcome.at }
-        : { state: cut.state, recordedAt: cut.recordedAt, resolvedAt: cut.resolvedAt };
-    },
+    conversationInterruption: async (conversationId, options) => cutView(await newestCut(conversationId, options?.fresh)),
+    withRetryCut: async (conversationId, commit) => await withInterruptionObligationAdmission(interruptionObligationDirectory(registry.filename),
+      store => commit(cutView(cutFor(store.list(), conversationId)))),
     /* A release records the cut as it hands a host over and a booting Viewer
        records the ones nobody released; either is the service restarting. */
-    conversationRestartCut: (conversationId) => {
-      const cut = newestCut(conversationId);
+    conversationRestartCut: async (conversationId) => {
+      const cut = await newestCut(conversationId);
       return cut ? { recordedAt: cut.recordedAt } : null;
     },
     conversationRestartCutHeld: (conversationId) => {
@@ -5585,6 +5593,35 @@ function settledPublicationRefusal(pipeline: Pipeline): RefusedPublication | nul
     ? { ok: false, error: result.detail, remote: "unreachable" } : null;
 }
 
+function refusedPassedPublicationAttempt(pipeline: Pipeline): PipelineStageAttempt | null {
+  const delivery = pipeline.delivery;
+  const operation = delivery?.operation;
+  if (!delivery?.active || !delivery.target.remote || !publishesRemoteBranch(pipeline)
+    || !operation || operation.epoch !== delivery.epoch || operation.sha !== pipeline.lastPassedCommit
+    || !awaitingPassedPublication(pipeline) || pipeline.remoteAction?.state === "pending") return null;
+  const refusal = settledPublicationRefusal(pipeline);
+  if (!refusal || refusal.outcome === "superseded") return null;
+  const attempt = currentAttempt(pipeline, pipeline.cursor!.stageId)!;
+  if (attempt.publicationRepair) return null;
+  return pipeline.state === "running" || pipeline.state === "paused" || checkoutVerificationPark(pipeline, attempt)
+    ? attempt : null;
+}
+
+/** A manual action can arrive before the committing job verifies the checkout. */
+async function movedRefusedPublicationHead(pipeline: Pipeline, ports: PipelinePorts): Promise<string | null> {
+  if (!refusedPassedPublicationAttempt(pipeline)) return null;
+  const head = await currentPipelineBranchHead(pipeline, ports.exec);
+  return head.ok && head.sha !== pipeline.lastPassedCommit ? head.sha : null;
+}
+
+async function parkMovedPassedPublication(pipeline: Pipeline, attempt: PipelineStageAttempt, head: string, ports: PipelinePorts): Promise<void> {
+  const base = pipeline.baseBranch || DEFAULT_PIPELINE_BASE_BRANCH;
+  const detail = afterCommitRepair(attempt, `the worktree moved to ${shortId(head)} after accepting ${shortId(pipeline.lastPassedCommit)}. Use publish acceptedSha=${head} to accept a verified clean integration of origin/${base}. Other changes require a fresh review.`);
+  recordSettledPublicationFailure(pipeline, attempt, ports);
+  attempt.error = detail;
+  await park(pipeline, detail);
+}
+
 /** A quiescent publisher whose push never reached the remote: ended by a
     signal, by its time limit, or together with the Viewer that started it. */
 function publicationNotLanded(published: RefusedPublication): boolean {
@@ -6810,6 +6847,7 @@ async function retryPassedStageCommit(pipeline: Pipeline, ports: PipelinePorts):
       return { error: `the ${pending} may still be running or queued; wait for it to finish before retrying settlement`, status: 409 };
     }
   }
+  if (resumeParkedStageSettlement(pipeline, ports, true)) return { pipeline };
   if (attempt.commitRepair) {
     // Explicit retry renews permission for one commit after a rejected repair.
     // Keep the original refusal/request; no second repair turn is sent.
@@ -7429,9 +7467,10 @@ function rebindPipelineAttemptPaths(pipeline: Pipeline, ports: PipelinePorts): b
  * after the attempt started is this attempt's; an older one belongs to an
  * earlier turn of the conversation.
  */
-function deployCutOf(attempt: PipelineStageAttempt, ports: PipelinePorts): StageInterruption | null {
+async function deployCutOf(attempt: PipelineStageAttempt, ports: PipelinePorts, fresh = false): Promise<StageInterruption | null> {
   if (attempt.paneId || !attempt.conversationId || !attempt.startedAt || !ports.conversationInterruption) return null;
-  const cut = ports.conversationInterruption(attempt.conversationId);
+  const cut = fresh ? await ports.conversationInterruption(attempt.conversationId, { fresh: true })
+    : await ports.conversationInterruption(attempt.conversationId);
   return cut && unixMs(cut.recordedAt) >= unixMs(attemptEvidenceFloor(attempt)) ? cut : null;
 }
 
@@ -7732,7 +7771,7 @@ async function replaceInterruptedStageAttempt(
   if (await cancelForOperatorPrompt(before)) return true;
   if (restartCutHoldsStageRecovery(attempt, ports)) return true;
   if (attempt.report || attempt.providerWait?.retryCancelled || newerExternalProviderPrompt(attempt, before)
-    || interruption.cut && before && !restartCutOf(attempt, before, ports)) return false;
+    || interruption.cut && before && !await restartCutOf(attempt, before, ports)) return false;
   /* A second interruption in the same boot keeps the bounded recovery policy.
      Each new service boot or recorded deploy cut owes its own replacement. */
   if (previous?.bootId === bootId) {
@@ -7824,7 +7863,7 @@ async function replaceInterruptedStageAttempt(
   if (attempt.report || attempt.providerWait?.retryCancelled || newerExternalProviderPrompt(attempt, latest)
     || (!interruption.cut && providerRecoveryOwnsTurn(attempt, latest)) || attempt.state !== "running") return false;
   if (interruption.cut
-    ? !restartCutOf(attempt, latest, ports)
+    ? !await restartCutOf(attempt, latest, ports)
     : latest?.turn !== "busy" || latest.launchOnly || (!ended && (latest.lastRecordAt ?? null) !== lastRecordAt)) {
     return false;
   }
@@ -7914,9 +7953,9 @@ async function startReplacementAttempt(
  * not end the turn, and whatever ends it later is not the restart. The
  * records a CLI writes as it exits or resumes are not work, whenever they land.
  */
-function restartCutOf(attempt: PipelineStageAttempt, durable: StageTurnEvidence | null | undefined, ports: PipelinePorts): boolean {
+async function restartCutOf(attempt: PipelineStageAttempt, durable: StageTurnEvidence | null | undefined, ports: PipelinePorts): Promise<boolean> {
   if (attempt.paneId || !attempt.conversationId || !attempt.startedAt) return false;
-  const cut = ports.conversationRestartCut?.(attempt.conversationId);
+  const cut = await ports.conversationRestartCut?.(attempt.conversationId);
   if (!cut || unixMs(cut.recordedAt) < unixMs(attempt.startedAt)) return false;
   if (!durable) return true;
   /* A turn the provider ended keeps its provider recovery, with its wait,
@@ -7955,7 +7994,7 @@ async function continueRestoredClaudeStage(
     delete attempt.restoreContinuation;
     await persist();
   }
-  const cut = ports.conversationRestartCut?.(attempt.conversationId);
+  const cut = await ports.conversationRestartCut?.(attempt.conversationId);
   if (!attempt.restoreContinuation && (!cut || unixMs(cut.recordedAt) < unixMs(evidenceFloor))) return false;
   // Preserve the ordinary cheap live path while both scan and runtime agree.
   // A stale running ledger over a restored idle host must still fall through.
@@ -7983,7 +8022,7 @@ async function continueRestoredClaudeStage(
   const final = durable?.turn === "terminal" && durable.message && durable.message.ts > unixMs(attemptEvidenceFloor(attempt))
     && parsePipelineStageVerdict(durable.message.text);
   if (final && "verdict" in final) return false;
-  if (restartCutHoldsStageRecovery(attempt, ports) || deployCutHoldsAttempt(deployCutOf(attempt, ports), ports)) return true;
+  if (restartCutHoldsStageRecovery(attempt, ports) || deployCutHoldsAttempt(await deployCutOf(attempt, ports), ports)) return true;
   if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return true;
   const provider = durable?.turn === "terminal" && durable.terminalProviderMessage;
   if (provider && classifyProviderCondition("claude", provider.errorClass, provider.text).kind !== "turn_cut") return false;
@@ -7996,7 +8035,7 @@ async function continueRestoredClaudeStage(
       // A pre-cut command can report its shutdown after the cut was recorded.
       // Only a fresh prompt or provider-authored output proves Claude resumed;
       // native task notifications still belong to the interrupted work.
-      const resumed = durable.lastAgentOutputAt === undefined ? !restartCutOf(attempt, durable, ports)
+      const resumed = durable.lastAgentOutputAt === undefined ? !await restartCutOf(attempt, durable, ports)
         : (durable.lastAgentOutputAt ?? 0) > cutAt
           || durable.prompts?.some(prompt => prompt.origin !== "harness" && prompt.ts > cutAt);
       if (resumed) return false;
@@ -8080,8 +8119,9 @@ async function continueRestoredClaudeStage(
     if (!current()) return false;
     const latestActive = await ports.conversationAgentActive(conversationId);
     if (!current() || await operatorStopped()) return false;
+    const deployCut = await deployCutOf(attempt, ports);
     return current() && !restartCutHoldsStageRecovery(attempt, ports)
-      && !deployCutHoldsAttempt(deployCutOf(attempt, ports), ports)
+      && !deployCutHoldsAttempt(deployCut, ports)
       && !ports.conversationDeliveryOutstanding?.(conversationId)
       && (latestActive !== true || !!latestInterrupted)
       && (latest.turn !== "busy" || (latest.lastAgentOutputAt ?? 0) <= unixMs(recovery.cutAt) || idleTurnSilent(latest, ports))
@@ -8137,7 +8177,7 @@ async function recoverInterruptedStageTurn(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   ports: PipelinePorts, persist: () => void | Promise<void>,
 ): Promise<boolean> {
-  const cut = deployCutOf(attempt, ports);
+  const cut = await deployCutOf(attempt, ports);
   if (attempt.state !== "running" || attempt.report || attempt.paneId || !attempt.conversationId || !attempt.agentPath
     || deployCutHoldsAttempt(cut, ports)) return false;
   const observedIdentity = { n: attempt.n, conversationId: attempt.conversationId, agentPath: attempt.agentPath, startedAt: attempt.startedAt };
@@ -8145,7 +8185,7 @@ async function recoverInterruptedStageTurn(
   if (!interrupted) return false;
   const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, undefined, attempt.startedAt);
   if (durable?.turn !== "busy" || durable.launchOnly
-    || providerRecoveryOwnsTurn(attempt, durable) && !restartCutOf(attempt, durable, ports)) return false;
+    || providerRecoveryOwnsTurn(attempt, durable) && !await restartCutOf(attempt, durable, ports)) return false;
   /* An idle host whose transcript is still growing is an agent at work. */
   if (interrupted === "idle" && !idleTurnSilent(durable, ports)) return false;
   if (ports.conversationDeliveryOutstanding?.(attempt.conversationId)) return true;
@@ -8185,7 +8225,7 @@ async function recoverInterruptedStageTurn(
      transcript proves no work after the boot. */
   const newestRecordAt = recoveryEvidence.lastRecordAt ?? recoveryEvidence.message?.ts ?? null;
   const recordedCut = !attempt.providerWait?.retryCancelled && !newerExternalProviderPrompt(attempt, recoveryEvidence)
-    && restartCutOf(attempt, recoveryEvidence, ports);
+    && await restartCutOf(attempt, recoveryEvidence, ports);
   const restarted = (bootStartedAt > unixMs(attemptEvidenceFloor(attempt)) && (newestRecordAt === null || newestRecordAt <= bootStartedAt))
     || (typeof epoch === "number" && attempt.hostEpoch !== undefined && attempt.hostEpoch !== epoch)
     || recordedCut;
@@ -8210,7 +8250,7 @@ async function reconcileSeveredStageTurn(
   if (attempt.state !== "running" || attempt.report || attempt.paneId || !conversationId || !attempt.agentPath) return "continue";
   const epoch = await ports.runtimeHostEpoch?.() ?? null;
   if (epoch === null) return "continue";
-  if (deployCutHoldsAttempt(deployCutOf(attempt, ports), ports)) return "continue";
+  if (deployCutHoldsAttempt(await deployCutOf(attempt, ports), ports)) return "continue";
   const clearWitness = (): void => {
     if (attempt.severedTurn === undefined) return;
     delete attempt.severedTurn;
@@ -11352,9 +11392,9 @@ async function tickRunStage(
   if (!attempt.report && attempt.providerWait?.retryCancelled && attempt.conversationId
     && await stageHostExited(attempt, ports)) {
     const latest = attempt.agentPath ? await stageRepairEvidence(attempt, ports) : null;
-    const continuationHeld = () => ports.conversationDeliveryOutstanding?.(attempt.conversationId!) === true
-      || deployCutHoldsAttempt(deployCutOf(attempt, ports), ports);
-    if (continuationHeld()) {
+    const continuationHeld = async () => ports.conversationDeliveryOutstanding?.(attempt.conversationId!) === true
+      || deployCutHoldsAttempt(await deployCutOf(attempt, ports), ports);
+    if (await continuationHeld()) {
       ports.scheduleTick?.(1_000);
       return;
     }
@@ -11369,8 +11409,8 @@ async function tickRunStage(
       }
     }
     const stillExited = await stageHostExited(attempt, ports);
-    if (!stillExited || attempt.report || !attempt.providerWait?.retryCancelled || continuationHeld()) {
-      if (continuationHeld()) ports.scheduleTick?.(1_000);
+    if (!stillExited || attempt.report || !attempt.providerWait?.retryCancelled || await continuationHeld()) {
+      if (await continuationHeld()) ports.scheduleTick?.(1_000);
       return;
     }
     attempt.state = "failed";
@@ -11383,7 +11423,7 @@ async function tickRunStage(
     if ((structuredActive === false || paneActive === false) && !attempt.report) {
       /* A restart that cut the attempt before its transcript was found owns
          its fresh attempt, retaining the worktree like any other cut. */
-      if (restartCutOf(attempt, null, ports)
+      if (await restartCutOf(attempt, null, ports)
         && await recoverRestartCutStage(pipeline, stage, attempt, null, ports, persist)) return;
       await recoverProviderCut(pipeline, stage, attempt, { condition: { kind: "host_death", scope: null, resetLabel: null, label: "stage host died without output" },
         text: "stage host died without output", ts: unixMs(attemptEvidenceFloor(attempt)) + 1, resetsAt: null }, ports, persist);
@@ -11429,7 +11469,7 @@ async function tickRunStage(
      verdict. The hold does not wait for the host to read unavailable: the
      successor re-hosts the conversation before it delivers, and the turn it
      re-hosted ends in whatever the cut left behind. */
-  const deployCut = deployCutOf(attempt, ports);
+  const deployCut = await deployCutOf(attempt, ports);
   const heldForDeployCut = deployCutHoldsAttempt(deployCut, ports);
   const unavailableAt = reportedUnavailableAt > 0 && deployCut?.state === "delivered" && deployCut.resolvedAt
     ? Math.max(reportedUnavailableAt, unixMs(deployCut.resolvedAt))
@@ -11477,7 +11517,7 @@ async function tickRunStage(
   await reconcileMisclassifiedProviderCancellation(pipeline, stage, attempt, ports, persist, durable);
   const restartCut = !oomDeath && !heldForDeployCut && !attempt.report
     && !attempt.providerWait?.retryCancelled && !newerExternalProviderPrompt(attempt, durable)
-    && restartCutOf(attempt, durable, ports);
+    && await restartCutOf(attempt, durable, ports);
   // OOM recovery owns the slot immediately after recorded reports.
   const terminalProviderMessage = durable?.turn === "terminal" ? durable.terminalProviderMessage : null;
   const notice = terminalProviderMessage && terminalProviderMessage.ts > unixMs(attemptEvidenceFloor(attempt))
@@ -12544,13 +12584,13 @@ async function reconcileParkedRestartCut(pipeline: Pipeline, stage: PipelineStag
           && attempt.error.startsWith(recovery.summary));
   };
   if (!wait || !unchanged() || !attempt.agentPath || !attempt.conversationId || !ports.conversationOperatorStopped
-    || ports.conversationRegistered?.(attempt.conversationId) === false || !restartCutOf(attempt, null, ports)
-    || deployCutHoldsAttempt(deployCutOf(attempt, ports), ports)) return false;
+    || ports.conversationRegistered?.(attempt.conversationId) === false || !await restartCutOf(attempt, null, ports)
+    || deployCutHoldsAttempt(await deployCutOf(attempt, ports), ports)) return false;
   const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath,
     undefined, attemptEvidenceFloor(attempt), undefined, wait.turnTs);
   const boundary = durable?.requestedPromptBoundary;
   if (!durable || boundary === undefined) { ports.scheduleTick?.(1_000); return true; }
-  if (!restartCutOf(attempt, durable, ports)
+  if (!await restartCutOf(attempt, durable, ports)
     || (durable.lastExternalPromptIndex ?? boundary) >= boundary) return false;
   if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return true;
   if (!unchanged() || stageTurnEvidenceCurrent(durable) !== true) { ports.scheduleTick?.(1_000); return true; }
@@ -12679,7 +12719,7 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
       }
     }
   }
-  if (stage?.kind === "run" && attempt?.report && wait && restartCutOf(attempt, null, ports)) {
+  if (stage?.kind === "run" && attempt?.report && wait && await restartCutOf(attempt, null, ports)) {
     await settleOnRecordedReport(pipeline, stage, attempt, ports, persist);
     return true;
   }
@@ -14109,10 +14149,12 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
     });
     const remaining = unixMs(waiting?.retryAfter ?? null) - unixMs(ports.now());
     if (remaining > 0) { ports.scheduleTick?.(remaining); throw preparationRefusal(); }
-    const ownership = stageBranchOwnershipReader(preview.id);
+    const ownership = stageBranchOwnershipReader(preview, attempt.branchAdoption?.branch ?? ports.stageBranchProtections?.get(preview.id)?.branch);
     let ownershipFence: string;
-    try { ownershipFence = await ownership.read(); }
-    catch (error) {
+    try {
+      ownershipFence = await ownership.read();
+      if (!ownership.current()) throw ownership.failure("settlement");
+    } catch (error) {
       await recordStageSettlementPreparationFailure(preview, preparationIdentity, ports, error);
       throw preparationRefusal();
     }
@@ -14120,14 +14162,15 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
     // before acquiring or dispatching any work for that selection.
     if (version() !== rowVersion || controllerTickFingerprint(reader.read()!) !== fingerprint) continue;
     let ownershipInvalidated = false;
-    let ownershipFailure: unknown = new Error("pipeline branch ownership changed during settlement");
+    let ownershipFailure: unknown;
     const ownershipCurrent = () => {
       if (ownership.current()) return true;
       ownershipInvalidated = true;
+      ownershipFailure = ownership.failure("settlement");
       return false;
     };
-    const matches = (current: Pipeline | null) => current !== null && version() === rowVersion
-      && ownershipCurrent() && controllerTickFingerprint(current) === fingerprint
+    const matches = (current: Pipeline | null) => current !== null && ownershipCurrent()
+      && version() === rowVersion && controllerTickFingerprint(current) === fingerprint
       && !(current.delivery?.operation?.state === "running" && proactivePipelineExecutionError(current, "prepare"))
       && (!attempt.flowId || JSON.stringify(ports.getFlow(attempt.flowId)) === flowFingerprint);
     const lock = path.join(pipelineArtifactsDir(preview.id), "remote-action.lock");
@@ -14151,9 +14194,10 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
     let validation: Promise<void> | undefined;
     const revalidate = () => validation ??= withViewerOperation("pipelines.revalidate", async () => {
       try {
-        if (version() !== rowVersion) { abort.abort(); return; }
+        if (version() !== rowVersion) { ownershipCurrent(); abort.abort(); return; }
         if (await ownership.read() !== ownershipFence) {
           ownershipInvalidated = true;
+          ownershipFailure = ownership.failure("settlement");
           abort.abort();
         }
         if (version() !== rowVersion
@@ -14315,6 +14359,36 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
 const STAGE_SETTLEMENT_ADMISSION_WAIT_MS = 15 * 60_000;
 const STAGE_SETTLEMENT_ADMISSION_SUPERSEDED = "publication admission superseded by the passed-stage settlement decision";
 const STAGE_SETTLEMENT_PREPARATION_DETAIL = "passed-stage settlement is waiting for fresh branch ownership evidence";
+const STAGE_SETTLEMENT_OWNERSHIP_PARK = "committing the passed stage: branch ownership preparation did not stabilize within 15 minutes: ";
+const LEGACY_SETTLEMENT_OWNERSHIP_CHANGE = "pipeline branch ownership changed during settlement";
+
+/** Recover parks written before ownership changes stayed on automatic backoff. */
+function resumeParkedStageSettlement(pipeline: Pipeline, ports: PipelinePorts, explicit = false): boolean {
+  const stage = currentStage(pipeline);
+  const attempt = stage && currentAttempt(pipeline, stage.id);
+  const wait = attempt?.settlementPreparationWait;
+  const operation = pipeline.delivery?.operation;
+  if (!stage || !attempt || wait?.reason !== LEGACY_SETTLEMENT_OWNERSHIP_CHANGE
+    || pipeline.state !== "needs_decision" || pipeline.cursor?.state !== "committing"
+    || pipeline.closedAt || pipeline.hiddenAt
+    || attempt.state !== "needs_decision" || attempt.verdict?.status !== "pass"
+    || pipeline.stateDetail !== attempt.error || !attempt.error?.startsWith(STAGE_SETTLEMENT_OWNERSHIP_PARK)
+    || wait.identity !== stageSettlementPreparationIdentity(pipeline, stage, attempt)
+    || operation?.state === "running" || pipeline.remoteAction?.state === "pending"
+    || (!explicit && unixMs(wait.retryAfter) > unixMs(ports.now()))) return false;
+  // Older parks lost the pre-park attempt state. An exact publication
+  // reservation for this pass proves the head already passed local settlement.
+  const accepted = operation?.sha === pipeline.lastPassedCommit && operation.epoch === pipeline.delivery?.epoch
+    && operation.requestKey === `pass:${stage.id}:${attempt.n}`;
+  attempt.state = accepted ? "passed" : "committing";
+  attempt.error = null;
+  delete attempt.settlementAdmissionRetry;
+  delete attempt.settlementPreparationWait;
+  pipeline.state = "running";
+  pipeline.pausedState = null;
+  pipeline.stateDetail = `${STAGE_SETTLEMENT_PREPARATION_DETAIL}: ${wait.reason}`;
+  return true;
+}
 
 function stageSettlementPreparationIdentity(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): string {
   const delivery = pipeline.delivery, operation = delivery?.operation;
@@ -14343,13 +14417,13 @@ async function recordStageSettlementPreparationFailure(preview: Pipeline, identi
     const reason = redactBounded(error instanceof Error ? error.message : String(error), 400);
     // Missing proof never retires the accepted pass or its publication
     // reservation. Persist the first failure and retry schedule across boot.
-    attempt.settlementPreparationWait = { ...prior, identity, startedAt: prior?.startedAt ?? now,
+    attempt.settlementPreparationWait = { identity, startedAt: prior?.startedAt ?? now,
       rounds: rounds + 1, retryAfter: new Date(unixMs(now) + delayMs).toISOString(), reason };
-    if (unixMs(now) - unixMs(attempt.settlementPreparationWait.startedAt) >= STAGE_SETTLEMENT_ADMISSION_WAIT_MS) {
-      // No Git result is accepted without fresh ownership. Stop this same
-      // intent instead of renewing it forever, retaining the accepted head
-      // and publication receipt. The commit retry resumes the same attempt.
-      const detail = `committing the passed stage: branch ownership preparation did not stabilize within 15 minutes: ${reason}; retry-stage to settle the preserved head`;
+    // A recorded competing write calls for another read. Keep the accepted
+    // attempt and its dismissal intact while the controller backs off.
+    if (!(error instanceof StageBranchOwnershipChange)
+      && unixMs(now) - unixMs(attempt.settlementPreparationWait.startedAt) >= STAGE_SETTLEMENT_ADMISSION_WAIT_MS) {
+      const detail = `${STAGE_SETTLEMENT_OWNERSHIP_PARK}${reason}; retry-stage to settle the preserved head`;
       stageSettlementEffects.set(current, notes);
       try { await park(current, detail, attempt); }
       finally { stageSettlementEffects.delete(current); }
@@ -14944,6 +15018,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           pipelineChanged = reconcileParkedUsageLimit(pipeline) || pipelineChanged;
           pipelineChanged = await reconcileParkedProviderRetry(pipeline, lanePorts, persistPipeline) || pipelineChanged;
           pipelineChanged = reconcileParkedVerdictMiss(pipeline, lanePorts) || pipelineChanged;
+          pipelineChanged = resumeParkedStageSettlement(pipeline, lanePorts) || pipelineChanged;
           pipelineChanged = await reconcileParkedPublicationRepair(pipeline, lanePorts) || pipelineChanged;
           pipelineChanged = await reconcileParkedDelivery(pipeline, lanePorts) || pipelineChanged;
           pipelineChanged = await reconcileParkedStructuredSpawn(pipeline, lanePorts) || pipelineChanged;
@@ -17400,9 +17475,14 @@ export async function patchPipeline(
   workspaceMemberId?: string,
 ): Promise<PipelinePatchResult> {
   let before: BriefTextSnapshot | undefined;
-  const result = await applyPipelinePatch(id, req, ports, actor, assertAuthority, workspaceMemberId,
-    pipeline => { before = briefTextSnapshot(pipeline); });
-  return result.pipeline ? withBriefWarnings(result, before ?? briefTextSnapshot(result.pipeline)) : result;
+  try {
+    const result = await applyPipelinePatch(id, req, ports, actor, assertAuthority, workspaceMemberId,
+      pipeline => { before = briefTextSnapshot(pipeline); });
+    return result.pipeline ? withBriefWarnings(result, before ?? briefTextSnapshot(result.pipeline)) : result;
+  } catch (error) {
+    if (req.action !== "retry-stage" || !(error instanceof InterruptionJournalBusyError)) throw error;
+    return { error: error.message, status: 503 };
+  }
 }
 
 async function applyPipelinePatch(
@@ -17579,6 +17659,8 @@ async function applyPipelinePatch(
     const moved = accepted !== pipeline.lastPassedCommit;
     const publicationFence = remoteActionFence(pipeline);
     const publicationEvidence = passedPublicationEvidence(pipeline);
+    const movedHead = req.acceptedSha === undefined && pipeline.state !== "paused"
+      ? await movedRefusedPublicationHead(pipeline, ports) : null;
     let integration: PipelineStageAttempt["publicationIntegration"];
     // A pass whose commit custody settlement refused: whoever answers the
     // lane's decisions accepts its clean head after reviewing it, in place.
@@ -17634,6 +17716,15 @@ async function applyPipelinePatch(
       if (moved && current.delivery?.operation?.state === "running") return { error: "publisher is still in flight; reconcile before accepting a moved head", status: 409 };
       const ownerError = current.delivery && deliveryOwnerError(current, pipelineDeliveryLookup({ ...current.delivery.target, active: true }));
       if (ownerError) return { error: ownerError, status: 409 };
+      if (movedHead) {
+        const passed = refusedPassedPublicationAttempt(current);
+        if (!passed || remoteActionFence(current) !== publicationFence) {
+          return { error: "the lane changed during passed-head verification; read it again", status: 409 };
+        }
+        await parkMovedPassedPublication(current, passed, movedHead, ports);
+        await persist();
+        return { pipeline: current };
+      }
       if (req.acceptedSha === undefined && restoreParkedPublishedPass(current)) {
         await persist(); requestPipelineTick();
         return { pipeline: current };
@@ -17721,6 +17812,9 @@ async function applyPipelinePatch(
       return { pipeline: current };
     });
   }
+
+  const paused = req.action === "resume" ? findPipelineRecord(id) : null;
+  const resumedHead = paused?.state === "paused" ? await movedRefusedPublicationHead(paused, ports) : null;
 
   let decisionProducerEvidence: RepairProducerEvidence | undefined;
   if (req.action === "resolve-decision" || req.action === "retry-stage") {
@@ -18200,6 +18294,10 @@ async function applyPipelinePatch(
       }
     } else if (req.action === "resume") {
       if (pipeline.state !== "paused") return { error: "pipeline is not paused", status: 409 };
+      const passed = resumedHead ? refusedPassedPublicationAttempt(pipeline) : null;
+      if (resumedHead && (!passed || remoteActionFence(pipeline) !== remoteActionFence(paused!))) {
+        return { error: "the lane changed during passed-head verification; read it again", status: 409 };
+      }
       pipeline.state = pipeline.pausedState ?? "running";
       pipeline.pausedState = null;
       delete pipeline.pause;
@@ -18214,6 +18312,7 @@ async function applyPipelinePatch(
       pipeline.stateDetail = (pipeline.state === "needs_review" || pipeline.state === "needs_decision" && currentTerminalReviewPending(pipeline)) && pipeline.reviewPending
         ? reviewPendingDetail(pipeline.reviewPending)
         : pauseResumeDetail("resumed", actor);
+      if (resumedHead && passed) await parkMovedPassedPublication(pipeline, passed, resumedHead, ports);
       if (flow?.state === "paused") ports.patchFlow(flow.id, "resume", undefined, actor);
     } else if (req.action === "retry-stage") {
       const budgetRefusal = terminalBudgetDecisionRefusal(attempt, true);
@@ -18420,7 +18519,7 @@ async function applyPipelinePatch(
         if (hostExited && !await stageHostExited(attempt, ports)) {
           return { error: "the failed attempt still has a live stage host; retry was cancelled", status: 409 };
         }
-        if (deployCutHoldsAttempt(deployCutOf(attempt, ports), ports)
+        if (deployCutHoldsAttempt(await deployCutOf(attempt, ports, true), ports)
           || (attempt.conversationId && ports.conversationDeliveryOutstanding?.(attempt.conversationId))) {
           return { error: "the attempt parked by turn recovery still has a pending continuation", status: 409 };
         }
@@ -18429,6 +18528,9 @@ async function applyPipelinePatch(
         if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {
           await persist();
           return { error: "the host of the attempt parked by turn recovery has not confirmed termination", status: 409 };
+        }
+        if (!hostExited && deployCutHoldsAttempt(await deployCutOf(attempt, ports, true), ports)) {
+          return { error: "the attempt parked by turn recovery still has a pending continuation", status: 409 };
         }
       }
       if (stage?.kind === "run" && attempt && (attempt.state === "spawning" || isStructuredSpawnPark(pipeline, attempt)) && !attempt.report
@@ -18454,12 +18556,14 @@ async function applyPipelinePatch(
         /* Two refusals, said apart (#2790): one waits on a message still on
            its way to the attempt, the other on evidence that its agent has
            stopped working. */
+        const cut = await deployCutOf(attempt, ports, true);
+        assertAuthority?.();
         if (ports.conversationDeliveryOutstanding?.(attempt.conversationId)) {
           return { error: "the running attempt has a pending delivery; retry once that delivery settles", status: 409 };
         }
         if (!hostExited && (!interrupted || durable?.turn !== "busy" || durable.launchOnly
           || (interrupted === "idle" && !idleTurnSilent(durable, ports)))
-          || deployCutHoldsAttempt(deployCutOf(attempt, ports), ports)) {
+          || deployCutHoldsAttempt(cut, ports)) {
           return { error: "the running attempt is not confirmed stalled", status: 409 };
         }
         /* The transcript read above can register a new generation for this
@@ -18502,12 +18606,16 @@ async function applyPipelinePatch(
           await persist();
           return { error: "the stalled attempt made progress while its host was stopping; retry was cancelled", status: 409 };
         }
-        if (ports.conversationDeliveryOutstanding?.(attempt.conversationId)) {
+        const latestCut = await deployCutOf(attempt, ports, true);
+        assertAuthority?.();
+        if (deployCutHoldsAttempt(latestCut, ports)
+          || ports.conversationDeliveryOutstanding?.(attempt.conversationId)) {
           await persist();
           return { error: "the running attempt has a pending delivery; retry once that delivery settles", status: 409 };
         }
-        await park(pipeline, "confirmed stalled attempt was stopped for retry", attempt);
-        await persist();
+        // Keep this park provisional until the final retry decision. A cut
+        // can still arrive during receipt reconciliation or the host check.
+        parkPipelineState(pipeline, "confirmed stalled attempt was stopped for retry", attempt);
       }
       if (pipeline.state !== "needs_decision") return { error: "pipeline does not have a stage awaiting retry"
         + (attempt?.publicationRepair ? publicationRepairDeliveryDetail(attempt.publicationRepair) : ""), status: 409 };
@@ -18842,20 +18950,36 @@ async function applyPipelinePatch(
           await persist();
           return { error: refusal, status: 409 };
         }
-        // Later account recovery must not reopen this attempt if its error changes.
-        attempt.state = "failed";
-        attempt.completedAt ??= ports.now();
       }
-      resetStageForRetry(pipeline, stage);
-      if (pipeline.cursor) { pipeline.cursor.admittedAt = ports.now(); pipeline.cursor.repeatReason = req.repeatReason ?? "unknown"; }
-      recordHandLaunch(pipeline, actor, ports.now());
-      if (unreservedSpawnRetry && stage && attempt.launchId) {
-        const original = ports.spawnReceipt(attempt.launchId);
-        if (original?.error && interruptedStageLaunch(original.error)) {
-          attempt.error = original.error;
-          await newAttempt(pipeline, stage, ports.now(), req.repeatReason ?? "unknown");
+      const commitRetryReset = async (cut: StageInterruption | null): Promise<PipelinePatchResult | null> => {
+        assertAuthority?.();
+        if (attempt && (cut && unixMs(cut.recordedAt) >= unixMs(attemptEvidenceFloor(attempt)) && deployCutHoldsAttempt(cut, ports)
+          || attempt.conversationId && ports.conversationDeliveryOutstanding?.(attempt.conversationId))) {
+          return { error: "the attempt has a pending delivery; retry once that delivery settles", status: 409 };
         }
-      }
+        if (unreservedSpawnRetry && attempt) {
+          // Later account recovery must not reopen this attempt if its error changes.
+          attempt.state = "failed";
+          attempt.completedAt ??= ports.now();
+        }
+        resetStageForRetry(pipeline, stage);
+        if (pipeline.cursor) { pipeline.cursor.admittedAt = ports.now(); pipeline.cursor.repeatReason = req.repeatReason ?? "unknown"; }
+        recordHandLaunch(pipeline, actor, ports.now());
+        if (unreservedSpawnRetry && stage && attempt?.launchId) {
+          const original = ports.spawnReceipt(attempt.launchId);
+          if (original?.error && interruptedStageLaunch(original.error)) {
+            attempt.error = original.error;
+            await newAttempt(pipeline, stage, ports.now(), req.repeatReason ?? "unknown");
+          }
+        }
+        await persist();
+        return null;
+      };
+      const cutConversation = attempt && !attempt.paneId && attempt.startedAt ? attempt.conversationId : null;
+      const refusal = cutConversation && ports.withRetryCut
+        ? await ports.withRetryCut(cutConversation, commitRetryReset)
+        : await commitRetryReset(attempt ? await deployCutOf(attempt, ports, true) : null);
+      return refusal ?? { pipeline };
     } else if (req.action === "skip-stage") {
       const skipRefusal = visualCriticSkipRefusal(stage, attempt, actor);
       if (skipRefusal) return { error: skipRefusal, status: 403 };

@@ -240,7 +240,7 @@ function RuleRow({ rule, kind, focused, scopeRole, onDelete, onRevert }: { rule:
   const revision = rule.revisedBy;
   const awaitingCurator = rule.awaitingCuration ?? (!rule.curatedAt || revision?.by === "agent" && revision.at > rule.curatedAt);
   const named = (id: string | null | undefined, text: string) => <><RoleMark role={id} size={12} />{text}</>;
-  const meta = [rule.keptByOperatorAt ? t("roleMemory.kept") : awaitingCurator ? t("roleMemory.unreviewed") : null, revision ? named(revisionRole(revision), t(`roleMemory.revised.${revision.by}`, { role: roleNameById(t, revision.roleId ?? "") })) : author ? named(rule.roleId, author) : null, (revision?.fixRound ?? rule.fixRound) ? t("roleMemory.fixRound") : null, rule.mergedFrom?.length ? t("roleMemory.mergedFrom", { count: rule.mergedFrom.length }) : null, (rule.tasks ?? 0) >= 2 ? t("roleMemory.tasks", { count: rule.tasks! }) : null].filter(Boolean);
+  const meta = [rule.decisionAuthor ? t(`roleMemory.decision.${rule.decisionAuthor}`) : null, rule.keptByOperatorAt ? t("roleMemory.kept") : awaitingCurator ? t("roleMemory.unreviewed") : null, revision ? named(revisionRole(revision), t(`roleMemory.revised.${revision.by}`, { role: roleNameById(t, revision.roleId ?? "") })) : author ? named(rule.roleId, author) : null, (revision?.fixRound ?? rule.fixRound) ? t("roleMemory.fixRound") : null, rule.mergedFrom?.length ? t("roleMemory.mergedFrom", { count: rule.mergedFrom.length }) : null, (rule.tasks ?? 0) >= 2 ? t("roleMemory.tasks", { count: rule.tasks! }) : null].filter(Boolean);
   return (
     <li ref={row} data-learned-rule={rule.id} data-focused={focused ? "" : undefined} data-open={open ? "" : undefined}
       className={`group flex items-start gap-2 rounded-[8px] px-2 py-1.5 ${focused ? KIND_TONE[kind].soft : "hover:bg-sunken"}`}>
@@ -276,7 +276,7 @@ function EarlierTexts({ rule, onRevert }: { rule: RuleView; onRevert?: (id: stri
     <summary className="cursor-pointer py-1">{t("roleMemory.versions", { count: rule.versions.length })}</summary>
     <ul className="m-0 list-none p-0">{rule.versions.slice().reverse().map(version => <li key={version.id} className="border-t border-border py-1">
       <p className="m-0 [overflow-wrap:anywhere]">{version.rule}</p><p className="m-0 text-muted [overflow-wrap:anywhere]">{version.why}</p>
-      <p className="m-0 text-[10.5px] text-muted">{new Date(version.revisedBy?.at ?? version.createdAt).toLocaleString(locale === "uk" ? "uk-UA" : "en-US")}{version.revisedBy ? <> · <RoleMark role={revisionRole(version.revisedBy)} size={12} />{t(`roleMemory.revised.${version.revisedBy.by}`, { role: roleNameById(t, version.revisedBy.roleId ?? "") })}</> : null}</p>
+      <p className="m-0 text-[10.5px] text-muted">{version.decisionAuthor ? t(`roleMemory.decision.${version.decisionAuthor}`) : null}{version.decisionAuthor ? " · " : ""}{new Date(version.revisedBy?.at ?? version.createdAt).toLocaleString(locale === "uk" ? "uk-UA" : "en-US")}{version.revisedBy ? <> · <RoleMark role={revisionRole(version.revisedBy)} size={12} />{t(`roleMemory.revised.${version.revisedBy.by}`, { role: roleNameById(t, version.revisedBy.roleId ?? "") })}</> : null}</p>
       <button type="button" data-rule-revert={version.id} className="min-h-9 px-1 text-accent" onClick={() => onRevert?.(version.id)}>{t("roleMemory.restore")}</button>
     </li>)}</ul>
   </details>;
@@ -285,13 +285,18 @@ function EarlierTexts({ rule, onRevert }: { rule: RuleView; onRevert?: (id: stri
 function LeftRow({ rule, kind, onRestore, counterpart, onFocus, onRevert, focused }: { rule: RuleView; kind: ScopeKind; onRestore: (rule: RuleView) => void; counterpart?: RuleView; onFocus?: (id: string) => void; onRevert?: (id: string) => void; focused?: boolean }) {
   const { t } = useLocale();
   const reason: `roleMemory.left.${NonNullable<RuleView["reason"]> | "merged"}` = rule.state === "merged" ? "roleMemory.left.merged" : `roleMemory.left.${rule.reason ?? "budget"}`;
+  const revision = rule.stageId === "decision" && !rule.decisionAuthor ? rule.revisedBy : undefined;
   const row = useRef<HTMLLIElement>(null);
   useEffect(() => { if (focused) row.current?.scrollIntoView({ block: "nearest" }); }, [focused]);
   return (
     <li ref={row} title={rule.note} data-left-rule={rule.id} data-focused={focused ? "" : undefined} className={`flex items-start gap-2 rounded-[8px] px-2 py-1 ${focused ? KIND_TONE[kind].soft : ""}`}>
       <span className="min-w-0 flex-1">
         <span className="text-[11.5px] leading-4 text-muted line-through line-clamp-2 [overflow-wrap:anywhere]">{rule.rule}</span>
-        <span className="block text-[10.5px] leading-4 text-muted [overflow-wrap:anywhere]">{t(reason)}{rule.where ? ` · ${rule.where}` : ""}</span>
+        <span data-rule-provenance="" className="block text-[10.5px] leading-4 text-muted [overflow-wrap:anywhere]">
+          {rule.decisionAuthor ? `${t(`roleMemory.decision.${rule.decisionAuthor}`)} · ` : null}
+          {revision ? <><RoleMark role={revisionRole(revision)} size={12} />{t(`roleMemory.revised.${revision.by}`, { role: roleNameById(t, revision.roleId ?? "") })} · </> : null}
+          {t(reason)}{rule.where ? ` · ${rule.where}` : ""}
+        </span>
         {counterpart ? <button type="button" data-rule-counterpart={counterpart.id} onClick={() => onFocus?.(counterpart.id)} className="text-left text-[11px] leading-4 text-accent [overflow-wrap:anywhere]">{counterpart.rule.slice(0, 70)}…</button> : null}
         <EarlierTexts rule={rule} onRevert={onRevert} />
       </span>

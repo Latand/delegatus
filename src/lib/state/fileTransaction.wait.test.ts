@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import { blockingWaitDiagnostics, fileTransactionCallSite, registryWaitCallSite, resetBlockingWaitsForTests, withWaitCorrelation } from "@/lib/blockingWaits";
 import {
   FileTransactionBusyError,
@@ -509,4 +509,136 @@ test("slow diagnostic holder metadata never delays lock admission or causes File
     fsp.stat = originalStat;
     fs.rmSync(lock, { force: true });
   }
+});
+
+for (const point of ["ticket", "lock"] as const) test(`a process exit at ${point} creation leaves no owner that can block the next contender`, async () => {
+  const file = path.join(root, `owner-publication-${point}`);
+  const ready = file + ".ready";
+  const child = Bun.spawn([process.execPath, "-e", `
+    import fs from "node:fs";
+    import fsp from "node:fs/promises";
+    import { withFileTransactionAsync } from ${JSON.stringify(new URL("./fileTransaction.ts", import.meta.url).pathname)};
+    const [file, ready, point] = process.argv.slice(1);
+    const waitForExit = async () => {
+      fs.writeFileSync(ready, "");
+      await Bun.sleep(15_000);
+    };
+    const open = fsp.open.bind(fsp);
+    fsp.open = async (target, flags, ...args) => {
+      const handle = await open(target, flags, ...args);
+      const pathname = String(target);
+      if (flags === "wx" && (point === "ticket" ? pathname.startsWith(file + ".write-locks/") : pathname === file + ".write-lock")) {
+        await waitForExit();
+      }
+      return handle;
+    };
+    const link = fsp.link.bind(fsp);
+    fsp.link = async (from, target) => {
+      await link(from, target);
+      if (point === "lock" && String(target) === file + ".write-lock") await waitForExit();
+    };
+    await withFileTransactionAsync(file, "fixture journal writer", () => { throw new Error("writer crossed the crash barrier"); });
+  `, file, ready, point], { stdout: "ignore", stderr: "inherit" });
+  try {
+    const handshake = performance.now() + 2_000;
+    while (!fs.existsSync(ready) && child.exitCode === null && performance.now() < handshake) await Bun.sleep(5);
+    expect(fs.existsSync(ready)).toBe(true);
+    child.kill("SIGKILL");
+    await child.exited;
+
+    const started = performance.now();
+    expect(await withFileTransactionAsync(file, "fixture journal waiter", () => "admitted", { waitMs: 4_500 })).toBe("admitted");
+    expect(performance.now() - started).toBeLessThan(5_000);
+    expect(fs.existsSync(file + ".write-lock")).toBe(false);
+    expect(fs.readdirSync(file + ".write-locks")).toEqual([]);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await child.exited;
+  }
+}, 12_000);
+
+test("published tickets keep live writers in admission order", async () => {
+  const file = path.join(root, "live-owner-order");
+  const release = Promise.withResolvers<void>();
+  const held = Promise.withResolvers<void>();
+  const order: string[] = [];
+  const holder = withFileTransactionAsync(file, "live journal owner", async () => {
+    held.resolve();
+    await release.promise;
+  });
+  await held.promise;
+  const first = withFileTransactionAsync(file, "first journal waiter", () => { order.push("first"); }, { waitMs: 2_000 });
+  let second: Promise<void> | undefined;
+  try {
+    const deadline = performance.now() + 1_000;
+    while (fs.readdirSync(file + ".write-locks").filter(name => name.endsWith(".json")).length !== 2
+      && performance.now() < deadline) await Bun.sleep(5);
+    expect(fs.readdirSync(file + ".write-locks").filter(name => name.endsWith(".json"))).toHaveLength(2);
+    await Bun.sleep(5);
+    second = withFileTransactionAsync(file, "second journal waiter", () => { order.push("second"); }, { waitMs: 2_000 });
+    release.resolve();
+    await Promise.all([holder, first, second]);
+    expect(order).toEqual(["first", "second"]);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([holder, first, second]);
+  }
+});
+
+for (const contender of ["async", "sync-scan"] as const) test(`a live publisher keeps its place before a later ${contender} contender`, async () => {
+  const file = path.join(root, `publisher-order-${contender}`);
+  const ready = file + ".ready";
+  const release = file + ".release";
+  const child = Bun.spawn([process.execPath, "-e", `
+    import fs from "node:fs";
+    import fsp from "node:fs/promises";
+    import { withFileTransactionAsync } from ${JSON.stringify(new URL("./fileTransaction.ts", import.meta.url).pathname)};
+    const [file, ready, release] = process.argv.slice(1);
+    const open = fsp.open.bind(fsp);
+    fsp.open = async (name, flags, ...args) => {
+      const handle = await open(name, flags, ...args);
+      if (flags === "wx" && String(name).startsWith(file + ".write-locks/")) {
+        fs.writeFileSync(ready, "");
+        const deadline = performance.now() + 10_000;
+        while (!fs.existsSync(release) && performance.now() < deadline) await Bun.sleep(5);
+      }
+      return handle;
+    };
+    await withFileTransactionAsync(file, "fixture first writer", () => fs.appendFileSync(file, "A"));
+  `, file, ready, release], { stdout: "ignore", stderr: "inherit" });
+  let second: Promise<void> | undefined;
+  try {
+    const deadline = performance.now() + 2_000;
+    while (!fs.existsSync(ready) && child.exitCode === null && performance.now() < deadline) await Bun.sleep(5);
+    expect(fs.existsSync(ready)).toBe(true);
+    const append = () => fs.appendFileSync(file, "B");
+    second = contender === "async" ? withFileTransactionAsync(file, "fixture second writer", append, { waitMs: 5_000 })
+      : withFileTransaction(file, "fixture second writer", append);
+    await Promise.race([second, Bun.sleep(100)]);
+    fs.writeFileSync(release, "");
+    expect(await child.exited).toBe(0);
+    await second;
+    expect(fs.readFileSync(file, "utf8")).toBe("AB");
+  } finally {
+    fs.writeFileSync(release, "");
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await Promise.allSettled([child.exited, second]);
+  }
+}, 12_000);
+
+test("a failed ticket write releases its incomplete file while the creator stays alive", async () => {
+  const file = path.join(root, "incomplete-ticket");
+  const write = fs.writeFileSync;
+  const fault = Object.assign(new Error("fixture ticket write refused"), { code: "EDQUOT" });
+  const hook = spyOn(fs, "writeFileSync").mockImplementation((target, data, options) => {
+    if (String(target).startsWith(file + ".write-locks" + path.sep)) {
+      write(target, "", options);
+      throw fault;
+    }
+    return write(target, data, options);
+  });
+  try { expect(() => withFileTransactionSync(file, "fixture writer", () => {})).toThrow(fault); }
+  finally { hook.mockRestore(); }
+  expect(await withFileTransactionAsync(file, "fixture next writer", () => "admitted", { waitMs: 500 })).toBe("admitted");
+  expect(fs.readdirSync(file + ".write-locks")).toEqual([]);
 });

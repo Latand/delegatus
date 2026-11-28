@@ -81,7 +81,13 @@ test("desktop and phone render the question before decision and delivery warning
   for (const render of surfaces) {
     const waiting = render({ kind: "prototype", id: notice.id, notice });
     expect(waiting).toContain(notice.roundTitle!);
-    expect(waiting).toContain(translate("en", "needs.ask.prototypeQuestions"));
+    /* The kind's word says what to do; the row repeats no instruction. */
+    expect(waiting).toContain(translate("en", "proto.notice.questions"));
+    expect(waiting).not.toContain(translate("en", "needs.ask.prototypeQuestions"));
+    /* A round titled as its form draws its title once. */
+    const echoed = render({ kind: "prototype", id: notice.id, notice: { ...notice, roundTitle: notice.title } });
+    expect(echoed).toContain(notice.title);
+    expect(echoed).not.toContain("data-needs-you-question");
     const decided = render({ kind: "prototype", id: notice.id, notice: { ...notice, undelivered: true } });
     expect(decided).toContain(translate("en", "proto.notice.undelivered"));
     expect(decided).toContain(translate("en", "proto.notice.open"));

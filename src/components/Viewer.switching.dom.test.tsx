@@ -954,10 +954,13 @@ test("phone: the bar's badge counts THIS project's queue and its pipelines, not 
      A pipeline waiting on a decision is a queue item like any other, and it is
      counted from the same answer that puts it on the board below. */
   mobile = true;
-  const asked = { since: 4_102_487_400, screenTail: "", target: "", menu: null };
+  /* Workers that ask in projects with no seat: «Needs you» holds their
+     questions (docs/design/legatus/build-plan.md, slice 1). */
+  const worker = { kind: "spawn", role: "builder", depth: 1, parentConversationId: null, reviewsConversationId: null, memberships: [] } as unknown as NonNullable<FileEntry["durableLineage"]>;
+  const asked = (path: string) => ({ kind: "question", toolUseId: `tool-${path}`, transcriptPath: path, pid: 1, askedAt: new Date(4_102_487_400_000).toISOString(), questions: [{ question: "Which layout stays?", header: "Layout", multiSelect: false, options: [] }] }) as unknown as FileEntry["pendingQuestion"];
   waiting = [
-    fileEntryFor(SHORT, { path: "/sessions/alpha/waiting.jsonl", conversationId: "conv-alpha-waiting", title: "Alpha needs a decision", waitingInput: asked }),
-    fileEntryFor(BETA_A, { path: "/sessions/beta/waiting.jsonl", conversationId: "conv-beta-waiting", title: "Beta needs a decision", waitingInput: asked }),
+    fileEntryFor(SHORT, { path: "/sessions/alpha/waiting.jsonl", conversationId: "conv-alpha-waiting", title: "Alpha needs a decision", durableLineage: worker, pendingQuestion: asked("/sessions/alpha/waiting.jsonl") }),
+    fileEntryFor(BETA_A, { path: "/sessions/beta/waiting.jsonl", conversationId: "conv-beta-waiting", title: "Beta needs a decision", durableLineage: worker, pendingQuestion: asked("/sessions/beta/waiting.jsonl") }),
   ];
   pipelines = [{
     id: "pipeline_alpha_lane", task: "Rebuild the board status projection", taskIds: [], project: "alpha",

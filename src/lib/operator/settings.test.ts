@@ -26,7 +26,7 @@ afterEach(() => {
 test("nothing is known until a client reports it", () => {
   expect(operatorLocale()).toBeNull();
   expect(operatorTimeZone()).toBeNull();
-  expect(readOperatorSettings()).toEqual({ locale: null, timeZone: null });
+  expect(readOperatorSettings()).toEqual({ locale: null, timeZone: null, commitAttribution: null });
 });
 
 test("a chosen language and a time zone are stored and read back", () => {
@@ -64,7 +64,7 @@ test("an older settings file can carry unknown keys", () => {
     locale,
     legacyExtension: { enabled: true },
   }));
-  expect(readOperatorSettings()).toEqual({ locale, timeZone: null });
+  expect(readOperatorSettings()).toEqual({ locale, timeZone: null, commitAttribution: null });
 });
 
 test("reads copy the outer settings while retaining the cached nested values", () => {
@@ -90,4 +90,13 @@ test("a same-size same-mtime replacement changes the locale without a reset", ()
   fs.utimesSync(replacement, stamp, stamp);
   fs.renameSync(replacement, file);
   expect(operatorLocale()).toBe("uk");
+});
+
+test("a saved opt-out survives independent language and time zone writes", () => {
+  const changedAt = "2026-11-26T16:10:00Z";
+  expect(updateOperatorSettings({ commitAttribution: false }, changedAt)?.commitAttribution).toEqual({ value: false, changedAt });
+  resetOperatorSettingsForTests();
+  updateOperatorSettings({ locale: "uk", timeZone: "Europe/Kyiv" });
+  updateOperatorSettings({ commitAttribution: false }, "2026-11-26T16:20:00Z");
+  expect(readOperatorSettings().commitAttribution).toEqual({ value: false, changedAt });
 });
