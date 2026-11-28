@@ -162,7 +162,21 @@ The «Потрібні ви» chip is `AttentionIsland` (`src/components/attenti
 placed by the Viewer's bar-island callback (`src/components/Viewer.tsx:1844–1894`):
 - inside a project's bar it is the row's last item, and the question toast
   (`AttentionToast`) hangs under it in a column `fixed top-14 z-50` at
-  `right: panelDocked ? PANEL_WIDTH + 16 : 16` (`Viewer.tsx:1875`);
+  `right: panelDocked ? PANEL_WIDTH + 16 : 16` (`Viewer.tsx:1875`). The column
+  is `QuestionToastColumn` (`src/components/attention/QuestionToastColumn.tsx`):
+  where an orchestrator seat's header (`[data-seat-head]`) crosses the toast's
+  band it starts 8 px under that header, so the toast never covers the seat's
+  tick switch, Rotate or Stop host, and from there it takes the first place
+  `placeStack` finds within 96 px that covers no line of text and no control, on
+  its own right edge. With none free, and words or a control lying under its left
+  end (the reports pane's tab labels at the foot of the header), it narrows
+  (`widthClearOfLeft`, never under 220 px, its text on two lines) until its left
+  edge clears them and is placed again; with that no place either, it stays on
+  that first line and never moves down the page. It is read when the toast's size, the window or the header under it
+  change and again, at most every 250 ms, when content under it changes, never while a pointer or the focus is on the toast, and it announces
+  a move with the window event `QUESTION_TOAST_PLACED`, which the caption stack
+  under it answers by reading the page again. The caption stack is not an
+  obstacle for it (`readObstacles` takes `skip: "[data-sound-captions]"`);
 - on the Overview and in chats it is a fixed corner column (`:1887–1893`).
   The needs-you panel docks on the right (`panelDocked`, `:1153`) or floats
   under the chip (`panelFloating`, `:1154`). The orchestrator dock is on the
@@ -212,13 +226,26 @@ root next to `<AttentionHost>` (`Viewer.tsx:1974`), following the precedent of
   (an old caption is the one whose sound was heard longest ago): a folded toast
   stays in the store and counts down, but is drawn off the column
   (`data-folded`, `visibility: hidden`), so it takes no space, no pointer and no
-  focus. Folding stops at two toasts in a window 1100 px wide or more, and at one
-  below it. With no free place for those, the stack takes the place that hides
-  the fewest lines (a control counts eight lines, and a line half hidden counts
-  as hidden) anywhere down the window, the nearest to the first line on a tie; the column says so in
-  `data-placement="covers"` (`"free"` otherwise). The place is read when the set
-  of toasts, their sizes, the window or the first line change, and never while a
-  held stack sits under a feed that scrolls.
+  focus. Before any place that covers something is taken, the search goes in
+  this order, and the first free place wins:
+  1. the whole stack, then fewer toasts down to the newest one alone, each
+     searched downward from the first line in 4 px steps for at most 320 px;
+  2. the newest toast alone, anywhere down the window's height;
+  3. the newest toast alone, moved leftward in 8 px steps while it stays in the
+     window's right half (its left edge never passes the window's middle), each
+     step searched down the whole height. The column's right edge is then
+     `right + shift`; it is the question toast's own edge whenever a place on
+     it was free.
+  Only with no free place in any of them does the stack take the place that
+  hides the fewest lines for the `keep` newest (2 in a window 1100 px wide or
+  more, 1 below it; a control counts eight lines, and a line half hidden counts
+  as hidden) anywhere down the window, the nearest to the first line on a tie;
+  the column says so in `data-placement="covers"` (`"free"` otherwise). The
+  place is read when the set of toasts, their sizes, the window or the first
+  line change; and when content under the stack changes (an opened task's
+  conversation arriving after the stack was placed), at most every 200 ms and
+  never while a pointer or the focus is on the stack, so a held stack sits
+  still under a feed that scrolls.
 - Below 1100 px the toast is at most 240 px wide, not 300.
 - `hidden` (the floating needs-you panel hangs in the same spot and lists the
   same things): render nothing. The store keeps counting down.
@@ -339,12 +366,13 @@ and one click on the page first:
 | State | How | Pass when |
 |---|---|---|
 | single | real path: one S3 | one `[data-sound-caption="step"]` reading «Критик вигляду — пройдено» (uk), the task title on line 2, under the island, inside the viewport |
-| stacked | seam: 5 pushes 300 ms apart | the store holds 4, newest last, the first push gone; the toasts on show are the newest ones, no two boxes intersect, none intersect the island or the question toast; on a free place none covers a line of text, a small control or an icon; on a `covers` place at most two toasts (one under 1100 px) are on show and no control is under them |
+| stacked | seam: 5 pushes 300 ms apart | the store holds 4, newest last, the first push gone; the toasts on show are the newest ones, no two boxes intersect, none intersect the island or the question toast; **strict from 1000 px**: the place is free and none covers a line of text, a small control or an icon (the stack folds to one, searches the window's height, then moves leftward within the right half before it would cover), with every toast starting at or right of the window's middle; at 640 px the board is one column of cards with no free band in the right half, so the newest toast alone takes the place that hides the fewest lines and no control |
 | expiry | seam: 1 push, wait 2.3 s, no pointer | gone |
 | hover-held | seam: 1 push, hover at 0.5 s, read at 3.5 s, leave, read at +0.8 s and +1.3 s | present at 3.5 s and at +0.8 s, gone by +1.3 s |
 | click | seam: a lane target | the lane's card has the focus ring, the caption is gone |
 | muted | real path with sound off (the ⋯ Sound levels switch) | the stage passes and no `[data-sound-captions]` child appears; turning sound off with one toast visible removes it |
-| task open | seam push with an agent window open | the stack is above the window (`elementFromPoint` at its centre is the toast), its top is ≥ the window header's bottom + 8, the place is free: no line of the conversation, no control and no icon is under a toast, at 1440, 1000 and 640 |
+| task open | seam push with an agent window open | the stack is above the window (`elementFromPoint` at its centre is the toast), its top is ≥ the window header's bottom + 8, the place is free: no line of the conversation, no control and no icon is under a toast, at 1440, 1000 and 640; the conversation's lines arrive after the push, and the stack reads the page again for them |
+| question toast over the seat's header | the seat-header driver (`?scenario=seat-head`) with the toast showing, 768, 1080, 1440 and 1440 with the panel docked | no control or line of the seat's header, and no line of text or control of the page under it, is under the toast, the toast is pressable and inside the window, on its right edge (16, or 336 with the panel docked) |
 | panel docked | seam with the needs-you panel docked | the stack's right edge is at `innerWidth − 336` |
 | phone 390 × 844 | seam push | no `[data-sound-captions]` in the DOM |
 

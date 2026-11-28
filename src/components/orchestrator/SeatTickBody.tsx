@@ -923,11 +923,7 @@ function SeatTickAutonomy({ state, turbo, row, phone, now, locale, wakesOn }: { 
         }} />
     </div>
     <p data-seat-tick-autonomy-about className="text-caption leading-4 text-secondary">{t("seatTick.autonomy.about")}</p>
-    <div data-turbo-row className={`flex min-w-0 items-center gap-2 ${row}`}>
-      <p data-turbo-head className="min-w-0 flex-1 text-label font-semibold uppercase tracking-wide text-muted">{t("seatTick.turbo.head")}</p>
-      <TurboSwitch control={turbo} phone={phone} describedBy={turboCaptionId} />
-    </div>
-    <TurboCaption control={turbo} id={turboCaptionId} />
+    {/* The duration and the wakes hint belong to the autonomy toggle above, so they sit under it, ahead of Turbo's own row: read after Turbo they read as Turbo's. */}
     {draft.enabled ? <label className="flex min-w-0 flex-col gap-1">
       <span className="text-ui text-primary">{t("seatTick.autonomy.durationLabel")}</span>
       <Select roomy={phone} data-seat-tick-autonomy-duration value={draft.hours} disabled={state.saving}
@@ -940,6 +936,11 @@ function SeatTickAutonomy({ state, turbo, row, phone, now, locale, wakesOn }: { 
       </Select>
     </label> : null}
     {draft.enabled && stored.state === "off" && !wakesOn ? <p data-seat-tick-autonomy-wakes className="text-caption leading-4 text-muted">{t("seatTick.autonomy.wakesToo")}</p> : null}
+    <div data-turbo-row className={`flex min-w-0 items-center gap-2 ${row}`}>
+      <p data-turbo-head className="min-w-0 flex-1 text-label font-semibold uppercase tracking-wide text-muted">{t("seatTick.turbo.head")}</p>
+      <TurboSwitch control={turbo} phone={phone} describedBy={turboCaptionId} />
+    </div>
+    <TurboCaption control={turbo} id={turboCaptionId} />
   </div>;
 }
 

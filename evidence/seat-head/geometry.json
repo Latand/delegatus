@@ -43,19 +43,19 @@
       },
       "atoms": [
         {
-          "name": "claude-opus-4-5-1m · high",
+          "name": "claude-opus-4-5-1m · High",
           "button": false,
-          "visibleText": 159,
+          "visibleText": 161,
           "naturalText": 123,
           "clipped": false,
           "truncated": false,
           "titled": true
         },
         {
-          "name": "· high",
+          "name": "· High",
           "button": false,
-          "visibleText": 36,
-          "naturalText": 36,
+          "visibleText": 38,
+          "naturalText": 38,
           "clipped": false,
           "truncated": false,
           "titled": true
@@ -164,25 +164,25 @@
       },
       "atoms": [
         {
-          "name": "claude-opus-4-5-1m · high",
+          "name": "claude-opus-4-5-1m · Високі",
           "button": false,
-          "visibleText": 159,
+          "visibleText": 173,
           "naturalText": 123,
           "clipped": false,
           "truncated": false,
           "titled": true
         },
         {
-          "name": "· high",
+          "name": "· Високі",
           "button": false,
-          "visibleText": 36,
-          "naturalText": 36,
+          "visibleText": 50,
+          "naturalText": 50,
           "clipped": false,
           "truncated": false,
           "titled": true
         },
         {
-          "name": "працює 6:41",
+          "name": "працює 6:40",
           "button": false,
           "visibleText": 61,
           "naturalText": 61,
@@ -265,7 +265,7 @@
           "titled": true
         },
         {
-          "name": "av claude",
+          "name": "shrink-0 select-none",
           "button": false,
           "visibleText": 0,
           "naturalText": 0,
@@ -346,7 +346,7 @@
           "titled": true
         },
         {
-          "name": "mandate v40, default v41",
+          "name": "mandate v71, default v72",
           "button": false,
           "visibleText": 118,
           "naturalText": 118,
@@ -447,7 +447,7 @@
           "titled": true
         },
         {
-          "name": "av claude",
+          "name": "shrink-0 select-none",
           "button": false,
           "visibleText": 0,
           "naturalText": 0,
@@ -528,7 +528,7 @@
           "titled": true
         },
         {
-          "name": "мандат v40, типовий v41",
+          "name": "мандат v71, типовий v72",
           "button": false,
           "visibleText": 122,
           "naturalText": 122,
@@ -629,7 +629,7 @@
           "titled": true
         },
         {
-          "name": "av claude",
+          "name": "shrink-0 select-none",
           "button": false,
           "visibleText": 0,
           "naturalText": 0,
@@ -719,7 +719,7 @@
           "titled": true
         },
         {
-          "name": "mandate v40, default v41",
+          "name": "mandate v71, default v72",
           "button": false,
           "visibleText": 118,
           "naturalText": 118,
@@ -829,7 +829,7 @@
           "titled": true
         },
         {
-          "name": "av claude",
+          "name": "shrink-0 select-none",
           "button": false,
           "visibleText": 0,
           "naturalText": 0,
@@ -919,7 +919,7 @@
           "titled": true
         },
         {
-          "name": "мандат v40, типовий v41",
+          "name": "мандат v71, типовий v72",
           "button": false,
           "visibleText": 122,
           "naturalText": 122,
@@ -1029,7 +1029,7 @@
           "titled": true
         },
         {
-          "name": "av claude",
+          "name": "shrink-0 select-none",
           "button": false,
           "visibleText": 0,
           "naturalText": 0,
@@ -1119,7 +1119,7 @@
           "titled": true
         },
         {
-          "name": "мандат v40, типовий v41",
+          "name": "мандат v71, типовий v72",
           "button": false,
           "visibleText": 122,
           "naturalText": 122,
@@ -1229,7 +1229,7 @@
           "titled": true
         },
         {
-          "name": "av claude",
+          "name": "shrink-0 select-none",
           "button": false,
           "visibleText": 0,
           "naturalText": 0,
@@ -1319,7 +1319,7 @@
           "titled": true
         },
         {
-          "name": "мандат v40, типовий v41",
+          "name": "мандат v71, типовий v72",
           "button": false,
           "visibleText": 122,
           "naturalText": 122,
@@ -1429,7 +1429,7 @@
           "titled": true
         },
         {
-          "name": "av claude",
+          "name": "shrink-0 select-none",
           "button": false,
           "visibleText": 0,
           "naturalText": 0,
@@ -1519,7 +1519,7 @@
           "titled": true
         },
         {
-          "name": "мандат v40, типовий v41",
+          "name": "мандат v71, типовий v72",
           "button": false,
           "visibleText": 122,
           "naturalText": 122,
@@ -1629,7 +1629,7 @@
           "titled": true
         },
         {
-          "name": "av claude",
+          "name": "shrink-0 select-none",
           "button": false,
           "visibleText": 0,
           "naturalText": 0,
@@ -1719,7 +1719,7 @@
           "titled": true
         },
         {
-          "name": "mandate v40, default v41",
+          "name": "mandate v71, default v72",
           "button": false,
           "visibleText": 118,
           "naturalText": 118,
@@ -1829,7 +1829,7 @@
           "titled": true
         },
         {
-          "name": "av claude",
+          "name": "shrink-0 select-none",
           "button": false,
           "visibleText": 0,
           "naturalText": 0,
@@ -1910,7 +1910,7 @@
           "titled": true
         },
         {
-          "name": "mandate v40, default v41",
+          "name": "mandate v71, default v72",
           "button": false,
           "visibleText": 118,
           "naturalText": 118,
@@ -2011,7 +2011,7 @@
           "titled": true
         },
         {
-          "name": "av claude",
+          "name": "shrink-0 select-none",
           "button": false,
           "visibleText": 0,
           "naturalText": 0,
@@ -2101,7 +2101,7 @@
           "titled": true
         },
         {
-          "name": "мандат v40, типовий v41",
+          "name": "мандат v71, типовий v72",
           "button": false,
           "visibleText": 122,
           "naturalText": 122,
@@ -2211,7 +2211,7 @@
           "titled": true
         },
         {
-          "name": "av claude",
+          "name": "shrink-0 select-none",
           "button": false,
           "visibleText": 0,
           "naturalText": 0,
@@ -2292,7 +2292,7 @@
           "titled": true
         },
         {
-          "name": "мандат v40, типовий v41",
+          "name": "мандат v71, типовий v72",
           "button": false,
           "visibleText": 122,
           "naturalText": 122,

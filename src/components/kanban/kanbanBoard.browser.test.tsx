@@ -13830,6 +13830,10 @@ describe("the orchestrator seat's header keeps every element readable and clicka
               await page.waitForTimeout(600);
               frames[`${label}-sheet`] = await measure(page, "[data-mobile2-sheet='seat'] [data-orchestrator-incumbent]");
               failures.push(...verdicts(`${label} seat sheet`, frames[`${label}-sheet`] as HeadReading | null, false));
+              /* The sheet says the reasoning tier in the interface language, as the desktop header does, never the raw id. */
+              const identity = await page.locator("[data-mobile2-sheet='seat'] [data-orchestrator-incumbent]").first().innerText();
+              if (/\b(low|medium|high|xhigh|max)\b/.test(identity)) failures.push(`${label} seat sheet: a raw reasoning id in «${identity.replace(/\s+/g, " ").slice(0, 120)}»`);
+              if (!identity.includes(translate(lang, "reasoningTier.high"))) failures.push(`${label} seat sheet: the tier is not said as «${translate(lang, "reasoningTier.high")}» in «${identity.replace(/\s+/g, " ").slice(0, 120)}»`);
               await shoot(page, "[data-mobile2-sheet='seat']", `seat-sheet-${label}`);
             } else {
               await page.waitForSelector("[data-kanban-seat] [data-orchestrator-mandate-version]", { timeout: 20_000 });
@@ -13870,6 +13874,118 @@ describe("the orchestrator seat's header keeps every element readable and clicka
       server.stop();
     }
     fs.writeFileSync(path.join(EVIDENCE, "geometry.json"), `${JSON.stringify({ widths: WIDTHS, readablePx: READABLE_PX, frames, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 600_000);
+
+  /*
+   * The question toast, showing: it hangs under the bar row at the window's right edge, where the seat's header has its
+   * tick switch, Rotate and Stop host. It starts under that header where the header crosses its band, so none of the
+   * header's controls or words is under it. Read at 768, 1080 and 1440 px (1440 also with the needs-you panel docked,
+   * where the toast moves with the panel's edge), en and uk, light and dark.
+   */
+  browserTest("the question toast, showing, covers no control or word of the seat's header or the page under it, in en and uk, light and dark", async () => {
+    const pngDir = process.env.SEAT_HEAD_PNG_DIR ?? null;
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    if (pngDir) fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const cases = [
+      ...([768, 1080, 1440] as const).map((width) => ({ width, docked: false })),
+      { width: 1440, docked: true },
+    ];
+    try {
+      for (const { width, docked } of cases) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        const label = `${width}${docked ? "-docked" : ""}-${lang}-${theme}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head`, { width, height: 900 }, theme, lang, "no-preference");
+        try {
+          if (docked) {
+            await context.addInitScript(() => localStorage.setItem("llvNeedsYouPanel", "open"));
+            await page.reload();
+          }
+          await page.waitForSelector("[data-kanban-seat] [data-orchestrator-mandate-version]", { timeout: 20_000 });
+          await page.waitForSelector("[data-attention-toast]", { timeout: 20_000 });
+          /* Past the toast's second read. */
+          await page.waitForTimeout(1200);
+          const reading = await page.evaluate(() => {
+            const round = (box: DOMRect) => [box.left, box.top, box.right, box.bottom].map((value) => Math.round(value * 10) / 10);
+            const toast = document.querySelector<HTMLElement>("[data-attention-toast]")!.getBoundingClientRect();
+            const head = document.querySelector<HTMLElement>("[data-kanban-seat] .seat-head")!;
+            const headBox = head.getBoundingClientRect();
+            const touches = (box: DOMRect) => box.width > 0 && box.height > 0 && box.left < toast.right - 0.5 && box.right > toast.left + 0.5 && box.top < toast.bottom - 0.5 && box.bottom > toast.top + 0.5;
+            const under: string[] = [];
+            for (const control of head.querySelectorAll<HTMLElement>("button, a[href], select, input, [role=switch]")) {
+              if (control.getClientRects().length && touches(control.getBoundingClientRect())) under.push(`control ${(control.getAttribute("aria-label") ?? control.textContent ?? control.tagName).trim().slice(0, 40)}`);
+            }
+            const walker = document.createTreeWalker(head, NodeFilter.SHOW_TEXT);
+            const range = document.createRange();
+            for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+              if (!(node.nodeValue ?? "").trim()) continue;
+              range.selectNodeContents(node);
+              for (const line of range.getClientRects()) if (touches(line as DOMRect)) under.push(`text ${(node.nodeValue ?? "").trim().slice(0, 40)}`);
+            }
+            /* The rest of the page the toast stands over: a line of text or a control is covered where the page draws it at a point
+               of its overlap with the toast (hit testing sees the page's clipping), whether it lies under the header or the reports pane. */
+            const toastElement = document.querySelector<HTMLElement>("[data-attention-toast]")!;
+            const drawnUnder = (element: Element, box: { left: number; top: number; right: number; bottom: number }) => {
+              const x = (Math.max(box.left, toast.left) + Math.min(box.right, toast.right)) / 2;
+              const y = (Math.max(box.top, toast.top) + Math.min(box.bottom, toast.bottom)) / 2;
+              const stack = document.elementsFromPoint(x, y);
+              const above = stack.findIndex((candidate) => toastElement.contains(candidate));
+              const below = stack.findIndex((candidate) => candidate === element || candidate.contains(element) || element.contains(candidate));
+              return above !== -1 && below > above;
+            };
+            const page: string[] = [];
+            const pageWalker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            for (let node = pageWalker.nextNode(); node; node = pageWalker.nextNode()) {
+              const parent = node.parentElement;
+              if (!parent || !(node.nodeValue ?? "").trim() || toastElement.contains(parent) || parent.closest("[data-sound-captions]") || head.contains(parent)) continue;
+              range.selectNodeContents(node);
+              for (const line of range.getClientRects()) if (touches(line as DOMRect) && drawnUnder(parent, line)) page.push(`text ${(node.nodeValue ?? "").trim().slice(0, 40)}`);
+            }
+            for (const control of document.querySelectorAll<HTMLElement>("button, a[href], select, input, [role=switch], [role=tab]")) {
+              if (toastElement.contains(control) || control.closest("[data-sound-captions]") || head.contains(control)) continue;
+              const box = control.getBoundingClientRect();
+              if (control.getClientRects().length && touches(box) && drawnUnder(control, box)) page.push(`control ${(control.getAttribute("aria-label") ?? control.textContent ?? control.tagName).trim().slice(0, 40)}`);
+            }
+            /* A control under the toast fails at once. A line of the page's text fails when the toast calls its place free; where none
+               is free (the header's rotation banner at 768, with the reports pane's rows under it) the toast stands on its first line,
+               under the header, and the lines it then covers are recorded. */
+            const placement = toastElement.closest<HTMLElement>("[data-question-toast-placement]")?.dataset.questionToastPlacement ?? "";
+            const coveredText = page.filter((line) => line.startsWith("text "));
+            under.push(...page.filter((line) => line.startsWith("control ") || placement !== "covers"));
+            const open = document.querySelector<HTMLElement>("[data-attention-toast-open]")!.getBoundingClientRect();
+            const hit = document.elementFromPoint((open.left + open.right) / 2, (open.top + open.bottom) / 2);
+            return {
+              toast: round(toast), head: round(headBox), under: [...new Set(under)], placement, coveredText: [...new Set(coveredText)],
+              toastPressable: Boolean(hit?.closest("[data-attention-toast]")),
+              inWindow: toast.left >= 0 && toast.top >= 0 && toast.right <= innerWidth && toast.bottom <= innerHeight,
+              right: Math.round((document.documentElement.clientWidth - toast.right) * 10) / 10,
+              chip: document.querySelector("[data-attention-island]") !== null,
+            };
+          });
+          frames[label] = reading;
+          if (reading.under.length) failures.push(`${label}: the toast ${reading.toast} covers ${reading.under.join(" | ")}`);
+          if (!reading.toastPressable) failures.push(`${label}: something else is drawn over the toast`);
+          if (!reading.inWindow) failures.push(`${label}: the toast ${reading.toast} leaves the window`);
+          const expectedRight = docked ? 336 : 16;
+          if (reading.right !== expectedRight) failures.push(`${label}: the toast stands ${reading.right}px from the window's right edge, expected ${expectedRight}`);
+          if (docked && reading.chip) failures.push(`${label}: the needs-you chip is drawn beside the docked panel`);
+          if (pngDir) await page.screenshot({ path: path.join(pngDir, `seat-head-toast-${label}.png`) });
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "toast.json"), `${JSON.stringify({ frames, failures }, null, 2)}\n`);
     expect(failures).toEqual([]);
   }, 600_000);
 });
@@ -41808,6 +41924,10 @@ describe("full autonomy", () => {
           expect(await duration.inputValue()).toBe("8");
           await seek(page);
           await page.screenshot({ path: path.join(out, `${label}-draft.png`) });
+          /* The duration belongs to the autonomy toggle: it stands under it and above Turbo's row, so it never reads as Turbo's. */
+          const [toggleBox, durationBox, turboBox] = await Promise.all([toggle.boundingBox(), duration.boundingBox(), page.locator("[data-turbo-row]:visible").first().boundingBox()]);
+          expect(toggleBox!.y + toggleBox!.height).toBeLessThanOrEqual(durationBox!.y);
+          expect(durationBox!.y + durationBox!.height).toBeLessThanOrEqual(turboBox!.y);
           await page.locator("[data-seat-tick-save]:visible").click();
           await page.waitForFunction(() => document.querySelector<HTMLSelectElement>('select[data-seat-tick-autonomy-duration]')?.value === "keep");
           await toggle.scrollIntoViewIfNeeded();
@@ -44531,8 +44651,12 @@ describe("sound captions", () => {
           if (shown.map((toast) => toast.sound).join() !== "step,landed,your-move,fault") failures.push(`${tag}: order ${shown.map((toast) => toast.sound)}`);
           if (!live(stacked).length) failures.push(`${tag}: every toast is folded`);
           if (live(stacked).at(-1)?.sound !== "fault") failures.push(`${tag}: the newest toast is not the one on show`);
-          failures.push(...layoutFailures(`${tag} stacked`, stacked));
-          if (stacked.column && stacked.column.right !== 16) failures.push(`${tag}: stack right edge is ${stacked.column.right}px from the window, expected 16`);
+          /* Strict from 1000 px: the stack finds a free place (folding to one, then down the whole window, then leftward in the right half) before it covers anything.
+             At 640 the board is one column of cards with no free band in the right half: the newest toast alone covers the fewest lines and no control (the non-strict rules). */
+          failures.push(...layoutFailures(`${tag} stacked`, stacked, viewport.width >= 1000));
+          /* Its own edge, or moved leftward with every toast still in the window's right half. */
+          if (stacked.column && stacked.column.right < 16) failures.push(`${tag}: stack right edge is ${stacked.column.right}px from the window, under 16`);
+          for (const toast of live(stacked)) if (toast.rect[0]! < stacked.viewport.width / 2 - 0.5) failures.push(`${tag}: a toast starts at ${toast.rect[0]}, left of the window's middle`);
           const expectedStep = translate(lang, "soundCaption.step", { stage: translate(lang, "roleCopy.visual-critic.name") });
           if (shown[0]?.line !== expectedStep) failures.push(`${tag}: the step toast reads «${shown[0]?.line}», expected «${expectedStep}»`);
           if (shown[0]?.who !== translate(lang, "roleCopy.visual-critic.name")) failures.push(`${tag}: the stage name is not set apart: ${shown[0]?.who}`);
@@ -44555,15 +44679,18 @@ describe("sound captions", () => {
           await page.waitForTimeout(2300);
           await page.click(`${card("t-export")} .tile >> nth=0`);
           await page.waitForSelector("[data-agent-window] .reader-slot:not([data-incoming])", { timeout: 15_000 });
+          /* No pointer on the stack: a pointer on it holds it where it is, which is the product's rule and not what this state reads. */
+          await page.mouse.move(5, 5);
           await push(page, "reply", 1, [{ what: "reply", subject: "Fix the board", target: null }]);
-          await page.waitForTimeout(350);
+          /* The conversation's lines may arrive after the push: the stack reads the page again for them within 200 ms. */
+          await page.waitForTimeout(1000);
           const opened = await readStack(page);
           failures.push(...layoutFailures(`${tag} task open`, opened, true));
           const first = live(opened)[0];
           if (!opened.header) failures.push(`${tag}: no agent window header to measure against`);
           else if (!first) failures.push(`${tag}: no toast with a task open`);
           else if (first.rect[1]! < opened.header[3]! + 7.5) failures.push(`${tag}: the toast starts at ${first.rect[1]}, under ${opened.header[3]}+8 of the window header`);
-          readings.push({ tag, ...viewport, lang, theme, stacked: shown.map((toast) => ({ sound: toast.sound, line: toast.line, rect: toast.rect, folded: toast.folded, textUnder: toast.textUnder.length })), placement: stacked.column?.placement ?? null, single: live(single).map((toast) => toast.rect), singlePlacement: single.column?.placement ?? null, island: single.island, taskOpen: { header: opened.header, toast: first?.rect ?? null } });
+          readings.push({ tag, ...viewport, lang, theme, stacked: shown.map((toast) => ({ sound: toast.sound, line: toast.line, rect: toast.rect, folded: toast.folded, textUnder: toast.textUnder.length })), placement: stacked.column?.placement ?? null, stackRight: stacked.column?.right ?? null, single: live(single).map((toast) => toast.rect), singlePlacement: single.column?.placement ?? null, island: single.island, taskOpen: { header: opened.header, toast: first?.rect ?? null } });
           await page.screenshot({ path: path.join(OUT, `task-open-${viewport.width}-${lang}-${theme}.png`) });
           if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join(" | ")}`);
         } catch (error) {
@@ -44649,11 +44776,13 @@ describe("sound captions", () => {
           await push(page, "step", 1, [{ what: "step", subject: "Sound captions", stage: CRITIC, target: LANE_TARGET }]);
           await push(page, "reply", 1, [{ what: "reply", subject: "Fix the board", target: LANE_TARGET }]);
           await page.waitForTimeout(250);
-          if (await count() !== 2) failures.push(`${tag}: ${await count()} toasts before the two-toast click, expected 2`);
-          await page.locator(".sc-toast").first().click();
+          /* The store holds both; where no free place shows both, the older one is folded (drawn off the column, still counting down). */
+          const stored = async () => (await readStack(page)).toasts.filter((toast) => !toast.leaving).length;
+          if (await stored() !== 2) failures.push(`${tag}: ${await stored()} toasts in the stack before the two-toast click, expected 2`);
+          await page.locator(".sc-toast:not([data-folded])").first().click();
           await page.mouse.move(5, 5);
           await page.waitForTimeout(2500);
-          if (await count() !== 0) failures.push(`${tag}: the second toast was still there 2.5 s after the first was clicked away`);
+          if (await stored() !== 0) failures.push(`${tag}: the second toast was still there 2.5 s after the first was clicked away`);
 
           /* The needs-you panel docked: the stack's right edge moves with the question toast's. */
           await page.evaluate(() => localStorage.setItem("llvNeedsYouPanel", "open"));

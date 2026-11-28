@@ -123,8 +123,8 @@ phone, reaching into the row's padding). A mouse opens it on hover, focus or cli
 - Portal to `document.body` at `Z.popover`, which outranks `Z.modal` and `Z.sheet`. Take placement and `useDismiss`
   from `team/WorkspaceSwitch.tsx`, with a passive role and no focus move.
 - Text is at most two short lines. Never a pill. It covers no words of another row, and of its own row a line whole or
-  not at all, so no fragment of a word stands beside it. It opens between the label and the state word at 240 px at
-  most, else over the row's muted line at the row's width, else under or above the row, and stays inside the viewport.
+  not at all, so no fragment of a word stands beside it. It opens between the label and the state word, as wide as the room
+  up to the state word or the chevron (a longer note, the Ukrainian one, stays in that place in one line), else over the row's muted line at the row's width, else under or above the row, and stays inside the viewport.
   Dot and label stay visible, on an opaque surface.
 - A row with a chevron is a `<button>`, so the dot goes beside it. **No nested interactive:** render the row as a
   `<div>` holding the dot button and the row button as siblings.

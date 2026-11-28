@@ -2565,6 +2565,8 @@ interface SettingsFrame {
   landed?: boolean;
   desktopOnly?: boolean;
   phoneOnly?: boolean;
+  /** The popover stands beside its row's label and hides none of the row's own words (the muted line included). */
+  ownClear?: boolean;
 }
 
 const rowButton = (page: Page, attr: string) => page.locator(`[${attr}] [data-settings-row="link"]`).first();
@@ -2750,7 +2752,7 @@ const SETTINGS_FRAMES: SettingsFrame[] = [
   { surface: "voice", name: "api-file", scene: "voice-file", section: "voice", query: "dev=default", defining: "[data-voice-companion-key]" },
   { surface: "voice", name: "api-env", scene: "voice-env", section: "voice", query: "dev=default", defining: "[data-key-source='env']" },
   { surface: "voice", name: "api-missing", scene: "voice-missing", section: "voice", query: "dev=default", defining: "[data-key-source='missing']" },
-  { surface: "voice", name: "popover-key", scene: "voice-missing", section: "voice", query: "dev=default", steps: async (page) => openDot(page, "data-voice-companion-key"), defining: "[data-settings-dot-popover]" },
+  { surface: "voice", name: "popover-key", scene: "voice-missing", section: "voice", query: "dev=default", steps: async (page) => openDot(page, "data-voice-companion-key"), defining: "[data-settings-dot-popover]", ownClear: true },
   { surface: "voice", name: "cap-usage", scene: "voice-file", section: "voice", query: "dev=default", steps: async (page) => pressRow(page, "data-voice-companion-cap-row"), defining: "[data-voice-companion-usage]" },
   { surface: "voice", name: "cap-reserved", scene: "voice-reserved", section: "voice", query: "dev=default", steps: async (page) => pressRow(page, "data-voice-companion-cap-row"), defining: "[data-voice-companion-usage]" },
   { surface: "voice", name: "cap-reached", scene: "voice-reached", section: "voice", query: "dev=default", steps: async (page) => pressRow(page, "data-voice-companion-cap-row"), defining: "[data-voice-companion-usage]" },
@@ -2799,8 +2801,8 @@ const SETTINGS_COMBOS = [
 const SETTINGS_DEVICES = { desktop: { width: 1440, height: 900 }, mid: { width: 900, height: 800 }, short: { width: 1000, height: 700 }, phone: { width: 390, height: 844 }, landscape: { width: 844, height: 390 } } as const;
 
 /** Measures the open surface: the brief's §5 numbers, the rules of a settings surface, and what a person would see cut. */
-function readSettingsSurface(args: { phone: boolean; defining: string | null; absent: string | null; landed: boolean }) {
-  const { phone, defining, absent, landed } = args;
+function readSettingsSurface(args: { phone: boolean; defining: string | null; absent: string | null; landed: boolean; ownClear?: boolean }) {
+  const { phone, defining, absent, landed, ownClear } = args;
   const failures: string[] = [];
   const surface = document.querySelector<HTMLElement>("[data-settings-window], [data-mobile2-sheet='settings']");
   if (!surface) return { failures: ["no settings surface"], end: null, scrolls: false };
@@ -3032,6 +3034,7 @@ function readSettingsSurface(args: { phone: boolean; defining: string | null; ab
     /* It covers no words of another row, and of its own row a line whole or not at all. */
     const under: string[] = [];
     const cutWords: string[] = [];
+    const hiddenOwn: string[] = [];
     if (own) {
       const ownWords = document.createTreeWalker(own, NodeFilter.SHOW_TEXT);
       for (let node = ownWords.nextNode(); node; node = ownWords.nextNode()) {
@@ -3042,9 +3045,11 @@ function readSettingsSurface(args: { phone: boolean; defining: string | null; ab
           const touches = rect.width > 0 && rect.left < box.right - 0.5 && rect.right > box.left + 0.5 && rect.top < box.bottom - 0.5 && rect.bottom > box.top + 0.5;
           const whole = rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 && rect.top >= box.top - 0.5 && rect.bottom <= box.bottom + 0.5;
           if (touches && !whole) cutWords.push((node.textContent ?? "").trim().slice(0, 40));
+          if (touches && !node.parentElement?.closest("[data-settings-dot-popover]")) hiddenOwn.push((node.textContent ?? "").trim().slice(0, 40));
         }
       }
     }
+    if (ownClear && !phone && hiddenOwn.length) failures.push(`popover hides words of its own row: ${[...new Set(hiddenOwn)].join(" | ")}`);
     if (cutWords.length) failures.push(`popover leaves a fragment of its own row: ${[...new Set(cutWords)].join(" | ")}`);
     /* It says what the row does not. */
     const word = own?.querySelector("[data-settings-row-value]")?.textContent?.trim().toLowerCase();
@@ -3115,7 +3120,7 @@ export async function captureSettingsWindowFrames(browser: Browser, base: string
         /* A defining element below the first screen is scrolled whole, as the person pressing its row sees it; where the
            window scrolled itself, the frame reads the screen it landed on. */
         if (frame.defining && !frame.details && !frame.landed) await page.locator(frame.defining).first().scrollIntoViewIfNeeded().catch(() => undefined);
-        const read = await page.evaluate(readSettingsSurface, { phone, defining: frame.defining ?? null, absent: frame.absent?.source ?? null, landed: frame.landed === true });
+        const read = await page.evaluate(readSettingsSurface, { phone, defining: frame.defining ?? null, absent: frame.absent?.source ?? null, landed: frame.landed === true, ownClear: frame.ownClear === true });
         reading.failures.push(...read.failures);
         reading.end = read.end;
         reading.scrolls = read.scrolls;

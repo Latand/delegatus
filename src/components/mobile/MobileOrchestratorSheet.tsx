@@ -6,6 +6,8 @@ import { Bot, ChevronRight, CornerDownRight, LoaderCircle, LogIn, Pencil, Refres
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import { X } from "@/components/icons";
+import { reasoningTierLabel } from "@/components/RuntimePill";
+import { modelDisplayName } from "@/lib/agent/models";
 import {
   AgentLaunchControls,
   launchEngineLabel,
@@ -1297,8 +1299,8 @@ function SeatIdentity({
           <span className="flex min-w-0 items-center gap-1.5">
             {model ? (
               <span className="min-w-0 truncate text-body font-semibold text-primary">
-                {model}
-                {effort ? <span className="font-normal text-secondary"> · {effort}</span> : null}
+                {modelDisplayName(engine ?? "claude", model)}
+                {effort ? <span className="font-normal text-secondary"> · {reasoningTierLabel(t, effort)}</span> : null}
               </span>
             ) : (
               <span className="min-w-0 truncate text-body text-muted">{t("orchPanel.incumbentUnknown")}</span>

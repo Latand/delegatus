@@ -17,7 +17,7 @@ import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
 import type { PipelineStage } from "@/lib/pipelines/types";
 
 import { stageDisplayName } from "./pipelines/pipelineModel";
-import { placeStack, readObstacles, WIDE_WINDOW } from "./soundCaptionPlacement";
+import { placeStack, QUESTION_TOAST_PLACED, readObstacles, TOAST_MAX_WIDTH, WIDE_WINDOW } from "./soundCaptionPlacement";
 import { SOUND_CAPTION_CSS } from "./soundCaptionStyles";
 
 /**
@@ -120,6 +120,8 @@ const LEAVE_MS = 140;
 /** The column's first line: 8 px under the bar row's 48 px. */
 const DEFAULT_TOP = 56;
 const GAP = 8;
+/** How often a stack that is not held re-reads the page while content under it changes, ms. */
+const REPLACE_MS = 200;
 const EMPTY: readonly SoundCaptionItem[] = [];
 
 /**
@@ -179,11 +181,11 @@ function SoundCaptionStack({ right, hidden, suppressPath, titleOf, onOpen }: Omi
   });
 
   /*
-   * Where the column stands: the first free place from the bottom of the question toast down. Reading the page's
+   * Where the column stands: the first free place from the bottom of the question toast down, leftward as far as the window's middle (the page is read as far). Reading the page's
    * text is the costly part, so it runs when the toasts, their sizes, the window or the first line change, and
    * never while a held stack sits still under a feed that scrolls.
    */
-  const [place, setPlace] = useState({ top: DEFAULT_TOP, fold: 0, free: true });
+  const [place, setPlace] = useState({ top: DEFAULT_TOP, fold: 0, free: true, shift: 0 });
   const live = shown.length > 0;
   const column = useRef<HTMLDivElement | null>(null);
   const placedFor = useRef("");
@@ -199,12 +201,16 @@ function SoundCaptionStack({ right, hidden, suppressPath, titleOf, onOpen }: Omi
     const key = JSON.stringify([shown.map((item) => item.id), sizes, right, viewport, minTop]);
     if (key === placedFor.current) return;
     placedFor.current = key;
-    const next = placeStack({ viewport, right, minTop, toasts: sizes, obstacles: readObstacles(element, right), keep: viewport.width >= WIDE_WINDOW ? 2 : 1 });
-    setPlace((current) => (current.top === next.top && current.fold === next.fold && current.free === next.free ? current : next));
+    const next = placeStack({ viewport, right, minTop, toasts: sizes, obstacles: readObstacles(element, right, { width: Math.max(TOAST_MAX_WIDTH, viewport.width / 2 - right) }), keep: viewport.width >= WIDE_WINDOW ? 2 : 1, anywhere: true, leftward: true });
+    setPlace((current) => (current.top === next.top && current.fold === next.fold && current.free === next.free && current.shift === next.shift ? current : next));
   }, [shown, right]);
+  /* A pointer or the focus on the stack holds it where it is: a toast moving under a hand is worse than one over a line. */
+  const isHeld = () => Boolean(column.current && (column.current.querySelector(":hover") || column.current.contains(document.activeElement)));
   const settleRef = useRef(settle);
+  const isHeldRef = useRef(isHeld);
   useLayoutEffect(() => {
     settleRef.current = settle;
+    isHeldRef.current = isHeld;
     if (live) settle();
     else placedFor.current = "";
   });
@@ -219,13 +225,32 @@ function SoundCaptionStack({ right, hidden, suppressPath, titleOf, onOpen }: Omi
         settleRef.current();
       });
     };
-    const observer = new MutationObserver(schedule);
-    observer.observe(document.body, { childList: true, subtree: true });
+    /* Content that arrives under the stack after it was placed (an opened task's conversation, a feed) is read again, at most
+       every REPLACE_MS and never while the stack is held; the toasts' own changes are the render's business. */
+    let replace = 0;
+    const again = () => {
+      if (replace) return;
+      replace = window.setTimeout(() => {
+        replace = 0;
+        if (isHeldRef.current()) return;
+        placedFor.current = "";
+        settleRef.current();
+      }, REPLACE_MS);
+    };
+    const observer = new MutationObserver((records) => {
+      schedule();
+      if (records.some((record) => !column.current?.contains(record.target))) again();
+    });
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    const moved = () => { again(); };
     window.addEventListener("resize", schedule);
+    window.addEventListener(QUESTION_TOAST_PLACED, moved);
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", schedule);
+      window.removeEventListener(QUESTION_TOAST_PLACED, moved);
       if (frame) window.cancelAnimationFrame(frame);
+      if (replace) window.clearTimeout(replace);
     };
   }, [live]);
 
@@ -279,7 +304,7 @@ function SoundCaptionStack({ right, hidden, suppressPath, titleOf, onOpen }: Omi
         data-sound-captions=""
         data-placement={place.free ? "free" : "covers"}
         aria-live="polite"
-        style={{ top: place.top, right }}
+        style={{ top: place.top, right: right + place.shift }}
         onPointerEnter={() => holdSoundCaptions(true, "pointer")}
         onPointerLeave={() => holdSoundCaptions(false, "pointer")}
         onFocus={() => holdSoundCaptions(true, "focus")}

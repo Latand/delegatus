@@ -5,7 +5,7 @@ import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
 import { diffTextLines } from "@/components/feed/diff";
-import { translate } from "@/lib/i18n";
+import { setLocale, translate } from "@/lib/i18n";
 import { emptyStore } from "@/components/runtime/runtimeModel";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
 import type { FileEntry } from "@/lib/types";
@@ -133,6 +133,7 @@ afterEach(() => {
   dom.document.body.replaceChildren();
   dom.sessionStorage.clear();
   dom.localStorage.clear();
+  setLocale("en");
 });
 
 function conversation(over: Partial<FileEntry>): FileEntry {
@@ -311,6 +312,17 @@ test("a live seat's pinned row carries a VISIBLE controls entry point beside the
   expect(entry!.closest(".overflow-x-auto")).toBeNull();
 });
 
+test("the controls sheet says the model and the reasoning tier in the Ukrainian words, not the raw ids", async () => {
+  setLocale("uk");
+  const files = [conversation({}), orchestrator];
+  const { host, root } = await mount(files);
+  const panel = await openControls(host, root, files);
+  const identity = panel.querySelector("[data-orchestrator-incumbent]") as HTMLElement;
+  expect(identity.textContent).toContain("Opus 5.5");
+  expect(identity.textContent).toContain(translate("uk", "reasoningTier.high"));
+  expect(identity.textContent).not.toContain("high");
+});
+
 test("the controls sheet names the incumbent the way the desktop header does, shows its mandate, and offers Rotate", async () => {
   const files = [conversation({}), orchestrator];
   const { host, root } = await mount(files);
@@ -326,8 +338,9 @@ test("the controls sheet names the incumbent the way the desktop header does, sh
   const identity = panel.querySelector("[data-orchestrator-incumbent]") as HTMLElement | null;
   expect(identity).not.toBeNull();
   expect(identity!.querySelector("[data-mobile2-seat-engine]")?.getAttribute("data-mobile2-seat-engine")).toBe("claude");
-  expect(identity!.textContent).toContain("opus");
-  expect(identity!.textContent).toContain("high");
+  /* The catalogue name and the locale's tier word, the two the desktop header reads. */
+  expect(identity!.textContent).toContain("Opus 5.5");
+  expect(identity!.textContent).toContain(translate("en", "reasoningTier.high"));
   expect(identity!.textContent).toContain("spare");
   expect(identity!.textContent).toContain("Max plan");
   expect(identity!.querySelector("[data-mobile2-seat-held]")!.textContent).toContain("holding the seat for");
