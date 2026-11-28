@@ -580,11 +580,11 @@ test('curator completion requires the registered learner, delivery and original 
   } })).toThrow('Judge session reused');
 });
 
-const contracts: Record<string, Contract> = Object.fromEntries(design.tasks.map(t => [t.id, {
+const contracts = Object.fromEntries(design.tasks.map(t => [t.id, {
   requirements: reqs, residuals, opportunities: [{ id: t.id, task: t.id, principle: 'boundary', applicability: 'applicable' as const, proof: proof(t.id), version: '1' }],
   ...(t.id === 'E1-C1' ? { predecessors: ['E1-C0'], oracleCommands: { 'E1-C0': oracleCommand('E1-C0') } }
     : t.id === 'E1-C2' ? { predecessors: ['E1-C0', 'E1-C1'], oracleCommands: { 'E1-C0': oracleCommand('E1-C0'), 'E1-C1': oracleCommand('E1-C1') } } : {}),
-}]));
+}])) as Record<string, Contract>;
 const event = (id: string) => ({ id, rowId: solver, evidenceDigest: proof(id) });
 
 function appendCausalRow(dir: string, id: string, driftInput: ReturnType<typeof preflights>[number]) {
@@ -609,7 +609,7 @@ function appendScheduledPrefix(dir: string, stopBefore: string, frozenPack?: { i
       .map(name => JSON.parse(readFileSync(join(dir, name), 'utf8')).entry as { rowId: string; kind: string });
     if (priorEvents.some(entry => entry.rowId === cell.id && entry.kind === 'solver')) continue;
     const pipelineId = `prefix-pipeline-${cell.id}`;
-    let drift: ReturnType<typeof preflights>[number] | undefined;
+    let drift: (ReturnType<typeof preflights>[number] & { preflightId?: string; startId?: string }) | undefined;
     if (cell.phase === 'O' || cell.phase === 'P') {
       const block = [...design.ordering.orchestrationBlocks, ...design.ordering.productPairedBlocks].find(b => b.orderedCells.includes(cell.id))!;
       drift = preflights(block.id).find(row => row.id === cell.id)!;
