@@ -139,8 +139,8 @@ opens a task, starts a pipeline in a worktree of its own for work that needs
 agents and keeps the task's card up to date. You can state only an outcome: it
 checks the scope first and chooses direct work, a pipeline or research itself.
 A decision it cannot make alone reaches you as a form with a recommended answer
-for each question, in the **Decisions** tab beside its chat
-and under **Needs you**.
+for each question, in the **Needs you** tab beside its chat
+(the **Reports** tab sits next to it) and in the board's **Needs you** queue.
 
 ![A project's orchestrator: its chat with you, its worker count against the limit, and beside it a task's three-question decision form waiting for your answer, already sent to Telegram with a link to send it again](docs/media/readme/orchestrator.svg)
 
@@ -265,10 +265,13 @@ Voice Delegatus can run its text turns on a connected ChatGPT plan. Connecting
 is optional and the owner does it in the Keys section. For an eligible turn the
 backend sends ChatGPT the call's transcript text, the results of earlier
 registry reads in the call and the selected project context. It also sends
-notes from earlier calls or, on a resumed call, the context of the call it
-continues; the directory of known projects beside the selected one; and the
-output of any configured tool, in the next round of the same turn. It sends no
-image on this path.
+the context of the call it continues, on a resumed call; with call memory on,
+notes from other earlier calls, which on a resumed call fill what the
+continued call leaves of the same budget, so both can travel together; the
+requests already sent to the orchestrator that still await its report and,
+when one waits for your confirmation, its instruction; the directory of known
+projects beside the selected one; and the output of any configured tool, in
+the next round of the same turn. It sends no image on this path.
 
 ## License
 
