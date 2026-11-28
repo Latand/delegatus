@@ -2349,7 +2349,7 @@ function unconfirmedLaunchSetup(receipt: LaunchSetupReceipt) {
   return !receipt.key && !receipt.hostSetup?.cleanupConfirmed ? receipt.hostSetup : undefined;
 }
 
-function missingSetupProcess(setup: NonNullable<SpawnReceipt["hostSetup"]>): boolean {
+export function missingSetupProcess(setup: NonNullable<SpawnReceipt["hostSetup"]>): boolean {
   return (setup.phase === "executing" || setup.execPermitGranted === true)
     && (setup.processes.length === 0 || !setupHasExecProcessEvidence(setup));
 }
@@ -2369,7 +2369,7 @@ function setupHasExecProcessEvidence(setup: NonNullable<SpawnReceipt["hostSetup"
 }
 
 /** A local PID lookup can clear setup custody only in the recorded domain. */
-function setupProcessMayOwn(identity: ProcessIdentity): boolean {
+export function setupProcessMayOwn(identity: ProcessIdentity): boolean {
   const current = systemBootEpoch();
   if (!identity.bootEpoch || !current) return true;
   if (identity.bootEpoch === current) return processIdentityMayOwn(identity);

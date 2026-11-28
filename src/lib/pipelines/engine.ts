@@ -2392,14 +2392,11 @@ export function defaultPipelinePorts(
         const reconciled = await registry.deliveryWriteBatchOrBusy({ label: "pipeline.setup-recovery", operationId: launchId }, () => {
           const currentFile = registry.readOnlySnapshot();
           const current = currentFile.receipts[launchId];
-          const changed = "the original setup reservation or its ownership changed";
-          if (!current || !safe(currentFile, current)) return changed;
-          if (current.hostSetup && !current.hostSetup.cleanupConfirmed
-            && !registry.confirmStructuredHostSetupCleanup(launchId, owner))
-            return "native setup process cleanup is unconfirmed";
-          return registry.releaseStructuredSpawnAdmissionOwner(launchId, owner).released ? null : changed;
+          if (!current || !safe(currentFile, current)) return false;
+          if (current.hostSetup && !current.hostSetup.cleanupConfirmed) registry.confirmStructuredHostSetupCleanup(launchId, owner);
+          return registry.releaseStructuredSpawnAdmissionOwner(launchId, owner).released;
         });
-        if (reconciled) return reconciled;
+        if (!reconciled) return "the original setup reservation or its ownership changed";
         invalidateRegistryProjection();
       }
       return null;
