@@ -147,14 +147,16 @@ test("retrying a parked test refusal preserves staged repair work for a fresh pr
     expect(original.publicationRepair?.requestedAt).toBeDefined();
     f.h.durableTurns.set(original.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(clock) });
     fs.unlinkSync(path.join(f.hooks, "pre-push"));
+    // Work staged by the producer before the publication repair parks must
+    // survive both the park and a fresh-producer retry.
+    fs.writeFileSync(path.join(f.lane(), "file.txt"), "staged producer repair\n");
+    await f.agentGit(f.lane(), "add", "file.txt");
+    const staged = await f.git(f.lane(), "write-tree");
     clock = new Date(Date.parse(clock) + 21 * 60_000).toISOString();
     f.h.advanceWallClock(21 * 60_000);
     await tickPipelines([], f.h.ports);
     expect(current().state).toBe("needs_decision");
-    // The timed-out repair has settled. Stage work added while the lane is parked.
-    fs.writeFileSync(path.join(f.lane(), "file.txt"), "staged producer repair\n");
-    await f.agentGit(f.lane(), "add", "file.txt");
-    const staged = await f.git(f.lane(), "write-tree");
+    expect(await f.git(f.lane(), "write-tree")).toBe(staged);
 
     f.h.ports.conversationTurnInterrupted = async () => "dead";
     expect((await rawPatchPipeline(current().id, { action: "retry-stage" }, f.h.ports)).error).toBeUndefined();
@@ -228,7 +230,7 @@ test.each(["dead", "unhosted", "scoped-unhosted", "conflict", "idle", "running",
     }
   });
 
-async function repairController(f: Awaited<ReturnType<typeof fixture>>, crash: "intent" | "commit" | "accepted" | null, race?: "index" | "worktree", hosted = false) {
+async function repairController(f: Awaited<ReturnType<typeof fixture>>, crash: "intent" | "commit" | "accepted" | null, race?: "index" | "worktree", hosted = false, commitTimeoutMs?: number) {
   return realExec("bun", ["-e", `
       const { spyOn } = await import("bun:test");
       const pullRequests = await import("./src/lib/pipelines/stagePullRequest.ts");
@@ -278,9 +280,54 @@ async function repairController(f: Awaited<ReturnType<typeof fixture>>, crash: "
         if (${JSON.stringify(crash)} === "commit" && args[0] === "git" && args[1][0] === "commit" && result.code === 0) process.exit(0);
         return result;
       };
+      if (${commitTimeoutMs ?? "undefined"} !== undefined) {
+        const execute = ports.exec;
+        ports.exec = async (command, args, cwd, env, options) => command === "git" && args[0] === "commit"
+          ? execute(command, args, cwd, env, { ...options, timeoutMs: ${commitTimeoutMs ?? "undefined"} })
+          : execute(command, args, cwd, env, options);
+      }
       await tickPipelines([], ports);
     `], process.cwd(), { ...process.env }, { timeoutMs: 30_000 });
 }
+
+test("publication repair commit timeouts have a restart-persistent retry limit and preserve staged custody", async () => {
+  const f = await fixture();
+  try {
+    const clock = f.h.ports.now();
+    f.h.ports.now = () => clock;
+    f.h.ports.resumeSeveredTurn = async () => true;
+    const accepted = await f.commit("implementation"); f.refuse(); await f.finish();
+    const original = structuredClone(current().runs[0]!.attempts[0]!);
+    f.h.durableTurns.set(original.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(clock) });
+    fs.unlinkSync(path.join(f.hooks, "pre-push"));
+    fs.writeFileSync(path.join(f.lane(), "file.txt"), "staged repair custody\n");
+    await f.agentGit(f.lane(), "add", "file.txt");
+    const stagedTree = await f.git(f.lane(), "write-tree");
+    const hookCalls = path.join(f.root, "pre-commit-calls");
+    fs.writeFileSync(path.join(f.hooks, "pre-commit"), `#!/bin/sh\nprintf x >> '${hookCalls}'\nsleep 5\n`, { mode: 0o755 });
+
+    // Each call is a fresh controller process. A real sleeping hook proves
+    // that the persisted retry budget survives process restart.
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      const restarted = await repairController(f, null, undefined, false, 450);
+      expect(restarted.code, restarted.stderr).toBe(0);
+      expect(fs.readFileSync(hookCalls, "utf8")).toHaveLength(attempt);
+      const row = current();
+      if (attempt < 5) expect(row.state).toBe("running");
+      else expect(row.state).toBe("needs_decision");
+    }
+
+    const result = current(), attempt = result.runs[0]!.attempts[0]!;
+    expect(attempt.publicationRepair?.commitTimeoutFailures).toBe(5);
+    expect(result.stateDetail).toContain("stopped after 4 automatic retries");
+    expect(result.stateDetail).toContain(accepted);
+    expect(result.stateDetail).toContain(stagedTree);
+    expect(result.lastPassedCommit).toBe(accepted);
+    expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(accepted);
+    expect(await f.git(f.lane(), "write-tree")).toBe(stagedTree);
+    expect(await f.git(f.repo, "ls-remote", "--heads", "origin", result.delivery!.target.branch)).toBe("");
+  } finally { f.close(); }
+}, 30_000);
 
 test.each(["automatic", "retry-stage", "foreign", "dirty", "missing-receipt"] as const)(
   "a live-origin repair intent survives later host loss (%s)", async shape => {

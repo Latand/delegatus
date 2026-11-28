@@ -6763,6 +6763,21 @@ async function settlePublicationRepairWithCustody(
     }
     if (!result.ok) {
       if (result.deferred) {
+        if (result.commitTimeout || result.commitCancelled) {
+          const failures = (repair.commitTimeoutFailures ?? 0) + 1;
+          repair.commitTimeoutFailures = failures;
+          if (failures > 4) {
+            const tree = repair.commitCustody?.tree;
+            const detail = `${result.error}; stopped after 4 automatic retries; accepted head ${repair.sha}`
+              + `${tree ? ` and staged tree ${tree}` : ""} preserved for recovery`;
+            attempt.error = publicationRepairParkDetail(repair, detail);
+            pipeline.stateDetail = attempt.error;
+            await persist();
+            await park(pipeline, attempt.error);
+            return false;
+          }
+          await persist();
+        }
         ports.scheduleTick?.(1_000);
         return false;
       }
@@ -6883,6 +6898,7 @@ async function settleRejectedPublicationRepair(
   ports: PipelinePorts, persist: () => void | Promise<void>,
 ): Promise<boolean> {
   const repair = attempt.publicationRepair!;
+  if (repair.preserveWorktreeOnRetry) return true;
   // A clean unchanged head needs no discard. Preserve the original timeout
   // and delivery refusal records; their retry path still checks live producers.
   if (!repair.rollback) {
@@ -6987,6 +7003,9 @@ async function stageCommitRepairSettled(
   const giveUp = async (why: string) => {
     repair.outcome = { status: "rejected", reason: why };
     if (publication) {
+      if (publication && why.includes("did not finish that turn in time")) {
+        attempt.publicationRepair!.preserveWorktreeOnRetry = true;
+      }
       await persist();
       if (!await settleRejectedPublicationRepair(pipeline, stage, attempt, ports, persist)) return false;
     }
