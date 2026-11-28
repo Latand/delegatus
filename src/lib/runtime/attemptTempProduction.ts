@@ -240,7 +240,7 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
           backfill = await backfillAttemptTempRetention(store, { audit: true, remaining: () => auditEnd - sweepMonotonicNow() });
         }
         const remaining = () => end - sweepMonotonicNow();
-        for (const owner of store.allocationDue(Date.now(), 4)) {
+        for (const owner of store.allocationDue(Date.now(), 64)) {
           if (remaining() <= 0) break;
           let bytes: number | null = null;
           try {

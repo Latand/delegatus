@@ -187,7 +187,7 @@ export function attemptRetentionCategory(retention?: { periodDays: number; dueBy
   scratchPeriodDays?: number; evidencePeriodDays?: number }): string {
   if (!retention) return "Тимчасові дані агентів";
   const until = retention.until === null ? "—" : new Date(retention.until).toISOString().slice(0, 10);
-  return `Тимчасові дані агентів (scratch: понад ${(retention.scratchPeriodDays ?? 1) * 24} год після підтвердженого завершення; докази: ${retention.evidencePeriodDays ?? retention.periodDays} днів; ${retention.scratchPeriodDays === undefined ? "облік строків оновлюється; " : ""}загалом ${formatDiskBytes(retention.dueBytes)} найближчими проходами; ще ${formatDiskBytes(retention.upcomingBytes)} — до ${until})`;
+  return `Тимчасові дані агентів. Звільнений scratch етапу підлягає прибиранню після завершення спроби. Строк для незвільненого scratch — понад ${(retention.scratchPeriodDays ?? 1) * 24} год, для доказів — ${retention.evidencePeriodDays ?? retention.periodDays} днів. ${retention.scratchPeriodDays === undefined ? "Облік строків оновлюється. " : ""}Найближчими проходами — загалом ${formatDiskBytes(retention.dueBytes)}, ще ${formatDiskBytes(retention.upcomingBytes)} — до ${until}`;
 }
 export function diskPressureLabel(pressure: DiskPressure): string {
   const low = pressure.volumes.filter(row => row.level === "warning" || row.level === "critical");

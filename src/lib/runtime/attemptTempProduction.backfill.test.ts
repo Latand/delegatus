@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { closeAgentRegistryForTests } from "@/lib/agent/registry";
 import { AttemptTempStore } from "./attemptTempRetention";
 import { measureAttemptAllocation } from "./attemptTempFilesystem";
-import { attemptScratchAuthority as attemptTempAuthority, backfillAttemptTempRetention } from "./attemptTempProduction";
+import { attemptScratchAuthority as attemptTempAuthority, backfillAttemptTempRetention, runAttemptTempSweep } from "./attemptTempProduction";
 import { finishedLane } from "./attemptTempRetention.testSupport";
 import { savePipelines } from "../pipelines/store";
 
@@ -36,6 +37,58 @@ test.each(["closed", "completed"] as const)("release immediately records the %s 
     const authority = await attemptTempAuthority(f.store.owner(directory)!, undefined, () => NOW);
     expect(f.store.retentionExpiry(directory)).toBe(authority.expiresAt!);
     expect(authority.state).toBe("closed");
+  } finally { f.store.close(); }
+});
+
+test("one production allocation page measures growth beyond the first forty roots", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "allocation-page-")); roots.push(root);
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(root, "state");
+  const store = new AttemptTempStore();
+  const clock = spyOn(Date, "now").mockReturnValue(NOW + 61_000);
+  try {
+    const lane = finishedLane(root, "2035-01-14T00:00:00Z");
+    lane.state = "running";
+    savePipelines([lane]);
+    const scratch = path.join(process.env.LLV_STATE_DIR, "scratch");
+    const directories = Array.from({ length: 41 }, (_, index) => path.join(scratch, `llv-stage-${String(index).padStart(6, "0")}`));
+    for (const [index, directory] of directories.entries()) {
+      fs.mkdirSync(directory, { recursive: true });
+      store.register({ directory, pipelineId: lane.id, launchId: `allocation-${index}`, retainUntilClose: false, createdAt: NOW - 1000 });
+      store.measure(directory, 4096, NOW - (index === 40 ? 0 : 1000));
+    }
+    const live = directories.at(-1)!;
+    const bytes = 64 * 1024 ** 2;
+    fs.writeFileSync(path.join(live, "payload"), Buffer.alloc(bytes, 1));
+    const report = await runAttemptTempSweep({
+      scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true, availableBytes: () => 412e9,
+    }, { NODE_ENV: "test", LLV_TEMP_SWEEP: "on", LLV_ATTEMPT_TEMP_CAP_BYTES: String(bytes / 2) });
+    expect(report?.overCapBytes).toBeGreaterThan(0);
+    expect(store.bytes()).toBeGreaterThanOrEqual(bytes);
+    expect(store.owner(live)).toMatchObject({ measuredAt: NOW + 61_000 });
+    expect(store.owner(live)?.bytes).toBeGreaterThanOrEqual(bytes);
+    expect(fs.statSync(path.join(live, "payload")).size).toBe(bytes);
+  } finally {
+    clock.mockRestore();
+    store.close();
+    closeAgentRegistryForTests();
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+  }
+});
+
+test("release queues a new allocation observation and rejects a pre-release checkpoint", () => {
+  const f = fixture(), directory = f.make("release-allocation");
+  try {
+    const inflight = f.store.allocationDue(NOW)[0]!;
+    // Compare-and-set must reject this observation even when measuredAt was zero.
+    f.store.release(directory);
+    f.store.recordAllocation(inflight, 1, NOW);
+    expect(f.store.owner(directory)).toMatchObject({ released: 1, bytes: 0, measuredAt: 0 });
+    f.store.measure(directory, 4096, NOW);
+    expect(f.store.allocationDue(NOW + 1000)).toHaveLength(0);
+    f.store.release(directory);
+    expect(f.store.allocationDue(NOW + 1000)[0]).toMatchObject({ directory, measuredAt: 0 });
   } finally { f.store.close(); }
 });
 

@@ -695,6 +695,91 @@ function workScratchFixture(total: number, overdue: number) {
   return { store, directories };
 }
 
+test.each([
+  "released", "early-release", "unreleased", "running", "cursor", "process", "retained",
+  "custody", "linked", "keep", "intent", "vanished", "checkout",
+] as const)("production handles recently ended stage scratch with %s", async scenario => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "prompt-scratch-release-")); roots.push(root);
+  isolateState(root);
+  const repo = path.join(root, "repo"); fs.mkdirSync(repo);
+  const started = WORK_TICK - 120_000, completed = WORK_TICK - 60_000;
+  const lane = finishedLane(repo, new Date(completed).toISOString());
+  lane.state = "running"; lane.closedAt = null; lane.worktreeDir = repo;
+  if (scenario === "cursor") lane.cursor = { stageId: "build", state: "pending", input: null, activatedBy: null };
+  const launchId = "prompt-release-launch";
+  lane.runs = [{ stageId: "build", attempts: [{ n: 1, state: "running", launchId, effectiveRole: lane.stages[0]!.effectiveRole,
+    conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+    startedAt: new Date(started).toISOString(), completedAt: null,
+    input: null, activatedBy: null, output: null, verdict: null, error: null }] }];
+  savePipelines([lane]);
+  const directory = statePath("scratch", "llv-stage-prompt"); fs.mkdirSync(directory, { recursive: true });
+  const payload = path.join(directory, "data.png");
+  const allocation = 1024 ** 2;
+  fs.writeFileSync(payload, Buffer.alloc(allocation, 7));
+  const store = new AttemptTempStore();
+  const clock = spyOn(Date, "now").mockReturnValue(WORK_TICK);
+  const unchanged = RepositoryLinkInventory.prototype.unchangedAll;
+  const checkout = spyOn(RepositoryLinkInventory.prototype, "unchangedAll")
+    .mockImplementation(function (this: RepositoryLinkInventory) { return scenario !== "checkout" && unchanged.call(this); });
+  try {
+    store.register({ directory, pipelineId: lane.id, launchId, retainUntilClose: scenario === "retained", createdAt: started });
+    if (scenario !== "unreleased" && scenario !== "released") store.release(directory);
+    // The host may release the root and a prior tick may measure it while the
+    // attempt's completion is still pending. Start with that stale size.
+    store.measure(directory, 4096, completed - 1);
+    if (scenario !== "running") {
+      const attempt = lane.runs[0]!.attempts[0]!;
+      attempt.state = "passed"; attempt.completedAt = new Date(completed).toISOString();
+      savePipelines([lane]);
+    }
+    if (scenario === "released") store.release(directory);
+    if (scenario === "custody") await holdFinishedRoot(directory, lane.id, "", [], launchId);
+    if (scenario === "linked") nameInReport(payload);
+    if (scenario === "keep") plantKeepMarker(directory);
+    if (scenario === "intent" || scenario === "vanished") {
+      // Keep the recovery page busy with an earlier intent. This root must
+      // reach the ordinary visit with its stale intent still in the ledger.
+      const earlier = path.join(path.dirname(directory), "llv-stage-ahead0"); fs.mkdirSync(earlier);
+      const stat = fs.lstatSync(earlier);
+      store.queueTrashIntent(earlier, `${stat.dev}:${stat.ino}`);
+      store.queueTrashIntent(directory, store.owner(directory)!.identity);
+      if (scenario === "vanished") fs.rmSync(directory, { recursive: true });
+    }
+    const scan = (): ProcessScan => ({ ownNamespace: null, processes: scenario === "process"
+      ? [{ pid: 123, namespace: null, stamped: false, paths: [path.join(directory, "tmp")] }] : [] });
+    // For the early release, preparation skips the recent measurement.
+    clock.mockReturnValue(WORK_TICK - 2);
+    const first = (await runAttemptTempSweep({ ...workPorts, scan, references }, workMode))!;
+    expect(first.errors).toBe(0);
+    if (scenario === "released" || scenario === "early-release" || scenario === "intent" || scenario === "vanished") {
+      expect(first.removed).toBe(scenario === "vanished" ? 0 : 1);
+      if (scenario !== "vanished") expect(first.removedBytes).toBeGreaterThanOrEqual(allocation);
+      expect(store.bytes()).toBe(0);
+      expect(store.has(directory)).toBeFalse();
+      expect(fs.existsSync(directory)).toBeFalse();
+      return;
+    }
+    expect(first.removed).toBe(0);
+    expect(fs.statSync(payload).size).toBe(allocation);
+    const reasons = { process: "process_reference", custody: "recorded_evidence_hold", linked: "linked_evidence_hold",
+      keep: "keep_marker", checkout: "checkout_changed" } as const;
+    if (scenario in reasons) expect(first.outcomes.find(row => row.directory === directory)?.reasonCode)
+      .toBe(reasons[scenario as keyof typeof reasons]);
+    if (scenario === "unreleased") expect(store.retentionExpiry(directory)).toBe(completed + ATTEMPT_SCRATCH_EXPIRY_OFFSET_MS);
+    if (scenario === "running" || scenario === "cursor" || scenario === "retained") {
+      expect((await attemptScratchAuthority(store.owner(directory)!)).state).toBe("live");
+      expect(store.retentionExpiry(directory)).toBeNull();
+    }
+    if (scenario === "checkout") {
+      const retryAt = Date.now() + 60_000;
+      expect(store.owner(directory)?.checkedAt).toBe(retryAt);
+      checkout.mockRestore();
+      expect(await productionFixtureTick(retryAt)).toMatchObject({ removed: 1, errors: 0 });
+      expect(fs.existsSync(directory)).toBeFalse();
+    }
+  } finally { checkout.mockRestore(); clock.mockRestore(); store.close(); }
+});
+
 test("absent allocation entries and recurring deferrals leave a path to the tail of the due ledger", async () => {
   const count = 2050;
   const { store, directories } = workScratchFixture(count, count);
@@ -740,7 +825,7 @@ test("absent allocation entries and recurring deferrals leave a path to the tail
       expect(report.pressure).toBeFalse();
       expect(report.errors).toBe(0);
       for (const row of report.outcomes) seen.add(row.directory);
-      if (i === 0) expect(store.allocationDue(WORK_TICK).map(owner => owner.directory)).toContain(deep);
+      if (i === 0) expect(store.owner(deep)?.bytes).toBeGreaterThanOrEqual(8 * 1024 ** 2);
       if (i === 1) {
         expect(report.checked).toBe(32);
         expect(report.outcomes.some((row: { directory: string }) => firstPage.has(row.directory))).toBeFalse();
@@ -1354,7 +1439,7 @@ test.skipIf(process.env.LLV_ATTEMPT_TEMP_BENCHMARK !== "1")("retention benchmark
       const directory = path.join(root, `llv-stage-${String(n).padStart(4, "0")}`); fs.mkdirSync(directory);
       fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(n < 32 ? 16 * 1024 ** 2 : 4096));
       store.register({ directory, pipelineId: pipeline.id, launchId: "benchmark-launch", retainUntilClose: false, createdAt: 1 });
-      store.measure(directory, n < 32 ? 16 * 1024 ** 2 : 4096); store.release(directory);
+      store.release(directory); store.measure(directory, n < 32 ? 16 * 1024 ** 2 : 4096);
     }
     for (const kind of ["cpu", "cpu", "io"]) {
       const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"), "--load", kind, path.join(root, "load-file")],
@@ -1437,7 +1522,7 @@ test("a checkout link created after the first authority inventory keeps its atte
   fs.mkdirSync(path.dirname(checkoutLink), { recursive: true });
   const store = new AttemptTempStore(path.join(root, "owners.sqlite"));
   store.register({ directory, pipelineId: pipeline.id, launchId: "late-link-launch", retainUntilClose: false, createdAt: 1 });
-  store.measure(directory, 4096); store.release(directory);
+  store.release(directory); store.measure(directory, 4096);
   let inventory: InstanceType<typeof RepositoryLinkInventory> | undefined;
   let injected = false;
   const targets = RepositoryLinkInventory.prototype.targets;
@@ -1484,7 +1569,7 @@ test.each([0, 1, 2, 3, 4])("a restored checkout holds scratch across consumer aw
   fs.writeFileSync(path.join(directory, "data"), "retained payload");
   const store = new AttemptTempStore(path.join(root, "owners.sqlite"));
   store.register({ directory, pipelineId: pipeline.id, launchId: "restored-launch", retainUntilClose: false, createdAt: 1 });
-  store.measure(directory, 4096); store.release(directory);
+  store.release(directory); store.measure(directory, 4096);
   const exists = fs.existsSync;
   let observations = 0, restored = false;
   let inventory: InstanceType<typeof RepositoryLinkInventory>;

@@ -51,9 +51,8 @@ export type AttemptTempOwner = {
   retainUntilClose: boolean;
   createdAt: number;
 };
-type Row = AttemptTempOwner & { identity: string; released: number; checkedAt: number; bytes: number };
+type Row = AttemptTempOwner & { identity: string; released: number; checkedAt: number; bytes: number; measuredAt: number };
 type ScheduledRoot = Row & { expiresAt: number };
-type AllocationRoot = Row & { measuredAt: number };
 export type EvidenceCopy = { destination: string; pipelineId: string | null; launchId: string; kind: "lane" | "agent" | "unattributed";
   createdAt: number; expiresAt: number | null; checkedAt: number; bytes: number };
 export const DEFAULT_ATTEMPT_TEMP_CAP_BYTES = 100 * 1024 ** 3;
@@ -302,8 +301,8 @@ export class AttemptTempStore {
       return result.changes > 0;
     }).immediate();
   }
-  recoverTrash(now: () => number, deadline: number, budgetNow: () => number, scheduledOnly = false) {
-    if (!scheduledOnly) return this.recovery.page(now, deadline, budgetNow);
+  recoverTrash(now: () => number, deadline: number, budgetNow: () => number, scheduledOnly = false, dryRun = false) {
+    if (!scheduledOnly) return this.recovery.page(now, deadline, budgetNow, undefined, dryRun);
     const discovery = attemptScratchAuditDue(this.schedulePosition().discoveryAfter, now()) && {
       unknown: (scratch: string, name: string) => {
         if (this.recoverLegacyScratch(scratch, name, now())) return "recovered attempt owner";
@@ -311,9 +310,10 @@ export class AttemptTempStore {
       },
       complete: () => this.postponeDiscovery(now() + ATTEMPT_SCRATCH_AUDIT_INTERVAL_MS),
     };
-    return this.recovery.page(now, deadline, budgetNow, discovery);
+    return this.recovery.page(now, deadline, budgetNow, discovery, dryRun);
   }
   queueTrashIntent(directory: string, identity: string) { this.recovery.queueIntent(directory, identity); }
+  clearStaleTrashIntent(directory: string, identity: string) { this.recovery.clearStaleIntent(directory, identity); }
   refreshTrashRecovery(directory: string) { this.recovery.refresh(directory); }
   clearTrashRecovery(directory: string) { this.recovery.forget(directory); }
   trashRecoveryWatches(directory: string) { return this.recovery.watches(directory); }
@@ -353,7 +353,7 @@ export class AttemptTempStore {
   }
   release(directory: string) {
     this.upgradeScratchRetention();
-    this.db.query("UPDATE roots SET released=1,checkedAt=0 WHERE directory=?").run(directory);
+    this.db.query("UPDATE roots SET released=1,checkedAt=0,measuredAt=0 WHERE directory=?").run(directory);
     const owner = this.owner(directory);
     if (owner?.pipelineId) {
       const pipeline = pipelineRecordReader(owner.pipelineId).read();
@@ -558,10 +558,10 @@ export class AttemptTempStore {
     return [...expired, ...rest("SELECT * FROM roots WHERE checkedAt<=? ORDER BY bytes DESC,checkedAt,createdAt,directory LIMIT ?", limit - expired.length)]
       .sort((a, b) => b.bytes - a.bytes);
   }
-  allocationDue(now: number, limit = 4): AllocationRoot[] {
+  allocationDue(now: number, limit = 4): Row[] {
     // A proof retry can be hours or days away. Let its zero or stale
     // allocation through without repeating the retirement proof.
-    return this.db.query<AllocationRoot, [number, number, number, number, number]>(`SELECT r.* FROM roots r WHERE measuredAt<=?
+    return this.db.query<Row, [number, number, number, number, number]>(`SELECT r.* FROM roots r WHERE measuredAt<=?
       AND (r.bytes=0 OR r.measuredAt<=? OR r.checkedAt<=? OR NOT EXISTS (
         SELECT 1 FROM root_retention t WHERE t.directory=r.directory AND t.expiresAt<=?))
       ORDER BY measuredAt,createdAt,directory LIMIT ?`).all(now - 60_000, now - 60 * 60_000, now, now, limit);
@@ -747,11 +747,11 @@ export class AttemptTempStore {
     this.db.query("INSERT INTO copy_eligibility VALUES(?,?) ON CONFLICT(destination) DO UPDATE SET eligible=excluded.eligible").run(destination, Number(eligible));
   }
   measure(directory: string, bytes: number, at = Date.now()) { this.db.query("UPDATE roots SET bytes=?,measuredAt=? WHERE directory=?").run(bytes, at, directory); }
-  recordAllocation(owner: AllocationRoot, bytes: number | null, at: number) {
+  recordAllocation(owner: Row, bytes: number | null, at: number) {
     this.db.query(`UPDATE roots SET measuredAt=?${bytes === null ? "" : ",bytes=?"} WHERE directory=? AND identity=?
-      AND launchId=? AND pipelineId IS ? AND createdAt=? AND retainUntilClose=? AND measuredAt=?`)
+      AND launchId=? AND pipelineId IS ? AND createdAt=? AND retainUntilClose=? AND released=? AND measuredAt=?`)
       .run(at, ...(bytes === null ? [] : [bytes]), owner.directory, owner.identity, owner.launchId, owner.pipelineId, owner.createdAt,
-        Number(owner.retainUntilClose), owner.measuredAt);
+        Number(owner.retainUntilClose), owner.released, owner.measuredAt);
   }
   bytes() { return this.db.query<{ bytes: number }, []>("SELECT bytes FROM totals WHERE id=1").get()!.bytes; }
   close() { this.db.close(); this.releaseMemoryTracking?.(); this.releaseMemoryTracking = undefined; }
@@ -893,7 +893,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
     retained: options.checkoutReads, validationReuseMs: options.checkoutReads ? 5_000 : 0 });
   const recovery = options.selection
     ? { entries: 0, manifestEntries: 0, checks: 0, restored: 0, adopted: 0, recoveredDirectory: null, ledgerOwned: null, outcomes: [] }
-    : store.recoverTrash(now, deadline, budgetNow, options.scheduledOnly);
+    : store.recoverTrash(now, deadline, budgetNow, options.scheduledOnly, options.mode === "dry-run");
   let recoveredIntent: Row | null = null;
   report.adopted += recovery.adopted;
   // A claimed tree that only its ledger row names goes back to the ordinary
@@ -1000,7 +1000,6 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         outcome(owner.directory, "held", bytes, refused.reason, refused.reasonCode); return;
       }
       if (!cleaner) store.defer(owner.directory, now() + 60_000);
-      recoveredTrash = store.recoveredTrash(owner.directory);
       requiredExpiry = store.requiredRootExpiry(owner.directory);
       const stat = fs.lstatSync(owner.directory, { throwIfNoEntry: false });
       // Stable aliases are valid (including platform temp-directory aliases).
@@ -1015,6 +1014,8 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       };
       if (!pathCurrent(owner.directory)) { outcome(owner.directory, "held", bytes, "physical ancestry changed or protected", "root_ancestry_changed"); return; }
       if (stat && (!stat.isDirectory() || stat.isSymbolicLink() || `${stat.dev}:${stat.ino}` !== owner.identity)) { outcome(owner.directory, disposition, bytes, reason, reasonCode); return; }
+      if (options.mode !== "dry-run") store.clearStaleTrashIntent(owner.directory, owner.identity);
+      recoveredTrash = store.recoveredTrash(owner.directory);
       // Custody survives a missing namespace with zero allocation. A pending
       // quarantine retains its allocation projection until replay resolves.
       const pendingJournal = fs.existsSync(attemptTempJournalPath(owner.directory));
@@ -1069,7 +1070,11 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
           outcome(owner.directory, initialState === "live" ? "live" : "held", bytes, `ownership ${initialState}; allocation retained`, `owner_${initialState}`);
           return;
         }
-        const recordedOnly = owner.bytes > 0 && initialState !== null && finished(initialState)
+        // A visit can beat preparation to the root, or release may have been
+        // measured before the lane recorded the attempt's completion.
+        const needsFinalMeasurement = owner.released && owner.pipelineId
+          && owner.measuredAt < (store.retentionExpiry(owner.directory) ?? 1);
+        const recordedOnly = owner.bytes > 0 && !needsFinalMeasurement && initialState !== null && finished(initialState)
           && !fs.existsSync(path.join(owner.directory, ".delegatus-keep")) && !recordedRootHeld(owner.directory)
           && ledgerLinkedEvidence(owner.directory).length === 0;
         const measured = await measureAttemptAllocation(owner.directory, { budgetMs: remaining(), bytes: owner.bytes, recordedOnly });
@@ -1559,7 +1564,8 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
             || last.reasonCode === "root_budget" && AttemptProtectionInventory.exists(owner.directory);
           const quarantined = !fs.existsSync(owner.directory) && fs.existsSync(attemptTempJournalPath(owner.directory));
           const fullProofWithoutProgress = ["checkout_budget", "namespace_budget", "root_budget", "mutation_fence_budget"].includes(last.reasonCode);
-          const retryMs = last.disposition !== "deferred" ? EXPIRED_HOLD_RETRY_MS
+          const retryMs = !options.cleaner && last.reasonCode === "checkout_changed" ? 0
+            : last.disposition !== "deferred" ? EXPIRED_HOLD_RETRY_MS
             : !quarantined && !actionable && (options.scheduledOnly && !pressure || pressure && fullProofWithoutProgress)
               ? EXPIRED_PROOF_RETRY_MS : 0;
           const retryAt = retryMs ? Math.max(current.checkedAt, now() + retryMs) : current.checkedAt;

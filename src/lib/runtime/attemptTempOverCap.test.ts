@@ -48,8 +48,8 @@ function fixture() {
     return pipeline;
   };
   const store = () => new AttemptTempStore();
-  /** One registered stage root holding `bytes` of data, released by its attempt. */
-  const make = (name: string, pipeline: Pipeline, bytes = MiB) => {
+  /** One registered stage root holding `bytes` of data. */
+  const make = (name: string, pipeline: Pipeline, bytes = MiB, released = false) => {
     // Stage roots carry exactly the six characters `mkdtemp` appends.
     const directory = statePath("scratch", `llv-stage-${name.padEnd(6, "0").slice(0, 6)}`);
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -58,7 +58,7 @@ function fixture() {
     try {
       ledger.register({ directory, pipelineId: pipeline.id, launchId: pipeline.runs[0]!.attempts[0]!.launchId!, retainUntilClose: false,
         createdAt: Date.parse(pipeline.runs[0]!.attempts[0]!.completedAt!) - HOUR });
-      ledger.release(directory);
+      if (released) ledger.release(directory);
       ledger.measure(directory, bytes);
     } finally { ledger.close(); }
     return directory;
@@ -412,7 +412,7 @@ test("a tick whose expiry page spends the whole budget lets reclaim go first on 
 
 test("an expired root whose removal was cut after it began is finished by the expiry page", async () => {
   const f = fixture();
-  const directory = f.make("expcut", f.lane("lane-expired-cut", 40));
+  const directory = f.make("expcut", f.lane("lane-expired-cut", 2), MiB, true);
   const stat = fs.lstatSync(directory), identity = `${stat.dev}:${stat.ino}`;
   // What a scheduled removal cut after it began leaves: its queued intent, the
   // quarantined tree and the journal. No evidence copy or check names the tree.

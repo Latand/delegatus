@@ -114,8 +114,24 @@ export class AttemptTrashRecovery {
       this.db.query("DELETE FROM trash_recovery WHERE directory=?").run(directory);
     })();
   }
+  clearStaleIntent(directory: string, identity: string) {
+    if (!this.db.query("SELECT 1 FROM trash_recovery WHERE directory=? AND identity=? AND restored=0").get(directory, identity)) return false;
+    try {
+      const original = fs.lstatSync(directory, { throwIfNoEntry: false });
+      if (original && (!original.isDirectory() || `${original.dev}:${original.ino}` !== identity)) return false;
+      // The sweep writes the journal before moving the original. Keep any
+      // journal entry, including an unreadable file or a dangling symlink.
+      if (fs.lstatSync(attemptTempJournalPath(directory), { throwIfNoEntry: false })) return false;
+    } catch { return false; }
+    return this.db.transaction(() => {
+      const cleared = this.db.query("DELETE FROM trash_recovery WHERE directory=? AND identity=? AND restored=0").run(directory, identity);
+      if (cleared.changes) this.clearObservations(directory);
+      return cleared.changes > 0;
+    })();
+  }
   page(now: () => number, deadline: number, budgetNow = now,
-    discovery: false | { unknown: (scratch: string, name: string) => string | undefined; complete: () => void } | undefined = undefined) {
+    discovery: false | { unknown: (scratch: string, name: string) => string | undefined; complete: () => void } | undefined = undefined,
+    dryRun = false) {
     const result = { entries: 0, manifestEntries: 0, checks: 0, restored: 0, adopted: 0, recoveredDirectory: null as string | null,
       /** A claimed tree only the ledger's own row names; the sweep decides. */
       ledgerOwned: null as string | null,
@@ -175,15 +191,8 @@ export class AttemptTrashRecovery {
       }
       return result;
     };
+    if (!dryRun && this.clearStaleIntent(candidate.directory, candidate.identity)) return result;
     const journal = readAttemptTempTrash(attemptTempJournalPath(candidate.directory), this.scratch);
-    if (!journal && !fs.existsSync(attemptTempJournalPath(candidate.directory))) {
-      const original = fs.lstatSync(candidate.directory, { throwIfNoEntry: false });
-      if (original?.isDirectory() && !original.isSymbolicLink() && `${original.dev}:${original.ino}` === candidate.identity) {
-        this.db.query("DELETE FROM trash_recovery WHERE directory=? AND identity=?").run(candidate.directory, candidate.identity);
-        this.clearObservations(candidate.directory);
-        return result;
-      }
-    }
     if (!journal || journal.identity !== candidate.identity) return hold();
     let binding: Binding | null = candidate.binding ? JSON.parse(candidate.binding) : null;
     let conflict = !!candidate.conflict, matches: string[] = JSON.parse(candidate.matches);
