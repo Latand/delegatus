@@ -39,11 +39,20 @@ async function waitForProvisioning(check: () => Promise<boolean>) {
   }
 }
 
-function fixtureCheckoutOutsideStripes(stem: string, peers: ReadonlyArray<{ worktreeDir: string }>): string {
+function pinFixtureCheckoutOutsideStripes(lane: Awaited<ReturnType<typeof create>>, stem: string,
+  peers: ReadonlyArray<{ worktreeDir: string }>): void {
   const occupied = new Set(peers.map(peer => provisioningStripe(path.resolve(peer.worktreeDir))));
   for (let suffix = 0; suffix < 256; suffix++) {
-    const checkout = path.resolve(`${stem}-${suffix}`);
-    if (!occupied.has(provisioningStripe(checkout))) return checkout;
+    const id = `${stem}-${suffix}`;
+    const identity = pipelineIdentity(id, lane.task, lane.repoDir);
+    if (occupied.has(provisioningStripe(path.resolve(identity.worktreeDir)))) continue;
+    lane.id = id;
+    Object.assign(lane, identity);
+    if (lane.delivery) {
+      lane.delivery.ownerId = id;
+      lane.delivery.target.branch = `refs/heads/${lane.branch}`;
+    }
+    return;
   }
   throw new Error("fixture could not select an independent checkout stripe");
 }
@@ -1802,7 +1811,7 @@ test("a new controller process resumes active and repository-waiting provisionin
   const peer = structuredClone(lane);
   peer.id = "restart-repository-waiter"; peer.delivery = undefined;
   Object.assign(peer, pipelineIdentity(peer.id, peer.task, peer.repoDir));
-  lane.worktreeDir = fixtureCheckoutOutsideStripes("/restart-checkout-owner", [peer]);
+  pinFixtureCheckoutOutsideStripes(lane, "restart-checkout-owner", [peer]);
   savePipelines([lane, peer]);
   const laneIds = [lane.id, peer.id];
   const clock = Date.parse(h.ports.now());
@@ -1944,8 +1953,8 @@ test.each(["success", "failure", "pause", "remove", "branch", "owner"] as const)
     Object.assign(row, pipelineIdentity(row.id, row.task, row.repoDir));
   }
   // This case holds a repository stripe and requires an independent checkout grant.
-  lane.worktreeDir = fixtureCheckoutOutsideStripes("/linked-checkout-owner", [peer, unrelated]);
-  unrelated.worktreeDir = fixtureCheckoutOutsideStripes("/unrelated-checkout", [lane, peer]);
+  pinFixtureCheckoutOutsideStripes(lane, "linked-checkout-owner", [peer, unrelated]);
+  pinFixtureCheckoutOutsideStripes(unrelated, "unrelated-checkout", [lane, peer]);
   savePipelines([lane]);
   const entered = latch(), release = latch(), peerLookup = latch(), otherReady = latch();
   const unregister = registerPipelineTick(async () => {
@@ -2031,7 +2040,7 @@ test("four linked provisioning lanes leave capacity for a later independent laun
     Object.assign(row, pipelineIdentity(row.id, row.task, row.repoDir));
     return row;
   })];
-  lane.worktreeDir = fixtureCheckoutOutsideStripes("/linked-capacity-owner", linked.slice(1));
+  pinFixtureCheckoutOutsideStripes(lane, "linked-capacity-owner", linked.slice(1));
   savePipelines(linked);
   const entered = latch(), release = latch(), linkedLookups = latch(), independentReady = latch();
   const lookedUp = new Set<string>();
@@ -2068,8 +2077,9 @@ test("four linked provisioning lanes leave capacity for a later independent laun
     const created = await createPipelineFromRequest({ task: "Independent lane", spec: "Provision beside a held repository", repoDir: "/independent", stages: BUILD_ONLY as never, publication: "internal" }, h.ports);
     expect(created.pipeline).toBeDefined();
     independent = created.pipeline!;
-    independent.worktreeDir = fixtureCheckoutOutsideStripes("/independent-checkout", linked);
-    await withDeliveryMutationAsync(tx => { tx.put(independent!); }, 1);
+    const admittedId = independent.id;
+    pinFixtureCheckoutOutsideStripes(independent, "independent-checkout", linked);
+    await withDeliveryMutationAsync(tx => { tx.delete(admittedId); tx.put(independent!); }, 2);
     await until(tickPipelinesController([], h.ports));
     await until(independentReady.promise);
     await waitForProvisioning(async () => {
