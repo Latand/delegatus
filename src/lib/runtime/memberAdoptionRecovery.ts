@@ -55,7 +55,8 @@ export async function recoverMemberAdoption(registry: AgentRegistry, key: Sessio
   }
   await registry.deliveryWriteOrBusy({ label: "adoption.recovery-cleanup", operationId: receipt.launchId }, () => {
     check();
-    registry.confirmStructuredHostSetupCleanup(receipt!.launchId, owner);
+    if (!registry.confirmStructuredHostSetupCleanup(receipt!.launchId, owner))
+      throw new Error("structured setup exec custody evidence is unavailable");
     if (!registry.releaseStructuredSpawnAdmissionOwner(receipt!.launchId, owner).released)
       throw new Error("member adoption cleanup release is not confirmed");
   });

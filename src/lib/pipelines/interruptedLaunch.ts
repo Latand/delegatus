@@ -1,4 +1,5 @@
-import { REGISTRY_WRITER_BUSY, resolveConversationAlias, type RegistryFile, type SpawnReceipt } from "@/lib/agent/registry";
+import { missingSetupProcess, REGISTRY_WRITER_BUSY, resolveConversationAlias, setupProcessMayOwn,
+  type RegistryFile, type SpawnReceipt } from "@/lib/agent/registry";
 import { registryKeysMatching } from "@/lib/agent/sqliteRegistryStore";
 import { processIdentityStatus } from "@/lib/processIdentity";
 import { readRuntimeSnapshot } from "@/lib/runtime/snapshotReads";
@@ -33,9 +34,9 @@ function unstartedStageProcessRefusal(receipt: SpawnReceipt, cut: "before-admiss
     return "native setup custody is unavailable";
   }
   if (setup.execPermitGranted) return "the original setup granted the engine permission to start";
-  if (setup.processes.some(identity => processIdentityStatus(identity) !== "dead")
+  if (setup.processes.some(setupProcessMayOwn)
     || setup.phase === "executing" && (!setup.processes.length
-      || !setup.cleanupConfirmed && !(reconcileCleanup && receipt.admissionOwner))) {
+      || !setup.cleanupConfirmed && (missingSetupProcess(setup) || !(reconcileCleanup && receipt.admissionOwner)))) {
     return "native setup process cleanup is unconfirmed";
   }
   // A retained waiter counts as executing even before it starts the engine.
