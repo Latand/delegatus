@@ -2,6 +2,8 @@ import fs from "node:fs";
 
 import { Database } from "bun:sqlite";
 
+import { captureProcessIdentity } from "@/lib/processIdentity";
+
 import { AgentRegistry } from "./registry";
 
 const [action, filename, ready, release, label = "writer", countText = "0", resultFile] = process.argv.slice(2);
@@ -65,10 +67,16 @@ if (action === "writer" || action === "writer-json" || action === "writer-sqlite
   waitFor(release);
   const durations: number[] = [];
   const key = { engine: "codex" as const, sessionId: label };
+  const capturedOwner = captureProcessIdentity(process.pid);
+  if (!capturedOwner.bootEpoch) throw new Error("mixed writer fixture needs a verified boot domain");
+  // Model a stale incarnation of this pid in the same observation domain.
+  // Without the boot epoch, the process identity reader correctly keeps the
+  // synthetic start token unverified and refuses the claim.
+  const staleProcess = { ...capturedOwner, startIdentity: `${process.pid}:${label}` };
   const baseHost = {
     kind: "codex-app-server" as const,
     endpoint: `stdio:${label}`,
-    process: { pid: process.pid, startIdentity: `${process.pid}:${label}` },
+    process: staleProcess,
     eventCursor: 0,
     protocolVersion: "1",
     writerClaimEpoch: 0,
@@ -82,7 +90,7 @@ if (action === "writer" || action === "writer-json" || action === "writer-sqlite
       key, artifactPath: `/sessions/${label}.jsonl`, cwd: "/repo", accountId: "work",
       status: "unhosted", host: null, structuredHost: baseHost, claimEpoch: 0, claimOwner: null, pendingAction: null,
     });
-    claim = registry.claimStructuredHost(key, { pid: process.pid, startIdentity: `${process.pid}:${label}` }, { allowUnhosted: true });
+    claim = registry.claimStructuredHost(key, staleProcess, { allowUnhosted: true });
     if (!claim?.claimOwner) throw new Error("mixed writer claim is required");
   }
   for (let index = 0; index < Number(countText); index += 1) {
