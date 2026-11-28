@@ -30,15 +30,21 @@ compatibility raises the major version.
   off until the installation owner configures a client ID, and it is not
   available on Windows ([#4416]).
 - **An agent's HTML evidence report opens in the preview.** The report renders
-  in the sandboxed frame, scripts and stylesheets stay denied, and source and
-  download controls are hidden for it ([#4466]).
+  in the sandboxed frame. Scripts are denied and inline styles work. Linked
+  stylesheet files load from the report's own folder, except when the Viewer is
+  reached through a literal IPv6 loopback address, where only inline styles and
+  embedded images apply. Source and download controls are hidden for it
+  ([#4466]).
 - **The Telegram relay understands more of a conversation.** A verified direct
   message from the owner, or from a requester trusted for the project, that asks
   for a task (the `/task` command, a request to create or file a task, or
   project work such as "fix …") creates one board task. The confirmation links to
-  the card, with an open button on relays that support rich replies; an
-  ambiguous request offers expiring project choices. Ordinary conversation
-  creates no task. This needs the paired relay service to support it ([#4521]). Prompts show sticker messages with their emoji and
+  the card, with an open button on relays that support rich replies. A task
+  request needs the installation's public HTTPS address to be set; without it
+  the relay creates no task and asks for the address. An ambiguous request offers
+  expiring project buttons on relays that support them, and otherwise asks the
+  sender to name the project. Ordinary conversation creates no task. This needs
+  the paired relay service to support it ([#4521]). Prompts show sticker messages with their emoji and
   description ([#4503]) and the quoted part of a reply together with external
   reply context, marked as untrusted ([#4515]).
 - **Codex CLI 0.171.0 and 0.172.0 are supported.** The supported window is
@@ -66,11 +72,13 @@ compatibility raises the major version.
   sits inside it, and with neither Claude nor Codex able to run, the
   orchestrator step says "Connect Claude or Codex first." with a link to
   Engines ([#4528]).
-- **Typing and board rows stay smooth under other sessions' activity.** The
+- **Typing in the composer is faster while another project is busy.** The
   composer and board rows ignore runtime events from other projects, and card
-  handlers stay stable. With a neighbour project busy at six events a second,
-  the 95th percentile of key-to-frame time at 1440 px fell from 379 to 184 ms
-  for the composer ([#4545]). Preparing a registry snapshot seeks the journal
+  handlers stay stable. In the benchmark, an in-page fixture of 1,710
+  conversations at 4x CPU throttling with a neighbour project busy at six events
+  a second, the median of five paired runs of the 95th percentile of key-to-frame
+  time at 1440 px fell from 379 to 184 ms for the composer. Typing still lags
+  under that neighbouring load ([#4545]). Preparing a registry snapshot seeks the journal
   bounds instead of scanning it, which cut the median from 36.8 to 26.3 ms on a
   100,000-row journal ([#4502]), and Decisions reads reuse one dismissal index
   per snapshot ([#4496]).
